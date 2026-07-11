@@ -107,6 +107,61 @@ pub unsafe fn enable_hook(target_va: usize, label: &str) -> bool {
     true
 }
 
+/// Queue a hook previously created at `target_va` by [`create_hook`] for
+/// enabling by the next [`apply_queued`] call. Returns `true` on success; logs
+/// against `label` and returns `false` on failure.
+///
+/// Every `MinHook` enable freezes all threads of the process to patch safely;
+/// queueing lets an installer with many hooks pay that freeze once for the
+/// whole batch instead of once per hook. The success log says "installed"
+/// even though the prologue patch lands at apply time — an apply failure is
+/// loud (see [`apply_queued`]), so the per-hook lines remain a faithful
+/// record of what is live.
+///
+/// # Safety
+///
+/// `target_va` must be the VA of a hook already created via [`create_hook`].
+#[must_use]
+pub unsafe fn queue_enable_hook(target_va: usize, label: &str) -> bool {
+    let target = target_va as *mut c_void;
+
+    // SAFETY: per the contract, `target_va` is a hook created by a matching
+    // `create_hook` call.
+    if let Err(e) = unsafe { MinHook::queue_enable_hook(target) } {
+        log::warn!(target: LOG_TARGET, "MinHook::queue_enable_hook({label}) failed: {e}");
+        return false;
+    }
+
+    log::info!(target: LOG_TARGET, "hook installed: {label} @ {target_va:#010x}");
+    true
+}
+
+/// Apply every enable queued via [`queue_enable_hook`] in a single thread-freeze.
+///
+/// Returns `true` on success. On failure logs a loud error against `label` —
+/// a failed apply leaves EVERY queued hook disabled, so the host runs fully
+/// stock — and returns `false`. Applying an empty queue is a harmless no-op.
+///
+/// # Safety
+///
+/// Each queued `target_va` must carry a detour whose calling convention and
+/// signature match the original function (the [`create_hook`] contract); the
+/// patches all go live here.
+#[must_use]
+pub unsafe fn apply_queued(label: &str) -> bool {
+    // SAFETY: per the contract, every queued hook pairs a verified target with
+    // an ABI-matching detour.
+    if let Err(e) = unsafe { MinHook::apply_queued() } {
+        log::error!(
+            target: LOG_TARGET,
+            "MinHook::apply_queued({label}) failed: {e} — every queued hook is still \
+             disabled, the host is running fully stock"
+        );
+        return false;
+    }
+    true
+}
+
 /// Install a `MinHook` detour at `target_va` and enable it in one step.
 ///
 /// On success returns the trampoline — a pointer to a thunk that runs the

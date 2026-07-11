@@ -428,8 +428,9 @@ fn render(m: &Manifest) -> String {
         emit_diff(&mut out, name, &snake, &screaming, f);
 
         // Install step: verify the signature, create the hook over the thunk,
-        // store the original, enable. Address + signature are inlined here.
-        let _ = writeln!(install_body, "    install_thunk(");
+        // store the original, queue the enable (applied in one batch at the end
+        // of `install_all`). Address + signature are inlined here.
+        let _ = writeln!(install_body, "    queued += usize::from(install_thunk(");
         let _ = writeln!(install_body, "        image_base,");
         let _ = writeln!(install_body, "        {:#010x},", f.rva);
         let _ = writeln!(install_body, "        {:?},", f.sig);
@@ -458,7 +459,7 @@ fn render(m: &Manifest) -> String {
             "            let _ = {screaming}_ORIGINAL.set(original);"
         );
         let _ = writeln!(install_body, "        }},");
-        let _ = writeln!(install_body, "    );");
+        let _ = writeln!(install_body, "    ));");
 
         // Arm this hook's compare switch if it is selected at runtime. Only a
         // hook with a `[diff]` table has the switch (compare mode runs both
@@ -508,11 +509,27 @@ fn render(m: &Manifest) -> String {
     } else {
         "image_base"
     };
-    out.push_str("/// Install every hooked function over the live host image: patch each\n");
-    out.push_str("/// prologue to its thunk and publish the trampoline to the original.\n");
+    out.push_str("/// Install every hooked function over the live host image: verify + create\n");
+    out.push_str("/// each hook and publish its trampoline, then apply all queued enables in a\n");
+    out.push_str("/// single thread-freeze (one `MH_ApplyQueued` instead of one freeze per hook).\n");
     out.push_str("/// Called once from `DllMain`; failures are logged and skipped.\n");
     let _ = writeln!(out, "pub fn install_all({param}: usize) {{");
-    out.push_str(&install_body);
+    if !install_body.is_empty() {
+        out.push_str("    let started = ::std::time::Instant::now();\n");
+        out.push_str("    let mut queued = 0usize;\n");
+        out.push_str(&install_body);
+        out.push_str(
+            "    // SAFETY: every queued hook pairs a sig-verified VA with its generated\n",
+        );
+        out.push_str("    // ABI-matching thunk; the batch goes live here.\n");
+        out.push_str("    if unsafe { ::wow_hook::apply_queued(\"install_all\") } {\n");
+        out.push_str("        ::log::info!(\n");
+        out.push_str("            target: super::LOG_TARGET,\n");
+        out.push_str("            \"install_all: {queued} hooks enabled in {} ms\",\n");
+        out.push_str("            started.elapsed().as_millis(),\n");
+        out.push_str("        );\n");
+        out.push_str("    }\n");
+    }
     out.push_str("}\n\n");
 
     out.push_str(INSTALL_THUNK);
@@ -802,11 +819,13 @@ fn is_integer_ret(ret: &str) -> bool {
 /// unless the bytes at the target match the recorded signature, then create the
 /// hook over the generated thunk, let the caller publish the original (the `store`
 /// closure runs before enabling, so the lazy resolver can never see an empty
-/// slot), then enable.
-const INSTALL_THUNK: &str = r#"/// Install one hook. Patching is refused unless the bytes at the target match
-/// the recorded `sig` — a `0` RVA, a signature mismatch, or a `MinHook` failure
-/// logs and skips. A hook must never crash the host, and must never patch an
-/// unverified address.
+/// slot), then queue the enable — `install_all` applies the whole queue in one
+/// thread-freeze at the end.
+const INSTALL_THUNK: &str = r#"/// Install one hook; returns whether it was queued for enabling. Patching is
+/// refused unless the bytes at the target match the recorded `sig` — a `0` RVA,
+/// a signature mismatch, or a `MinHook` failure logs and skips. A hook must
+/// never crash the host, and must never patch an unverified address. The enable
+/// is only queued; `install_all`'s single `apply_queued` makes the batch live.
 fn install_thunk(
     image_base: usize,
     rva: usize,
@@ -814,13 +833,13 @@ fn install_thunk(
     thunk: *mut ::core::ffi::c_void,
     label: &str,
     store: impl FnOnce(*mut ::core::ffi::c_void),
-) {
+) -> bool {
     if rva == 0 {
         ::log::warn!(
             target: super::LOG_TARGET,
             "{label} rva unset in symbols.toml — skipping",
         );
-        return;
+        return false;
     }
     // Debug bisection: `WOW_TURBO_SKIP=all` installs nothing; a comma-separated
     // list skips those labels. Lets a crash be narrowed to a single hook without
@@ -831,7 +850,7 @@ fn install_thunk(
         .is_ok_and(|s| s == "all" || s.split(',').any(|x| x.trim() == label))
     {
         ::log::warn!(target: super::LOG_TARGET, "{label} skipped (WOW_TURBO_SKIP)");
-        return;
+        return false;
     }
     let va = image_base + rva;
     // SAFETY: `va` is the live image base plus the function's manifest RVA, which
@@ -841,16 +860,16 @@ fn install_thunk(
             target: super::LOG_TARGET,
             "{label} signature mismatch at {va:#010x} — refusing to patch",
         );
-        return;
+        return false;
     }
     // SAFETY: `va`'s prologue matched the recorded signature, and `thunk`'s
     // generated `extern "abi"` matches the manifest ABI.
     let Some(trampoline) = (unsafe { ::wow_hook::create_hook(va, thunk, label) }) else {
-        return;
+        return false;
     };
     store(trampoline);
     // SAFETY: `va` is the hook just created above.
-    let _ = unsafe { ::wow_hook::enable_hook(va, label) };
+    unsafe { ::wow_hook::queue_enable_hook(va, label) }
 }
 "#;
 
@@ -955,7 +974,7 @@ fn emit_x87st0(
 
     // Install step: identical to the named-convention path, minus the
     // differential-mode arming (x87st0 entries have no diff machinery).
-    let _ = writeln!(install_body, "    install_thunk(");
+    let _ = writeln!(install_body, "    queued += usize::from(install_thunk(");
     let _ = writeln!(install_body, "        image_base,");
     let _ = writeln!(install_body, "        {:#010x},", f.rva);
     let _ = writeln!(install_body, "        {:?},", f.sig);
@@ -984,7 +1003,7 @@ fn emit_x87st0(
         "            let _ = {screaming}_ORIGINAL.set(original);"
     );
     let _ = writeln!(install_body, "        }},");
-    let _ = writeln!(install_body, "    );");
+    let _ = writeln!(install_body, "    ));");
 }
 
 /// Convert a `PascalCase`/`camelCase` manifest key to `snake_case`, preserving
