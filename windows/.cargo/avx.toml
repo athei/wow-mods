@@ -1,0 +1,18 @@
+# AVX overlay for the native-Windows wow_turbo build, loaded on top of
+# config.toml via `cargo --config .cargo/avx.toml` (the `windows-avx` Makefile
+# target). Native hardware executes 256-bit ops at full width — the 128-bit
+# translation-unit reasoning behind the nehalem baseline in config.toml does
+# not apply — so this variant raises the baseline to haswell (AVX2 + FMA +
+# BMI1/BMI2/LZCNT; Intel 2013+, any AMD Ryzen).
+#
+# rustflags ARRAYS from merged config sources are JOINED, with this file's
+# entries placed later — so `target-cpu=haswell` overrides the base `nehalem`
+# (last -C wins) while the -Lnative xwin paths from config.toml survive.
+# [env] STRINGS are REPLACED wholesale, so the -idirafter include list from
+# config.toml is repeated here — keep the two files in sync.
+[target.i686-pc-windows-msvc]
+rustflags = ["-C", "target-cpu=haswell"]
+
+[env]
+CFLAGS_i686-pc-windows-msvc   = "-march=haswell -idirafter /opt/xwin/crt/include -idirafter /opt/xwin/sdk/include/ucrt -idirafter /opt/xwin/sdk/include/um -idirafter /opt/xwin/sdk/include/shared"
+CXXFLAGS_i686-pc-windows-msvc = "-march=haswell -idirafter /opt/xwin/crt/include -idirafter /opt/xwin/sdk/include/ucrt -idirafter /opt/xwin/sdk/include/um -idirafter /opt/xwin/sdk/include/shared"

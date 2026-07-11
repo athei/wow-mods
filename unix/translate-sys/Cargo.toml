@@ -1,0 +1,12 @@
+[package]
+name = "wow-translate-sys"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description.workspace = true
+authors.workspace = true
+build = "build.rs"
+links = "wow_translate_sys"
+
+[lints]
+workspace = true

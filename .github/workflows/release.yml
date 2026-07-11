@@ -1,0 +1,27 @@
+name: release
+
+# Pushing a v* tag opens an empty draft release. The bundles need the local
+# Wine-on-macOS cross toolchain (WINE_SDK, winebuild, xwin, Xcode), so they are
+# built on a dev machine with `make bundle` and uploaded to the draft by hand;
+# release notes come from GitHub's "Generate release notes" button at publish
+# time.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  draft-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft --verify-tag \
+            --title "$GITHUB_REF_NAME" \
+            --notes "Build locally with \`make bundle\` and upload the zips from \`dist/\`, then use *Generate release notes* and publish."

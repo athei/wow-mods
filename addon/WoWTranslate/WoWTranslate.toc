@@ -1,0 +1,15 @@
+## Interface: 11200
+## Title: WoWTranslate
+## Notes: Real-time chat translation for WoW 1.12
+## Version: 1.5
+## Author: belthazor, WoWTranslateTeam
+## X-License: MIT (derived from the wow-translate addon; see LICENSE)
+## SavedVariables: WoWTranslateDB WoWTranslateCache WoWTranslateDebugLog
+
+WoWTranslate_Glossary.lua
+WoWTranslate_OutGlossary.lua
+WoWTranslate_Cache.lua
+WoWTranslate_API.lua
+WoWTranslate_Config.lua
+WoWTranslate_Minimap.lua
+WoWTranslate.lua

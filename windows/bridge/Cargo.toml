@@ -1,0 +1,18 @@
+[package]
+name = "wow-mods-bridge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description.workspace = true
+authors.workspace = true
+
+[lib]
+name = "wow_mods"
+crate-type = ["cdylib"]
+
+[dependencies]
+wow-shared = { workspace = true }
+log = { workspace = true }
+
+[lints]
+workspace = true

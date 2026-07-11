@@ -1,0 +1,5 @@
+# Cargo build output (each workspace has its own target/)
+target/
+
+# `make bundle` release-archive staging
+/dist/

@@ -1,0 +1,47 @@
+[package]
+name = "wow-turbo-dll"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description.workspace = true
+authors.workspace = true
+
+[lib]
+name = "wow_turbo"
+crate-type = ["cdylib"]
+
+[dependencies]
+log = { workspace = true }
+# Histogram map used by the in-DLL `profile` module; unconditional because that
+# module (classification + TSV rendering) is host-tested.
+rustc-hash = { workspace = true }
+# Pure-Rust inflate for the MPQ sector-decompressor reimpl (`storm::inflate`).
+# Not target-gated: the kernel is host-unit-tested under the same toolchain.
+miniz_oxide = { workspace = true }
+# Single-pattern substring search for the Lua string-library literal fast paths
+# (`math::strlib`). Not target-gated: the kernel is host-unit-tested.
+memchr = { workspace = true }
+# Pure-Rust libm for the `Math::Pow` transcendental leaf (`math::misc`). A
+# standalone hooked function, so unlike the inlined trig polynomials there is no
+# surrounding kernel to vectorize; the crate compiles to SSE2 f64 (no x87 libm
+# call) and brings the correct IEEE pow special cases. Not target-gated: the
+# kernel is host-unit-tested.
+libm = { workspace = true }
+# Trig + ftol numeric kernels (`math::trig`/`math::misc` re-export them) live in
+# the shared crate so the d3d9 FF path uses the same libcall-free math; also the
+# mmap breadcrumb ring (zero-cost no-op unless WOW_CRUMB=1) the generated
+# thunks record into. Not target-gated: the kernels are host-unit-tested.
+wow-shared = { workspace = true }
+
+# The hook-installation plumbing (and its MinHook backend) is only built for the
+# shipped 32-bit DLL; off-target builds (x86_64-apple-darwin, for host-testing the
+# portable numeric kernels) compile the crate without it.
+[target.'cfg(target_arch = "x86")'.dependencies]
+wow-hook = { workspace = true }
+
+[build-dependencies]
+serde = { workspace = true }
+toml = { workspace = true }
+
+[lints]
+workspace = true

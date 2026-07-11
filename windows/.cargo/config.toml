@@ -1,0 +1,32 @@
+[build]
+target = "i686-pc-windows-msvc"
+
+[target.i686-pc-windows-msvc]
+linker = "lld-link"
+rustflags = [
+    "-C", "target-cpu=nehalem",
+    "-C", "target-feature=-crt-static",
+    "-C", "target-feature=+bmi1,+bmi2,+lzcnt",
+    "-Lnative=/opt/xwin/crt/lib/x86",
+    "-Lnative=/opt/xwin/sdk/lib/um/x86",
+    "-Lnative=/opt/xwin/sdk/lib/ucrt/x86",
+]
+
+[env]
+# xwin include paths repeated for C and C++ — cc-rs reads CFLAGS_<target>
+# and CXXFLAGS_<target> separately with no cross-fallback, and TOML has
+# no variable substitution. snmalloc-sys needs the C++ path for <atomic>;
+# libmimalloc-sys only needs the C one.
+#
+# `-march=nehalem` mirrors the rustflags `target-cpu` baseline so build-script
+# C/C++ code (snmalloc-sys is the big one — ~300 KB of object in release) gets
+# the same ISA. These DLLs run under x86-on-ARM translation, whose vector unit
+# is 128-bit: 256-bit AVX/AVX2 ops are split across two halves and underperform
+# plain SSE, so the baseline caps at SSE4.2 (128-bit, 1:1 with the host vector
+# unit) plus the AVX-independent GPR bit-manipulation features (BMI1/BMI2/LZCNT
+# via `-mbmi -mbmi2 -mlzcnt`). cc-rs invokes clang for this target (the
+# `-idirafter` flags here are clang-style), so these flags propagate without
+# needing an MSVC `/arch:` spelling.
+CFLAGS_i686-pc-windows-msvc   = "-march=nehalem -mbmi -mbmi2 -mlzcnt -idirafter /opt/xwin/crt/include -idirafter /opt/xwin/sdk/include/ucrt -idirafter /opt/xwin/sdk/include/um -idirafter /opt/xwin/sdk/include/shared"
+CXXFLAGS_i686-pc-windows-msvc = "-march=nehalem -mbmi -mbmi2 -mlzcnt -idirafter /opt/xwin/crt/include -idirafter /opt/xwin/sdk/include/ucrt -idirafter /opt/xwin/sdk/include/um -idirafter /opt/xwin/sdk/include/shared"
+AR_i686-pc-windows-msvc       = "/opt/homebrew/opt/llvm/bin/llvm-lib"

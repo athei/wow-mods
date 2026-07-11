@@ -1,0 +1,21 @@
+[package]
+name = "wow-mods-unix"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description.workspace = true
+authors.workspace = true
+
+[lib]
+name = "wow_mods"
+crate-type = ["cdylib"]
+
+[dependencies]
+wow-shared = { workspace = true }
+wow-translate-sys = { workspace = true }
+objc2 = { workspace = true }
+log = { workspace = true }
+strum = { workspace = true }
+
+[lints]
+workspace = true
