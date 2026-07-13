@@ -2432,10 +2432,19 @@ ret  = "void"
 args = ["*mut u8", "*const f32"]
 preserve = ["ecx"]
 
+# The CRT `_CIpow` intrinsic THUNK (VA 0x73f940), not the stack-args core at
+# 0x73f962 it tail-feeds: `_CIpow` takes base in ST(1) and exponent in ST(0),
+# and the thunk spills the exponent with a non-popping FST for the core to
+# consume — so a hook on the core inherits a live ST(0) no named convention can
+# express (a cdecl replacement there leaked one x87 register per call until the
+# stack jammed and every load returned the indefinite QNaN; native-Windows
+# lighting bug). Hooking the thunk with the x87pow naked shim replaces thunk +
+# core in one balanced contract and also retires Math::Exp2 (0x744b00), whose
+# sole caller is the core.
 [functions.Math__Pow_x87]
-rva  = 0x33f962
-sig  = "8B C8 50 9B D9 3C 24 66 81 3C 24 7F 02 74 05 E8 ?? ?? ?? ?? 81 E1 00 00"
-abi  = "cdecl"
+rva  = 0x33f940
+sig  = "83 EC 10 D9 C9 DD 1C 24 DD 54 24 08 8B 44 24 0C E8 ?? ?? ?? ??"
+abi  = "x87pow"
 ret  = "f64"
 args = ["f64", "f64"]
 preserve = []

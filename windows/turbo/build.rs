@@ -264,6 +264,10 @@ fn render(m: &Manifest) -> String {
             emit_x87st0(&mut out, &mut install_body, name, &snake, &screaming, f);
             continue;
         }
+        if f.abi == "x87pow" {
+            emit_x87pow(&mut out, &mut install_body, name, &snake, &screaming, f);
+            continue;
+        }
         let abi = abi_str(&f.abi, name);
         // `void` → no return arrow at all (an explicit `-> ()` trips
         // `clippy::unused_unit`); any other type is emitted verbatim. A function
@@ -974,6 +978,123 @@ fn emit_x87st0(
 
     // Install step: identical to the named-convention path, minus the
     // differential-mode arming (x87st0 entries have no diff machinery).
+    let _ = writeln!(install_body, "    queued += usize::from(install_thunk(");
+    let _ = writeln!(install_body, "        image_base,");
+    let _ = writeln!(install_body, "        {:#010x},", f.rva);
+    let _ = writeln!(install_body, "        {:?},", f.sig);
+    let _ = writeln!(
+        install_body,
+        "        {snake}_thunk as *mut ::core::ffi::c_void,"
+    );
+    let _ = writeln!(install_body, "        {name:?},");
+    let _ = writeln!(install_body, "        |trampoline| {{");
+    let _ = writeln!(
+        install_body,
+        "            // SAFETY: the trampoline runs the displaced prologue then continues"
+    );
+    let _ = writeln!(
+        install_body,
+        "            // into the unhooked original, carrying its ABI."
+    );
+    let _ = writeln!(install_body, "            let original = unsafe {{");
+    let _ = writeln!(
+        install_body,
+        "                ::core::mem::transmute::<*mut ::core::ffi::c_void, {name}Fn>(trampoline)"
+    );
+    let _ = writeln!(install_body, "            }};");
+    let _ = writeln!(
+        install_body,
+        "            let _ = {screaming}_ORIGINAL.set(original);"
+    );
+    let _ = writeln!(install_body, "        }},");
+    let _ = writeln!(install_body, "    ));");
+}
+
+/// Emit the hook plumbing for an `abi = "x87pow"` entry, the CRT `_CIpow` intrinsic.
+///
+/// `_CIpow`'s two `f64` arguments arrive on the x87 register stack (`ST(1)` =
+/// base, `ST(0)` = exponent) and its result returns in `ST(0)` — a register
+/// contract none of the named conventions can express. The thunk is a naked
+/// shim that spills BOTH arguments to the stack (popping each; the original
+/// thunk's `FST` leaves the exponent live in `ST(0)` for its core to consume,
+/// so a replacement that pops neither — or one — leaks x87 registers until the
+/// 8-slot stack jams and every load yields the indefinite `QNaN`) and calls an
+/// ordinary `extern "C" fn(f64, f64) -> f64` wrapper around the reimpl, whose
+/// `f64` return lands in `ST(0)` exactly as the original leaves it.
+/// Constraints mirror `x87st0`: exactly two `f64` args, an `f64` return, no
+/// `preserve` (the original clobbers EAX/ECX/EDX), no differential harness,
+/// and no crumb recording (the shim has no Rust body to host the cfg'd call).
+fn emit_x87pow(
+    out: &mut String,
+    install_body: &mut String,
+    name: &str,
+    snake: &str,
+    screaming: &str,
+    f: &Function,
+) {
+    assert!(
+        f.args == ["f64", "f64"] && f.ret == "f64",
+        "{name}: x87pow supports exactly (f64 in ST1, f64 in ST0) -> f64, got {:?} -> {}",
+        f.args,
+        f.ret
+    );
+    assert!(
+        f.preserve.is_empty(),
+        "{name}: x87pow cannot preserve registers (the original clobbers eax/ecx/edx), got {:?}",
+        f.preserve
+    );
+    assert!(
+        f.diff.is_none(),
+        "{name}: x87pow entries cannot carry a [diff] table"
+    );
+
+    // Opaque trampoline handle: the original is not callable through a Rust fn
+    // type (its arguments live in x87 registers); stored only so the `originals`
+    // accessor contract matches every other hook.
+    let _ = writeln!(out, "pub type {name}Fn = unsafe extern \"C\" fn();");
+    let _ = writeln!(
+        out,
+        "static {screaming}_ORIGINAL: ::std::sync::OnceLock<{name}Fn> = ::std::sync::OnceLock::new();"
+    );
+
+    // Ordinary-ABI inner the asm shim calls: its two f64 arguments are the
+    // spilled ST(1)/ST(0) already sitting on the stack at the `call`.
+    let _ = writeln!(
+        out,
+        "extern \"C\" fn {snake}_x87pow_inner(arg0: f64, arg1: f64) -> f64 {{"
+    );
+    let _ = writeln!(out, "    super::hooks::{snake}(arg0, arg1)");
+    let _ = writeln!(out, "}}");
+
+    let _ = writeln!(out, "#[unsafe(naked)]");
+    let _ = writeln!(out, "extern \"C\" fn {snake}_thunk() {{");
+    let _ = writeln!(
+        out,
+        "    // SAFETY: replicates the original's register contract: the two f64\n    \
+         // arguments arrive in ST(1) (base) and ST(0) (exponent) and are popped to\n    \
+         // the stack slots the cdecl inner reads as its arguments — both popped,\n    \
+         // matching the original's net effect (it consumes both and leaves only the\n    \
+         // result), so the x87 stack depth is balanced at +1 on return; the inner's\n    \
+         // f64 return arrives in ST(0) and flows through unchanged."
+    );
+    let _ = writeln!(
+        out,
+        "    ::core::arch::naked_asm!(\n        \
+         \"sub esp, 16\",\n        \
+         \"fxch\",\n        \
+         \"fstp qword ptr [esp]\",\n        \
+         \"fstp qword ptr [esp + 8]\",\n        \
+         \"call {{inner}}\",\n        \
+         \"add esp, 16\",\n        \
+         \"ret\",\n        \
+         inner = sym {snake}_x87pow_inner,\n    \
+         )"
+    );
+    let _ = writeln!(out, "}}");
+    out.push('\n');
+
+    // Install step: identical to the named-convention path, minus the
+    // differential-mode arming (x87pow entries have no diff machinery).
     let _ = writeln!(install_body, "    queued += usize::from(install_thunk(");
     let _ = writeln!(install_body, "        image_base,");
     let _ = writeln!(install_body, "        {:#010x},", f.rva);

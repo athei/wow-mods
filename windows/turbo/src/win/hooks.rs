@@ -27376,9 +27376,14 @@ pub fn orientation__set_position__7adcd0(this: *mut u8, pos: *const f32) {
     }
 }
 
-/// `Math::Pow` — `__cdecl(base: f64, exp: f64) -> f64` (result in `ST(0)`). Pure
-/// scalar, no pointers. Replacing it also retires `Math::Exp2` (0x744b00), whose
-/// sole caller is this routine.
+/// `Math::Pow` — the CRT `_CIpow` intrinsic thunk (0x73f940).
+///
+/// Base in `ST(1)`, exponent in `ST(0)`, result in `ST(0)`. The generated
+/// `x87pow` naked shim pops both arguments to the stack before calling here
+/// (the register contract is the whole point of the hook site — see
+/// `symbols.toml`), so this adapter sees plain by-value floats. Pure scalar,
+/// no pointers. Replacing the thunk also retires its core (0x73f962) and
+/// `Math::Exp2` (0x744b00), whose sole caller is that core.
 pub fn math__pow_x87(base: f64, exp: f64) -> f64 {
     crate::math::misc::math__pow_x87(base, exp)
 }

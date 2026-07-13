@@ -2027,12 +2027,15 @@ mod tests_perlin_noise3_d__452960 {
     }
 }
 
-/// `Math::Pow` — the CRT `pow(base, exp)` core (0x73f962): in the 1.12 client an
-/// x87 `fyl2x`/`f2xm1`/`fscale` chain wrapped in `FSAVE`/`FRSTOR`, hot under
-/// Rosetta because those transcendentals trap to microcode helpers. Computed in
-/// f64 via the pure-Rust `libm` (SSE2, no x87 libm call); the result is returned
-/// in `ST(0)` exactly as the original leaves it. Hooking this also makes
-/// `Math::Exp2` (0x744b00) dead — its only caller is this routine.
+/// `Math::Pow` — the CRT `_CIpow(base, exp)` intrinsic (thunk 0x73f940 + core 0x73f962).
+///
+/// In the 1.12 client an x87 `fyl2x`/`f2xm1`/`fscale` chain wrapped in
+/// `FSAVE`/`FRSTOR`, hot under Rosetta because those transcendentals trap to
+/// microcode helpers. Computed in f64 via the pure-Rust `libm` (SSE2, no x87
+/// libm call); the `x87pow` shim keeps the intrinsic's register contract (args
+/// in `ST(1)`/`ST(0)`, both consumed; result in `ST(0)`) balanced. Hooking the
+/// thunk also makes the core and `Math::Exp2` (0x744b00) dead — the core is the
+/// thunk's only callee, and Exp2's only caller is the core.
 ///
 /// `libm::pow` follows IEEE-754 / C99 `pow`, which is precisely what the
 /// original's `_pow_handle_inf` special-case table reproduces (|x| ≷ 1 with
