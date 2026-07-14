@@ -15045,7 +15045,7 @@ pub fn c_world_bsp__traverse_node__6bc1c0(
 }
 
 /// `CWorld::LinkEntityToTiles` — `__thiscall(ecx = this)`, returns `u32`
-/// (0 = world inactive / no tile touched, 1 = linked into >= 1 tile).
+/// (0 = linking disabled / no tile touched, 1 = linked into >= 1 tile).
 ///
 /// Quantizes the entity world-space AABB (fields at `this+0x44/0x48/0x50/0x54`)
 /// into inclusive tile-index loop bounds (pure kernel; field@0x50 -> ix_lo,
@@ -15065,12 +15065,13 @@ pub fn c_world__link_entity_to_tiles__6a8ca0(this: *mut core::ffi::c_void) -> u3
         return 0;
     }
 
-    // World/tile-grid active gate `DAT_00c9e384`: null => inactive, return 0.
-    const WORLD_ACTIVE: *const usize =
-        (crate::win::EXPECTED_IMAGE_BASE + 0x89_e384) as *const usize;
+    // Link-disable early-out `DAT_00c9e384` (same gate as 0x6b7070/0x6aa8b0):
+    // non-zero => skip, return 0. Zero is the normal in-play state.
+    const LINK_DISABLED: *const u32 =
+        (crate::win::EXPECTED_IMAGE_BASE + 0x89_e384) as *const u32;
     // SAFETY: fixed `.data` gate dword in the live host image (non-DYNAMICBASE).
-    let world_active = unsafe { WORLD_ACTIVE.read() };
-    if world_active == 0 {
+    let link_disabled = unsafe { LINK_DISABLED.read() };
+    if link_disabled != 0 {
         return 0;
     }
 
