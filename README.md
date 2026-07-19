@@ -87,7 +87,8 @@ That makes `wow_turbo` safe to drop into an existing mod loadout (see
 - Ports the entire text-layout stack off x87 — in a packed capital city it
   alone was ~11.7% of the client's main-thread profile.
 - Faster addon/Lua runtime: literal `string.gsub`/`string.gfind` fast paths,
-  a fixed string-intern hash, and half as many garbage-collector pauses.
+  a fixed string-intern hash, and per-collection garbage-collector timing
+  visibility.
 - Moves MP3 music decoding — the single hottest x87 routine in a busy
   session — to SSE.
 - Faster loading screens (one persistent modern zlib inflater instead of a
@@ -181,9 +182,13 @@ targeted fixes:
   structurally similar strings (and addons generate a lot of those) collide in
   the intern table and degrade into long linked-list walks. Replaced with a
   full FNV-1a hash plus a stored-hash pre-check before any byte comparison.
-- **Garbage-collector pacing.** Lua 5.0's collector is stop-the-world.
-  Widening its growth threshold makes collections run roughly half as often,
-  cutting both load-time thrash and steady-state gameplay pauses.
+- **Garbage-collector observability.** Lua 5.0's collector is stop-the-world,
+  so every collection is a potential frame hitch. Each collection now logs its
+  mark/sweep phase timings and heap size (`RUST_LOG=wow::gc=debug`), and
+  collections long enough to drop frames emit a warning. The client's own
+  pacing policy is left untouched: an earlier release widened the growth
+  threshold to collect less often, which let enough garbage accumulate on
+  addon-heavy raid setups to cause multi-second freezes, and was reverted.
 - **Hot VM leaves.** Table hashing and lookup, number↔string conversion and
   the constant-table path are ported to SSE.
 

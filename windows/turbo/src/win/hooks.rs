@@ -11613,6 +11613,18 @@ pub fn os_get_time_ms__42b790() -> i64 {
     (((u128::from(ticks) * u128::from(magic)) >> CLOCK_SHIFT) as i64).wrapping_add(bias)
 }
 
+/// Fold a raw `rdtsc` delta to whole milliseconds.
+///
+/// The duration counterpart of [`os_get_time_ms__42b790`]'s absolute fold —
+/// the same integer Q[`CLOCK_SHIFT`] multiply against the published
+/// engine-clock scale, without the bias. Returns 0 before
+/// [`init_engine_clock`] publishes the magic (never observed: attach runs it
+/// before `install_all`).
+fn clock_ticks_to_ms(ticks: u64) -> u64 {
+    let magic = CLOCK_MAGIC.load(core::sync::atomic::Ordering::Relaxed);
+    ((u128::from(ticks) * u128::from(magic)) >> CLOCK_SHIFT) as u64
+}
+
 /// CRT `__ftol` — argument in `ST(0)`, result in `EDX:EAX` (`abi = "x87st0"`;
 /// the generated naked shim spills the x87 argument and forwards it here).
 /// Every compiler-emitted float-to-int cast in the binary funnels through
@@ -19719,39 +19731,102 @@ pub fn storm_archive__find_file_entry__6549a0(
     }
 }
 
-/// Multiplier applied to the post-collect Lua GC threshold. The stock collector
-/// resets `GCthreshold` to ~2x the live set after each cycle; widening it to
-/// `K * nblocks` makes the (non-incremental, stop-the-world) collector run ~K/2
-/// as often, bounding heap headroom to K x the live set. Cuts both the load-time
-/// mark-sweep thrash and the steady-state gameplay collect frequency. Tunable.
-const GC_THRESHOLD_MULTIPLIER: u32 = 4;
-
-/// `luaC_collectgarbage` — `__fastcall(ecx = L)`. Runs the stock full collection
-/// (which internally resets `GCthreshold` to ~2x the live set), then widens that
-/// threshold to `GC_THRESHOLD_MULTIPLIER * nblocks`. Re-applied on every collect,
-/// so the collector fires less often with heap growth bounded to K x the live set.
+/// Gauge threshold: a collect at least this long earns a rate-limited warn.
 ///
-/// Lua 5.0 layout: `global_State` at `*(L + 0x10)`, live-byte count `nblocks` at
-/// `G + 0x28`, GC trigger `GCthreshold` at `G + 0x24`.
+/// 50 ms is ~3 dropped frames at 60 fps — a visible hitch. Collects below it
+/// still emit the per-collect debug record.
+const GC_WARN_MS: u64 = 50;
+
+/// `luaC_collectgarbage` — `__fastcall(ecx = L)`, per-phase pause gauge.
+///
+/// Faithful reimpl of the stock outer body (gate + four phase calls) with
+/// `rdtsc` between phases; the collection itself is untouched stock code.
+/// Stock shape: bail if `*(L+0x60) == 0`, then `markall(L)`,
+/// `luaC_sweep(L, 0)`, `checkSizes(L)`, tail-`luaC_callGCTM(L)`.
+///
+/// Threshold pacing is deliberately NOT touched: `checkSizes` tails into the
+/// client's own `luaM_adjustGC` (`0x6fae00`), which sets `GCthreshold =
+/// nblocks + max(min(carry-over headroom, per-pool committed-capacity metric),
+/// nblocks/4)` — pacing tied to the SmallBlockPool footprint, many small
+/// collects. An earlier release overwrote that with `4 * nblocks`, letting up
+/// to ~12x the stock garbage pile up per cycle; on raid-scale heaps the
+/// (non-incremental, stop-the-world) collect then ran for seconds. The gauge
+/// below exists so pacing changes are argued with numbers next time.
+///
+/// Lua 5.0 layout: `global_State` at `*(L + 0x10)`, live-byte count `nblocks`
+/// at `G + 0x28`, GC trigger `GCthreshold` at `G + 0x24`. Reentry via a `__gc`
+/// metamethod allocating past the fresh threshold recurses through the patched
+/// VA exactly like stock; the gauge simply emits a nested record.
 pub fn lua_c_collectgarbage__6f7340(l: i32) {
-    let original = super::symbols::originals::lua_c_collectgarbage__6f7340();
-    original(l);
+    use core::sync::atomic::{AtomicU32, Ordering};
     if l == 0 {
         return;
     }
     let l_addr = l as usize;
-    // SAFETY: `L + 0x10` is the lua_State's global_State pointer.
-    let g = unsafe { *((l_addr + 0x10) as *const usize) };
-    if g == 0 {
+    // SAFETY: `L + 0x60` is the collect-enable gate the stock prologue tests.
+    if unsafe { *((l_addr + 0x60) as *const u32) } == 0 {
         return;
     }
-    // SAFETY: `G + 0x28` is the post-collect live-byte count (nblocks).
-    let nblocks = unsafe { *((g + 0x28) as *const u32) };
-    let widened = nblocks.saturating_mul(GC_THRESHOLD_MULTIPLIER);
-    // SAFETY: `G + 0x24` is the GC trigger threshold; widening it lowers the
-    // collect frequency.
-    unsafe {
-        *((g + 0x24) as *mut u32) = widened;
+    // Stock phase bodies (all unhooked; xref'd from the stock `0x6f7340` body).
+    const MARKALL_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x2f_73e0;
+    const SWEEP_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x2f_71d0;
+    const CHECK_SIZES_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x2f_7370;
+    const CALL_GCTM_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x2f_7080;
+    // SAFETY: image base verified at load; `fastcall(ecx = L)` per the disasm.
+    let markall: extern "fastcall" fn(i32) = unsafe { core::mem::transmute(MARKALL_VA) };
+    // SAFETY: image base verified at load; `fastcall(ecx = L, edx = all-flag)`.
+    let sweep: extern "fastcall" fn(i32, i32) = unsafe { core::mem::transmute(SWEEP_VA) };
+    // SAFETY: image base verified at load; `fastcall(ecx = L)` per the disasm.
+    let check_sizes: extern "fastcall" fn(i32) = unsafe { core::mem::transmute(CHECK_SIZES_VA) };
+    // SAFETY: image base verified at load; `fastcall(ecx = L)` per the disasm.
+    let call_gctm: extern "fastcall" fn(i32) = unsafe { core::mem::transmute(CALL_GCTM_VA) };
+
+    // SAFETY: `L + 0x10` is the lua_State's global_State pointer.
+    let g = unsafe { *((l_addr + 0x10) as *const usize) };
+    // SAFETY: `G + 0x28` is the live-byte count (nblocks).
+    let nblocks_before = if g == 0 { 0 } else { unsafe { *((g + 0x28) as *const u32) } };
+
+    let t0 = wow_shared::tsc::rdtsc();
+    markall(l);
+    let t1 = wow_shared::tsc::rdtsc();
+    sweep(l, 0);
+    let t2 = wow_shared::tsc::rdtsc();
+    check_sizes(l);
+    let t3 = wow_shared::tsc::rdtsc();
+    call_gctm(l);
+    let t4 = wow_shared::tsc::rdtsc();
+
+    let mark_ms = clock_ticks_to_ms(t1.wrapping_sub(t0));
+    let sweep_ms = clock_ticks_to_ms(t2.wrapping_sub(t1));
+    let sizes_ms = clock_ticks_to_ms(t3.wrapping_sub(t2));
+    let gctm_ms = clock_ticks_to_ms(t4.wrapping_sub(t3));
+    let total_ms = clock_ticks_to_ms(t4.wrapping_sub(t0));
+    let (nblocks_after, threshold) = if g == 0 {
+        (0, 0)
+    } else {
+        // SAFETY: `G + 0x28` is the post-collect live-byte count (nblocks).
+        let after = unsafe { *((g + 0x28) as *const u32) };
+        // SAFETY: `G + 0x24` is the GC trigger threshold `luaM_adjustGC` set.
+        let thr = unsafe { *((g + 0x24) as *const u32) };
+        (after, thr)
+    };
+    log::debug!(
+        target: "wow::gc",
+        "gc: {total_ms} ms (mark {mark_ms}, sweep {sweep_ms}, sizes {sizes_ms}, \
+         gctm {gctm_ms}), nblocks {nblocks_before} -> {nblocks_after}, \
+         threshold {threshold}",
+    );
+    if total_ms >= GC_WARN_MS {
+        static SLOW: AtomicU32 = AtomicU32::new(0);
+        let n = SLOW.fetch_add(1, Ordering::Relaxed);
+        if n < 64 || n.is_multiple_of(16) {
+            log::warn!(
+                target: "wow::gc",
+                "slow gc #{n}: {total_ms} ms (mark {mark_ms}, sweep {sweep_ms}, \
+                 sizes {sizes_ms}, gctm {gctm_ms}), nblocks {nblocks_before} -> \
+                 {nblocks_after}, threshold {threshold}",
+            );
+        }
     }
 }
 
