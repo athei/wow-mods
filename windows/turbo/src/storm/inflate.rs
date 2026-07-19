@@ -6,10 +6,12 @@
 //! sector**. This replaces the decode with `miniz_oxide`'s low-level
 //! decompressor, reusing one [`DecompressorOxide`] across sectors, so the
 //! per-sector init/end and its pool-allocator churn disappear and the inner loop
-//! is a modern `inflate_fast`. `miniz_oxide` is used directly (not via `flate2`,
-//! which would force-enable `simd-adler32`'s runtime CPU dispatch) and with
-//! `simd` off, so it stays on the build's pinned SSE baseline — no Rosetta AVX2
-//! mispick.
+//! is a modern `inflate_fast`. `miniz_oxide` is used directly (`flate2` adds
+//! nothing over the low-level reuse API here) with the `simd` feature ON:
+//! `simd-adler32`'s runtime dispatch only takes AVX paths when CPUID reports
+//! them — Rosetta reports AVX only on explicit opt-in — so the checksum picks
+//! the best safe path everywhere without disturbing the pinned compile-time
+//! baseline.
 
 use miniz_oxide::inflate::{
     TINFLStatus,
