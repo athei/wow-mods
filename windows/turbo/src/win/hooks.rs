@@ -19737,11 +19737,99 @@ pub fn storm_archive__find_file_entry__6549a0(
 /// still emit the per-collect debug record.
 const GC_WARN_MS: u64 = 50;
 
+/// Native replacement for the stock sweep phase of a normal collect.
+///
+/// Reproduces `luaC_sweep(L, 0)` (`0x6f71d0`) exactly — sweep the userdata
+/// list, every string-table bucket (decrementing `strt.nuse` by the freed
+/// count), then the main `rootgc` list — using the prefetching
+/// [`crate::math::lua_gc::sweep_list`] kernel for the walks. Per dead object
+/// it skips the stock `freeobj` → `luaM_irealloc` frames for the three
+/// trivially-sized types (string, userdata, upvalue): it performs
+/// `luaM_irealloc`'s bookkeeping inline (`nblocks -= size`, in stock
+/// per-object order) and calls `SmallBlockPool__Realloc` directly — the same
+/// pool call the stock chain bottoms out in. Compound types (table, closure,
+/// thread, proto) still go through stock `freeobj`, whose helpers free their
+/// internal arrays. Only the normal-collect `deadmask = 0` is implemented;
+/// the free-everything close path never runs through the collect hook.
+///
+/// Layout (verified on the disasm): `strt.hash/nuse/size` at `G+0x4/0x8/0xc`,
+/// `rootgc` at `G+0x10`, `rootudata` at `G+0x14`, `nblocks` at `G+0x28`;
+/// object tag at `+0x4`; string/userdata length at `+0xc` with allocation
+/// sizes `len+0x11` / `len+0x10`; upvalues are `0x20` bytes (all three from
+/// stock `freeobj`).
+fn lua_gc_sweep_native(l: i32) {
+    use crate::math::lua_gc::{GcHeader, sweep_list};
+    const FREEOBJ_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x2f_7260;
+    const POOL_REALLOC_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x2f_ae90;
+    // SAFETY: image base verified at load; `fastcall(ecx = L, edx = object)`
+    // per the stock sweeplist call site.
+    let free_obj: extern "fastcall" fn(i32, u32) = unsafe { core::mem::transmute(FREEOBJ_VA) };
+    // SAFETY: image base verified at load; `fastcall(ecx = L, edx = block)`
+    // plus the new size on the stack (`ret 0x4`), per the luaM_irealloc tail.
+    let pool_realloc: extern "fastcall" fn(i32, u32, u32) -> u32 =
+        unsafe { core::mem::transmute(POOL_REALLOC_VA) };
+
+    // SAFETY: `L + 0x10` is the lua_State's global_State pointer.
+    let g = unsafe { *(((l as usize) + 0x10) as *const usize) };
+    if g == 0 {
+        return;
+    }
+    let nblocks = (g + 0x28) as *mut u32;
+    let mut free = |o: *mut GcHeader| {
+        let addr = o as usize;
+        // SAFETY: `o` is a dead, unlinked GC object; the tag is at `+0x4`.
+        let size = match unsafe { (*o).tt } {
+            // SAFETY: the string length lives at `+0xc`.
+            4 => unsafe { *((addr + 0xc) as *const u32) }.wrapping_add(0x11),
+            // SAFETY: the userdata length lives at `+0xc`.
+            7 => unsafe { *((addr + 0xc) as *const u32) }.wrapping_add(0x10),
+            10 => 0x20,
+            _ => {
+                free_obj(l, addr as u32);
+                return;
+            }
+        };
+        // SAFETY: `G+0x28` is nblocks; stock `luaM_irealloc` order — debit
+        // it, then free the block into the client's pool allocator.
+        let debited = unsafe { *nblocks }.wrapping_sub(size);
+        // SAFETY: see above.
+        unsafe { *nblocks = debited };
+        pool_realloc(l, addr as u32, 0);
+    };
+
+    // SAFETY: `G+0x14` anchors the userdata list; layout per the doc comment.
+    unsafe {
+        sweep_list((g + 0x14) as *mut *mut GcHeader, 0, &mut free);
+    }
+    // SAFETY: `G+0x4`/`G+0xc` are the string-table bucket array and size.
+    let strt_hash = unsafe { *((g + 0x4) as *const usize) } as *mut *mut GcHeader;
+    // SAFETY: see above.
+    let strt_size = unsafe { *((g + 0xc) as *const i32) };
+    let mut dead_strings = 0u32;
+    for i in 0..strt_size.max(0) as usize {
+        // SAFETY: `i < strt.size`, so this is a valid bucket anchor.
+        let bucket = unsafe { strt_hash.add(i) };
+        // SAFETY: the bucket anchors a well-formed intern chain.
+        dead_strings += unsafe { sweep_list(bucket, 0, &mut free) };
+    }
+    let nuse = (g + 0x8) as *mut u32;
+    // SAFETY: `G+0x8` is `strt.nuse`; stock sweepstrings debits freed counts.
+    let remaining = unsafe { *nuse }.wrapping_sub(dead_strings);
+    // SAFETY: see above.
+    unsafe { *nuse = remaining };
+    // SAFETY: `G+0x10` anchors the main rootgc list.
+    unsafe {
+        sweep_list((g + 0x10) as *mut *mut GcHeader, 0, &mut free);
+    }
+}
+
 /// `luaC_collectgarbage` — `__fastcall(ecx = L)`, per-phase pause gauge.
 ///
 /// Faithful reimpl of the stock outer body (gate + four phase calls) with
-/// `rdtsc` between phases; the collection itself is untouched stock code.
-/// Stock shape: bail if `*(L+0x60) == 0`, then `markall(L)`,
+/// `rdtsc` between phases. Mark, size-check, and finalizer phases are the
+/// untouched stock bodies; the sweep phase runs natively via
+/// [`lua_gc_sweep_native`], which also carries the lua-5.0.3 zombie-weak-
+/// table sweep fix. Stock shape: bail if `*(L+0x60) == 0`, then `markall(L)`,
 /// `luaC_sweep(L, 0)`, `checkSizes(L)`, tail-`luaC_callGCTM(L)`.
 ///
 /// Threshold pacing is deliberately NOT touched: `checkSizes` tails into the
@@ -19768,14 +19856,12 @@ pub fn lua_c_collectgarbage__6f7340(l: i32) {
         return;
     }
     // Stock phase bodies (all unhooked; xref'd from the stock `0x6f7340` body).
+    // The sweep phase runs natively instead — see [`lua_gc_sweep_native`].
     const MARKALL_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x2f_73e0;
-    const SWEEP_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x2f_71d0;
     const CHECK_SIZES_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x2f_7370;
     const CALL_GCTM_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x2f_7080;
     // SAFETY: image base verified at load; `fastcall(ecx = L)` per the disasm.
     let markall: extern "fastcall" fn(i32) = unsafe { core::mem::transmute(MARKALL_VA) };
-    // SAFETY: image base verified at load; `fastcall(ecx = L, edx = all-flag)`.
-    let sweep: extern "fastcall" fn(i32, i32) = unsafe { core::mem::transmute(SWEEP_VA) };
     // SAFETY: image base verified at load; `fastcall(ecx = L)` per the disasm.
     let check_sizes: extern "fastcall" fn(i32) = unsafe { core::mem::transmute(CHECK_SIZES_VA) };
     // SAFETY: image base verified at load; `fastcall(ecx = L)` per the disasm.
@@ -19789,7 +19875,7 @@ pub fn lua_c_collectgarbage__6f7340(l: i32) {
     let t0 = wow_shared::tsc::rdtsc();
     markall(l);
     let t1 = wow_shared::tsc::rdtsc();
-    sweep(l, 0);
+    lua_gc_sweep_native(l);
     let t2 = wow_shared::tsc::rdtsc();
     check_sizes(l);
     let t3 = wow_shared::tsc::rdtsc();

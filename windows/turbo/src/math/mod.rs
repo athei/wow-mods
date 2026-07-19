@@ -20,6 +20,7 @@ pub mod frustum;
 pub mod gx;
 pub mod light;
 pub mod lua;
+pub mod lua_gc;
 pub mod m2;
 pub mod matrix33;
 pub mod matrix34;
