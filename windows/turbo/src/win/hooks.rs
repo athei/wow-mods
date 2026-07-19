@@ -19737,6 +19737,448 @@ pub fn storm_archive__find_file_entry__6549a0(
 /// still emit the per-collect debug record.
 const GC_WARN_MS: u64 = 50;
 
+/// Native mark phase: worklist-driven reimpl of stock `markall`.
+///
+/// Replaces the recursive/intrusive-gray-list stock mark with a flat
+/// worklist so the traversal can later be parallelized. Object layout
+/// (verified on the disasm): GC header `next+0x0/tt+0x4/marked+0x5`;
+/// `TObject = {tt, shadow, value}` (16 bytes — the `+0x4` shadow word is a
+/// client addition whose canonical nil value lives at `0xceeac0`); table
+/// `flags+0x6/lsizenode+0x7/metatable+0x8/array+0xc/node+0x10/gclist+0x18/
+/// sizearray+0x1c`, nodes 0x28 bytes (`key@0`, `val@0x10`); closure
+/// `isC+0x6/nupvalues+0x7`; proto constants `+0x8`/inner protos `+0x10`/
+/// locvars `+0x18`/upvalue names `+0x1c`/source `+0x20` with counts at
+/// `+0x28/+0x34/+0x38/+0x24`; upvalue value `TObject` at `+0x10`.
+///
+/// Thread objects are the one type still traversed by STOCK code: stack
+/// traversal has side effects (nil-fill above top, `checkStacksizes`
+/// shrink-reallocs), so [`MarkCtx::traverse_thread`] hands the stock
+/// `traversestack` a GCState-shaped shim (`{tmark, wk, wv, wkv, g}`) and
+/// drains the intrusive gray list it builds back into the worklist. The
+/// weak lists are plain vectors (stock threads them through table `gclist`
+/// fields); the weak-table clears are reimplemented natively against them.
+/// `separateudata` runs stock (serial, allocator-touching).
+struct MarkCtx {
+    l: i32,
+    g: usize,
+    gray: Vec<usize>,
+    wk: Vec<usize>,
+    wv: Vec<usize>,
+    wkv: Vec<usize>,
+    shim: [usize; 5],
+}
+
+impl MarkCtx {
+    /// Reads a GC object's type tag (`+0x4`).
+    #[inline]
+    fn tag(o: usize) -> u8 {
+        // SAFETY: `o` is a live GC object; the tag byte is at `+0x4`.
+        unsafe { *((o + 0x4) as *const u8) }
+    }
+
+    /// Reads a GC object's mark byte (`+0x5`).
+    #[inline]
+    fn marked(o: usize) -> u8 {
+        // SAFETY: `o` is a live GC object; the mark byte is at `+0x5`.
+        unsafe { *((o + 0x5) as *const u8) }
+    }
+
+    /// Writes a GC object's mark byte.
+    #[inline]
+    fn set_marked(o: usize, m: u8) {
+        // SAFETY: `o` is a live GC object; the mark byte is at `+0x5`.
+        unsafe { *((o + 0x5) as *mut u8) = m };
+    }
+
+    /// Stock `reallymarkobject`: set the reachable bit and queue traversal.
+    ///
+    /// Strings and upvalues have no children; userdata marks its metatable
+    /// (never null on this client); tables/closures/threads/protos go gray.
+    fn mark(&mut self, o: usize) {
+        let m = Self::marked(o);
+        if m & 0x11 != 0 {
+            return;
+        }
+        Self::set_marked(o, m | 1);
+        match Self::tag(o) {
+            5 | 6 | 8 | 9 => self.gray.push(o),
+            7 => {
+                // SAFETY: userdata metatable pointer lives at `+0x8`.
+                let mt = unsafe { *((o + 0x8) as *const usize) };
+                self.mark(mt);
+            }
+            _ => {}
+        }
+    }
+
+    /// Stock `markvalue`: mark a `TObject`'s referent if it is collectible.
+    fn mark_value(&mut self, tv: usize) {
+        // SAFETY: `tv` is a live TObject; tag at `+0x0`, referent at `+0x8`.
+        if unsafe { *(tv as *const i32) } > 3 {
+            // SAFETY: see above.
+            let o = unsafe { *((tv + 0x8) as *const usize) };
+            self.mark(o);
+        }
+    }
+
+    /// Stock `traversetable`, with the weak lists kept as vectors.
+    fn traverse_table(&mut self, t: usize) {
+        // SAFETY: table metatable pointer lives at `+0x8` (never null).
+        let mt = unsafe { *((t + 0x8) as *const usize) };
+        self.mark(mt);
+        let mut weak_key = false;
+        let mut weak_val = false;
+        // SAFETY: metatable flags byte at `+0x6`; bit 3 caches "__mode absent".
+        if unsafe { *((mt + 0x6) as *const u8) } & 0x8 == 0 {
+            const GETTM_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x2f_7ba0;
+            // SAFETY: image base verified at load; `fastcall(ecx = mt,
+            // edx = event)` + name on the stack (`ret 0x4`), per the disasm.
+            let gettm: extern "fastcall" fn(usize, i32, usize) -> usize =
+                unsafe { core::mem::transmute(GETTM_VA) };
+            // SAFETY: `G+0x8c` is `tmname[TM_MODE]`.
+            let mode_name = unsafe { *((self.g + 0x8c) as *const usize) };
+            let mode = gettm(mt, 3, mode_name);
+            // SAFETY: a non-null result is a TObject; string check + data.
+            if mode != 0 && unsafe { *(mode as *const i32) } == 4 {
+                // SAFETY: string referent at `+0x8`; len `+0xc`; data `+0x10`.
+                let ts = unsafe { *((mode + 0x8) as *const usize) };
+                // SAFETY: see above.
+                let len = unsafe { *((ts + 0xc) as *const u32) } as usize;
+                // SAFETY: TString data is `len` bytes at `+0x10`.
+                let bytes =
+                    unsafe { core::slice::from_raw_parts((ts + 0x10) as *const u8, len) };
+                weak_key = bytes.contains(&b'k');
+                weak_val = bytes.contains(&b'v');
+                if weak_key || weak_val {
+                    let bits = (u8::from(weak_val) << 1 | u8::from(weak_key)) << 1;
+                    Self::set_marked(t, (Self::marked(t) & 0xf9) | bits);
+                    match (weak_key, weak_val) {
+                        (true, true) => self.wkv.push(t),
+                        (true, false) => self.wk.push(t),
+                        (false, true) => self.wv.push(t),
+                        (false, false) => unreachable!(),
+                    }
+                }
+            }
+        }
+        // SAFETY: array part pointer at `+0xc`, element count at `+0x1c`.
+        let array = unsafe { *((t + 0xc) as *const usize) };
+        // SAFETY: see above.
+        let size_array = unsafe { *((t + 0x1c) as *const i32) };
+        if !weak_val {
+            for i in 0..size_array.max(0) as usize {
+                self.mark_value(array + i * 0x10);
+            }
+        }
+        // SAFETY: node part pointer at `+0x10`; count is `1 << lsizenode`.
+        let node = unsafe { *((t + 0x10) as *const usize) };
+        // SAFETY: `lsizenode` byte at `+0x7`.
+        let n_nodes = 1usize << (unsafe { *((t + 0x7) as *const u8) } & 0x1f);
+        for i in 0..n_nodes {
+            let n = node + i * 0x28;
+            // SAFETY: node value tag at `+0x10`; nil entries are skipped.
+            if unsafe { *((n + 0x10) as *const i32) } != 0 {
+                if !weak_key {
+                    self.mark_value(n);
+                }
+                if !weak_val {
+                    self.mark_value(n + 0x10);
+                }
+            }
+        }
+    }
+
+    /// Stock `traverseclosure` (C upvalue slots vs Lua proto/gt/upvalues).
+    fn traverse_closure(&mut self, c: usize) {
+        // SAFETY: `isC` byte at `+0x6`, `nupvalues` byte at `+0x7`.
+        let is_c = unsafe { *((c + 0x6) as *const u8) } != 0;
+        // SAFETY: see above.
+        let nup = unsafe { *((c + 0x7) as *const u8) } as usize;
+        if is_c {
+            for i in 0..nup {
+                self.mark_value(c + 0x10 + i * 0x10);
+            }
+        } else {
+            // SAFETY: Lua closure: proto object at `+0x18`, gt at `+0xc`.
+            let proto = unsafe { *((c + 0x18) as *const usize) };
+            self.mark(proto);
+            // SAFETY: see above.
+            let gt = unsafe { *((c + 0xc) as *const usize) };
+            self.mark(gt);
+            for i in 0..nup {
+                // SAFETY: upvalue pointer array at `+0x20`.
+                let u = unsafe { *((c + 0x20 + i * 4) as *const usize) };
+                if Self::marked(u) == 0 {
+                    self.mark_value(u + 0x10);
+                    Self::set_marked(u, 1);
+                }
+            }
+        }
+    }
+
+    /// Stock `traverseproto`: direct-bit string marks + inner protos.
+    fn traverse_proto(&mut self, p: usize) {
+        let bit = |s: usize| Self::set_marked(s, Self::marked(s) | 1);
+        // SAFETY: source string at `+0x20` (offsets per the fn doc comment).
+        bit(unsafe { *((p + 0x20) as *const usize) });
+        // SAFETY: constants array at `+0x8`, count at `+0x28`.
+        let k = unsafe { *((p + 0x8) as *const usize) };
+        // SAFETY: see above.
+        let size_k = unsafe { *((p + 0x28) as *const i32) };
+        for i in 0..size_k.max(0) as usize {
+            let tv = k + i * 0x10;
+            // SAFETY: constant tag at `+0x0`; only strings are collectible.
+            if unsafe { *(tv as *const i32) } == 4 {
+                // SAFETY: see above.
+                bit(unsafe { *((tv + 0x8) as *const usize) });
+            }
+        }
+        // SAFETY: upvalue-name array at `+0x1c`, count at `+0x24`.
+        let upvals = unsafe { *((p + 0x1c) as *const usize) };
+        // SAFETY: see above.
+        let size_upvals = unsafe { *((p + 0x24) as *const i32) };
+        for i in 0..size_upvals.max(0) as usize {
+            // SAFETY: name pointers, stride 4.
+            bit(unsafe { *((upvals + i * 4) as *const usize) });
+        }
+        // SAFETY: inner-proto array at `+0x10`, count at `+0x34`.
+        let inner = unsafe { *((p + 0x10) as *const usize) };
+        // SAFETY: see above.
+        let size_inner = unsafe { *((p + 0x34) as *const i32) };
+        for i in 0..size_inner.max(0) as usize {
+            // SAFETY: proto pointers, stride 4.
+            let ip = unsafe { *((inner + i * 4) as *const usize) };
+            self.mark(ip);
+        }
+        // SAFETY: locvar array at `+0x18` (stride 0xc, name at `+0x0`),
+        // count at `+0x38`.
+        let locvars = unsafe { *((p + 0x18) as *const usize) };
+        // SAFETY: see above.
+        let size_locvars = unsafe { *((p + 0x38) as *const i32) };
+        for i in 0..size_locvars.max(0) as usize {
+            // SAFETY: see above.
+            bit(unsafe { *((locvars + i * 0xc) as *const usize) });
+        }
+    }
+
+    /// Thread traversal through STOCK `traversestack` + shim drain.
+    fn traverse_thread(&mut self, th: usize) {
+        const TRAVERSESTACK_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x2f_7860;
+        // SAFETY: image base verified at load; `fastcall(ecx = GCState*,
+        // edx = L1)` per the markall/propagatemarks call sites.
+        let traversestack: extern "fastcall" fn(*mut [usize; 5], usize) =
+            unsafe { core::mem::transmute(TRAVERSESTACK_VA) };
+        traversestack(&mut self.shim, th);
+        self.drain_shim();
+    }
+
+    /// Move everything a stock callee pushed onto the shim's intrusive
+    /// gray list into the flat worklist.
+    fn drain_shim(&mut self) {
+        let mut o = self.shim[0];
+        self.shim[0] = 0;
+        while o != 0 {
+            let off = match Self::tag(o) {
+                5 => 0x18,
+                6 => 0x8,
+                8 => 0x54,
+                9 => 0x40,
+                _ => break,
+            };
+            // SAFETY: the per-type gclist link stock reallymarkobject used.
+            let next = unsafe { *((o + off) as *const usize) };
+            self.gray.push(o);
+            o = next;
+        }
+    }
+
+    /// Drain the worklist: stock `propagatemarks` over the flat queue.
+    fn propagate(&mut self) {
+        while let Some(o) = self.gray.pop() {
+            match Self::tag(o) {
+                5 => self.traverse_table(o),
+                6 => self.traverse_closure(o),
+                8 => self.traverse_thread(o),
+                9 => self.traverse_proto(o),
+                _ => {}
+            }
+        }
+    }
+
+    /// Stock `valismarked`: strings are marked as a side effect; only the
+    /// reachable bit decides.
+    fn val_is_marked(tv: usize) -> bool {
+        // SAFETY: `tv` is a live TObject; tag at `+0x0`, referent at `+0x8`.
+        let tt = unsafe { *(tv as *const i32) };
+        if tt == 4 {
+            // SAFETY: see above.
+            let s = unsafe { *((tv + 0x8) as *const usize) };
+            Self::set_marked(s, Self::marked(s) | 1);
+        }
+        if tt < 4 {
+            return true;
+        }
+        // SAFETY: see above.
+        let o = unsafe { *((tv + 0x8) as *const usize) };
+        Self::marked(o) & 1 != 0
+    }
+
+    /// Stock `removeentry`: nil the value (tag + shadow word), key → DEAD.
+    fn remove_entry(n: usize) {
+        // SAFETY: the canonical nil shadow word the client keeps at 0xceeac0.
+        let nil_shadow = unsafe { *((crate::win::EXPECTED_IMAGE_BASE + 0x8c_eac0) as *const u32) };
+        // SAFETY: node value tag at `+0x10`, shadow at `+0x14`.
+        unsafe { *((n + 0x10) as *mut i32) = 0 };
+        // SAFETY: see above.
+        unsafe { *((n + 0x14) as *mut u32) = nil_shadow };
+        // SAFETY: node key tag at `+0x0`; collectible keys become DEAD (-1).
+        if unsafe { *(n as *const i32) } >= 4 {
+            // SAFETY: see above.
+            unsafe { *(n as *mut i32) = -1 };
+        }
+    }
+
+    /// Stock `cleartablevalues` over one weak list.
+    fn clear_values(tables: &[usize]) {
+        for &t in tables {
+            // SAFETY: table layout per [`MarkCtx`] doc; array part.
+            let array = unsafe { *((t + 0xc) as *const usize) };
+            // SAFETY: see above.
+            let size_array = unsafe { *((t + 0x1c) as *const i32) };
+            for i in 0..size_array.max(0) as usize {
+                let tv = array + i * 0x10;
+                if !Self::val_is_marked(tv) {
+                    // SAFETY: nil the array slot (tag + shadow word).
+                    let nil_shadow = unsafe {
+                        *((crate::win::EXPECTED_IMAGE_BASE + 0x8c_eac0) as *const u32)
+                    };
+                    // SAFETY: see above.
+                    unsafe { *(tv as *mut i32) = 0 };
+                    // SAFETY: see above.
+                    unsafe { *((tv + 0x4) as *mut u32) = nil_shadow };
+                }
+            }
+            Self::clear_nodes(t, 0x10);
+        }
+    }
+
+    /// Stock `cleartablekeys` over one weak list.
+    fn clear_keys(tables: &[usize]) {
+        for &t in tables {
+            Self::clear_nodes(t, 0x0);
+        }
+    }
+
+    /// Shared node walk for the weak clears: test the TObject at
+    /// `node + probe_off`, remove the entry when its referent died.
+    fn clear_nodes(t: usize, probe_off: usize) {
+        // SAFETY: node part pointer at `+0x10`, count `1 << lsizenode`.
+        let node = unsafe { *((t + 0x10) as *const usize) };
+        // SAFETY: `lsizenode` byte at `+0x7`.
+        let n_nodes = 1usize << (unsafe { *((t + 0x7) as *const u8) } & 0x1f);
+        for i in 0..n_nodes {
+            let n = node + i * 0x28;
+            // SAFETY: skip entries whose value is already nil (stock
+            // cleartablevalues relies on valismarked(nil) == true; for the
+            // key probe stock tests the key TObject directly).
+            if !Self::val_is_marked(n + probe_off) {
+                Self::remove_entry(n);
+            }
+        }
+    }
+}
+
+/// Native `markall`: stock phase order with vector weak lists.
+///
+/// Sequence transcribed from the stock body: roots → propagate →
+/// `cleartablevalues(wkv)`, `cleartablevalues(wv)` → stash old wkv, reset
+/// wkv/wv → stock `separateudata` → `marktmu` → propagate →
+/// `cleartablekeys(old wkv)`, `cleartablekeys(wk)`,
+/// `cleartablevalues(new wv)`, `cleartablekeys(new wkv)`,
+/// `cleartablevalues(new wkv)`.
+fn lua_gc_mark_native(l: i32) {
+    const SEPARATEUDATA_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x2f_6ff0;
+    // SAFETY: image base verified at load; `fastcall(ecx = L)` per the disasm.
+    let separateudata: extern "fastcall" fn(i32) = unsafe { core::mem::transmute(SEPARATEUDATA_VA) };
+    // SAFETY: `L + 0x10` is the lua_State's global_State pointer.
+    let g = unsafe { *(((l as usize) + 0x10) as *const usize) };
+    if g == 0 {
+        return;
+    }
+    let mut ctx = MarkCtx {
+        l,
+        g,
+        gray: Vec::with_capacity(8192),
+        wk: Vec::new(),
+        wv: Vec::new(),
+        wkv: Vec::new(),
+        shim: [0, 0, 0, 0, g],
+    };
+    // markroots: defaultmeta, registry, mainthread stack, then L itself.
+    ctx.mark_value(g + 0x40);
+    ctx.mark_value(g + 0x30);
+    // SAFETY: `G+0x50` is the mainthread pointer.
+    let mainthread = unsafe { *((g + 0x50) as *const usize) };
+    ctx.traverse_thread(mainthread);
+    if l as usize != mainthread {
+        ctx.mark(l as usize);
+    }
+    ctx.propagate();
+
+    MarkCtx::clear_values(&ctx.wkv);
+    MarkCtx::clear_values(&ctx.wv);
+    let wkv_old = core::mem::take(&mut ctx.wkv);
+    ctx.wv.clear();
+
+    separateudata(ctx.l);
+    // marktmu: unmark then remark everything on the finalizable list.
+    // SAFETY: `G+0x18` anchors the tmudata list.
+    let mut u = unsafe { *((g + 0x18) as *const usize) };
+    while u != 0 {
+        MarkCtx::set_marked(u, MarkCtx::marked(u) & 0xfe);
+        ctx.mark(u);
+        // SAFETY: GC-header next link at `+0x0`.
+        u = unsafe { *(u as *const usize) };
+    }
+    ctx.propagate();
+
+    MarkCtx::clear_keys(&wkv_old);
+    MarkCtx::clear_keys(&ctx.wk);
+    MarkCtx::clear_values(&ctx.wv);
+    MarkCtx::clear_keys(&ctx.wkv);
+    MarkCtx::clear_values(&ctx.wkv);
+}
+
+/// Count reachable-marked GC objects across all three sweepable lists.
+///
+/// Parity-harness helper (`WOW_TURBO_GC_PARITY=1`): after the native mark,
+/// stock `markall` runs again — under-marking by the native pass shows up
+/// as extra objects the stock pass marks (and is repaired by it BEFORE the
+/// sweep runs, so a parity soak cannot free a live object).
+fn lua_gc_count_marked(g: usize) -> u32 {
+    let mut count = 0u32;
+    let mut count_list = |mut o: usize| {
+        while o != 0 {
+            count += u32::from(MarkCtx::marked(o) & 1);
+            // SAFETY: GC-header next link at `+0x0`.
+            o = unsafe { *(o as *const usize) };
+        }
+    };
+    // SAFETY: `G+0x14`/`G+0x10` anchor the udata and rootgc lists.
+    count_list(unsafe { *((g + 0x14) as *const usize) });
+    // SAFETY: see above.
+    count_list(unsafe { *((g + 0x10) as *const usize) });
+    // SAFETY: `G+0x4`/`G+0xc` are the string-table buckets and size.
+    let strt_hash = unsafe { *((g + 0x4) as *const usize) };
+    // SAFETY: see above.
+    let strt_size = unsafe { *((g + 0xc) as *const i32) };
+    for i in 0..strt_size.max(0) as usize {
+        // SAFETY: bucket `i` is within `strt.size`.
+        count_list(unsafe { *((strt_hash + i * 4) as *const usize) });
+    }
+    count
+}
+
 /// Native replacement for the stock sweep phase of a normal collect.
 ///
 /// Reproduces `luaC_sweep(L, 0)` (`0x6f71d0`) exactly — sweep the userdata
@@ -19856,12 +20298,10 @@ pub fn lua_c_collectgarbage__6f7340(l: i32) {
         return;
     }
     // Stock phase bodies (all unhooked; xref'd from the stock `0x6f7340` body).
-    // The sweep phase runs natively instead — see [`lua_gc_sweep_native`].
-    const MARKALL_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x2f_73e0;
+    // Mark and sweep run natively — see [`lua_gc_mark_native`] and
+    // [`lua_gc_sweep_native`].
     const CHECK_SIZES_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x2f_7370;
     const CALL_GCTM_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x2f_7080;
-    // SAFETY: image base verified at load; `fastcall(ecx = L)` per the disasm.
-    let markall: extern "fastcall" fn(i32) = unsafe { core::mem::transmute(MARKALL_VA) };
     // SAFETY: image base verified at load; `fastcall(ecx = L)` per the disasm.
     let check_sizes: extern "fastcall" fn(i32) = unsafe { core::mem::transmute(CHECK_SIZES_VA) };
     // SAFETY: image base verified at load; `fastcall(ecx = L)` per the disasm.
@@ -19873,8 +20313,39 @@ pub fn lua_c_collectgarbage__6f7340(l: i32) {
     let nblocks_before = if g == 0 { 0 } else { unsafe { *((g + 0x28) as *const u32) } };
 
     let t0 = wow_shared::tsc::rdtsc();
-    markall(l);
-    let t1 = wow_shared::tsc::rdtsc();
+    lua_gc_mark_native(l);
+    let mut t1 = wow_shared::tsc::rdtsc();
+    let mark_ticks = t1.wrapping_sub(t0);
+
+    // Parity harness (`WOW_TURBO_GC_PARITY=1`): re-run STOCK markall after
+    // the native mark. Anything the native pass under-marked is both
+    // reported and re-marked here BEFORE the sweep can free it, so a parity
+    // soak is safe by construction. Outside the timed phase windows.
+    static PARITY: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    let parity =
+        *PARITY.get_or_init(|| std::env::var_os("WOW_TURBO_GC_PARITY").is_some_and(|v| v == "1"));
+    if parity && g != 0 {
+        const MARKALL_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x2f_73e0;
+        // SAFETY: image base verified at load; `fastcall(ecx = L)`.
+        let markall: extern "fastcall" fn(i32) = unsafe { core::mem::transmute(MARKALL_VA) };
+        let native_marked = lua_gc_count_marked(g);
+        markall(l);
+        let stock_marked = lua_gc_count_marked(g);
+        if stock_marked == native_marked {
+            log::debug!(
+                target: "wow::gc",
+                "gc parity ok: {native_marked} objects marked",
+            );
+        } else {
+            log::warn!(
+                target: "wow::gc",
+                "gc parity MISMATCH: native marked {native_marked}, stock \
+                 raised it to {stock_marked}",
+            );
+        }
+        t1 = wow_shared::tsc::rdtsc();
+    }
+
     lua_gc_sweep_native(l);
     let t2 = wow_shared::tsc::rdtsc();
     check_sizes(l);
@@ -19882,11 +20353,19 @@ pub fn lua_c_collectgarbage__6f7340(l: i32) {
     call_gctm(l);
     let t4 = wow_shared::tsc::rdtsc();
 
-    let mark_ms = clock_ticks_to_ms(t1.wrapping_sub(t0));
-    let sweep_ms = clock_ticks_to_ms(t2.wrapping_sub(t1));
-    let sizes_ms = clock_ticks_to_ms(t3.wrapping_sub(t2));
-    let gctm_ms = clock_ticks_to_ms(t4.wrapping_sub(t3));
-    let total_ms = clock_ticks_to_ms(t4.wrapping_sub(t0));
+    let sweep_ticks = t2.wrapping_sub(t1);
+    let sizes_ticks = t3.wrapping_sub(t2);
+    let gctm_ticks = t4.wrapping_sub(t3);
+    let mark_ms = clock_ticks_to_ms(mark_ticks);
+    let sweep_ms = clock_ticks_to_ms(sweep_ticks);
+    let sizes_ms = clock_ticks_to_ms(sizes_ticks);
+    let gctm_ms = clock_ticks_to_ms(gctm_ticks);
+    let total_ms = clock_ticks_to_ms(
+        mark_ticks
+            .wrapping_add(sweep_ticks)
+            .wrapping_add(sizes_ticks)
+            .wrapping_add(gctm_ticks),
+    );
     let (nblocks_after, threshold) = if g == 0 {
         (0, 0)
     } else {
