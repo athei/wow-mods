@@ -8321,9 +8321,7 @@ pub fn c_world_view__compare_draw_list_by_texture__70aa00(
     // Element stride 0x40, texture key at `+0x24`. The index arithmetic wraps
     // exactly as the stock `SHL reg,6` does; a bogus index would fault there too.
     let key = |index: u32| {
-        let offset = (index as usize)
-            .wrapping_mul(0x40)
-            .wrapping_add(0x24);
+        let offset = (index as usize).wrapping_mul(0x40).wrapping_add(0x24);
         let slot = elem_base.wrapping_add(offset);
         // SAFETY: `slot` addresses the element's texture-key dword, exactly the
         // dword the stock body loads with `MOV EAX,[ECX + 0x24]`.
@@ -15067,8 +15065,7 @@ pub fn c_world__link_entity_to_tiles__6a8ca0(this: *mut core::ffi::c_void) -> u3
 
     // Link-disable early-out `DAT_00c9e384` (same gate as 0x6b7070/0x6aa8b0):
     // non-zero => skip, return 0. Zero is the normal in-play state.
-    const LINK_DISABLED: *const u32 =
-        (crate::win::EXPECTED_IMAGE_BASE + 0x89_e384) as *const u32;
+    const LINK_DISABLED: *const u32 = (crate::win::EXPECTED_IMAGE_BASE + 0x89_e384) as *const u32;
     // SAFETY: fixed `.data` gate dword in the live host image (non-DYNAMICBASE).
     let link_disabled = unsafe { LINK_DISABLED.read() };
     if link_disabled != 0 {

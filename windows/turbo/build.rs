@@ -515,7 +515,9 @@ fn render(m: &Manifest) -> String {
     };
     out.push_str("/// Install every hooked function over the live host image: verify + create\n");
     out.push_str("/// each hook and publish its trampoline, then apply all queued enables in a\n");
-    out.push_str("/// single thread-freeze (one `MH_ApplyQueued` instead of one freeze per hook).\n");
+    out.push_str(
+        "/// single thread-freeze (one `MH_ApplyQueued` instead of one freeze per hook).\n",
+    );
     out.push_str("/// Called once from `DllMain`; failures are logged and skipped.\n");
     let _ = writeln!(out, "pub fn install_all({param}: usize) {{");
     if !install_body.is_empty() {
