@@ -20355,14 +20355,86 @@ fn gc_clear_nodes(t: usize, probe_off: usize) {
     }
 }
 
+/// Job selector for a pool epoch.
+#[derive(Clone, Copy)]
+enum GcJobKind {
+    /// Mark propagation over the injector.
+    Mark,
+    /// String-table sweep over bucket ranges.
+    Sweep,
+}
+
+/// A pool job: what to run and the parameters to run it on.
+///
+/// Published only by [`gc_par_begin`], whole, under the `job` lock; `epoch`
+/// advances with every publication. Participants act on a copy, and any
+/// claim of shared cursor state revalidates `epoch` first (with `active`
+/// held), so a participant that slept through a publication can never mix
+/// a stale spec with a newer job's cursor.
+#[derive(Clone, Copy)]
+struct GcJob {
+    /// Publication generation; workers sleep until it advances.
+    epoch: u64,
+    /// Which job body to run.
+    kind: GcJobKind,
+    /// The collect's `global_State`.
+    g: usize,
+    /// String-table bucket array (sweep only).
+    strt_hash: usize,
+    /// Bucket count (sweep only).
+    strt_size: usize,
+    /// Chunk-span slice pointer (sweep only).
+    ///
+    /// The coordinator holds the index borrow for as long as the job is
+    /// current, so the slice is live whenever the epoch check passes.
+    spans_ptr: usize,
+    /// Chunk-span slice length (sweep only).
+    spans_len: usize,
+}
+
+impl GcJob {
+    /// A mark-propagation job over `g`.
+    const fn mark(g: usize) -> Self {
+        Self {
+            epoch: 0,
+            kind: GcJobKind::Mark,
+            g,
+            strt_hash: 0,
+            strt_size: 0,
+            spans_ptr: 0,
+            spans_len: 0,
+        }
+    }
+
+    /// A string-table sweep job over `g`'s intern table and chunk index.
+    const fn sweep(
+        g: usize,
+        strt_hash: usize,
+        strt_size: usize,
+        spans_ptr: usize,
+        spans_len: usize,
+    ) -> Self {
+        Self {
+            epoch: 0,
+            kind: GcJobKind::Sweep,
+            g,
+            strt_hash,
+            strt_size,
+            spans_ptr,
+            spans_len,
+        }
+    }
+}
+
 /// Shared state of the parallel mark worker pool.
 ///
 /// Lives for the process lifetime behind a `OnceLock`; one instance serves
-/// every collect. A collect is framed by [`gc_par_begin`] (job parameters +
-/// epoch bump) and ends when the coordinator observes global quiescence
-/// (both queues empty, no worker active) and raises `done`. `active` counts
-/// workers currently holding work; it changes on batch boundaries, not per
-/// object, so the only per-object atomic is the mark-bit claim.
+/// every collect. A collect is framed by [`gc_par_begin`] (job spec + epoch,
+/// published whole under the `job` lock) and ends when the coordinator
+/// observes global quiescence (both queues empty, no worker active) and
+/// raises `done`. `active` counts workers currently holding work; it changes
+/// on batch boundaries, not per object, so the only per-object atomic is the
+/// mark-bit claim.
 struct GcParShared {
     /// Overflow/steal queue of claimed-but-untraversed objects.
     injector: std::sync::Mutex<Vec<usize>>,
@@ -20378,32 +20450,22 @@ struct GcParShared {
     wkv: std::sync::Mutex<Vec<usize>>,
     /// Workers currently processing a batch.
     active: core::sync::atomic::AtomicU32,
-    /// Raised by the coordinator when a propagation pass is complete.
+    /// Raised by the coordinator when a pass is complete.
     done: core::sync::atomic::AtomicBool,
-    /// The collect's `global_State`, published before each epoch.
-    g: core::sync::atomic::AtomicUsize,
-    /// Job selector for an epoch.
-    ///
-    /// 0 = mark propagation, 1 = string-table sweep (workers grab bucket ranges via
-    /// `bucket_cursor`).
-    job: core::sync::atomic::AtomicU8,
-    /// String-table bucket array for a sweep job.
-    strt_hash: core::sync::atomic::AtomicUsize,
-    /// Bucket count for a sweep job.
-    strt_size: core::sync::atomic::AtomicUsize,
     /// Next unclaimed bucket for a sweep job.
-    bucket_cursor: core::sync::atomic::AtomicUsize,
-    /// Published chunk-span slice (`ptr`, valid for the job's duration).
     ///
-    /// The coordinator holds the index borrow until the job completes.
-    spans_ptr: core::sync::atomic::AtomicUsize,
-    /// Published chunk-span slice length.
-    spans_len: core::sync::atomic::AtomicUsize,
-    /// Dead strings freed by sweep workers (feeds the `strt.nuse` debit).
+    /// Reset under the `job` lock at publication; claimed with `active` held
+    /// and the epoch revalidated, so a stale participant can never consume a
+    /// newer job's buckets.
+    bucket_cursor: core::sync::atomic::AtomicUsize,
+    /// Dead strings freed by sweep participants (feeds the `strt.nuse` debit).
     freed_strings: core::sync::atomic::AtomicU32,
-    /// Propagation-pass generation; workers sleep until it advances.
-    epoch: std::sync::Mutex<u64>,
-    /// Wakes the workers for a new pass.
+    /// The published job: spec and generation, in one lock.
+    ///
+    /// Workers copy it while holding the lock, so a spec is only ever
+    /// observed whole — never mid-publication.
+    job: std::sync::Mutex<GcJob>,
+    /// Wakes the workers for a new job.
     cv: std::sync::Condvar,
 }
 
@@ -20511,11 +20573,11 @@ fn gc_par_drain_shim(shim: &mut [usize; 5], shared: &GcParShared, local: &mut Ve
 /// currently-active participant. Workers leave when the coordinator raises
 /// `done`; only the coordinator consumes `thread_q` (stock stack traversal
 /// via its private shim).
-fn gc_par_propagate(shared: &GcParShared, coordinator: bool) {
+fn gc_par_propagate(shared: &GcParShared, g: usize, coordinator: bool) {
     use core::sync::atomic::Ordering;
     let mut sink = GcParSink {
         shared,
-        g: shared.g.load(Ordering::Relaxed),
+        g,
         local: Vec::with_capacity(2048),
     };
     let mut shim = [0usize, 0, 0, 0, sink.g];
@@ -20579,89 +20641,106 @@ fn gc_par_propagate(shared: &GcParShared, coordinator: bool) {
 /// plus an indexed free: chunk lookup through the published span slice and
 /// an atomic freelist push ([`crate::math::lua_gc::chunk_free_push`]) —
 /// concurrent workers may free into the same chunk. Survivor mark-clearing
-/// and unlinking touch only this worker's buckets. `nblocks` is debited
-/// atomically per free; freed counts accumulate for the coordinator's
-/// single `strt.nuse` debit. Termination mirrors the mark protocol: the
-/// cursor exhausts, active holders drain, the coordinator raises `done`.
-fn gc_par_sweep_strt(shared: &GcParShared) {
+/// and unlinking touch only this participant's buckets.
+///
+/// Termination invariant: a claim raises `active` first, revalidates the
+/// job's epoch under the `job` lock, and flushes its `freed_strings` and
+/// `nblocks` accounting before lowering `active`. The coordinator therefore
+/// observes cursor-exhausted ∧ `active == 0` only once no participant holds
+/// unswept buckets or unflushed accounting. The epoch check also keeps a
+/// participant that slept through a publication off a newer job's cursor:
+/// the epoch cannot advance while it holds `active`, and the cursor is only
+/// reset under the `job` lock the check takes.
+fn gc_par_sweep_strt(shared: &GcParShared, job: &GcJob) {
     use core::sync::atomic::{AtomicU32, Ordering};
 
     use crate::math::lua_gc::{ChunkSpan, GcHeader, chunk_free_push, chunk_owning, sweep_list};
     const BATCH: usize = 256;
-    let g = shared.g.load(Ordering::Relaxed);
-    let strt_hash = shared.strt_hash.load(Ordering::Relaxed);
-    let strt_size = shared.strt_size.load(Ordering::Relaxed);
-    let spans_ptr = shared.spans_ptr.load(Ordering::Relaxed);
-    let spans_len = shared.spans_len.load(Ordering::Relaxed);
-    // SAFETY: the coordinator holds the index borrow for the whole job; the
-    // slice is immutable while published.
-    let spans: &[ChunkSpan] =
-        unsafe { core::slice::from_raw_parts(spans_ptr as *const ChunkSpan, spans_len) };
-    // SAFETY: `G+0x28` is nblocks; participants debit it once, atomically.
-    let nblocks = unsafe { AtomicU32::from_ptr((g + 0x28) as *mut u32) };
-    let debit = core::cell::Cell::new(0u32);
-    let mut freed_total = 0u32;
-    let mut free = |o: *mut GcHeader| {
-        let addr = o as usize;
-        // SAFETY: bucket chains hold strings; the length lives at `+0xc`.
-        let size = unsafe { *((addr + 0xc) as *const u32) }.wrapping_add(0x11);
-        debit.set(debit.get().wrapping_add(size));
-        if let Some(chunk) = chunk_owning(spans, addr) {
-            // SAFETY: `chunk` owns `addr` per the index; the block is dead.
-            unsafe { chunk_free_push(chunk, addr) };
-        } else {
-            gc_smem_free(addr as u32);
-        }
-    };
     loop {
-        let start = shared.bucket_cursor.fetch_add(BATCH, Ordering::SeqCst);
-        if start >= strt_size {
+        shared.active.fetch_add(1, Ordering::SeqCst);
+        if shared.job.lock().unwrap().epoch != job.epoch {
+            shared.active.fetch_sub(1, Ordering::SeqCst);
             break;
         }
-        shared.active.fetch_add(1, Ordering::SeqCst);
-        let end = (start + BATCH).min(strt_size);
+        let start = shared.bucket_cursor.fetch_add(BATCH, Ordering::SeqCst);
+        if start >= job.strt_size {
+            shared.active.fetch_sub(1, Ordering::SeqCst);
+            break;
+        }
+        // The epoch was validated with `active` held, so the spec's pointers
+        // are live for this whole batch: the job cannot retire while this
+        // participant is active.
+        // SAFETY: the coordinator holds the index borrow while the job is
+        // current; the slice is immutable while published.
+        let spans: &[ChunkSpan] = unsafe {
+            core::slice::from_raw_parts(job.spans_ptr as *const ChunkSpan, job.spans_len)
+        };
+        // SAFETY: `G+0x28` is nblocks; participants debit it atomically.
+        let nblocks = unsafe { AtomicU32::from_ptr((job.g + 0x28) as *mut u32) };
+        let debit = core::cell::Cell::new(0u32);
+        let mut free = |o: *mut GcHeader| {
+            let addr = o as usize;
+            // SAFETY: bucket chains hold strings; the length lives at `+0xc`.
+            let size = unsafe { *((addr + 0xc) as *const u32) }.wrapping_add(0x11);
+            debit.set(debit.get().wrapping_add(size));
+            if let Some(chunk) = chunk_owning(spans, addr) {
+                // SAFETY: `chunk` owns `addr` per the index; the block is dead.
+                unsafe { chunk_free_push(chunk, addr) };
+            } else {
+                gc_smem_free(addr as u32);
+            }
+        };
+        let end = (start + BATCH).min(job.strt_size);
+        let mut freed = 0u32;
         for b in start..end {
             // SAFETY: bucket `b < strt.size` anchors an intern chain; this
             // participant exclusively owns buckets in its claimed range.
-            freed_total +=
-                unsafe { sweep_list((strt_hash + b * 4) as *mut *mut GcHeader, 0, &mut free) };
+            freed +=
+                unsafe { sweep_list((job.strt_hash + b * 4) as *mut *mut GcHeader, 0, &mut free) };
         }
+        shared.freed_strings.fetch_add(freed, Ordering::SeqCst);
+        nblocks.fetch_sub(debit.get(), Ordering::Relaxed);
         shared.active.fetch_sub(1, Ordering::SeqCst);
     }
-    shared
-        .freed_strings
-        .fetch_add(freed_total, Ordering::SeqCst);
-    nblocks.fetch_sub(debit.get(), Ordering::Relaxed);
 }
 
-/// Worker thread body: sleep between passes, propagate during them.
+/// Worker thread body: sleep between jobs, run the published job's body.
 fn gc_par_worker(shared: &GcParShared) {
     let mut seen = 0u64;
     loop {
-        {
-            let mut ep = shared.epoch.lock().unwrap();
-            while *ep == seen {
-                ep = shared.cv.wait(ep).unwrap();
+        let job = {
+            let mut j = shared.job.lock().unwrap();
+            while j.epoch == seen {
+                j = shared.cv.wait(j).unwrap();
             }
-            seen = *ep;
-        }
-        if shared.job.load(core::sync::atomic::Ordering::SeqCst) == 1 {
-            gc_par_sweep_strt(shared);
-        } else {
-            gc_par_propagate(shared, false);
+            seen = j.epoch;
+            *j
+        };
+        match job.kind {
+            GcJobKind::Mark => gc_par_propagate(shared, job.g, false),
+            GcJobKind::Sweep => gc_par_sweep_strt(shared, &job),
         }
     }
 }
 
-/// Open a propagation pass: reset `done`, bump the epoch, wake the workers.
-fn gc_par_begin(shared: &GcParShared) {
-    shared
-        .done
-        .store(false, core::sync::atomic::Ordering::SeqCst);
-    let mut ep = shared.epoch.lock().unwrap();
-    *ep += 1;
-    drop(ep);
+/// Publish a job: reset `done` and the cursor, bump the epoch, wake the workers.
+///
+/// The spec, the epoch and the cursor reset all land under the `job` lock,
+/// so a worker (which copies the spec under the same lock) and a stale
+/// claimant (which revalidates the epoch under it) each see either the
+/// previous job whole or this one whole. Returns the published job for the
+/// coordinator's own participation.
+fn gc_par_begin(shared: &GcParShared, mut spec: GcJob) -> GcJob {
+    use core::sync::atomic::Ordering;
+    shared.done.store(false, Ordering::SeqCst);
+    let mut job = shared.job.lock().unwrap();
+    spec.epoch = job.epoch + 1;
+    *job = spec;
+    shared.bucket_cursor.store(0, Ordering::SeqCst);
+    shared.freed_strings.store(0, Ordering::SeqCst);
+    drop(job);
     shared.cv.notify_all();
+    spec
 }
 
 /// The worker pool, created on the game thread at the first collect.
@@ -20681,15 +20760,9 @@ fn gc_pool() -> &'static GcParShared {
             wkv: std::sync::Mutex::new(Vec::new()),
             active: core::sync::atomic::AtomicU32::new(0),
             done: core::sync::atomic::AtomicBool::new(false),
-            g: core::sync::atomic::AtomicUsize::new(0),
-            job: core::sync::atomic::AtomicU8::new(0),
-            strt_hash: core::sync::atomic::AtomicUsize::new(0),
-            strt_size: core::sync::atomic::AtomicUsize::new(0),
             bucket_cursor: core::sync::atomic::AtomicUsize::new(0),
-            spans_ptr: core::sync::atomic::AtomicUsize::new(0),
-            spans_len: core::sync::atomic::AtomicUsize::new(0),
             freed_strings: core::sync::atomic::AtomicU32::new(0),
-            epoch: std::sync::Mutex::new(0),
+            job: std::sync::Mutex::new(GcJob::mark(0)),
             cv: std::sync::Condvar::new(),
         });
         let workers = std::thread::available_parallelism()
@@ -20710,13 +20783,10 @@ fn gc_pool() -> &'static GcParShared {
 
 /// Native `markall` on the worker pool: stock phase order, vector weak lists.
 fn lua_gc_mark_parallel(l: i32, g: usize, shared: &GcParShared) {
-    use core::sync::atomic::Ordering;
     const SEPARATEUDATA_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x2f_6ff0;
     // SAFETY: image base verified at load; `fastcall(ecx = L)` per the original.
     let separateudata: extern "fastcall" fn(i32) =
         unsafe { core::mem::transmute(SEPARATEUDATA_VA) };
-    shared.g.store(g, Ordering::Relaxed);
-    shared.job.store(0, Ordering::SeqCst);
 
     // Roots (serial, tiny): registry-family values, mainthread, L. The
     // mainthread's stack is traversed UNCONDITIONALLY, exactly like stock
@@ -20749,8 +20819,8 @@ fn lua_gc_mark_parallel(l: i32, g: usize, shared: &GcParShared) {
     let seeds: Vec<usize> = seed.local.drain(..).collect();
     shared.injector.lock().unwrap().extend(seeds);
 
-    gc_par_begin(shared);
-    gc_par_propagate(shared, true);
+    gc_par_begin(shared, GcJob::mark(g));
+    gc_par_propagate(shared, g, true);
 
     let wkv_old = core::mem::take(&mut *shared.wkv.lock().unwrap());
     let wv_old = core::mem::take(&mut *shared.wv.lock().unwrap());
@@ -20776,8 +20846,8 @@ fn lua_gc_mark_parallel(l: i32, g: usize, shared: &GcParShared) {
         let seeds: Vec<usize> = seed.local.drain(..).collect();
         shared.injector.lock().unwrap().extend(seeds);
     }
-    gc_par_begin(shared);
-    gc_par_propagate(shared, true);
+    gc_par_begin(shared, GcJob::mark(g));
+    gc_par_propagate(shared, g, true);
 
     let wk = core::mem::take(&mut *shared.wk.lock().unwrap());
     let wv = core::mem::take(&mut *shared.wv.lock().unwrap());
@@ -21144,19 +21214,16 @@ fn lua_gc_sweep_native(l: i32) {
             // coordinator while the workers chew the bucket ranges; every free
             // goes through the same atomic freelist push, so no coordination
             // beyond the cursor is needed.
-            shared.g.store(g, Ordering::Relaxed);
-            shared.job.store(1, Ordering::SeqCst);
-            shared
-                .strt_hash
-                .store(strt_hash as usize, Ordering::Relaxed);
-            shared.strt_size.store(strt_size, Ordering::Relaxed);
-            shared.bucket_cursor.store(0, Ordering::SeqCst);
-            shared
-                .spans_ptr
-                .store(idx.spans.as_ptr() as usize, Ordering::Relaxed);
-            shared.spans_len.store(idx.spans.len(), Ordering::Relaxed);
-            shared.freed_strings.store(0, Ordering::SeqCst);
-            gc_par_begin(shared);
+            let job = gc_par_begin(
+                shared,
+                GcJob::sweep(
+                    g,
+                    strt_hash as usize,
+                    strt_size,
+                    idx.spans.as_ptr() as usize,
+                    idx.spans.len(),
+                ),
+            );
             // SAFETY: `G+0x14` anchors the userdata list.
             unsafe {
                 sweep_list((g + 0x14) as *mut *mut GcHeader, 0, &mut free);
@@ -21165,13 +21232,20 @@ fn lua_gc_sweep_native(l: i32) {
             unsafe {
                 sweep_list((g + 0x10) as *mut *mut GcHeader, 0, &mut free);
             }
-            // Join the bucket work, then wait out the last active holders.
-            gc_par_sweep_strt(shared);
+            // Join the bucket work, then wait out the last active holders —
+            // once `active` reads zero, every participant has flushed both
+            // its bucket sweeps and its accounting.
+            gc_par_sweep_strt(shared, &job);
+            let mut idle_spins = 0u32;
             while shared.active.load(Ordering::SeqCst) != 0 {
-                core::hint::spin_loop();
+                idle_spins += 1;
+                if idle_spins.is_multiple_of(64) {
+                    std::thread::yield_now();
+                } else {
+                    core::hint::spin_loop();
+                }
             }
             shared.done.store(true, Ordering::SeqCst);
-            shared.job.store(0, Ordering::SeqCst);
             // SAFETY: `G+0x8` is `strt.nuse`; single debit equals stock's
             // per-bucket debits.
             let remaining =
