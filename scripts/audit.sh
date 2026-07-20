@@ -8,6 +8,7 @@
 #   scripts/audit.sh                  audit the whole tree
 #   scripts/audit.sh --file <path>    the per-file subset, for an editor hook
 #   scripts/audit.sh --update-derives regenerate scripts/derive_inventory.txt
+#   scripts/audit.sh --update-allows  regenerate scripts/allow_inventory.txt
 #
 # POSIX sh + awk only: no bashisms, and no GNU awk extensions (`\s`, `\b`),
 # since the stock macOS awk has neither. Interactive shells here sometimes
@@ -19,26 +20,34 @@ set -eu
 cd "$(git rev-parse --show-toplevel)"
 
 INVENTORY=scripts/derive_inventory.txt
+ALLOWS=scripts/allow_inventory.txt
 
 # Files permitted to hold each narrowly-scoped exception. These are sets, not
 # counts: a new site fails even if an old one was deleted in the same change.
-ALLOW_SITES='unix/shared/src/tsc.rs
-windows/turbo/src/math/boundsfit.rs
-windows/turbo/src/math/collision.rs
-windows/turbo/src/math/gx.rs
-windows/turbo/src/math/lua_gc.rs
-windows/turbo/src/math/m2.rs
-windows/turbo/src/math/particle.rs
-windows/turbo/src/math/quaternion.rs
-windows/turbo/src/math/world.rs
-windows/turbo/src/math.rs
-windows/turbo/src/win/hooks.rs'
-
+#
+# Lint suppressions do NOT use this shape. A set says only *where* a suppression
+# may live, so the largest file in the tree — already on any such list — could
+# absorb an unbounded number of new ones silently. They use the inventory+diff
+# shape instead (see `allow_scan`), which pins the file, the lint AND the count.
 ONCELOCK_SITES='windows/translate/src/hook.rs
 windows/turbo/build.rs
 windows/turbo/src/win/hooks.rs'
 
 INLINE_ALWAYS_SITES='unix/shared/src/crumb.rs'
+
+# Suppressing a lint GROUP in source is banned outright, with no exception file
+# and no inventory row that could legitimise it. This is the shape of the one
+# regression this whole layer exists to prevent: a single `#![allow(...)]` naming
+# two groups switches off some four hundred lints, and the tree then reports
+# clean while the largest file in it goes unlinted. An individual lint can be
+# argued for; a group cannot, because nobody can say what is inside it.
+LINT_GROUPS='clippy::(nursery|pedantic|all|cargo|complexity|correctness|perf|restriction|style|suspicious)'
+
+# Visibility prefixes are matched because "no `pub(crate)`" pushes any shared
+# singleton to plain `pub`, which makes `pub static X: OnceLock<..>` the shape
+# this rule most needs to see. `[^=]*` spans the type, so a wrapped generic or a
+# fully-qualified path does not slip past.
+ONCELOCK_PATTERN='^[ \t]*(pub[^ ]* )?static [^=]*OnceLock'
 
 # The vendored addon is upstream MIT (see THIRD-PARTY-LICENSES.md). Its
 # glossary names the servers and zones it exists to translate, so the
@@ -46,6 +55,7 @@ INLINE_ALWAYS_SITES='unix/shared/src/crumb.rs'
 VENDORED='addon/'
 
 status=0
+WHOLE_TREE=0
 
 # Report a finding and name the section of docs/CONVENTIONS.md it comes from,
 # so the fix is one lookup away rather than a guess.
@@ -78,14 +88,30 @@ doc_shape() {
             if (t ~ /^\/\/!/)    return 1
             return 0
         }
+        # `///` and `//!` are different blocks even with no blank line between
+        # them: a module header sitting directly above the first item doc would
+        # otherwise read as one long run, and the title of that item would be
+        # judged as body text, which is to say never judged at all.
+        function marker(l,   t) {
+            t = l
+            sub(/^[ \t]*/, "", t)
+            return (t ~ /^\/\/!/) ? "!" : "/"
+        }
         function blank(l,   t) {
             t = text(l)
             gsub(/[ \t\r]/, "", t)
             return t == ""
         }
-        FNR == 1 { run = 0 }
+        FNR == 1 { run = 0; mark = "" }
         {
-            if (!is_doc($0)) { run = 0; next }
+            # An attribute between a doc block and its item does not end the
+            # block; anything else non-doc does.
+            if (!is_doc($0)) {
+                if ($0 !~ /^[ \t]*#!?\[/) run = 0
+                next
+            }
+            if (marker($0) != mark) run = 0
+            mark = marker($0)
             run++
             if (length($0) > 100)
                 printf "%s:%d: doc line is %d columns (max 100)\n", FILENAME, FNR, length($0)
@@ -108,30 +134,108 @@ doc_shape() {
 # Every type deriving Clone and/or Copy, as `path Type Derives`. The committed
 # inventory is diffed against this, so a speculative derive cannot slip in
 # unnoticed: adding one means consciously recording it.
+#
+# The attribute is accumulated until its closing bracket rather than read off one
+# line, because both shapes that hide a derive from a single-line match are ones
+# the tree can produce on its own: rustfmt breaks a long derive list across lines,
+# and `#[cfg_attr(test, derive(Clone))]` nests the derive inside another attribute.
 derive_scan() {
     awk '
-        /^[ \t]*#\[derive\(/ {
-            if ($0 ~ /Clone/ || $0 ~ /Copy/) {
-                pending = $0
+        function derive_list(b,   p, rest, i) {
+            p = index(b, "derive(")
+            if (p == 0) return ""
+            rest = substr(b, p + 7)
+            i = index(rest, ")")
+            if (i > 0) rest = substr(rest, 1, i - 1)
+            gsub(/[ \t\r]/, "", rest)
+            sub(/,$/, "", rest)
+            return rest
+        }
+        function consider(   l) {
+            l = derive_list(abuf)
+            if (l ~ /(^|,)Clone($|,)/ || l ~ /(^|,)Copy($|,)/) {
+                pending = l
                 pfile = FILENAME
             }
-            next
+            abuf = ""
         }
-        pending != "" {
-            # Attributes and doc comments may sit between the derive and the item.
-            if ($0 ~ /^[ \t]*#\[/ || $0 ~ /^[ \t]*\/\//) next
-            if (match($0, /(struct|enum|union)[ \t]+[A-Za-z_][A-Za-z0-9_]*/)) {
-                name = substr($0, RSTART, RLENGTH)
-                sub(/^(struct|enum|union)[ \t]+/, "", name)
-                list = pending
-                sub(/^[ \t]*#\[derive\(/, "", list)
-                sub(/\)\].*$/, "", list)
-                gsub(/[ \t]/, "", list)
-                printf "%s %s %s\n", pfile, name, list
+        function closed(l) {
+            sub(/[ \t\r]+$/, "", l)
+            return l ~ /\]$/
+        }
+        FNR == 1 { pending = ""; abuf = ""; inattr = 0 }
+        {
+            line = $0
+            sub(/\/\/.*$/, "", line)
+            if (inattr) {
+                abuf = abuf line
+                if (closed(line)) { inattr = 0; consider() }
+                next
             }
-            pending = ""
+            if (line ~ /^[ \t]*#\[/) {
+                abuf = line
+                if (closed(line)) consider(); else inattr = 1
+                next
+            }
+            if (line ~ /^[ \t\r]*$/) next
+            if (pending != "") {
+                if (match(line, /(struct|enum|union)[ \t]+[A-Za-z_][A-Za-z0-9_]*/)) {
+                    name = substr(line, RSTART, RLENGTH)
+                    sub(/^(struct|enum|union)[ \t]+/, "", name)
+                    printf "%s %s %s\n", pfile, name, pending
+                }
+                pending = ""
+            }
         }
     ' "$@" | LC_ALL=C sort
+}
+
+# Every lint suppression in the tree, as `path lint count`. Covers the outer
+# `#[allow(...)]`, the inner `#![allow(...)]`, `#[expect(...)]` and the
+# `#[cfg_attr(..., allow(...))]` form, and accumulates multi-line attributes,
+# so no spelling of a suppression is invisible to the diff.
+#
+# This is deliberately an inventory rather than a permitted-file set. A set can
+# only answer "may this file hold a suppression at all", which grants every file
+# already on it an unbounded budget — and the file carrying most of them is the
+# largest in the tree. Keying on the lint and the count instead means a new file,
+# a new lint in a listed file, one more site, and an entry that has gone stale
+# all show up as a diff line somebody has to look at.
+allow_scan() {
+    awk '
+        function flush(   p, q, rest, i, n, arr) {
+            p = index(buf, "allow(")
+            q = index(buf, "expect(")
+            if (p == 0 || (q > 0 && q < p)) p = q
+            if (p == 0) { buf = ""; return }
+            rest = substr(buf, p)
+            sub(/^(allow|expect)\(/, "", rest)
+            i = index(rest, ")")
+            if (i > 0) rest = substr(rest, 1, i - 1)
+            n = split(rest, arr, ",")
+            for (i = 1; i <= n; i++) {
+                gsub(/[ \t\r]/, "", arr[i])
+                if (arr[i] != "") printf "%s %s\n", FILENAME, arr[i]
+            }
+            buf = ""
+        }
+        FNR == 1 { buf = ""; inattr = 0 }
+        {
+            line = $0
+            # Drop comments first: an allow list carries its justification inline,
+            # and a `)]` inside that prose would otherwise close the attribute early.
+            sub(/\/\/.*$/, "", line)
+            if (!inattr) {
+                if (line !~ /#!?\[(allow|expect|cfg_attr)\(/) next
+                inattr = 1
+                buf = line
+            } else {
+                buf = buf line
+            }
+            if (line ~ /\)\]/) { inattr = 0; flush() }
+        }
+    ' "$@" | LC_ALL=C sort | uniq -c |
+        awk '{ printf "%s %s %s\n", $2, $3, $1 }'
 }
 
 # A pattern that must not appear at all, anywhere. Mentioning it in a comment is
@@ -152,12 +256,17 @@ banned() {
 # A pattern that must not appear in a COMMENT. The inverse of `banned`: these are
 # release-hygiene rules, and the only place they can be broken is the prose.
 # `#` and `--` are here for TOML and Lua, which carry prose too.
+#
+# `//` and `--` are matched anywhere on the line, not just at its start: a
+# trailing comment after code is still a comment, and the tree carries several
+# hundred of them. `#` stays anchored — unanchored it would match any line
+# containing a `#`, which in Rust is every attribute.
 banned_in_comments() {
     pattern=$1
     section=$2
     message=$3
     shift 3
-    hits=$(grep -HnE "^[ \t]*(//|///|//!|#|--).*($pattern)" "$@" || true)
+    hits=$(grep -HnE "(//|--|^[ \t]*(#|\*)).*($pattern)" "$@" || true)
     if [ -n "$hits" ]; then
         report "$section" "$message" "$hits"
     fi
@@ -178,7 +287,13 @@ banned_anywhere() {
     fi
 }
 
-# A pattern confined to a known set of files: flag any file outside the set.
+# A pattern confined to a known set of files: flag any file outside the set, and
+# any entry in the set that no longer matches anything.
+#
+# The stale half matters as much as the stray half. Each of these files earned
+# its exception with an argument recorded in docs/CONVENTIONS.md; once the last
+# occurrence is gone the permission has outlived what justified it, and leaving
+# it in place quietly re-grants it to whatever gets added next.
 confined() {
     pattern=$1
     section=$2
@@ -196,6 +311,21 @@ confined() {
     if [ -n "$strays" ]; then
         report "$section" "$message" "$(printf '%s' "$strays")"
     fi
+    # Only meaningful over the whole tree: in --file mode the other permitted
+    # files are simply not in the argument list.
+    if [ "$WHOLE_TREE" = 1 ]; then
+        stale=''
+        for entry in $permitted; do
+            if ! printf '%s\n' "$hits" | grep -qxF "$entry"; then
+                stale="$stale$entry
+"
+            fi
+        done
+        if [ -n "$stale" ]; then
+            report "$section" "stale exception: recorded file no longer matches" \
+                "$(printf '%s' "$stale")"
+        fi
+    fi
 }
 
 # --- modes -------------------------------------------------------------------
@@ -207,36 +337,68 @@ case "${1:-}" in
     printf 'wrote %s (%d types)\n' "$INVENTORY" "$(wc -l <"$INVENTORY" | tr -d ' ')"
     exit 0
     ;;
+--update-allows)
+    # shellcheck disable=SC2046
+    allow_scan $(git ls-files '*.rs') >"$ALLOWS"
+    printf 'wrote %s (%d file/lint pairs)\n' "$ALLOWS" "$(wc -l <"$ALLOWS" | tr -d ' ')"
+    exit 0
+    ;;
 --file)
     file=${2:?--file needs a path}
-    # An editor hook's view: only the checks that a single file can answer.
-    case $file in *.rs) ;; *) exit 0 ;; esac
+    # An editor hook's view: only the checks a single file can answer on its own.
+    # Deliberately NOT the release-hygiene rules — those are scoped by exclusion
+    # sets (the vendored addon, the licence texts, this script) that a lone path
+    # cannot reconstruct, so running them here would report the exempt files as
+    # violations. Nor the inventory diffs, which are whole-tree by definition.
+    # `make audit` remains the gate; this is edit-time feedback, not a substitute.
+    case $file in
+    *.rs) ;;
+    *)
+        printf 'audit: --file covers Rust sources only; %s not checked\n' "$file" >&2
+        exit 0
+        ;;
+    esac
     [ -f "$file" ] || exit 0
 
     findings=$(doc_shape "$file")
     [ -z "$findings" ] || report 'Doc comments' 'doc-comment shape' "$findings"
 
-    banned 'pub\(crate\)' 'No pub(crate) — use module hierarchy' \
-        'pub(crate) visibility' "$file"
+    banned 'pub\(crate\)|pub *\(in ' 'No pub(crate) — use module hierarchy' \
+        'restricted visibility' "$file"
+    banned "$LINT_GROUPS" 'Warning suppressions' \
+        'a lint group suppressed in source; name the individual lints' "$file"
     confined 'inline\(always\)' 'Inline attributes' \
-        '#[inline(always)] outside the one measured site' "$INLINE_ALWAYS_SITES" "$file"
-    confined '^[ \t]*static .*: *(std::sync::)?OnceLock' 'LazyLock over OnceLock' \
-        'OnceLock static outside the runtime-argument sites' "$ONCELOCK_SITES" "$file"
-    confined '#\[allow\(' 'Warning suppressions' \
-        'lint suppression outside the recorded exception files' "$ALLOW_SITES" "$file"
+        '#[inline(always)] outside the recorded exception file' "$INLINE_ALWAYS_SITES" "$file"
+    confined "$ONCELOCK_PATTERN" 'LazyLock over OnceLock' \
+        'OnceLock static outside the recorded exception files' "$ONCELOCK_SITES" "$file"
 
     exit $status
     ;;
 -h | --help)
-    sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'
     exit 0
     ;;
 esac
 
 # --- whole-tree audit --------------------------------------------------------
 
+WHOLE_TREE=1
+
+# Every check below is driven by a file list built from `git ls-files`. If one of
+# those expansions ever yields nothing — a quoting change, a `cd` that lands
+# somewhere else — grep is handed no files, the `|| true` in each helper swallows
+# the error, and the script reports a clean tree having scanned nothing. Assert
+# the set is populated at the point it is built, so that failure is loud.
+require_files() {
+    [ "$1" -ge "$2" ] || {
+        printf 'audit: internal error: expected at least %d files, got %d\n' "$2" "$1" >&2
+        exit 2
+    }
+}
+
 # shellcheck disable=SC2046
 set -- $(git ls-files '*.rs')
+require_files $# 40
 
 findings=$(doc_shape "$@")
 if [ -n "$findings" ]; then
@@ -252,15 +414,68 @@ if [ -n "$drift" ]; then
         "$drift"
 fi
 
-banned 'pub\(crate\)' 'No pub(crate) — use module hierarchy' \
-    'pub(crate) visibility' "$@"
+drift=$(allow_scan "$@" | diff "$ALLOWS" - || true)
+if [ -n "$drift" ]; then
+    report 'Warning suppressions' \
+        "allow inventory drift (< committed, > working tree). A suppression needs an argument recorded in docs/CONVENTIONS.md; record it with scripts/audit.sh --update-allows" \
+        "$drift"
+fi
+
+banned "$LINT_GROUPS" 'Warning suppressions' \
+    'a lint group suppressed in source; name the individual lints' "$@"
+
+banned 'impl( *<[^>]*>)? *(Clone|Copy) for ' 'No default Copy / Clone on aggregate structs' \
+    'hand-written Clone/Copy impl — the derive inventory cannot see it' "$@"
+
+# The two doc spellings the shape check cannot parse. Both are legal Rust and
+# neither appears in the tree; banning them keeps `doc_shape` a complete rule
+# rather than one with a documented way around it.
+banned '/\*\*|#\[doc *=' 'Doc comments' \
+    'block or attribute doc comment — use /// or //! so the shape check applies' "$@"
+
+banned 'pub\(crate\)|pub *\(in ' 'No pub(crate) — use module hierarchy' \
+    'restricted visibility' "$@"
 
 confined 'inline\(always\)' 'Inline attributes' \
-    '#[inline(always)] outside the one measured site' "$INLINE_ALWAYS_SITES" "$@"
-confined '^[ \t]*static .*: *(std::sync::)?OnceLock' 'LazyLock over OnceLock' \
-    'OnceLock static outside the runtime-argument sites' "$ONCELOCK_SITES" "$@"
-confined '#\[allow\(' 'Warning suppressions' \
-    'lint suppression outside the recorded exception files' "$ALLOW_SITES" "$@"
+    '#[inline(always)] outside the recorded exception file' "$INLINE_ALWAYS_SITES" "$@"
+confined "$ONCELOCK_PATTERN" 'LazyLock over OnceLock' \
+    'OnceLock static outside the recorded exception files' "$ONCELOCK_SITES" "$@"
+
+# --- manifests ---------------------------------------------------------------
+#
+# The lint tables are the tree's primary enforcement surface, and both ways they
+# can be silently disabled are invisible to every other check here. `[lints]
+# workspace = true` is opt-in per crate and cargo does not warn when it is
+# missing, so a new member simply has pedantic and nursery switched off. And a
+# lint set to `deny` aborts its crate's run at the first hit, which stops cargo
+# scheduling the units that depend on it — their findings never appear at all.
+# `warn` plus cargo's `build.warnings = "deny"` reports everything, then fails.
+# shellcheck disable=SC2046
+set -- $(git ls-files '*Cargo.toml')
+require_files $# 8
+
+for manifest in "$@"; do
+    case $manifest in
+    windows/Cargo.toml | unix/Cargo.toml)
+        for group in nursery pedantic; do
+            grep -qE "^$group = \{ level = \"warn\", priority = -1 \}" "$manifest" ||
+                report 'Warning suppressions' \
+                    "$manifest: $group is not warn/-1 in [workspace.lints.clippy]"
+        done
+        ;;
+    *)
+        grep -A1 '^\[lints\]' "$manifest" | grep -q 'workspace *= *true' ||
+            report 'Warning suppressions' \
+                "$manifest: missing [lints] workspace = true, so the workspace lint table does not apply"
+        ;;
+    esac
+done
+
+banned 'level *= *"(deny|forbid)"|^[a-z_0-9]+ *= *"(deny|forbid)"' 'Warning suppressions' \
+    'deny/forbid lint level — warn plus build.warnings="deny" is the gate' "$@"
+
+# shellcheck disable=SC2046
+set -- $(git ls-files '*.rs')
 
 modules=$(git ls-files '*/mod.rs' || true)
 if [ -n "$modules" ]; then
@@ -303,6 +518,20 @@ banned_anywhere '[Tt]urtle|TURTLE|[Ww]orld[ _-][Oo]f[ _-][Ww]arcraft|WORLD OF WA
 banned_in_comments '[Gg]hidra|GHIDRA|[Dd]ecompil|[Dd]isassembl|[Dd]isasm|(^|[^A-Za-z])IDA([^A-Za-z]|$)|[Rr]everse[ -]engineer|[Rr]eversed from|[Ll]eaked (symbol|build|binar|client|pdb|source|debug)' \
     'Release hygiene' \
     'names a decompiler, a disassembler, or the workflow — keep the fact, drop the provenance' "$@"
+
+# The same rule, applied to what the tool actually leaves behind. Naming the
+# decompiler is the obvious form of provenance; pasting its output is the
+# literal one, and it is the form that survives a search for the word. The
+# address families carry a real fact and keep it — `FUN_006acdd0` becomes
+# `0x6acdd0` — while the register-typed locals name a temporary that only ever
+# existed in the tool's rendering, so those get a name describing what they hold.
+#
+# `local_[0-9a-f]+` is deliberately absent: this tree has hand-chosen names like
+# `local_end` and `local_box` meaning model-local space, which match it only
+# because `e` and `b` are hex digits. The families below have no such collision.
+banned_anywhere '(^|[^A-Za-z0-9_])(FUN|DAT|_DAT)_[0-9a-f]{6,}|(^|[^A-Za-z0-9_])(([a-z]{1,4}Var[0-9]+)|([iu]Stack_[0-9a-f]+)|(param_[0-9]{3})|(extraout_|unaff_|in_(EAX|ECX|EDX|EBX|ESI|EDI)))' \
+    'Release hygiene' \
+    'a decompiler-generated identifier — keep the address, drop the tool naming' "$@"
 
 # A competing implementation cited in source as justification. The README's
 # compatibility chapter is a different act — users need to know which mods to

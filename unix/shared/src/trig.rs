@@ -27,10 +27,6 @@
 //! result stays bounded and correct — callers do occasionally pass such a large
 //! angle, and a garbage result there must not propagate downstream.
 #![allow(
-    // As in the shim math kernels: `suboptimal_flops` would suggest `mul_add`,
-    // but the i686/x86-64-v2 baseline has no FMA, so `mul_add` lowers to a slow
-    // libm `fma` call — the polynomials are written as explicit mul/add on purpose.
-    clippy::suboptimal_flops,
     clippy::many_single_char_names,
     // The f64 Cody–Waite reduction constants are kept bit-exact (Cephes values).
     clippy::excessive_precision

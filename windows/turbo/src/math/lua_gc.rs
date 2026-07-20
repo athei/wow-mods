@@ -306,6 +306,10 @@ mod tests_lua_gc {
         let chunk_addr = chunk.as_mut_ptr() as usize;
         for b in &mut blocks {
             let block = b.as_mut_ptr() as usize;
+            // SAFETY: `chunk_addr` is the five-word descriptor above and `block`
+            // a four-word slot, both live stack arrays for the whole loop; the
+            // push writes only the descriptor's head/count and the block's first
+            // word, all of which are in bounds.
             unsafe { chunk_free_push(chunk_addr, block) };
         }
         assert_eq!(chunk[4], 3);
@@ -328,6 +332,11 @@ mod tests_lua_gc {
             for part in addrs.chunks(1000) {
                 s.spawn(move || {
                     for &b in part {
+                        // SAFETY: as above, and the descriptor outlives the
+                        // scope every thread is joined within. Concurrent pushes
+                        // are what this test exercises: the head word is updated
+                        // by compare-exchange, so overlapping callers are the
+                        // supported case rather than a violated precondition.
                         unsafe { chunk_free_push(chunk_addr, b) };
                     }
                 });
@@ -339,6 +348,9 @@ mod tests_lua_gc {
         let mut cur = chunk[1] as usize;
         while cur != 0 {
             seen += 1;
+            // SAFETY: `cur` is a link word the pushes above wrote, so it is
+            // either zero (loop ends) or the address of one of the `blocks`
+            // slots, which are still alive here; its first word is the next link.
             cur = unsafe { *(cur as *const u32) } as usize;
         }
         assert_eq!(seen, 4000);

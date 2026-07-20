@@ -7,11 +7,7 @@
 //! integer code instead. Shared here because both the wow_turbo reimpls (where
 //! it doubles as the faithful CRT `__ftol` replacement) and any i686
 //! code needing a float→int cast without the x87 tax use it.
-#![allow(
-    non_snake_case,
-    // Bit-manipulation on IEEE fields: the shifts/masks/casts are the point.
-    clippy::nursery
-)]
+#![allow(non_snake_case)]
 
 /// CRT float-to-i64 truncation (`__ftol`).
 ///
@@ -101,12 +97,14 @@ mod tests_ftol__40a2b0 {
     /// Sweep the exponent range against the reference cast.
     #[test]
     fn exponent_sweep() {
-        let mut x = 1.0_f64;
-        while x < 9.2e18 {
+        // Stepping the exponent rather than doubling an accumulator walks the
+        // same powers of two, and keeps the loop bound an exact integer
+        // comparison instead of a float one.
+        for e in 0..63 {
+            let x = 2.0_f64.powi(e);
             for &v in &[x, -x, x * 1.5, -x * 1.5, x + 0.25] {
                 assert_eq!(ftol(v), v as i64, "v={v:e}");
             }
-            x *= 2.0;
         }
     }
 }

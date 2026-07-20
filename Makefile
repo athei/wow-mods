@@ -1,7 +1,9 @@
-ifndef WINE_SDK
-$(error WINE_SDK is not set)
-endif
 export WINE_SDK
+
+# rustfmt.toml uses unstable options, so formatting needs nightly. Override to
+# pin a dated toolchain if a nightly ever regresses:  make check FMT_TOOLCHAIN=nightly-YYYY-MM-DD
+FMT_TOOLCHAIN ?= nightly
+
 
 # Release bundles always ship the production profile.
 ifneq ($(filter bundle,$(MAKECMDGOALS)),)
@@ -55,14 +57,23 @@ GAME_MODS = $(dir $(WOW_EXE))mods
 
 MAKEFLAGS += --silent
 
-.PHONY: all windows windows-avx unix install bundle test fmt clippy audit doc check upgrade upgrade-incompat clean require-wow-exe
+.PHONY: all windows windows-avx unix install bundle test fmt clippy audit doc check \
+        lint-counts lint-counts-update update-inventories \
+        upgrade upgrade-incompat clean require-wow-exe require-wine-sdk
+
+# Scoped to the targets that actually link. `fmt`, `clippy`, `audit`, `doc` and
+# `check` never reach the linker, so a contributor auditing the tree does not
+# need a Wine SDK staged to run the gate — and a top-level `ifndef` would have
+# stopped them at Makefile parse time, before any target was even selected.
+require-wine-sdk:
+	test -n "$(WINE_SDK)" || { echo "error: WINE_SDK is not set" >&2; exit 1; }
 
 require-wow-exe:
 	test -n "$(WOW_EXE)" || { echo "error: WOW_EXE is not set (path to the client's WoW.exe)" >&2; exit 1; }
 
 all: windows unix
 
-windows:
+windows: require-wine-sdk
 	cd windows && cargo build --profile $(PROFILE) --target $(PE_i386)
 	# Wine builtins: version.dll (the injector) and wow_mods.dll (the unixlib
 	# bridge that pairs wow_mods.so). The mods themselves (wow_turbo.dll,
@@ -77,11 +88,11 @@ windows:
 # wow_turbo for native Windows: same i686 DLL, but with the ISA baseline raised
 # to haswell (AVX2 — see .cargo/avx.toml). Built into its own target dir so it
 # never clobbers the nehalem artifacts. Not a Wine builtin, so no winebuild.
-windows-avx:
+windows-avx: require-wine-sdk
 	cd windows && cargo build -p wow-turbo-dll --profile $(PROFILE) \
 	    --target $(PE_i386) --target-dir target/avx --config .cargo/avx.toml
 
-unix:
+unix: require-wine-sdk
 	cd unix && cargo build --profile $(PROFILE) --target $(UNIX_RELEASE_TARGET)
 
 install: all require-wow-exe
@@ -151,17 +162,53 @@ test:
 	cd unix && cargo nextest run
 
 clippy:
-	cd windows && cargo clippy --target $(PE_i386) $(DENY_WARNINGS)
+	# --all-targets: test code is code. Without it the intersection of cfg(test)
+	# and the 32-bit target is linted by nothing, and that is where the
+	# 32-bit-only test helpers live.
+	cd windows && cargo clippy --target $(PE_i386) --all-targets $(DENY_WARNINGS)
 	# wow_turbo's tests + portable kernels only exist off the PE target; lint them
 	# on the x86_64 host target the host tests run under.
 	cd windows && cargo clippy -p wow-turbo-dll --target $(UNIX_RELEASE_TARGET) --all-targets $(DENY_WARNINGS)
 	cd unix && cargo clippy --all-targets $(DENY_WARNINGS)
+	# `unix/shared` ships into both worlds but is a member of only this
+	# workspace, so the windows legs run it through plain rustc with no lint
+	# table. Lint it on the target it actually ships as, and again on the PE
+	# target that reaches its 32-bit arms.
+	cd unix && cargo clippy --all-targets --target $(UNIX_RELEASE_TARGET) $(DENY_WARNINGS)
+	cd unix && cargo clippy -p wow-shared --target $(PE_i386) $(DENY_WARNINGS)
 
 # The conventions clippy can't express: doc-comment shape, the Clone/Copy derive
 # inventory, and the patterns that are banned or confined to a known set of
 # files. See docs/CONVENTIONS.md § Mechanical audit.
 audit:
 	./scripts/audit.sh
+
+# The finding counts annotated against each exempted lint in the workspace
+# manifests. Deliberately outside `check`: force-warning those lints changes the
+# compiler flags, so this cannot share check's build cache and costs minutes
+# rather than seconds. Run it when you change a lint table.
+lint-counts:
+	./scripts/lint_counts.sh
+
+lint-counts-update:
+	./scripts/lint_counts.sh --update
+
+# The unsafe-block debt recorded in docs/CONVENTIONS.md § One operation per
+# unsafe block. Both lints together — counting only one of them is how the
+# undocumented-block half of the number went unrecorded.
+unsafe-debt:
+	cd windows && cargo clippy -p wow-turbo-dll --target $(PE_i386) --all-targets \
+	    --message-format=short -- \
+	    --force-warn clippy::multiple_unsafe_ops_per_block \
+	    --force-warn clippy::undocumented_unsafe_blocks 2>&1 | \
+	    awk '/missing a safety comment/ {u++} /expected only one/ {m++} \
+	         END {printf "undocumented: %d\nmulti-operation: %d\ntotal: %d\n", u, m, u + m}'
+
+# The two committed inventories, regenerated. Both are diffed by `make audit`,
+# so a change here is a change a reviewer sees.
+update-inventories:
+	./scripts/audit.sh --update-derives
+	./scripts/audit.sh --update-allows
 
 # rustdoc's own lints, which no other target sees: broken and private intra-doc
 # links, malformed HTML in doc comments. clippy gates a doc block's prose; only
@@ -176,15 +223,20 @@ doc:
 	cd unix && cargo doc --no-deps $(DENY_WARNINGS)
 
 fmt:
-	cd windows && cargo +nightly fmt
-	cd unix && cargo +nightly fmt
+	cd windows && cargo +$(FMT_TOOLCHAIN) fmt
+	cd unix && cargo +$(FMT_TOOLCHAIN) fmt
 
 # One command to run before every commit: formatting, the full clippy sweep, the
 # conventions audit, and the doc build. fmt-check first (fast, fails early on
 # the cheapest mistake).
 check:
-	cd windows && cargo +nightly fmt --check
-	cd unix && cargo +nightly fmt --check
+	cd windows && cargo +$(FMT_TOOLCHAIN) fmt --check
+	cd unix && cargo +$(FMT_TOOLCHAIN) fmt --check
+	# rustfmt reports an unrecognised config key as a warning and still exits 0,
+	# so a renamed or stabilised option would stop being applied while the tree
+	# stayed green under a rule nobody was enforcing any more. Nothing else in
+	# the gate can see that; promote it to a failure.
+	cd windows && ! cargo +$(FMT_TOOLCHAIN) fmt --check 2>&1 | grep 'Unknown configuration option'
 	$(MAKE) clippy
 	$(MAKE) audit
 	$(MAKE) doc
