@@ -2908,7 +2908,7 @@ pub fn c_map_chunk__decompress_vertex_normals__6aff10(this: *mut core::ffi::c_vo
 ///
 /// Returns the per-step spline/velocity source vec3 block at `this+0x144`
 /// unless the gating scalar at `this+0x148` is bit-exactly equal to the host
-/// zero sentinel (`DAT_007ffd74`), in which case there is no active source and
+/// zero sentinel at `0x7ffd74`, in which case there is no active source and
 /// the original returns NULL. A pointer return: a chaining caller dereferences
 /// the result.
 pub fn c_movement__get_active_spline_source__618920(this: *mut f32) -> *mut f32 {
@@ -3258,7 +3258,7 @@ pub fn c_particle_emitter__update_particle_physics__7b2680(
 ///
 /// Returns 1 if the world XY in `pos` falls inside the loaded-terrain liquid
 /// grid and that cell's liquid bit is set, else 0. Maps XY relative to the host
-/// map origin into the 64x64 chunk grid `DAT_00c96318`, dereferences the chunk
+/// map origin into the 64x64 chunk grid at `0xc96318`, dereferences the chunk
 /// pointer (`+0x278` sub-table) and its liquid bitfield (`+0xf1c`). Map origin,
 /// bounds, cell/sub scales, and the rounding bias are fixed host globals read
 /// by absolute address (base verified at load; client non-`DYNAMICBASE`). The
@@ -5472,7 +5472,7 @@ pub fn cm2_shared__get_bounds_center__713680(this: *mut u8, out: *mut f32) -> *m
     let inited = unsafe { init_flag.cast::<u32>().read() };
     if inited == 0 {
         // Header not built yet: run the original initializer at its absolute VA.
-        // `FUN_00710520` is `__thiscall(this, flag) -> void`.
+        // The routine at `0x710520` is `__thiscall(this, flag) -> void`.
         const M2_INIT_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x31_0520;
         // SAFETY: a fixed `.text` entry in the live host image (base verified at
         // load); the transmuted signature matches the declared prototype, and
@@ -6283,7 +6283,7 @@ pub fn cg_unit_c__is_footstep_near_liquid__60a740(
 /// Writes `value` into the plane entry at `*(this+0x2824) + index*0x18` only
 /// when it changed (strict ordered inequality, matching the x87 `FCOMP`/`JNP`
 /// test). On a change it first calls the stock active-list grower
-/// `FUN_00594010` (`__thiscall(this, index)`) by absolute VA — that path
+/// at `0x594010` (`__thiscall(this, index)`) by absolute VA — that path
 /// touches the Storm heap, so it stays in the host — then stores the new
 /// value.
 pub fn c_gx_device__set_plane_float__593770(this: *mut core::ffi::c_void, index: i32, value: f32) {
@@ -6373,7 +6373,7 @@ pub fn cm2_model__get_animation_info__711a20(
         return;
     }
 
-    // Resolve the alias pair into [local_8, local_6] (two u16) and echo into
+    // Resolve the alias pair into `alias` (two u16) and echo into
     // pOutInfo+0x34 / +0x38.
     let mut alias = [0u16; 2];
     const ALIAS_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x31_1bf0;
@@ -6969,7 +6969,7 @@ pub fn c_movement__compute_box_ground_normal__6332a0(this: i32) {
     let mut out = [0.0_f32; 3];
 
     // `CMovement::ComputeGroundNormal` (0x637140) averages the global
-    // collision-contact list (`DAT_00c4e530`/`DAT_00c4e534`) and clips against
+    // collision-contact list (`0xc4e530`/`0xc4e534`) and clips against
     // the box planes. It is our own hook — direct Rust call (wave-5
     // devirtualized the former COMPUTE_GROUND_NORMAL_VA detour delegate).
     c_movement__compute_ground_normal__637140(out.as_mut_ptr(), planes.as_mut_ptr(), 6);
@@ -7148,7 +7148,7 @@ pub fn cg_unit_c__update_water_interaction__6030c0(
 /// fastcall(ecx = posArray f32*, edx = offsetArray f32*; color, uvBase f32*[8],
 /// uvScale f32*[2]), RET 0xC, void. Resizes the device vertex buffer for four
 /// 0x30-byte vertices (GxResizeBuffer, returns the buffer; the lock vtable call
-/// returns the vertex cursor — the two `extraout_EAX` values), then per
+/// returns the vertex cursor — both returned in `EAX`), then per
 /// vertex copies the position triple + color and computes four UV coordinates
 /// `uvBase[k] × uvScale + offset[vertex]`, and finally commits and submits the
 /// batch. All device ops stay delegates; only the UV math is native.
@@ -7589,7 +7589,7 @@ pub fn cg_unit_c__get_state_dependent_scalar__617430(this: *mut u8) -> f32 {
 ///
 /// `combinedNormal` is dereferenced unconditionally, matching the stock body
 /// (the `|cn|²` dot precedes the `useCombinedNormal` test). The step height is
-/// the stock `FUN_00617430(this)` accessor result, delegated once via
+/// the stock accessor at `0x617430` applied to `this`, delegated once via
 /// `transmute` — a pure read-only getter of `this` state, invariant across this
 /// call, so the stock's up-to-three repeated calls collapse to one.
 pub fn c_movement__compute_slope_climb_delta__635c00(
@@ -7949,9 +7949,9 @@ pub fn c_particle_emitter__compute_vertex_color_uv__7b9b10(
 /// direction built from two angle spreads (`this+0x24`, `this+0x28`) at radius
 /// `this+0x18`, integrated one step under the emitter's z acceleration
 /// `this+0x1c`, then offset by the emitter world origin `emitterPos`. The three
-/// random words come from the stock shared RNG `FUN_004531e0`
+/// random words come from the stock shared RNG at `0x4531e0`
 /// (`__fastcall(ecx = &state) -> u32`), which reads and mutates the fixed
-/// global RNG-state struct `DAT_00cf5be0` — it is called out to by absolute
+/// global RNG-state struct at `0xcf5be0` — it is called out to by absolute
 /// VA so the global advances exactly as in the original (the values cannot be
 /// baked or the stream desyncs). `this+0x20` is copied verbatim into
 /// `particle+0x20` as a raw dword. The pure kernel does the float math;
@@ -8009,7 +8009,7 @@ pub fn c_particle_emitter__spawn_particle__7ba200(
     // SAFETY: `emitter_pos` addresses 3 contiguous, aligned f32 (non-null above).
     let ep = unsafe { *emitter_pos.cast::<[f32; 3]>() };
 
-    // The shared RNG state struct `DAT_00cf5be0`; the call-out below reads and
+    // The shared RNG state struct at `0xcf5be0`; the call-out below reads and
     // mutates it so the global stream advances exactly as the stock spawn does.
     const RNG_STATE_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x8f_5be0;
     const RNG_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x5_31e0;
@@ -8390,7 +8390,7 @@ pub fn c_world_liquid__query_height_at_point__6b9f10(
 /// of the element array (`*(worldView+0x34)`), then orders them by a key chain
 /// (priority table when `*(worldView+0x148) & 4`, then several float/int
 /// fields, then the texture key when `& 2`). On an undecided tie it falls
-/// through to the stock extended comparator `FUN_0070aa30`
+/// through to the stock extended comparator at `0x70aa30`
 /// (`__fastcall(indexA, indexB, stack=worldView)`, `ret 4`).
 pub fn c_world_view__compare_draw_list_opaque__70ae10(
     index_a: u32,
@@ -8537,7 +8537,7 @@ pub fn c_world_view__compare_draw_list_by_texture__70aa00(
     }
 }
 
-/// `FUN_0041af70` — `__fastcall(ecx, edx) -> (ecx - edx) >> 2` (arithmetic shift).
+/// The helper at `0x41af70` — `__fastcall(ecx, edx) -> (ecx - edx) >> 2` (arithmetic shift).
 ///
 /// Orders two texture pointers by address; the extended comparator consumes
 /// only the sign, but the value is transcribed exactly.
@@ -9541,7 +9541,7 @@ pub fn height_bucket_insert_node_at_pos__6818b0(object_node: i32, world_pos: *co
 /// the rounded index to `0..=31` (drops the node when above), then performs the
 /// intrusive doubly-linked-list surgery on the global bucket array at `0xc7bd40`
 /// (stride `0x6c`): unlinks the node from its current list (resolving its prev via
-/// the stock `FUN_006876b0`, `__thiscall(link, -1)`, `ret 4`) and relinks it at
+/// the stock helper at `0x6876b0`, `__thiscall(link, -1)`, `ret 4`) and relinks it at
 /// the destination bucket's list head.
 pub fn height_bucket_insert_node_from_object__6816f0(object_node: i32) {
     if object_node == 0 {
@@ -9660,7 +9660,7 @@ pub fn height_bucket_insert_node_from_object__6816f0(object_node: i32) {
 /// (`0x810f70`, i32) from the host tables; the two passes seed their 9-entry
 /// index lists at frustum-dependent offsets (`0x88`/`8` when the bound globals
 /// `0xc7d118`/`0xc7d11c` fall below `0xc7cf20`/`0xc7cf24`). Each pass calls the
-/// stock edge rasterizer `FUN_00681b50` (`__fastcall(ecx=vertArray,
+/// stock edge rasterizer at `0x681b50` (`__fastcall(ecx=vertArray,
 /// edx=edgeIndices, stack=edgeCount, worldOffset, 0)`, `ret 0xc`) over the cell
 /// vertex array (`node+0x83c`) with world offset `node+0x6c`.
 pub fn height_bucket__rasterize_cell_occluder__6c15d0(node: i32) {
@@ -10114,8 +10114,8 @@ pub fn light_animate_color_and_intensity__69e770(this: *mut u8) {
     // SAFETY: `active_ptr` is the initialized active-flags dword of the live object.
     let active = unsafe { active_ptr.cast::<u32>().read() };
     if active & 1 != 0 || active == 0 {
-        // Republish: a stateful liquid/flags update on the object. `FUN_0069e280`
-        // is `__fastcall(ecx = this) -> void` (reads `this`
+        // Republish: a stateful liquid/flags update on the object. The routine
+        // at `0x69e280` is `__fastcall(ecx = this) -> void` (reads `this`
         // from ECX, plain `ret`).
         const REPUBLISH_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x29_e280;
         // SAFETY: a fixed `.text` entry in the live host image (base verified at
@@ -15220,7 +15220,7 @@ pub fn c_world_bsp__traverse_node__6bc1c0(
         // SAFETY: the id table is in-bounds at `pool + 2*list_off`.
         let id_table = unsafe { pool.add(list_off as usize * 2) };
 
-        // FUN_006bca50 — the per-element box collector; impure (mutates process
+        // The per-element box collector at 0x6bca50 — impure (mutates process
         // globals). Kept as an unhooked callee until separately reversed.
         const ELEM_COLLECT_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x2b_ca50;
         // SAFETY: a fixed `.text` entry in the live host image; the transmuted
@@ -15347,7 +15347,7 @@ pub fn c_world__link_entity_to_tiles__6a8ca0(this: *mut core::ffi::c_void) -> u3
         return 0;
     }
 
-    // Link-disable early-out `DAT_00c9e384` (same gate as 0x6b7070/0x6aa8b0):
+    // Link-disable early-out at `0xc9e384` (same gate as 0x6b7070/0x6aa8b0):
     // non-zero => skip, return 0. Zero is the normal in-play state.
     const LINK_DISABLED: *const u32 = (crate::win::EXPECTED_IMAGE_BASE + 0x89_e384) as *const u32;
     // SAFETY: fixed `.data` gate dword in the live host image (non-DYNAMICBASE).
@@ -15394,7 +15394,7 @@ pub fn c_world__link_entity_to_tiles__6a8ca0(this: *mut core::ffi::c_void) -> u3
     // SAFETY: `flags_slot` is an aligned dword.
     let flags = unsafe { flags_slot.cast::<u32>().read() };
 
-    // 64x64 row-pointer table `DAT_00c96318` (4-byte slots).
+    // 64x64 row-pointer table at `0xc96318` (4-byte slots).
     const ROW_TABLE: *const *mut u8 =
         (crate::win::EXPECTED_IMAGE_BASE + 0x89_6318) as *const *mut u8;
 
@@ -21709,8 +21709,8 @@ unsafe fn pq_heap_set(idx: usize, z: f32, ptr: u32) {
 
 /// Reserve one slot at the end of the depth-sort vector.
 ///
-/// The stock `FUN_007b63a0(ctrl, null, 1)` fast path. Bumps the count; only the rare
-/// capacity-exhausted case calls the stock grow helper (`FUN_007bff20`), so the steady-state path
+/// The stock fast path at `0x7b63a0` (`ctrl, null, 1`). Bumps the count; only the rare
+/// capacity-exhausted case calls the stock grow helper at `0x7bff20`, so the steady-state path
 /// is call-free.
 ///
 /// SAFETY: `PQ_HEAP_CTRL` is the live vector control block.
@@ -21841,7 +21841,7 @@ pub fn c_particle_emitter__render_particles__7b3a10(
                 (0.0, 0)
             };
             // Erase the last element: tail-shift is zero (erase-last), so this is
-            // just `count -= 1` (the stock `FUN_007b64a0(ctrl, count-1, 1)`).
+            // just `count -= 1` (stock: `0x7b64a0(ctrl, count-1, 1)`).
             if pre != 0 {
                 // SAFETY: the count field is writable.
                 unsafe { PQ_HEAP_COUNT.write((pre - 1) as u32) };
@@ -23301,7 +23301,7 @@ pub fn c_object_placement__set_relative_transform__7b5160(
 ///
 /// Faithful shape notes (0x7b5230–0x7b54cd): the camera delta reads
 /// `p2+0x30..0x38 − p3[0..2]` with per-component narrows and writes
-/// `_DAT_00cf58e8` (kernel `substep_camera_distance__7b5230`, which routes
+/// the global at `0xcf58e8` (kernel `substep_camera_distance__7b5230`, which routes
 /// through the shared 0x4549f0 SqMag kernel). SetRelativeTransform
 /// (0x7b5160) — OUR hook, called directly — runs for `this` and every
 /// child; the child count at `+0x7c` is re-read EVERY iteration and the
@@ -23526,58 +23526,92 @@ pub fn c_particle_emitter__update_with_substeps__7b5230(
 /// (`0x7b5550`, the SECOND call site), then restores the saved transform. Walks `parent+0x7c`
 /// children at `parent+0x80`. Impure-driver helper; kept out of the kernel module because it is all
 /// in-place pointer mutation plus a transmute_va call-out.
-#[allow(
-    clippy::multiple_unsafe_ops_per_block,
-    clippy::undocumented_unsafe_blocks
-)]
 fn update_child_emitters_7b5a10(
     parent_base: *mut u8,
     particle: *mut u8,
     pre_pos: [f32; 3],
     dt: f32,
 ) {
-    let child_count = unsafe { parent_base.add(0x7c).cast::<u32>().read() };
+    // SAFETY: `parent_base` is the emitter `this` of the sole caller, taken after
+    // its `this.is_null()` early return; +0x7c is the child-count field of that
+    // instance, so the offset stays inside the same allocation.
+    let count_field = unsafe { parent_base.add(0x7c) };
+    // SAFETY: +0x7c is a dword-aligned `u32` count, the same field the stock body
+    // loads to bound the child walk.
+    let child_count = unsafe { count_field.cast::<u32>().read() };
     if child_count == 0 {
         return;
     }
     // Inline array of child `this` pointers at parent+0x80 (single load, stock
     // `lea eax,[esi+0x80]; mov ecx,[cursor]`); index directly, no extra deref.
+    //
+    // SAFETY: the array is inline in the emitter instance, so +0x80 addresses the
+    // same allocation as `parent_base`; forming the pointer reads nothing.
     let child_array = unsafe { parent_base.add(0x80).cast::<*mut core::ffi::c_void>() };
     // Per-child scratch transform lives at parent+0x22c (3 f32 saved/restored).
+    //
+    // SAFETY: as above — +0x22c is the emitter position triple, a field of that
+    // same instance, and only the address is computed here.
     let scratch = unsafe { parent_base.add(0x22c) };
 
     for c in 0..child_count {
-        let child = unsafe { child_array.add(c as usize).read() }.cast::<u8>();
+        // SAFETY: `c` runs over `0..child_count`, and that count is exactly what
+        // +0x7c records for the inline pointer array at +0x80.
+        let slot = unsafe { child_array.add(c as usize) };
+        // SAFETY: slots below the count hold the child `this` pointers; the stock
+        // body loads the same cursor (0x7b5b21) and dereferences it with no null
+        // test, so the field accesses below inherit that assumption unchanged.
+        let child = unsafe { slot.read() }.cast::<u8>();
 
         // Save scratch, then write the particle's CURRENT (post-physics) first 3
         // f32 (pos) into it — `mov edx,[ebx]; mov [eax],edx` at 0x7b5b39.
+        //
+        // SAFETY: `scratch` addresses the three-f32 slot at parent+0x22c;
+        // `read_unaligned` requires only that those 12 bytes be readable, which
+        // the enclosing instance provides.
         let saved = unsafe { scratch.cast::<[f32; 3]>().read_unaligned() };
+        // SAFETY: `particle` is an element of the emitter's particle array (stride
+        // 0x20 or 0x40) whose first three f32 are the position — the same triple
+        // the caller snapshotted into `pre_pos`.
         let cur_pos = unsafe { particle.cast::<[f32; 3]>().read_unaligned() };
+        // SAFETY: the same parent+0x22c triple just read from, written back
+        // through the unaligned path, so only writability is required.
         unsafe { scratch.cast::<[f32; 3]>().write_unaligned(cur_pos) };
 
         let child_base = child;
-        let cflags = unsafe { child_base.add(0x1ac).cast::<u32>().read() };
+        // SAFETY: `child_base` is a child emitter instance taken from the array;
+        // +0x1ac is the emitter flag word, the field the parent's own update body
+        // reads and writes on its `this`.
+        let flags_field = unsafe { child_base.add(0x1ac) };
+        // SAFETY: the flag word is a dword-aligned `u32` field of that instance.
+        let cflags = unsafe { flags_field.cast::<u32>().read() };
         // Color seed when (cflags >> 8) & 0x4 == bit 0x400 (test ah,0x4 at
         // 0x7b5b51): copy particle+0x10 (3 f32, post-physics velocity) into
         // child+0x258.
         if cflags & 0x0400 != 0 {
-            let src = unsafe { particle.add(0x10).cast::<[f32; 3]>().read_unaligned() };
-            unsafe {
-                child_base
-                    .add(0x258)
-                    .cast::<[f32; 3]>()
-                    .write_unaligned(src)
-            };
+            // SAFETY: the particle element is 0x20 bytes at minimum and carries
+            // its age f32 at +0x1c, so the velocity triple spanning +0x10..+0x1c
+            // lies inside the element.
+            let vel_field = unsafe { particle.add(0x10) };
+            // SAFETY: that triple is three f32 and the unaligned read needs only
+            // the 12 bytes to be readable.
+            let src = unsafe { vel_field.cast::<[f32; 3]>().read_unaligned() };
+            // SAFETY: +0x258 is a three-f32 emitter field — the emitter body
+            // reads and writes it as `[f32; 3]` on its own `this`.
+            let color_field = unsafe { child_base.add(0x258) };
+            // SAFETY: three f32 wide, written through the unaligned path, so only
+            // writability of those 12 bytes is required.
+            unsafe { color_field.cast::<[f32; 3]>().write_unaligned(src) };
         }
         // Position seed when (cflags >> 8) & 0x10 == bit 0x1000 (test ah,0x10 at
         // 0x7b5b78): copy the PRE-physics particle position into child+0x248.
         if cflags & 0x1000 != 0 {
-            unsafe {
-                child_base
-                    .add(0x248)
-                    .cast::<[f32; 3]>()
-                    .write_unaligned(pre_pos)
-            };
+            // SAFETY: +0x248 is the emitter snapshot triple — three f32, read and
+            // written as `[f32; 3]` on an emitter `this` elsewhere in this body.
+            let saved_pos_field = unsafe { child_base.add(0x248) };
+            // SAFETY: three f32 wide, written unaligned, so only those 12 bytes
+            // need to be writable.
+            unsafe { saved_pos_field.cast::<[f32; 3]>().write_unaligned(pre_pos) };
         }
 
         // Per-particle position eval — the SECOND 0x7b5550 call site, here inside
@@ -23586,10 +23620,16 @@ fn update_child_emitters_7b5a10(
         // the call (0x7b5b9f), so EmitParticles runs against the child instance
         // while the out-pointer still addresses the parent's +0x1fc slot.
         // EmitParticles (0x7b5550) is OUR hook — direct call, no detour.
+        //
+        // SAFETY: +0x1fc is the emitter's placement block, the `ctx` both of our
+        // 0x7b5550 call sites hand over; only the address is formed here.
         let pos_out = unsafe { parent_base.add(0x1fc) };
         c_particle_emitter__emit_particles__7b5550(child_base.cast::<u8>(), dt, pos_out);
 
         // Restore the scratch transform.
+        //
+        // SAFETY: the parent+0x22c triple read at the top of this iteration,
+        // written back through the same unaligned path.
         unsafe { scratch.cast::<[f32; 3]>().write_unaligned(saved) };
     }
 }
@@ -23623,10 +23663,6 @@ fn update_child_emitters_7b5a10(
 /// base is `&state` (the stock `lea [ebp-0x6c]`), so a stock `[ebp-N]` slot is
 /// `state[(0x6c - N) / 4]`. The constructor and emitters read this block by
 /// pointer, so its byte image must match the stock frame exactly.
-#[allow(
-    clippy::multiple_unsafe_ops_per_block,
-    clippy::undocumented_unsafe_blocks
-)]
 // REASON: dense impure command-stream driver. Every block reads in-bounds device
 // fields (validated against the stock body) or calls a bounds-checked original
 // emitter by its exact ECX/EDX/stack ABI; a per-op SAFETY comment on each of the
@@ -23660,17 +23696,32 @@ pub fn gx_light_apply_scene_lighting__71c730(
     // 0x589e60: SetRenderState, `fastcall(ecx = state_id, edx = value)`, ret.
     const SET_RS_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x18_9e60;
 
+    // SAFETY: `CTOR_VA` is 0x591260, a fixed `.text` address of the client, whose
+    // image base `attach_process` asserts equals `EXPECTED_IMAGE_BASE` before any
+    // hook installs; the type matches the `thiscall(ecx = &state)` leaf above.
     let ctor: unsafe extern "thiscall" fn(*mut u8) = unsafe { core::mem::transmute(CTOR_VA) };
     // idx -> ecx, &state -> edx, then four stack dwords (c0, c1, c2, enable).
     let emit_light: unsafe extern "fastcall" fn(u32, *const u8, u32, u32, u32, u32) =
+        // SAFETY: `EMIT_LIGHT_VA` is 0x589d80 in that same base-asserted image; the
+        // type matches the `fastcall(ecx, edx)` pair plus the four stack dwords the
+        // callee pops with `ret 0x10`.
         unsafe { core::mem::transmute(EMIT_LIGHT_VA) };
     let emit_disable: unsafe extern "fastcall" fn(u32, u32) =
+        // SAFETY: `EMIT_DISABLE_VA` is 0x589de0 in that same base-asserted image; the
+        // type matches its register-only `fastcall(ecx = idx, edx = 0)`.
         unsafe { core::mem::transmute(EMIT_DISABLE_VA) };
     // opcode -> ecx, a dead dword -> edx (pass 0), value -> the one stack dword.
     let emit_1stk_e00: unsafe extern "fastcall" fn(u32, u32, u32) =
+        // SAFETY: `EMIT_1STK_E00_VA` is 0x589e00 in that same base-asserted image; the
+        // type matches its `fastcall` pair plus the one stack dword it pops with
+        // `ret 0x4`.
         unsafe { core::mem::transmute(EMIT_1STK_E00_VA) };
     let emit_1stk_e30: unsafe extern "fastcall" fn(u32, u32, u32) =
+        // SAFETY: `EMIT_1STK_E30_VA` is 0x589e30 in that same base-asserted image,
+        // carrying the same `fastcall` + one-stack-dword ABI as 0x589e00.
         unsafe { core::mem::transmute(EMIT_1STK_E30_VA) };
+    // SAFETY: `SET_RS_VA` is 0x589e60 in that same base-asserted image; the type
+    // matches its `fastcall(ecx = state_id, edx = value)`.
     let set_rs: unsafe extern "fastcall" fn(u32, u32) = unsafe { core::mem::transmute(SET_RS_VA) };
 
     // Local 0x6c-byte light-state frame block. Stock `[ebp-N]` -> `state[(0x6c-N)/4]`.
@@ -23681,12 +23732,19 @@ pub fn gx_light_apply_scene_lighting__71c730(
     let base = state.as_mut_ptr();
     // Raw in/out helpers into the block — avoids overlapping `&mut state[..]`
     // borrows when handing the clamp leaf two distinct out-slots at once.
+    // SAFETY: `base` is `state.as_mut_ptr()` over 0x1b dwords, and every `k` these
+    // two closures are called with below is one of the stock offsets 0x24..=0x5c, so
+    // `idx(k) = (0x6c - k) / 4` lands in 4..=18 — in bounds of the 27-dword block.
     let slot_u32 = |k: usize| unsafe { base.add(idx(k)) };
+    // SAFETY: same in-bounds `idx(k)`; `state` is a dword array, so each slot the
+    // pointer lands on is 4-byte aligned and an `f32` is validly addressed there.
     let slot_f32 = |k: usize| unsafe { base.add(idx(k)).cast::<f32>() };
 
     // 0x71c740: [ebp-4] = 0 (the per-loop "relative-pos written" flag word).
     state[idx(0x4)] = 0;
     // 0x71c743: ctor(&state) default-inits the block up to +0x38.
+    // SAFETY: the ctor writes only the first 0x38 bytes of whatever ecx addresses;
+    // `base` is the live, still-in-scope 0x6c-byte `state` array, which covers that.
     unsafe { ctor(base.cast::<u8>()) };
     // 0x71c748..0x71c754: flags(state[-0x6c]) |= 1.
     state[idx(0x6c)] |= 1;
@@ -23696,7 +23754,13 @@ pub fn gx_light_apply_scene_lighting__71c730(
     state[idx(0x6c)] &= !0x2;
 
     // 0x71c762..0x71c770: copy this+0x78 ambient dir (3 f32) into state[-0x68..-0x60].
-    let amb = unsafe { dev.add(0x78).cast::<[u32; 3]>().read() };
+    // SAFETY: `dev+0x78` is the light manager's cached ambient direction (3 f32),
+    // written through the same `this` by the `71c2f0` call directly above — or, when
+    // that call saw its `this+0x14` bit 2 already set, by the earlier call that set
+    // it. It is in bounds: the manager's param block runs from +0x84.
+    let amb_ptr = unsafe { dev.add(0x78) };
+    // SAFETY: `amb_ptr` addresses those three dword-aligned f32, read as raw bits.
+    let amb = unsafe { amb_ptr.cast::<[u32; 3]>().read() };
     state[idx(0x68)] = amb[0];
     state[idx(0x64)] = amb[1];
     state[idx(0x60)] = amb[2];
@@ -23707,18 +23771,26 @@ pub fn gx_light_apply_scene_lighting__71c730(
     crate::win::hooks::gx_light_clamp_color_component_to_byte__71ca80(
         slot_u32(0x5c),
         slot_f32(0x50),
+        // SAFETY: `dev+0x54` is the manager's 3-f32 light-direction accumulator, the
+        // field `71c2f0` reads and writes at the same offset; the clamp leaf null-
+        // checks this pointer and reads three contiguous f32 unaligned from it.
         unsafe { dev.add(0x54).cast::<f32>() },
         0.0,
     );
     crate::win::hooks::gx_light_clamp_color_component_to_byte__71ca80(
         slot_u32(0x58),
         slot_f32(0x4c),
+        // SAFETY: `dev+0x60` is the manager's 3-f32 primary light direction, the field
+        // `71c2f0` writes at the same offset; the clamp leaf reads three f32 from it.
         unsafe { dev.add(0x60).cast::<f32>() },
         1.0,
     );
     crate::win::hooks::gx_light_clamp_color_component_to_byte__71ca80(
         slot_u32(0x54),
         slot_f32(0x48),
+        // SAFETY: `dev+0x6c` is the 12-byte slot bracketed by the +0x60 light direction
+        // (3 f32, ending at +0x6c) and the +0x78 ambient direction, so three f32 are in
+        // bounds here; the clamp leaf reads exactly that many.
         unsafe { dev.add(0x6c).cast::<f32>() },
         0.0,
     );
@@ -23728,6 +23800,9 @@ pub fn gx_light_apply_scene_lighting__71c730(
     state[idx(0x18)] = 0;
     state[idx(0x14)] = 0;
     state[idx(0x10)] = 0;
+    // SAFETY: the emitter reads the 0x6c-byte light state through edx; `base` is the
+    // live `state` array, ctor-seeded and filled above. The four trailing arguments
+    // are the four stack dwords the callee pops with `ret 0x10`.
     unsafe { emit_light(0, base.cast::<u8>(), 0, 0, 0, 1) };
 
     // 0x71c7d2..0x71c7ec: flags |= 2; clear scratch packed/max slots.
@@ -23740,7 +23815,11 @@ pub fn gx_light_apply_scene_lighting__71c730(
     // --- Active light loop (0x71c7d5..0x71c8f7). ---
     // count=*(this+0x180); ptr array base = this + count*4 + 0x160, walked back.
     // The command-slot index `slot_ix` starts at 1 (slot 0 = ambient) and caps <4.
-    let count = unsafe { dev.add(0x180).cast::<i32>().read() };
+    // SAFETY: `dev+0x180` is the manager's active-light count; the fog-state sibling
+    // `70baf0` reads the entry count of this same object at this same offset.
+    let count_ptr = unsafe { dev.add(0x180) };
+    // SAFETY: `count_ptr` is that dword-aligned count field.
+    let count = unsafe { count_ptr.cast::<i32>().read() };
     let mut slot_ix: u32 = 1;
     if count != 0 {
         let mut light_ptr = (dev as usize).wrapping_add((count as usize) * 4 + 0x160);
@@ -23754,15 +23833,30 @@ pub fn gx_light_apply_scene_lighting__71c730(
                 break;
             }
             // 0x71c817..0x71c81c: load the light-struct pointer.
+            // SAFETY: `light_ptr` walks the stride-4 entry-pointer array at `dev+0x160`
+            // — the array `70baf0` indexes on this same object — from index `count-1`
+            // down to 0, because it is pre-decremented at the loop top from
+            // `dev + count*4 + 0x160`. Each element is a dword-aligned pointer. A null
+            // entry is deliberately not filtered: the stock body loads it unconditionally.
             let light = unsafe { (light_ptr as *const *const u8).read() };
 
             // 0x71c81e..0x71c846: choose the direction source. When camera_pos is
             // non-null, dir = light_world(+0xc/+0x10/+0x14) - camera(0/4/8) into
             // state[-0x24..-0x1c]; else dir = light+0x18.
             let dir_ptr: *const u8 = if camera_pos.is_null() {
+                // SAFETY: `+0x18` is the entry's direction field; `70baf0` reads this
+                // same entry layout at +0x18/+0x1c/+0x20 and on out to +0x5c.
                 unsafe { light.add(0x18) }
             } else {
-                let lp = unsafe { light.add(0xc).cast::<[f32; 3]>().read_unaligned() };
+                // SAFETY: `+0xc` is the entry's world position, well inside the entry
+                // layout `70baf0` reads out to +0x5c.
+                let lp_ptr = unsafe { light.add(0xc) };
+                // SAFETY: `lp_ptr` addresses three contiguous f32; the unaligned read
+                // makes no alignment demand on the field.
+                let lp = unsafe { lp_ptr.cast::<[f32; 3]>().read_unaligned() };
+                // SAFETY: `camera_pos` is non-null on this arm of the `is_null` test
+                // above, and the stock body performs the identical three-f32 load here,
+                // so a non-null argument carries the original's 3-f32 contract.
                 let vp = unsafe { camera_pos.cast::<[f32; 3]>().read_unaligned() };
                 state[idx(0x24)] = (lp[0] - vp[0]).to_bits();
                 state[idx(0x20)] = (lp[1] - vp[1]).to_bits();
@@ -23773,6 +23867,10 @@ pub fn gx_light_apply_scene_lighting__71c730(
             };
 
             // 0x71c84b..0x71c859: copy the chosen dir into state[-0x68..-0x60].
+            // SAFETY: `dir_ptr` is one of the two arms above — the entry's `+0x18`
+            // direction field, or `&state[idx(0x24)]` whose three dwords were just
+            // written. `idx(0x24)` is 18, so 18..21 stays inside the 0x1b-dword block,
+            // and both sources are dword-aligned for this 12-byte read.
             let d = unsafe { dir_ptr.cast::<[u32; 3]>().read() };
             state[idx(0x68)] = d[0];
             state[idx(0x64)] = d[1];
@@ -23784,7 +23882,11 @@ pub fn gx_light_apply_scene_lighting__71c730(
 
             // 0x71c866..0x71c886: copy light+0x3c (3 f32) into state[-0x30..-0x28]
             // and clamp it (baseline 1.0) -> packed state[-0x58], max state[-0x4c].
-            let col = unsafe { light.add(0x3c).cast::<[u32; 3]>().read() };
+            // SAFETY: `+0x3c` starts the entry's 3-dword colour block — the same
+            // +0x3c/+0x40/+0x44 fields `70baf0` copies out of each entry.
+            let col_ptr = unsafe { light.add(0x3c) };
+            // SAFETY: `col_ptr` addresses those three dword-aligned fields.
+            let col = unsafe { col_ptr.cast::<[u32; 3]>().read() };
             state[idx(0x30)] = col[0];
             state[idx(0x2c)] = col[1];
             state[idx(0x28)] = col[2];
@@ -23796,7 +23898,11 @@ pub fn gx_light_apply_scene_lighting__71c730(
             );
 
             // 0x71c88e..0x71c89d: copy light+0x54..+0x5c (3 f32) into state[-0x44..-0x3c].
-            let extra = unsafe { light.add(0x54).cast::<[u32; 3]>().read() };
+            // SAFETY: `+0x54` starts the entry's trailing 3-dword scalar block, read at
+            // +0x54/+0x58/+0x5c by `70baf0` out of this same entry layout.
+            let extra_ptr = unsafe { light.add(0x54) };
+            // SAFETY: `extra_ptr` addresses those three dword-aligned fields.
+            let extra = unsafe { extra_ptr.cast::<[u32; 3]>().read() };
             state[idx(0x44)] = extra[0];
             state[idx(0x40)] = extra[1];
             state[idx(0x3c)] = extra[2];
@@ -23806,6 +23912,9 @@ pub fn gx_light_apply_scene_lighting__71c730(
             state[idx(0x18)] = 0;
             state[idx(0x14)] = 0;
             state[idx(0x10)] = 0;
+            // SAFETY: same emitter, same live `state` block as the slot-0 emit above;
+            // `slot_ix` is below 4 because the loop breaks on `slot_ix >= 4` before
+            // reaching here, so it names one of the four command slots.
             unsafe { emit_light(slot_ix, base.cast::<u8>(), 0, 0, 0, 1) };
             slot_ix += 1;
 
@@ -23818,6 +23927,8 @@ pub fn gx_light_apply_scene_lighting__71c730(
 
     // 0x71c8e3..0x71c8f5: disable the remaining command slots up to 4.
     while slot_ix < 4 {
+        // SAFETY: the disable emitter takes the slot index in ecx and an unused edx;
+        // the `while slot_ix < 4` condition keeps `slot_ix` inside the four slots.
         unsafe { emit_disable(slot_ix, 0) };
         slot_ix += 1;
     }
@@ -23828,26 +23939,54 @@ pub fn gx_light_apply_scene_lighting__71c730(
         return;
     }
     // 0x71c902..0x71c915: gate on eps <= |*(this+0x18c)| (eps @0x8029d4).
-    let fog_mag = unsafe { dev.add(0x18c).cast::<f32>().read() };
+    // SAFETY: `dev+0x18c` is the manager's fog magnitude, one dword of the fog block
+    // whose neighbours at +0x184, +0x188 and +0x190..+0x198 the stock tail loads from
+    // this same object, exactly as reproduced below.
+    let fog_mag_ptr = unsafe { dev.add(0x18c) };
+    // SAFETY: `fog_mag_ptr` is that dword-aligned f32 field.
+    let fog_mag = unsafe { fog_mag_ptr.cast::<f32>().read() };
     const EPS: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x40_29d4) as *const f32;
     // SAFETY: fixed, initialized `.data` eps dword in the live host image.
     let eps = unsafe { EPS.read() };
     if eps <= fog_mag.abs() {
         // 0x71c91b..0x71ca28: encode the 3 fog channels at this+0x190/+0x194/+0x198.
-        let ch = unsafe { dev.add(0x190).cast::<[f32; 3]>().read_unaligned() };
+        // SAFETY: `dev+0x190` starts the three fog colour channels at +0x190/+0x194/
+        // +0x198 that the encoder below consumes as `&[f32; 3]`, in bounds of the same
+        // fog block the magnitude was just read from.
+        let ch_ptr = unsafe { dev.add(0x190) };
+        // SAFETY: `ch_ptr` addresses those three f32; the read demands no alignment.
+        let ch = unsafe { ch_ptr.cast::<[f32; 3]>().read_unaligned() };
         let packed = crate::math::light::encode_fog_color__71c730(&ch);
         // 0x71ca23..0x71ca2a: emit opcode 0xd with the packed color (1 stack arg).
+        // SAFETY: opcode 0xd in ecx, an unused edx, and the packed colour as the one
+        // stack dword the callee reads at [ebp+8] and pops with `ret 0x4`.
         unsafe { emit_1stk_e00(0xd, 0, packed) };
         // 0x71ca2f..0x71ca3b: emit opcode 0xb with *(this+0x188).
-        let p188 = unsafe { dev.add(0x188).cast::<u32>().read() };
+        // SAFETY: `dev+0x188` is a fog-block dword of the manager, between the +0x184
+        // parameter and the +0x18c magnitude this tail already read.
+        let p188_ptr = unsafe { dev.add(0x188) };
+        // SAFETY: `p188_ptr` is that dword-aligned parameter field.
+        let p188 = unsafe { p188_ptr.cast::<u32>().read() };
+        // SAFETY: opcode 0xb in ecx, an unused edx, and the parameter as the one stack
+        // dword the callee pops with `ret 0x4`.
         unsafe { emit_1stk_e30(0xb, 0, p188) };
         // 0x71ca40..0x71ca4c: emit opcode 0xa with *(this+0x184).
-        let p184 = unsafe { dev.add(0x184).cast::<u32>().read() };
+        // SAFETY: `dev+0x184` is the fog-block dword below +0x188, inside the same
+        // block this tail reads out to +0x198.
+        let p184_ptr = unsafe { dev.add(0x184) };
+        // SAFETY: `p184_ptr` is that dword-aligned parameter field.
+        let p184 = unsafe { p184_ptr.cast::<u32>().read() };
+        // SAFETY: opcode 0xa in ecx, an unused edx, and the parameter as the one stack
+        // dword the callee pops with `ret 0x4`.
         unsafe { emit_1stk_e30(0xa, 0, p184) };
         // 0x71ca51..0x71ca5b: SetRenderState(0xf, 1) — enable fog.
+        // SAFETY: SetRenderState takes the state id in ecx and the value in edx; 0xf
+        // is the fog-enable id copied verbatim from the stock body at 0x71ca51.
         unsafe { set_rs(0xf, 1) };
     } else {
         // 0x71ca69..0x71ca70: SetRenderState(0xf, 0) — disable fog.
+        // SAFETY: SetRenderState takes the state id in ecx and the value in edx; the
+        // same 0xf fog-enable id, written with the stock disable value at 0x71ca69.
         unsafe { set_rs(0xf, 0) };
     }
 }
@@ -23858,10 +23997,7 @@ pub fn gx_light_apply_scene_lighting__71c730(
 // into noise. Allowed for this driver only; the crash-class per-drop math lives
 // in the host-tested kernel `crate::math::weather::weather_raindrop_vertex__675ac0`.
 #[cfg(target_arch = "x86")]
-#[allow(
-    clippy::multiple_unsafe_ops_per_block,
-    clippy::undocumented_unsafe_blocks
-)]
+#[allow(clippy::multiple_unsafe_ops_per_block)]
 pub extern "thiscall" fn weather_draw_rain_drops__675ac0(this: *mut core::ffi::c_void) {
     if this.is_null() {
         return;
@@ -23908,41 +24044,80 @@ pub extern "thiscall" fn weather_draw_rain_drops__675ac0(this: *mut core::ffi::c
     //   stdcall would leave ecx unset and the anchor garbage.)
     const LIST_STEP_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x27_d6c0;
 
+    // SAFETY: the load-time check refuses to patch unless the host image base equals
+    // `EXPECTED_IMAGE_BASE`, so `BEGIN_VA` is the `.text` address of the begin-batch
+    // thunk; per the constant above it takes no caller args and its tail target
+    // cleans 0, which is what `extern "cdecl" fn()` emits.
     let begin: extern "cdecl" fn() = unsafe { core::mem::transmute(BEGIN_VA) };
+    // SAFETY: `END_VA` is the matching end-batch thunk at the same checked base, with
+    // the same no-caller-args, cleans-0 shape.
     let end: extern "cdecl" fn() = unsafe { core::mem::transmute(END_VA) };
+    // SAFETY: `.text` at the checked base; 0x589e60 takes the state id in ecx and the
+    // value in edx with no stack args, which is `fastcall(u32, u32)`.
     let set_state: extern "fastcall" fn(u32, u32) = unsafe { core::mem::transmute(SET_RS_VA) };
     // opcode -> ecx, a dead dword -> edx (pass 0), value -> the one stack dword.
     let set_state_f: extern "fastcall" fn(u32, u32, f32) =
+        // SAFETY: `.text` at the checked base; 0x589e30 reads the opcode from ecx and
+        // the value from `[ebp+8]`, and its `ret 0x4` is fastcall callee-clean for the
+        // single stack dword this signature places there.
         unsafe { core::mem::transmute(EMIT_1STK_E30_VA) };
     let set_state_c: extern "fastcall" fn(u32, u32, u32) =
+        // SAFETY: `.text` at the checked base; 0x589e00 has the same ecx-opcode,
+        // one-stack-dword, `ret 0x4` shape as 0x589e30.
         unsafe { core::mem::transmute(EMIT_1STK_E00_VA) };
     let set_tex: extern "fastcall" fn(u32, *mut core::ffi::c_void) =
+        // SAFETY: `.text` at the checked base; 0x589e80 takes the stage in ecx and the
+        // handle in edx with no stack args.
         unsafe { core::mem::transmute(SET_TEX_VA) };
     // owner -> ecx, flag -> edx, the trailing dword -> the one stack arg.
     let get_tex: extern "fastcall" fn(
         u32,
         u32,
         *const core::ffi::c_void,
-    ) -> *mut core::ffi::c_void = unsafe { core::mem::transmute(GET_TEX_VA) };
+    ) -> *mut core::ffi::c_void =
+        // SAFETY: `.text` at the checked base; 0x44acf0 reads its 2nd arg from edx and
+        // its 3rd from `[ebp+8]`, and its `ret 0x4` cleans that one stack dword.
+        unsafe { core::mem::transmute(GET_TEX_VA) };
+    // SAFETY: `.text` at the checked base; 0x58b0b0 fills a 16-float block through the
+    // pointer in ecx, and the sole call below passes the local `mtx: [f32; 16]`.
     let get_matrix: extern "thiscall" fn(*mut f32) = unsafe { core::mem::transmute(GET_MATRIX_VA) };
     let resize: extern "fastcall" fn(u32, u32, u32) -> *mut core::ffi::c_void =
+        // SAFETY: `.text` at the checked base; 0x58a140 takes 0 in ecx and the format in
+        // edx plus one stack dword, `ret 0x4`, and returns the buffer in eax.
         unsafe { core::mem::transmute(RESIZE_VA) };
     let lock: extern "fastcall" fn(*mut core::ffi::c_void) -> *mut f32 =
+        // SAFETY: `.text` at the checked base; 0x58a080 takes the buffer in ecx with no
+        // stack args and returns the stream pointer in eax.
         unsafe { core::mem::transmute(LOCK_VA) };
     let unlock: extern "fastcall" fn(*mut core::ffi::c_void, u32) =
+        // SAFETY: `.text` at the checked base; 0x58a0a0 takes the buffer in ecx and 0 in
+        // edx with no stack args.
         unsafe { core::mem::transmute(UNLOCK_VA) };
     let ticks_to_seconds: extern "thiscall" fn(u32) -> f32 =
+        // SAFETY: `.text` at the checked base; 0x674600 takes the tick delta in ecx and
+        // returns the f32 in ST0, where this ABI's float return is read from.
         unsafe { core::mem::transmute(TICKS_TO_SECONDS_VA) };
     let apply_preset: extern "fastcall" fn(*mut core::ffi::c_void, u32) =
+        // SAFETY: `.text` at the checked base; 0x58a7c0 takes the buffer in ecx and the
+        // preset in edx with no stack args.
         unsafe { core::mem::transmute(APPLY_PRESET_VA) };
+    // SAFETY: `.text` at the checked base; 0x58a830 takes the descriptor address in ecx
+    // and 0 in edx, and the sole call below passes the local 3-dword `desc`.
     let draw: extern "fastcall" fn(*const u32, u32) = unsafe { core::mem::transmute(DRAW_VA) };
     // anchor -> ecx, node -> the one stack dword (thiscall: ecx + 1 stack arg).
     let list_step: extern "thiscall" fn(*mut core::ffi::c_void, *mut core::ffi::c_void) -> *mut u8 =
+        // SAFETY: `.text` at the checked base; 0x67d6c0 takes the anchor in ecx and the
+        // node as one stack dword with `ret 0x4`, which is what thiscall emits here.
         unsafe { core::mem::transmute(LIST_STEP_VA) };
 
     // --- Early-out gate: `[this+0xac] & 1` set, or zero -> nothing to draw.
     // (0x675ace `mov eax,[edi+0xac]`; 0x675ad6 `test al,1`; 0x675ae4 `cmp eax,ebx`.)
-    let head_word = unsafe { base.add(0xac).cast::<u32>().read() };
+    // SAFETY: `this` is non-null (returned above if it was) and is the weather-effect
+    // instance the client passes in ecx; `+0xac` is a field inside it, the dword the
+    // stock loads at 0x675ace as `mov eax,[edi+0xac]`.
+    let head_ptr = unsafe { base.add(0xac) };
+    // SAFETY: `head_ptr` addresses that initialized, 4-byte-aligned instance field.
+    let head_word = unsafe { head_ptr.cast::<u32>().read() };
     if head_word & 1 != 0 || head_word == 0 {
         return;
     }
@@ -23961,7 +24136,11 @@ pub extern "thiscall" fn weather_draw_rain_drops__675ac0(this: *mut core::ffi::c
     set_state_c(0xd, 0, 0x8080_8080);
 
     // --- Bind the drop texture from `[this+0xc4]` via the texture-handle getter.
-    let tex_owner = unsafe { base.add(0xc4).cast::<u32>().read() };
+    // SAFETY: `base` is the non-null instance and `+0xc4` is its texture-owner field,
+    // the dword the stock loads into ecx before calling 0x44acf0.
+    let tex_owner_ptr = unsafe { base.add(0xc4) };
+    // SAFETY: `tex_owner_ptr` addresses that initialized, 4-byte-aligned dword.
+    let tex_owner = unsafe { tex_owner_ptr.cast::<u32>().read() };
     let tex = get_tex(tex_owner, 1, core::ptr::null());
     set_tex(0x17, tex);
 
@@ -23981,32 +24160,58 @@ pub extern "thiscall" fn weather_draw_rain_drops__675ac0(this: *mut core::ffi::c
     // rows the stock copies into the `[ebp-0xb8..-0xa4]` block at 0x675cad..0x675cda.
     let right = [mtx[0] * inv12, mtx[4] * inv12, mtx[8] * inv12];
     let up = [mtx[1] * inv6, mtx[5] * inv6, mtx[9] * inv6];
-    // Negated tilt-basis row used as the v0 corner origin (`local_15c` group).
+    // Negated tilt-basis row used as the v0 corner origin.
     let neg_right = [-right[0], -right[1], -right[2]];
 
     // --- Camera position: GetCameraPosition (0x672570) returns the fixed
     // absolute VA 0xc7cf20 = EXPECTED_IMAGE_BASE + 0x87cf20; three contiguous f32.
     const CAMERA: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x87_cf20) as *const f32;
-    let camera = unsafe { [CAMERA.read(), CAMERA.add(1).read(), CAMERA.add(2).read()] };
+    // SAFETY: 0xc7cf20 is the camera-position global, three contiguous f32 in the
+    // client's data at the checked image base; this reads the first of them.
+    let cam_x = unsafe { CAMERA.read() };
+    // SAFETY: y is the second f32 of that same three-float global, so the offset stays
+    // inside it.
+    let cam_y_ptr = unsafe { CAMERA.add(1) };
+    // SAFETY: `cam_y_ptr` addresses an initialized, 4-byte-aligned f32 of the global.
+    let cam_y = unsafe { cam_y_ptr.read() };
+    // SAFETY: z is the third f32 of the same global, still inside it.
+    let cam_z_ptr = unsafe { CAMERA.add(2) };
+    // SAFETY: `cam_z_ptr` addresses an initialized, 4-byte-aligned f32 of the global.
+    let cam_z = unsafe { cam_z_ptr.read() };
+    let camera = [cam_x, cam_y, cam_z];
 
     // --- Global "now" tick stamp (0xc62970).
     const NOW_TICKS: *const u32 = (crate::win::EXPECTED_IMAGE_BASE + 0x86_2970) as *const u32;
+    // SAFETY: 0xc62970 is the engine's tick stamp, an initialized, aligned dword in the
+    // client's data at the checked image base; it is what the stock feeds to 0x674600.
     let now_ticks = unsafe { NOW_TICKS.read() };
 
     // --- Outer per-node list walk. The head is `[this+0xac]`; each node is
     // advanced through the list step (`this+0xa4`) which returns the anchor
     // `[ecx+4]` when the node is 0, then the next node is `[ret+4]`.
-    let mut node = unsafe { base.add(0xac).cast::<*mut u8>().read() };
+    // SAFETY: `base + 0xac` is the same instance field the entry gate read; `this` is
+    // non-null and the offset is inside the instance.
+    let node_head_ptr = unsafe { base.add(0xac) };
+    // SAFETY: `node_head_ptr` addresses that dword, here taken as the head node
+    // pointer; the entry gate already established it is non-zero with the tag bit clear.
+    let mut node = unsafe { node_head_ptr.cast::<*mut u8>().read() };
     if (node as usize) & 1 != 0 || node.is_null() {
         node = core::ptr::null_mut();
     }
     while !node.is_null() && (node as usize) & 1 == 0 {
         let cur = node;
         // Drop time-base / count live at node+0x24010 / node+0x2400c.
-        let time_base = unsafe { cur.add(0x2_4010).cast::<u32>().read() };
+        // SAFETY: `cur` is a non-null list node (loop condition) and `+0x24010` is the
+        // time-base field of that node record, the dword the stock reads there.
+        let time_base_ptr = unsafe { cur.add(0x2_4010) };
+        // SAFETY: `time_base_ptr` addresses that initialized, 4-byte-aligned dword.
+        let time_base = unsafe { time_base_ptr.cast::<u32>().read() };
         if time_base <= now_ticks {
             let now_seconds = ticks_to_seconds(now_ticks.wrapping_sub(time_base));
-            let drop_count = unsafe { cur.add(0x2_400c).cast::<u32>().read() };
+            // SAFETY: `+0x2400c` is the drop-count field of the same node record.
+            let drop_count_ptr = unsafe { cur.add(0x2_400c) };
+            // SAFETY: `drop_count_ptr` addresses that initialized, aligned dword.
+            let drop_count = unsafe { drop_count_ptr.cast::<u32>().read() };
             // Reserve count*3 vertices (lea ecx,[eax+2*eax]) of fmt 0x14.
             let buffer = resize(0, 0x14, drop_count.wrapping_mul(3));
             let mut vstream = lock(buffer);
@@ -24017,15 +24222,31 @@ pub extern "thiscall" fn weather_draw_rain_drops__675ac0(this: *mut core::ffi::c
                 // Per drop: pos at +0xc/+0x10/+0x14, lifetime pair +0x1c/+0x20.
                 let mut drop_ptr = cur;
                 for _ in 0..drop_count {
-                    let pos = unsafe {
-                        [
-                            drop_ptr.add(0xc).cast::<f32>().read(),
-                            drop_ptr.add(0x10).cast::<f32>().read(),
-                            drop_ptr.add(0x14).cast::<f32>().read(),
-                        ]
-                    };
-                    let birth = unsafe { drop_ptr.add(0x1c).cast::<f32>().read() };
-                    let death = unsafe { drop_ptr.add(0x20).cast::<f32>().read() };
+                    // SAFETY: `drop_ptr` walks this node's drop array from `cur` in the
+                    // stock's 0x18 stride, bounded by the `drop_count` the node itself
+                    // records; `+0xc` is that record's position x.
+                    let pos_x_ptr = unsafe { drop_ptr.add(0xc) };
+                    // SAFETY: `pos_x_ptr` addresses an initialized, 4-byte-aligned f32
+                    // written when the drop was spawned.
+                    let pos_x = unsafe { pos_x_ptr.cast::<f32>().read() };
+                    // SAFETY: `+0x10` is position y of the same in-array record.
+                    let pos_y_ptr = unsafe { drop_ptr.add(0x10) };
+                    // SAFETY: `pos_y_ptr` addresses an initialized, aligned f32.
+                    let pos_y = unsafe { pos_y_ptr.cast::<f32>().read() };
+                    // SAFETY: `+0x14` is position z of the same in-array record.
+                    let pos_z_ptr = unsafe { drop_ptr.add(0x14) };
+                    // SAFETY: `pos_z_ptr` addresses an initialized, aligned f32.
+                    let pos_z = unsafe { pos_z_ptr.cast::<f32>().read() };
+                    let pos = [pos_x, pos_y, pos_z];
+                    // SAFETY: `+0x1c` is the record's birth stamp, the offset the
+                    // per-drop kernel documents as its `birth` input.
+                    let birth_ptr = unsafe { drop_ptr.add(0x1c) };
+                    // SAFETY: `birth_ptr` addresses an initialized, aligned f32.
+                    let birth = unsafe { birth_ptr.cast::<f32>().read() };
+                    // SAFETY: `+0x20` is the record's death stamp, the kernel's `death`.
+                    let death_ptr = unsafe { drop_ptr.add(0x20) };
+                    // SAFETY: `death_ptr` addresses an initialized, aligned f32.
+                    let death = unsafe { death_ptr.cast::<f32>().read() };
 
                     if let Some(s) = crate::math::weather::weather_raindrop_vertex__675ac0(
                         now_seconds,
@@ -24065,6 +24286,14 @@ pub extern "thiscall" fn weather_draw_rain_drops__675ac0(this: *mut core::ffi::c
                         let u1 = u0 + 0.125;
                         let u2 = u0 + 0.25;
                         let v1 = v0;
+                        // SAFETY: `vstream` is what 0x58a080 returned for the buffer
+                        // 0x58a140 reserved with `drop_count * 3` vertices of format
+                        // 0x14, and the buffer is still locked here. This arm runs at
+                        // most once per drop and each pass writes exactly three
+                        // vertices then advances `vstream` by 15 f32 = 3 * 5 dwords, so
+                        // the writes stay inside that reservation. Kept as one block:
+                        // the strided record writes are a verbatim transcription of the
+                        // stock emission, which one comment per store would only bury.
                         unsafe {
                             // Streak is three 5-dword (0x14) vertices written
                             // into the locked stream; the stock interleaves two
@@ -24083,6 +24312,10 @@ pub extern "thiscall" fn weather_draw_rain_drops__675ac0(this: *mut core::ffi::c
                         }
                         vert_count = vert_count.wrapping_add(3);
                     }
+                    // SAFETY: advances one 0x18-byte drop record; the loop runs exactly
+                    // the `drop_count` the node records for its own array, so every
+                    // advance stays within that array, which the node's header dwords
+                    // at +0x2400c/+0x24010 sit past.
                     drop_ptr = unsafe { drop_ptr.add(0x18) };
                 }
             }
@@ -24096,9 +24329,17 @@ pub extern "thiscall" fn weather_draw_rain_drops__675ac0(this: *mut core::ffi::c
             draw(desc.as_ptr(), 0);
         }
         // Advance the list: step(this+0xa4, cur) then next = [ret+4].
+        // SAFETY: `this` is non-null and `+0xa4` is the list anchor embedded in the
+        // instance, the ecx the stock passes to the list step at 0x67d6c0.
         let anchor = unsafe { base.add(0xa4).cast::<core::ffi::c_void>() };
         let ret = list_step(anchor, cur.cast::<core::ffi::c_void>());
-        node = unsafe { ret.add(4).cast::<*mut u8>().read() };
+        // SAFETY: 0x67d6c0 returns its node argument when non-zero (`cur` is, by the
+        // loop condition) and otherwise the anchor's `[ecx+4]`; either way `ret` is a
+        // list link whose `+4` holds the next-node pointer.
+        let next_ptr = unsafe { ret.add(4) };
+        // SAFETY: `next_ptr` addresses that initialized, aligned link dword; the loop
+        // condition re-tests the result for null and for the low tag bit.
+        node = unsafe { next_ptr.cast::<*mut u8>().read() };
     }
 
     end();
@@ -24169,11 +24410,14 @@ struct TraceBest {
 /// Read an unaligned `f32` / `[f32; 3]` / `[f32; 16]` from loaded M2 geometry.
 ///
 /// Loaded M2 geometry is only 2-byte aligned in general (the family-wide house idiom).
-#[allow(clippy::multiple_unsafe_ops_per_block)]
 unsafe fn trace_f32u(p: *const u8, off: usize) -> f32 {
-    // SAFETY: caller guarantees `p + off` is a readable `f32` of a live geometry
-    // struct; read unaligned since M2 data may be only 2-byte aligned.
-    unsafe { p.add(off).cast::<f32>().read_unaligned() }
+    // SAFETY: caller guarantees `p` points into a live client struct (a scene
+    // instance or loaded M2 geometry) and that `off` lies inside it, so the
+    // offset stays within one allocation.
+    let at = unsafe { p.add(off) };
+    // SAFETY: `p + off` is a readable `f32` field of that struct; read unaligned
+    // because loaded M2 geometry is only 2-byte aligned in general.
+    unsafe { at.cast::<f32>().read_unaligned() }
 }
 unsafe fn trace_vec3u(p: *const u8) -> [f32; 3] {
     // SAFETY: caller guarantees `p` spans three readable `f32` (a `C3Vector`);
@@ -24189,35 +24433,38 @@ unsafe fn trace_mat16u(p: *const u8) -> [f32; 16] {
 /// Clear one instance's hit-result slot (stock `*[inst+0x414] = 0; [inst+0x414] = 0`).
 ///
 /// Guards the embedded pointer against null (stock assumes it valid).
-#[allow(clippy::multiple_unsafe_ops_per_block)]
 unsafe fn trace_clear_hit_slot(inst: *mut u8) {
-    // SAFETY: `inst` is a live scene instance; `inst+0x414` holds a (possibly
-    // null) pointer to its hit-result slot, both written unconditionally by the
-    // original. We additionally null-guard the embedded pointer.
-    unsafe {
-        let slot = anim_ptr(inst, 0x414);
-        if !slot.is_null() {
-            slot.cast::<u32>().write(0);
-        }
-        anim_put_u32(inst, 0x414, 0);
+    // SAFETY: `inst` is a live instance node walked off the scene's `+0x130` list, so
+    // `inst+0x414` is an in-bounds, aligned pointer field: its hit-result slot.
+    let slot = unsafe { anim_ptr(inst, 0x414) };
+    if !slot.is_null() {
+        // SAFETY: a non-null `+0x414` addresses that instance's live, dword-aligned
+        // hit-result cell; stock writes it unguarded, the null test is the added guard.
+        unsafe { slot.cast::<u32>().write(0) };
     }
+    // SAFETY: `inst+0x414` is that same in-bounds, aligned dword field, which the
+    // original then overwrites with zero.
+    unsafe { anim_put_u32(inst, 0x414, 0) };
 }
 
 /// Clear every instance's hit slot and reset `this+0x12c`.
 ///
 /// The two degenerate early-outs (`*end_local < eps`, `seg_len < eps`).
-#[allow(clippy::multiple_unsafe_ops_per_block)]
 unsafe fn trace_clear_all(this: *mut u8) {
-    // SAFETY: `this+0x130` is the scene's instance-list head; each node's
-    // `+0x418` is its next link and `this+0x12c` is the in-bounds state dword.
-    unsafe {
-        let mut node = anim_ptr(this, 0x130);
-        while !node.is_null() {
-            trace_clear_hit_slot(node);
-            node = anim_ptr(node, 0x418);
-        }
-        anim_put_u32(this, 0x12c, 0);
+    // SAFETY: `this` is the live `CM2Scene` the caller already null-checked;
+    // `this+0x130` is its in-bounds instance-list head pointer field.
+    let mut node = unsafe { anim_ptr(this, 0x130) };
+    while !node.is_null() {
+        // SAFETY: `node` is a non-null instance reached from the list head, so
+        // it carries the `+0x414` hit-result slot the callee clears.
+        unsafe { trace_clear_hit_slot(node) };
+        // SAFETY: `node+0x418` is that same instance's next link, an in-bounds
+        // pointer field of the node just cleared.
+        node = unsafe { anim_ptr(node, 0x418) };
     }
+    // SAFETY: `this+0x12c` is the scene's in-bounds state dword, which the
+    // original resets once the instance list has been walked.
+    unsafe { anim_put_u32(this, 0x12c, 0) };
 }
 
 /// Grow the candidate record (`this+0x134`, 0x10-byte records) and index (`this+0x138`, u32).
@@ -24305,13 +24552,14 @@ unsafe fn trace_grow_vertex_scratch(this: *mut u8, need: u32, line: u32) -> *mut
 ///
 /// On pass ≥ 1 a new batch (`record[3] != best[3]`) or a missing best wins unconditionally;
 /// otherwise the nearer `t` wins (`!(t > best.t)`, NaN-faithful).
-#[allow(clippy::multiple_unsafe_ops_per_block)]
 unsafe fn trace_accept(record: *mut u8, t: f32, pass: u32, best: &mut TraceBest) {
-    // SAFETY: `record+0xc` and `best.hit+0xc` are the in-bounds u32 sort keys of
-    // candidate records in the `this+0x134` buffer; `best.hit` is read only after
-    // the null check short-circuits.
-    let same_key =
-        unsafe { !best.hit.is_null() && anim_u32(best.hit, 0xc) == anim_u32(record, 0xc) };
+    let same_key = !best.hit.is_null()
+        // SAFETY: `best.hit+0xc` is the in-bounds u32 batch key of the current best candidate
+        // record in the `this+0x134 + idx*0x10` buffer; the null test short-circuits first.
+        && unsafe { anim_u32(best.hit, 0xc) }
+            // SAFETY: `record+0xc` is that same key on the candidate record the caller forwarded
+            // from the same `this+0x134 + idx*0x10` buffer, sized to the instance count.
+            == unsafe { anim_u32(record, 0xc) };
     let take = (pass != 0 && (best.hit.is_null() || !same_key)) || !(t > best.t);
     if take {
         best.t = t;
@@ -24762,10 +25010,6 @@ pub fn cm2_scene__trace_line__7089c0(
 // only. The only float math is the keyframe-clock fold, done x87-free via the
 // `seq_ticks` / `ftol__40a2b0` kernels (the stock body uses `fild`/`fmul`/
 // `__ftol`).
-#[allow(
-    clippy::multiple_unsafe_ops_per_block,
-    clippy::undocumented_unsafe_blocks
-)]
 /// `CM2Model::AdvanceEventTracks` -- `__thiscall(ecx = this, delta)`, `ret 0x4`, void.
 ///
 /// Per-frame event-track advance for one M2 instance and (recursively) its child models. On the
@@ -24803,7 +25047,7 @@ pub fn cm2_model__advance_event_tracks__719370(this: *mut core::ffi::c_void, del
         if block.is_null() {
             return;
         }
-        // Placement ctor FUN_0070dd40: `__thiscall(ecx=block) -> *mut u8`, bare
+        // Placement ctor at 0x70dd40: `__thiscall(ecx=block) -> *mut u8`, bare
         // ret; `mov eax,ecx; mov dword [eax],-1; ret`.
         const CTOR_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x30_dd40;
         // SAFETY: fixed `.text` entry; signature matches `__thiscall(this) -> *mut u8`.
@@ -24815,13 +25059,20 @@ pub fn cm2_model__advance_event_tracks__719370(this: *mut core::ffi::c_void, del
         }
         // Fill the control block exactly as 0x7193ab..0x7193cd:
         //   *node = 9; node[1] = 0; node[2] = [[esi+0x2c]+0xc]; node[3] = delta.
-        // SAFETY: `node+0/+4/+8/+0xc` are in-bounds dwords of the fresh 0x50 block.
+        // SAFETY: `node+0x0` is an in-bounds dword of the fresh 0x50-byte block
+        // `SMemAlloc` returned and the ctor at 0x70dd40 handed back; both null-checked.
         unsafe { anim_put_u32(node, 0x0, 0x9) };
+        // SAFETY: `node+0x4` is an in-bounds dword of that same 0x50-byte block.
         unsafe { anim_put_u32(node, 0x4, 0x0) };
-        // SAFETY: `this+0x2c` is the live clock provider; `clk+0xc` the wall clock.
+        // SAFETY: `this+0x2c` is the instance's clock-provider pointer slot; `this`
+        // is non-null and the stock body loads that slot with no null test here.
         let clk = unsafe { anim_ptr(inst, 0x2c) };
+        // SAFETY: `clk+0xc` is the provider's wall-clock dword, the same field the
+        // per-segment path reads off the `+0x2c` provider.
         let now = unsafe { anim_u32(clk, 0xc) };
+        // SAFETY: `node+0x8` is an in-bounds dword of that same 0x50-byte block.
         unsafe { anim_put_u32(node, 0x8, now) };
+        // SAFETY: `node+0xc` is an in-bounds dword of that same 0x50-byte block.
         unsafe { anim_put_u32(node, 0xc, delta) };
         // Link: **[esi+0x3c] = node; *[esi+0x3c] = node + 4 (0x7193ca..0x7193d0).
         // SAFETY: `this+0x3c` holds the writable list-tail slot pointer.
@@ -24844,13 +25095,18 @@ pub fn cm2_model__advance_event_tracks__719370(this: *mut core::ffi::c_void, del
     // Gate: advance tracks only when the event sink (`[esi+0x1f4]`) or the active
     // flag (`[esi+0x70]`) is live; otherwise fall straight to the child recursion
     // (0x7193e5..0x7193fa).
-    // SAFETY: `this+0x1f4` event sink; `this+0x70` active flag.
+    // SAFETY: `this+0x1f4` is the in-bounds event-sink dword; `this` is non-null
+    // and past the `+0x10` guard, so the one-time init has already run.
     let sink = unsafe { anim_u32(inst, 0x1f4) };
+    // SAFETY: `this+0x70` is the in-bounds active-flag dword of that instance.
     let active = unsafe { anim_u32(inst, 0x70) };
     if sink != 0 || active != 0 {
         // shared = [esi+0x30]; hdr = [shared+0x130] (0x719400..0x71940c).
-        // SAFETY: `this+0x30` shared-model ptr; `shared+0x130` header ptr.
+        // SAFETY: `this+0x30` is the in-bounds shared-model pointer slot.
         let shared = unsafe { anim_ptr(inst, 0x30) };
+        // SAFETY: `shared+0x130` is the model-header pointer slot of the
+        // `[[this+0x30]+0x130]` chain the other M2 instance hooks read; the stock
+        // body loads it with no null test on `shared`.
         let hdr = unsafe { anim_ptr(shared, 0x130) };
 
         // Outer sequence-chain loop: head index at [esi+0x80], next via
@@ -24860,8 +25116,10 @@ pub fn cm2_model__advance_event_tracks__719370(this: *mut core::ffi::c_void, del
         while seq_idx != -1 {
             advance_event_track_seq(inst, hdr, seq_idx as u32, delta);
             // Next link: [ [esi+0x90] + seq_idx*0x118 + 0x114 ] (0x7198c2..0x7198d8).
-            // SAFETY: `this+0x90` bone-state array base; record at seq_idx*0x118.
+            // SAFETY: `this+0x90` is the in-bounds bone-state array base slot.
             let states = unsafe { anim_ptr(inst, 0x90) };
+            // SAFETY: `seq_idx` is seeded from `[esi+0x80]` and re-fed from
+            // `[state+0x114]`, so it is a live index into the `0x118`-stride array.
             let state = unsafe { states.add(seq_idx as usize * 0x118) };
             // SAFETY: `state+0x114` in-bounds next-index dword.
             seq_idx = unsafe { anim_i32(state, 0x114) };
@@ -24899,27 +25157,33 @@ pub fn cm2_model__advance_event_tracks__719370(this: *mut core::ffi::c_void, del
 /// Resolves the [lo, hi) keyframe window for `seq_idx`, optionally fires the edge-event callback
 /// (`0x70a280`), then sweeps every event-track record (count at `hdr+0x114`, stride `0x2c`). All
 /// offsets and the two mirror sweep directions match the stock body.
-#[allow(
-    clippy::multiple_unsafe_ops_per_block,
-    clippy::undocumented_unsafe_blocks
-)]
 fn advance_event_track_seq(inst: *mut u8, hdr: *const u8, seq_idx: u32, delta: u32) {
     // bone-state record edi = [esi+0x90] + seq_idx*0x118 (0x719424..0x71943e).
-    // SAFETY: `this+0x90` bone-state base; record at seq_idx*0x118 in-bounds.
+    // SAFETY: `this+0x90` is the in-bounds bone-state array-base pointer field of the
+    // instance the caller null-checked before casting it to `inst`.
     let states = unsafe { anim_ptr(inst, 0x90) };
+    // SAFETY: `seq_idx` is a link from the caller's walk of that same array (head index
+    // `this+0x80`, next `state+0x114`), so it indexes `states` at the stock 0x118 stride.
     let state = unsafe { states.add(seq_idx as usize * 0x118) };
     // cur_seq = [state+0xa4]; track_start = [state+0xa8] (0x719430/0x71943e seed).
-    // SAFETY: `state+0xa4` assigned-seq id; `state+0xa8` per-track start clock.
+    // SAFETY: `state+0xa4` is the assigned-seq id dword of that 0x118-byte record.
     let cur_seq = unsafe { anim_i32(state, 0xa4) };
+    // SAFETY: `state+0xa8` is the per-track start clock, another dword of the same record.
     let track_start = unsafe { anim_u32(state, 0xa8) };
     // seqrec = [hdr+0x20] + cur_seq*0x44 (0x719443..0x71944c).
-    // SAFETY: `hdr+0x20` sequence-record array base; record at cur_seq*0x44.
+    // SAFETY: `hdr+0x20` is the sequence-record array-base field of the shared header the
+    // caller resolved as `[[this+0x30]+0x130]`.
     let seq_arr = unsafe { anim_ptr(hdr, 0x20) };
+    // SAFETY: `cur_seq` is the sequence id the client itself stored at `state+0xa4`, so it
+    // indexes that array; the stock body applies the same 0x44 stride.
     let seqrec = unsafe { seq_arr.offset(cur_seq as isize * 0x44) };
 
     // now = [[esi+0x2c]+0xc]; elapsed = now - track_start (0x71944f..0x71945c).
-    // SAFETY: `this+0x2c` clock provider; `clk+0xc` wall clock.
+    // SAFETY: `this+0x2c` is the in-bounds clock-provider pointer field of the instance.
     let clk = unsafe { anim_ptr(inst, 0x2c) };
+    // SAFETY: `clk+0xc` is the provider's wall-clock dword; the same `[[esi+0x2c]+0xc]`
+    // chain is read unconditionally by the stock body here and on the lazy-init path
+    // (0x7193ab..0x7193cd).
     let now = unsafe { anim_u32(clk, 0xc) };
     let elapsed = now.wrapping_sub(track_start);
 
@@ -24931,13 +25195,16 @@ fn advance_event_track_seq(inst: *mut u8, hdr: *const u8, seq_idx: u32, delta: u
     // arm is for the just-(re)started case (elapsed < delta). Swapping these
     // makes the window span the whole animation, which the seam-normalize clamps
     // to a full cycle and re-fires every event each frame (footsteps machine-gun).
-    // SAFETY: `state+0xa8`/`state+0xac` start/end clocks.
     let lo_seed = if elapsed >= delta {
         now.wrapping_sub(delta)
     } else {
+        // SAFETY: `state+0xa8` is the per-track start clock of the 0x118-byte bone-state
+        // record, the same dword already read into `track_start` above.
         unsafe { anim_u32(state, 0xa8) }
     };
     let mut window_lo = lo_seed;
+    // SAFETY: `state+0xac` is the per-track end clock, the dword following `+0xa8` in that
+    // same record.
     let track_end = unsafe { anim_u32(state, 0xac) };
     let span = track_end.wrapping_sub(track_start);
     let mut window_hi = if elapsed > span { track_end } else { now };
@@ -24952,9 +25219,13 @@ fn advance_event_track_seq(inst: *mut u8, hdr: *const u8, seq_idx: u32, delta: u
     let latch = unsafe { anim_u32(state, 0xc0) };
     if active != 0 && track_end2 == window_hi && latch == 0 {
         // bonedef = [ [hdr+0x38] + seq_idx*0x6c ] (0x7194b9..0x7194c9).
-        // SAFETY: `hdr+0x38` bone-def base; def at seq_idx*0x6c, first dword.
+        // SAFETY: `hdr+0x38` is the bone-def array-base field of the shared header.
         let defs = unsafe { anim_ptr(hdr, 0x38) };
-        let bonedef = unsafe { anim_i32(defs.add(seq_idx as usize * 0x6c), 0x0) };
+        // SAFETY: `seq_idx` indexes the bone-def array in parallel with the bone-state
+        // array it already indexed at `this+0x90`; the stock stride here is 0x6c.
+        let def = unsafe { defs.add(seq_idx as usize * 0x6c) };
+        // SAFETY: the bone-def id is the first dword of that 0x6c-byte record.
+        let bonedef = unsafe { anim_i32(def, 0x0) };
         // Set latch BEFORE the conditional fire (matches 0x7194bc order).
         // SAFETY: `state+0xc0` writable emitter latch.
         unsafe { anim_put_u32(state, 0xc0, 1) };
@@ -24968,10 +25239,14 @@ fn advance_event_track_seq(inst: *mut u8, hdr: *const u8, seq_idx: u32, delta: u
             // SAFETY: receiver wall clock at recv+0xc.
             let recv_now = unsafe { anim_u32(recv, 0xc) };
             let p6 = recv_now.wrapping_sub(track_end2);
-            // SAFETY: emitter handle / params.
+            // SAFETY: `state+0xf8` is the emitter-handle dword of the 0x118-byte record.
             let emitter = unsafe { anim_u32(state, 0xf8) };
+            // SAFETY: `this+0x70` is the active-flag dword, the same slot read into
+            // `active` above, which is non-zero on this branch.
             let p1 = unsafe { anim_u32(inst, 0x70) };
+            // SAFETY: `this+0x78` is an in-bounds callback-parameter dword of the instance.
             let p7 = unsafe { anim_u32(inst, 0x78) };
+            // SAFETY: `this+0x7c` is the parameter dword following `+0x78`.
             let p8 = unsafe { anim_u32(inst, 0x7c) };
             const FIRE_EDGE_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x30_a280;
             // SAFETY: fixed `.text` entry; signature matches the declared
@@ -25011,8 +25286,9 @@ fn advance_event_track_seq(inst: *mut u8, hdr: *const u8, seq_idx: u32, delta: u
 
     // Fold lo/hi through the rate using the x87-free kernels (sites A 0x719535,
     // B 0x719559). rate = [state+0xb0]; offset = [state+0xb8].
-    // SAFETY: `state+0xb0` rate float; `state+0xb8` integer tick offset.
+    // SAFETY: `state+0xb0` is the playback-rate float of the 0x118-byte bone-state record.
     let rate = unsafe { anim_f32(state, 0xb0) };
+    // SAFETY: `state+0xb8` is the integer tick-offset dword of that same record.
     let offset = unsafe { anim_i32(state, 0xb8) };
     // Site A: lo' = ftol(f32((lo - [state+0xa8]) * rate)) + offset.
     let lo_ticks = window_lo.wrapping_sub(track_start) as i32;
@@ -25027,8 +25303,10 @@ fn advance_event_track_seq(inst: *mut u8, hdr: *const u8, seq_idx: u32, delta: u
     // `window_lo' < window_hi'` unsigned; the two inner clamps at 0x71958e /
     // 0x7195a5 are `jbe` (unsigned), so each modifies `window_lo` only when its
     // delta is strictly `>` the span. seqrec span ticks at +0x4 / +0x8.
-    // SAFETY: `seqrec+4`/`seqrec+8` ticks; reused later for the per-track base.
+    // SAFETY: `seqrec+0x4` is the first tick of the 0x44-byte sequence record resolved
+    // from `hdr+0x20` above; it is reused later for the per-track base.
     let seq_lo = unsafe { anim_u32(seqrec, 0x4) };
+    // SAFETY: `seqrec+0x8` is the last tick, the dword following `+0x4` in that record.
     let seq_hi = unsafe { anim_u32(seqrec, 0x8) };
     if window_lo < window_hi {
         // 0x71957d..0x719596: edi = window_hi' - window_lo'; eax = seq_hi - seq_lo;
@@ -25074,10 +25352,6 @@ fn advance_event_track_seq(inst: *mut u8, hdr: *const u8, seq_idx: u32, delta: u
 /// C-fwd 0x719724 / C-rev 0x719844), and fires the 9-arg per-segment callback (`0x70a400`,
 /// ret 0x24). The forward arm increments the segment cursor and uses `window_hi - acc`; the reverse
 /// arm decrements and uses `acc - window_hi`.
-#[allow(
-    clippy::multiple_unsafe_ops_per_block,
-    clippy::undocumented_unsafe_blocks
-)]
 fn sweep_event_track(
     inst: *mut u8,
     hdr: *const u8,
@@ -25093,9 +25367,14 @@ fn sweep_event_track(
     // (0x7195e1..0x7195f4). Skip the track if first >= last (unsigned).
     // SAFETY: `track+0x20` per-sequence range-pair array base.
     let range_arr = unsafe { anim_ptr(track, 0x20) };
+    // SAFETY: `range_arr` holds one 8-byte `{first, last}` pair per sequence and
+    // is parallel to the `hdr+0x20` record array the caller indexed with this
+    // same `cur_seq` (read from `state+0xa4`), so element `cur_seq*8` is this
+    // track's range pair for the sequence being swept.
     let pair = unsafe { range_arr.offset(cur_seq as isize * 8) };
-    // SAFETY: `pair+0` first, `pair+4` last.
+    // SAFETY: `pair+0` is the `first` dword of the pair resolved above.
     let first = unsafe { anim_u32(pair, 0x0) };
+    // SAFETY: `pair+4` is the `last` dword of that same 8-byte pair.
     let last = unsafe { anim_u32(pair, 0x4) };
     if first >= last {
         return;
@@ -25103,6 +25382,9 @@ fn sweep_event_track(
 
     // Owner-resolve (0x7195fa..0x719643): the track applies to seq_idx only when
     // the chained bone id equals seq_idx; else skip.
+    // SAFETY: `track+0x8` is the owner-bone id word of the 0x2c-byte track
+    // record the caller resolved as `[hdr+0x118] + i*0x2c`, with `i` below the
+    // track count at `hdr+0x114`.
     let mut owner = u32::from(unsafe { anim_u16(track, 0x8) });
     if owner > seq_idx {
         // SAFETY: `this+0x90` bone-state base.
@@ -25110,12 +25392,23 @@ fn sweep_event_track(
         loop {
             // SAFETY: bone state at owner*0x118; +0xa4 assigned-seq id.
             let st = unsafe { states.add(owner as usize * 0x118) };
+            // SAFETY: `st+0xa4` is the assigned-seq id dword of the 0x118-byte
+            // bone-state record resolved above, the same field the caller reads
+            // to seed `cur_seq`; -1 means the bone has no sequence assigned.
             if unsafe { anim_i32(st, 0xa4) } != -1 {
                 break;
             }
             // SAFETY: `hdr+0x38` bone-def base; def at owner*0x6c, +8 alias word.
             let defs = unsafe { anim_ptr(hdr, 0x38) };
-            let nxt = u32::from(unsafe { anim_u16(defs.add(owner as usize * 0x6c), 0x8) });
+            // SAFETY: the `hdr+0x38` bone-def array is parallel to the
+            // `inst+0x90` bone-state array, both indexed by bone id, and `owner`
+            // has just been used to index the latter, so the 0x6c-byte def here
+            // belongs to the same bone.
+            let def = unsafe { defs.add(owner as usize * 0x6c) };
+            // SAFETY: `def+8` is the alias word of that 0x6c-byte bone def; the
+            // walk stops below when it reads 0xffff, so only a real bone id is
+            // carried into the next iteration's indexing.
+            let nxt = u32::from(unsafe { anim_u16(def, 0x8) });
             if nxt == 0xffff {
                 owner = 0;
                 break;
@@ -25133,8 +25426,11 @@ fn sweep_event_track(
     // base computation (0x719649..0x71966c): if [seqrec+8] > [seqrec+4] (signed)
     //   base = window_lo % ([seqrec+8]-[seqrec+4]) + [seqrec+4];
     // else base = [seqrec+4].
-    // SAFETY: `seqrec+4`/`seqrec+8` span ticks.
+    // SAFETY: `seqrec+4` is the span's low tick; `seqrec` is the 0x44-byte
+    // sequence record the caller resolved as `[hdr+0x20] + cur_seq*0x44` and
+    // read the same two ticks from when normalizing the window seam.
     let s4 = unsafe { anim_u32(seqrec, 0x4) };
+    // SAFETY: `seqrec+8` is the high tick of that same 0x44-byte record.
     let s8 = unsafe { anim_u32(seqrec, 0x8) };
     let base = if (s8 as i32) > (s4 as i32) {
         (window_lo % s8.wrapping_sub(s4)).wrapping_add(s4)
@@ -25144,7 +25440,7 @@ fn sweep_event_track(
 
     // SAFETY: `track+0x28` segment-timestamp array.
     let ts = unsafe { anim_ptr(track, 0x28) };
-    // `acc` is the running segment accumulator (`local_30`/`[ebp-0x2c]`); `prev`
+    // `acc` is the running segment accumulator (`[ebp-0x2c]`); `prev`
     // is the previous timestamp value held across iterations (ebx).
     if window_hi > window_lo {
         // --- Forward arm (0x71966c..0x71977c). ---
@@ -25236,10 +25532,6 @@ fn sweep_event_track(
 /// (`ftol(|[state+0xb4]| * dt)`, replacing `fld`/`fabs`/`fimul`/`__ftol`), and the 9-arg
 /// per-segment callback `0x70a400` (`ret 0x24`). `dt` is the signed per-segment delta already
 /// computed by the caller (`window_hi - acc` forward / `acc - window_hi` reverse).
-#[allow(
-    clippy::multiple_unsafe_ops_per_block,
-    clippy::undocumented_unsafe_blocks
-)]
 fn fire_segment(
     inst: *mut u8,
     hdr: *const u8,
@@ -25248,7 +25540,7 @@ fn fire_segment(
     seq_idx: u32,
     dt: u32,
 ) {
-    // Bone-matrix update: FUN_00714000 __thiscall(ecx=this), bare ret (0x7196df).
+    // Bone-matrix update: 0x714000 __thiscall(ecx=this), bare ret (0x7196df).
     const BONE_MATRIX_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x31_4000;
     // SAFETY: fixed `.text` entry; signature matches `__thiscall(this)`, bare ret.
     let bone_matrix: extern "thiscall" fn(*mut u8) =
@@ -25271,8 +25563,9 @@ fn fire_segment(
     // SAFETY: `track+0xc` spans the track's local input C3Vector (edx operand).
     let v_local = unsafe { track.add(0xc) }.cast::<f32>();
     let mid = c44_matrix__transform_point__7bca80(scratch_a.as_mut_ptr(), v_local, m_bone);
-    // SAFETY: `this+0x2c` clock provider; `+0xdc` spans the second 16-float matrix.
+    // SAFETY: `this+0x2c` clock provider.
     let recv = unsafe { anim_ptr(inst, 0x2c) };
+    // SAFETY: `recv+0xdc` spans the second 16-float matrix (the stack operand).
     let m_world = unsafe { recv.add(0xdc) }.cast::<f32>();
     let _ = c44_matrix__transform_point__7bca80(scratch_b.as_mut_ptr(), mid, m_world);
 
@@ -25291,16 +25584,25 @@ fn fire_segment(
     //   p6=&scratch_b, p7=w, p8=[esi+0x1f8], p9=[esi+0x1fc].
     // SAFETY: `this+0x2c` receiver.
     let recv2 = unsafe { anim_ptr(inst, 0x2c) };
+    // SAFETY: `this+0x1f4` is an instance dword field, callback arg 1.
     let p1 = unsafe { anim_u32(inst, 0x1f4) };
+    // SAFETY: `this+0x1f8` is an instance dword field, callback arg 8.
     let p8 = unsafe { anim_u32(inst, 0x1f8) };
+    // SAFETY: `this+0x1fc` is an instance dword field, callback arg 9.
     let p9 = unsafe { anim_u32(inst, 0x1fc) };
-    // SAFETY: `track+0`/`track+4` per-track first/second params.
+    // SAFETY: `track+0` per-track first param.
     let p4 = unsafe { anim_u32(track, 0x0) };
+    // SAFETY: `track+4` per-track second param.
     let p5 = unsafe { anim_u32(track, 0x4) };
     // bonedef = [ [hdr+0x38] + seq_idx*0x6c ] (0x719750..0x71975e).
-    // SAFETY: `hdr+0x38` bone-def base; def at seq_idx*0x6c, first dword.
+    // SAFETY: `hdr+0x38` bone-def array base.
     let defs = unsafe { anim_ptr(hdr, 0x38) };
-    let bonedef = unsafe { anim_u32(defs.add(seq_idx as usize * 0x6c), 0x0) };
+    // SAFETY: the caller runs its owner-resolve guard first and returns unless
+    // `owner == seq_idx`, so `seq_idx` is a resolved bone id from the same
+    // domain that caller indexes this `0x6c`-stride array with.
+    let def = unsafe { defs.add(seq_idx as usize * 0x6c) };
+    // SAFETY: the def's first dword is the bone-def handle, callback arg 3.
+    let bonedef = unsafe { anim_u32(def, 0x0) };
     const FIRE_SEG_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x30_a400;
     // SAFETY: fixed `.text` entry; signature matches the declared
     // `__thiscall(ecx, u32, *mut u8, u32, u32, u32, *mut f32, i32, u32, u32)`,
@@ -25374,17 +25676,17 @@ pub fn c_gx_batch__update_fog_state__70baf0(this: *mut u8) {
     // CGxDevice::GetDepthConvention() -> i32 (loads its own device singleton).
     let get_depth_convention: unsafe extern "C" fn() -> i32 =
         unsafe { core::mem::transmute(IB + 0x18_9ca0) };
-    // FUN_00591260: init a ~0x38-byte fog-default block at ecx, no stack args.
+    // 0x591260: init a ~0x38-byte fog-default block at ecx, no stack args.
     let init_fog_block: unsafe extern "fastcall" fn(*mut u8) =
         unsafe { core::mem::transmute(IB + 0x19_1260) };
     // CGxDevice::SetViewport_Indexed(ecx = index, edx = block, +4 stack dwords),
     // `ret 0x10`; ecx<4 validated.
     let set_viewport_indexed: unsafe extern "fastcall" fn(u32, *mut u8, u32, u32, u32, u32) =
         unsafe { core::mem::transmute(IB + 0x18_9d80) };
-    // FUN_00589de0(ecx = index, edx = value), void, ecx<4 validated.
+    // 0x589de0(ecx = index, edx = value), void, ecx<4 validated.
     let set_indexed_state: unsafe extern "fastcall" fn(u32, u32) =
         unsafe { core::mem::transmute(IB + 0x18_9de0) };
-    // FUN_0058b2a0 SetFogPlane(ecx = 0, edx = plane-ptr), void.
+    // 0x58b2a0 SetFogPlane(ecx = 0, edx = plane-ptr), void.
     let set_fog_plane: unsafe extern "fastcall" fn(u32, *const f32) =
         unsafe { core::mem::transmute(IB + 0x18_b2a0) };
 
@@ -25430,7 +25732,7 @@ pub fn c_gx_batch__update_fog_state__70baf0(this: *mut u8) {
         && enable_i32 as u32 == unsafe { base.add(0x332c).cast::<u32>().read() };
 
     if !cohort_a_same {
-        // iVar4 = the value submitted to SetRenderState(0xe, iVar4).
+        // The value submitted to SetRenderState(0xe, `enable_arg`).
         let mut enable_arg: i32 = 0;
         if enable_i32 == 0 {
             // Fog disabled: only re-init when depth convention is 0.
@@ -25692,11 +25994,7 @@ pub fn c_gx_batch__update_fog_state__70baf0(this: *mut u8) {
 /// `crate::math::particle`. One-unsafe-op-per-block would fragment each strided
 /// field read into noise, so a single per-fn allow with inline offset comments
 /// is used here, mirroring the liquid-query driver.
-#[allow(
-    clippy::multiple_unsafe_ops_per_block,
-    clippy::undocumented_unsafe_blocks,
-    clippy::cognitive_complexity
-)]
+#[allow(clippy::cognitive_complexity, clippy::multiple_unsafe_ops_per_block)]
 pub fn c_particle_emitter__apply_render_state__70c190(this: *mut core::ffi::c_void) {
     if this.is_null() {
         return;
@@ -25849,8 +26147,8 @@ pub fn c_particle_emitter__apply_render_state__70c190(this: *mut core::ffi::c_vo
     }
 
     // ===== Block D (0x70c3a9): color resolution + commit / stage  =====
-    let alpha_scalar = ptr_f32(cur, 0x10); // (float)piVar2[4]
-    let cur_type = ptr_u32(cur, 0x0); // *piVar2
+    let alpha_scalar = ptr_f32(cur, 0x10); // (float)cur[4]
+    let cur_type = ptr_u32(cur, 0x0); // *cur
 
     // --- type > 2: single modulated alpha, opaque RGB; commit and return.
     if (cur_type as i32) > 2 {
@@ -25962,7 +26260,7 @@ pub fn c_particle_emitter__apply_render_state__70c190(this: *mut core::ffi::c_vo
         write_f32(base, 0x220, color_r);
         write_f32(base, 0x224, color_g);
         write_f32(base, 0x228, color_b);
-        write_u32(base, 0x21c, ptr_u32(cur, 0x10)); // piVar2[4]
+        write_u32(base, 0x21c, ptr_u32(cur, 0x10)); // cur[4]
         write_u32(base, 0x22c, 0);
         if rd_u32(0x3240) > 0x1c {
             write_u32(base, 0x3240, 0x1c);
@@ -25980,7 +26278,7 @@ pub fn c_particle_emitter__apply_render_state__70c190(this: *mut core::ffi::c_vo
     write_f32(base, 0x32d8, color_r);
     write_f32(base, 0x32dc, color_g);
     write_f32(base, 0x32e0, color_b);
-    write_u32(base, 0x32d4, ptr_u32(cur, 0x10)); // piVar2[4]
+    write_u32(base, 0x32d4, ptr_u32(cur, 0x10)); // cur[4]
     write_u32(base, 0x32e4, 0);
     if rd_u32(0x32e8) > 0x8 {
         write_u32(base, 0x32e8, 0x8);
@@ -25991,33 +26289,40 @@ pub fn c_particle_emitter__apply_render_state__70c190(this: *mut core::ffi::c_vo
 }
 
 /// Reads a pointer field `*(p + off)` of an emitter sub-struct.
-// REASON: `add` + `read` are one strided field access; splitting them would
-// fragment a single load into two unsafe blocks for no clarity.
-#[allow(clippy::multiple_unsafe_ops_per_block)]
 #[inline]
 fn ptr_ptr(p: *const u8, off: usize) -> *const u8 {
-    // SAFETY: `p + off` addresses an in-bounds pointer field of the pointee.
-    unsafe { p.add(off).cast::<*const u8>().read() }
+    // SAFETY: `p` is a pointer the render-state driver read out of the live emitter (`this+0x48`
+    // or `this+0x3310`), and `off` is a field offset inside that struct, so `p + off` stays in
+    // the same client allocation.
+    let field = unsafe { p.add(off) };
+    // SAFETY: the slot at `p + off` holds a pointer the client stored there, so it is
+    // initialised, and the callers' offsets (`0x90`, `0x94`, `0xa0`) are multiples of four off a
+    // client allocation, which is the alignment a 32-bit pointer read needs.
+    unsafe { field.cast::<*const u8>().read() }
 }
 
 /// Writes an f32 at `base + off` of the emitter struct.
-// REASON: `add` + `write` are one strided field store; a single unsafe block
-// keeps the staging-slot write atomic in the reader's eye.
-#[allow(clippy::multiple_unsafe_ops_per_block)]
 #[inline]
 fn write_f32(base: *mut u8, off: usize, v: f32) {
-    // SAFETY: `base + off` is an in-bounds, writable f32 staging slot.
-    unsafe { base.add(off).cast::<f32>().write(v) };
+    // SAFETY: `off` is one of the emitter's staging-field offsets (0x210..0x228 and
+    // 0x32c8..0x32e0), all inside the emitter object that `base` was derived from after the
+    // caller null-checked it, so the offset stays in bounds.
+    let slot = unsafe { base.add(off) }.cast::<f32>();
+    // SAFETY: those offsets are multiples of 4 within a client-allocated emitter, so `slot` is
+    // an aligned, writable f32 field of a live object for the duration of the store.
+    unsafe { slot.write(v) };
 }
 
 /// Writes a u32 at `base + off` of the emitter struct.
-// REASON: `add` + `write` are one strided field store; a single unsafe block
-// keeps the staging-slot write atomic in the reader's eye.
-#[allow(clippy::multiple_unsafe_ops_per_block)]
 #[inline]
 fn write_u32(base: *mut u8, off: usize, v: u32) {
-    // SAFETY: `base + off` is an in-bounds, writable u32 staging slot.
-    unsafe { base.add(off).cast::<u32>().write(v) };
+    // SAFETY: `base` is the emitter `this`, null-checked by the caller, and every `off` it
+    // passes names a dword field of that struct — the largest, `0x32ec`, sits below the
+    // `0x3300` state block the same struct carries — so the offset stays inside one allocation.
+    let slot = unsafe { base.add(off) };
+    // SAFETY: `slot` addresses a dword field of the live emitter, so it is 4-byte aligned and
+    // writable, and nothing holds a reference to the client memory it points into.
+    unsafe { slot.cast::<u32>().write(v) };
 }
 
 /// `World::QueryObjectBoxes` — `__fastcall(ecx = this, edx = tag, stack = flags)`.
@@ -26148,7 +26453,7 @@ pub fn world__query_object_boxes__6ad330(
                 world_box.as_mut_ptr(),
             );
             // Re-add the world center to both corners (two `C3Vector::AddInPlace`:
-            // dst min @ &local_40, dst max @ local_34 in the stock body).
+            // dst min first, then dst max, in the stock body).
             c3_vector__add_in_place__4841c0(world_box.as_mut_ptr(), world_center.as_ptr());
             // SAFETY: `world_box+3` is the in-bounds max corner (3 contiguous f32).
             c3_vector__add_in_place__4841c0(
@@ -26332,8 +26637,8 @@ pub fn cloud_update_layer__6cffc0(this: *mut core::ffi::c_void) {
     let buf5c = fld_i32(0x5c) as usize; // +0x5c prior-accumulator buffer
     for row in 0..rows {
         let cell_idx = (fld_i32(0x18) as usize + row) << shift;
-        let field_row = field + cell_idx * 4; // iVar17 / local_24
-        let velo_row = grad_buf + cell_idx * 8; // local_18
+        let field_row = field + cell_idx * 4; // row base in the field buffer
+        let velo_row = grad_buf + cell_idx * 8; // row base in the gradient buffer
 
         // GRAD-build: per-octave hashed gradient indices into the record. (0x6d0140..0x6d01cb)
         for k in 0..depth {
@@ -27250,7 +27555,7 @@ pub fn c_world__collect_tile_geometry__6aadc0(
     // SAFETY: `cell+0xc` is the in-bounds flags byte.
     let cell_flags = unsafe { cell.add(0xc).read() };
     if cell_flags & 0x40 != 0 {
-        // FUN_006ab530(cell, query_aabb, out_ctx, flags): fastcall ecx=cell,
+        // 0x6ab530(cell, query_aabb, out_ctx, flags): fastcall ecx=cell,
         // edx=query_aabb, 2 stack args (out_ctx, flags); ret 8. The callee reads
         // only the first stack arg (out_ctx), but pops both, so flags MUST be
         // pushed to keep the callee-cleans stack balanced.
@@ -27348,7 +27653,7 @@ pub fn c_world__collect_tile_geometry__6aadc0(
                     // --- Emit / cull the 4 triangles. (0x6ab01b..0x6ab3b8)
                     let mut tri = TRI_TABLE_BASE;
                     while tri < BASE + 0x41_046c {
-                        // tri reads [tri-4]=i0, [tri]=i1, [tri+4]=i2 (piVar11[-1,0,1]).
+                        // tri reads [tri-4]=i0, [tri]=i1, [tri+4]=i2 (3 adjacent dwords).
                         // SAFETY: the triangle table is 4*3 dwords at TRI_TABLE_BASE-4.
                         let i0 = unsafe { (tri as *const u32).sub(1).read() } as usize;
                         let i1 = unsafe { (tri as *const u32).read() } as usize;
@@ -27458,7 +27763,7 @@ pub fn c_world__collect_tile_geometry__6aadc0(
             // SAFETY: cell+0x118 + i*4 is in bounds (4-entry array).
             let occ = unsafe { cell.add(0x118 + (i as usize) * 4).cast::<*mut u8>().read() };
             if !occ.is_null() && (flags & (1u32 << (i + 0x10))) != 0 {
-                // FUN_006ab4e0(cell, &aabb, &bounds, occ, out_ctx): fastcall
+                // 0x6ab4e0(cell, &aabb, &bounds, occ, out_ctx): fastcall
                 // ecx=cell, edx=&aabb(local), 3 stack args (&bounds, occ, out_ctx).
                 // The local aabb (6 floats at ebp-0x44) and bounds (ebp-0x14) are
                 // re-materialized contiguously; the callee reads past edx. We hand
@@ -27494,13 +27799,13 @@ pub fn c_world__collect_tile_geometry__6aadc0(
         // SAFETY: ctx[+0x1c] is the pair-array's grow-shape function pointer slot.
         let mut shape = unsafe { out_ctx.add(7).read() } as u32;
         if shape == 0 {
-            // FUN_00674520(pair_ctrl, new_count): thiscall ecx, 1 stack -> eax.
+            // 0x674520(pair_ctrl, new_count): thiscall ecx, 1 stack -> eax.
             // SAFETY: stock array helper; ABI per 0x674520.
             let f: extern "thiscall" fn(*mut i32, u32) -> u32 =
                 unsafe { core::mem::transmute(BASE + 0x27_4520) };
             shape = f(pair_ctrl, new_count);
         }
-        // FUN_006acc90(new_count, shape): thiscall ecx=pair_ctrl, 2 stack -> eax.
+        // 0x6acc90(new_count, shape): thiscall ecx=pair_ctrl, 2 stack -> eax.
         // SAFETY: stock round-up helper; ABI per 0x6acc90.
         let roundup: extern "thiscall" fn(*mut i32, u32, u32) -> u32 =
             unsafe { core::mem::transmute(BASE + 0x2a_cc90) };
@@ -27560,21 +27865,23 @@ pub fn c_world__collect_tile_geometry__6aadc0(
 ///
 /// `elem` is the freshly-built 0x34-byte vertex record. Delegates entirely to the stock vis-color +
 /// submit calls (not math). (0x6ab38a..0x6ab3ac)
-#[allow(clippy::undocumented_unsafe_blocks)]
 fn collect_tile_debug_draw_emit__6aadc0(elem: *mut f32, color: u32) {
     if elem.is_null() {
         return;
     }
     const BASE: usize = crate::win::EXPECTED_IMAGE_BASE;
-    // FUN_006acdd0(&color_holder, color): thiscall ecx=&holder, 1 stack arg; ret 4.
+    // The color setter at 0x6acdd0: `__thiscall(ecx = &holder, color)`, `RET 4`.
     let mut holder: u32 = 0;
-    // SAFETY: stock color setter; ABI per 0x6acdd0.
     let set_color: extern "thiscall" fn(*mut u32, u32) =
+        // SAFETY: 0x6acdd0 is a `.text` address in the loaded client, verified
+        // non-relocated by `win`'s image-base check; the signature is the
+        // convention that routine was compiled with.
         unsafe { core::mem::transmute(BASE + 0x2a_cdd0) };
     set_color(&mut holder, color);
-    // FUN_006a98e0(elem, NULL, ...): fastcall ecx=elem, edx=0, 1 stack arg (color holder).
-    // SAFETY: stock debug submit; ABI per 0x6a98e0.
+    // The debug submit at 0x6a98e0: `__fastcall(ecx = elem, edx = 0, &holder)`.
     let submit: extern "fastcall" fn(*mut f32, u32, *mut u32) =
+        // SAFETY: as above for 0x6a98e0; `elem` is non-null (checked on entry)
+        // and `holder` is a live stack slot for the duration of the call.
         unsafe { core::mem::transmute(BASE + 0x2a_98e0) };
     submit(elem, 0, &mut holder);
 }
@@ -27603,7 +27910,7 @@ fn collect_tile_debug_draw_culled__6aadc0(
         let v = unsafe { *cell_ptr.add(idx * 0xc).cast::<[f32; 3]>() };
         crate::math::world::tile_collect_vertex_to_world__6aadc0(&v, origin)
     };
-    // The exact debug vis-element seeding (FUN_00597ad0 / CallMethodOnArrayElements /
+    // The exact debug vis-element seeding (0x597ad0 / CallMethodOnArrayElements /
     // QuadElement::SeedFromFill) is a debug-list mutation, not math; it is exercised
     // only with the collision-draw cvar ON. We rebuild the three world verts and
     // submit via the same stock path the visible arm uses (red), which is the
@@ -27720,32 +28027,43 @@ fn bdl_pow2_floor(need: u32) -> u32 {
 /// Grows by one if needed, then returns the new record slot `(count<<6)+data` and post-increments
 /// the count. (0x707bae..0x707bf2.) The caller fail-returns when the slot is null (the stock `je`
 /// overflow guard).
-#[allow(
-    clippy::multiple_unsafe_ops_per_block,
-    clippy::undocumented_unsafe_blocks
-)]
 unsafe fn bdl_record_reserve(ctl: *mut u8) -> *mut u8 {
     const DEF_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x30_daf0;
     const ALIGN_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x30_db30;
     const SETCAP_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x30_db50;
+    // SAFETY: `ctl` is a live `{cap@0,count@4,data@8,gran@0xc}` control block the caller keeps
+    // alive across the call; `count` is its dword at `+4`.
     let count = unsafe { bdl_rd32(ctl, 4) };
+    // SAFETY: same control block; `cap` is its dword at `+0`.
     let cap = unsafe { bdl_rd32(ctl, 0) };
     let need = count.wrapping_add(1);
     if need > cap {
+        // SAFETY: same control block; `gran` is its dword at `+0xc`.
         let mut gran = unsafe { bdl_rd32(ctl, 0xc) };
         if gran == 0 {
+            // SAFETY: image base verified at load, so `DEF_VA` is the client's
+            // default-granularity routine; signature matches the callee.
             let f: extern "thiscall" fn(*mut u8, u32) -> u32 =
                 unsafe { core::mem::transmute(DEF_VA) };
             gran = f(ctl, need);
         }
+        // SAFETY: image base verified at load, so `ALIGN_VA` is the client's capacity-rounding
+        // routine; signature matches the callee.
         let fa: extern "thiscall" fn(*mut u8, u32, u32) -> u32 =
             unsafe { core::mem::transmute(ALIGN_VA) };
         let newcap = fa(ctl, need, gran);
+        // SAFETY: image base verified at load, so `SETCAP_VA` is the client's set-capacity
+        // routine; signature matches the callee.
         let fs: extern "thiscall" fn(*mut u8, u32) = unsafe { core::mem::transmute(SETCAP_VA) };
         fs(ctl, newcap);
     }
+    // SAFETY: same control block; `count@4` is re-read because the grow above can reallocate
+    // `data@8` but leaves the control block itself in place.
     let count2 = unsafe { bdl_rd32(ctl, 4) };
+    // SAFETY: same control block; `data` is the record-array base at `+8`.
     let data = unsafe { bdl_rd32(ctl, 8) };
+    // SAFETY: same control block; post-increments `count@4`, which the grow above sized `cap`
+    // to admit.
     unsafe { bdl_wr32(ctl, 4, count2.wrapping_add(1)) };
     (data as usize).wrapping_add((count2 as usize) << 6) as *mut u8
 }
@@ -27753,16 +28071,21 @@ unsafe fn bdl_record_reserve(ctl: *mut u8) -> *mut u8 {
 /// 64-stride record reserve via the `reserve(1, 1)` helper (0x70da00) instead of the inline grow.
 ///
 /// The cross-fade duplicate-record path (0x707fc3..0x707fdb).
-#[allow(
-    clippy::multiple_unsafe_ops_per_block,
-    clippy::undocumented_unsafe_blocks
-)]
 unsafe fn bdl_record_reserve1(ctl: *mut u8) -> *mut u8 {
     const RES_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x30_da00;
+    // SAFETY: the host image base is asserted to be `EXPECTED_IMAGE_BASE` at load, so `RES_VA` is
+    // the client's growable-array `reserve`; its prototype is the transmuted
+    // `thiscall(this, count, gran)`.
     let f: extern "thiscall" fn(*mut u8, u32, u32) = unsafe { core::mem::transmute(RES_VA) };
     f(ctl, 1, 1);
+    // SAFETY: `ctl` is the caller's live record-array control block
+    // (`{cap@0,count@4,data@8,gran@0xc}`), so `+4` is its initialised count dword.
     let count = unsafe { bdl_rd32(ctl, 4) };
+    // SAFETY: the same live control block; `+8` is its data-pointer dword, refreshed by the
+    // `reserve` call above if that reallocated the array.
     let data = unsafe { bdl_rd32(ctl, 8) };
+    // SAFETY: the same live control block; `+4` is the writable count dword just read, and the
+    // `reserve(1, 1)` above raised the capacity to cover the incremented value.
     unsafe { bdl_wr32(ctl, 4, count.wrapping_add(1)) };
     (data as usize).wrapping_add((count as usize) << 6) as *mut u8
 }
@@ -27772,58 +28095,72 @@ unsafe fn bdl_record_reserve1(ctl: *mut u8) -> *mut u8 {
 /// The elements are 4 bytes; the array grows via the inline default-granularity path
 /// (0x4292e0/0x429320/0x429340) when `count+1 > cap`. Store-then-bump, skipping the store on a null
 /// data slot (the stock `je`). (e.g. 0x707dd5..0x707f7a.)
-#[allow(
-    clippy::multiple_unsafe_ops_per_block,
-    clippy::undocumented_unsafe_blocks
-)]
 unsafe fn bdl_index_push(ctl: *mut u8, value: u32) {
     const DEF_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x02_92e0;
     const ALIGN_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x02_9320;
     const SETCAP_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x02_9340;
+    // SAFETY: the caller passes a live array descriptor, so `+4` is its in-bounds `count` dword.
     let count = unsafe { bdl_rd32(ctl, 4) };
+    // SAFETY: `+0` on that same descriptor is its in-bounds `cap` dword.
     let cap = unsafe { bdl_rd32(ctl, 0) };
     let need = count.wrapping_add(1);
     if need > cap {
+        // SAFETY: `+0xc` on that same descriptor is its in-bounds `gran` dword.
         let mut gran = unsafe { bdl_rd32(ctl, 0xc) };
         if gran == 0 {
+            // SAFETY: image base verified at load; the default-granularity helper is
+            // `thiscall(this, need) -> gran`.
             let f: extern "thiscall" fn(*mut u8, u32) -> u32 =
                 unsafe { core::mem::transmute(DEF_VA) };
             gran = f(ctl, need);
         }
+        // SAFETY: image base verified at load; the capacity-align helper is
+        // `thiscall(this, need, gran) -> newcap`.
         let fa: extern "thiscall" fn(*mut u8, u32, u32) -> u32 =
             unsafe { core::mem::transmute(ALIGN_VA) };
         let newcap = fa(ctl, need, gran);
+        // SAFETY: image base verified at load; the set-capacity helper is `thiscall(this, newcap)`
+        // and returns nothing.
         let fs: extern "thiscall" fn(*mut u8, u32) = unsafe { core::mem::transmute(SETCAP_VA) };
         fs(ctl, newcap);
     }
+    // SAFETY: `+4` is that descriptor's `count` dword, re-read here because the grow helpers
+    // above write through `ctl`.
     let count2 = unsafe { bdl_rd32(ctl, 4) };
+    // SAFETY: `+8` is that descriptor's `data` pointer, which the grow above may have replaced.
     let data = unsafe { bdl_rd32(ctl, 8) };
     let slot = (data as usize).wrapping_add((count2 as usize) * 4) as *mut u32;
     if !slot.is_null() {
         // SAFETY: non-null in-bounds element slot just reserved above.
         unsafe { slot.write(value) };
     }
+    // SAFETY: `+4` is that descriptor's writable `count` dword, and the grow above reserved
+    // capacity for the bumped value.
     unsafe { bdl_wr32(ctl, 4, count2.wrapping_add(1)) };
 }
 
 /// Append `value` to a 4-stride index array via the `reserve(1, 1)` helper (0x4291f0).
 ///
 /// Used instead of the inline grow. (e.g. 0x70804f..0x70806f.)
-#[allow(
-    clippy::multiple_unsafe_ops_per_block,
-    clippy::undocumented_unsafe_blocks
-)]
 unsafe fn bdl_index_push_reserve1(ctl: *mut u8, value: u32) {
     const RES_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x02_91f0;
+    // SAFETY: fixed `.text` entry in the live host image (base verified at load); matches the
+    // declared prototype `__thiscall(array, extra, align_to_granularity)`.
     let f: extern "thiscall" fn(*mut u8, u32, u32) = unsafe { core::mem::transmute(RES_VA) };
     f(ctl, 1, 1);
+    // SAFETY: `ctl` is a caller-supplied live index-array header
+    // `{cap@0,count@4,data@8,gran@0xc}`, so `+4` is its initialised element-count dword.
     let count = unsafe { bdl_rd32(ctl, 4) };
+    // SAFETY: same header; `+8` is its element-storage pointer, refreshed by the reserve call
+    // above if that reallocated.
     let data = unsafe { bdl_rd32(ctl, 8) };
     let slot = (data as usize).wrapping_add((count as usize) * 4) as *mut u32;
     if !slot.is_null() {
         // SAFETY: non-null in-bounds element slot just reserved above.
         unsafe { slot.write(value) };
     }
+    // SAFETY: `+4` is the same header's writable count dword; the reserve call above made room
+    // for the element this bump publishes.
     unsafe { bdl_wr32(ctl, 4, count.wrapping_add(1)) };
 }
 
@@ -27832,29 +28169,33 @@ unsafe fn bdl_index_push_reserve1(ctl: *mut u8, value: u32) {
 /// Uses the power-of-two default-granularity rule (0x7087ee..0x708835): when
 /// `gran==0`, gran = 0x40 for `need>=0x40` (persisted) else `pow2_floor(need)`.
 /// No append.
-#[allow(
-    clippy::multiple_unsafe_ops_per_block,
-    clippy::undocumented_unsafe_blocks
-)]
 unsafe fn bdl_index_grow_pow2(ctl: *mut u8, need: u32) {
     const ALIGN_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x02_9320;
     const SETCAP_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x02_9340;
+    // SAFETY: `ctl` is a live `{cap@0,count@4,data@8,gran@0xc}` index-array header — the call
+    // sites pass the view's `this+0x3c`/`+0x4c` arrays — so the capacity dword at `+0` is an
+    // in-bounds initialised dword.
     let cap = unsafe { bdl_rd32(ctl, 0) };
     if need <= cap {
         return;
     }
+    // SAFETY: same live header; `+0xc` is its granularity dword.
     let mut gran = unsafe { bdl_rd32(ctl, 0xc) };
     if gran == 0 {
         if need >= 0x40 {
             gran = 0x40;
+            // SAFETY: `+0xc` is the writable granularity dword of that same header; the stock
+            // path persists the 0x40 default there before aligning.
             unsafe { bdl_wr32(ctl, 0xc, 0x40) };
         } else {
             gran = bdl_pow2_floor(need);
         }
     }
+    // SAFETY: fixed `.text` VA; prototype `__thiscall(ecx = ctl, need, gran) -> u32`.
     let fa: extern "thiscall" fn(*mut u8, u32, u32) -> u32 =
         unsafe { core::mem::transmute(ALIGN_VA) };
     let newcap = fa(ctl, need, gran);
+    // SAFETY: fixed `.text` VA; prototype `__thiscall(ecx = ctl, newcap) -> void`.
     let fs: extern "thiscall" fn(*mut u8, u32) = unsafe { core::mem::transmute(SETCAP_VA) };
     fs(ctl, newcap);
 }
@@ -27862,20 +28203,29 @@ unsafe fn bdl_index_grow_pow2(ctl: *mut u8, need: u32) {
 /// Append `value` to a 4-stride index array via the power-of-two grow path.
 ///
 /// (compaction single-record reflow, 0x7087d9..0x708844).
-#[allow(
-    clippy::multiple_unsafe_ops_per_block,
-    clippy::undocumented_unsafe_blocks
-)]
 unsafe fn bdl_index_push_pow2(ctl: *mut u8, value: u32) {
+    // SAFETY: the caller supplies a live 4-stride index control block laid out
+    // `{cap@0, count@4, data@8, gran@0xc}`, so `+4` is an in-bounds dword.
     let count = unsafe { bdl_rd32(ctl, 4) };
+    // SAFETY: same control block, which is the layout `bdl_index_grow_pow2`
+    // expects: it reads `cap@0` and `gran@0xc`, may persist a default
+    // granularity there, and leaves the reallocation to the client's
+    // set-capacity routine. It does not append.
     unsafe { bdl_index_grow_pow2(ctl, count.wrapping_add(1)) };
+    // SAFETY: `ctl` still addresses the same control block after the grow, which
+    // rewrites only header fields; `+4` is the count, re-read for that reason.
     let count2 = unsafe { bdl_rd32(ctl, 4) };
+    // SAFETY: same control block; `+8` is the element buffer pointer, re-read
+    // because the grow may have reallocated that buffer.
     let data = unsafe { bdl_rd32(ctl, 8) };
     let slot = (data as usize).wrapping_add((count2 as usize) * 4) as *mut u32;
     if !slot.is_null() {
         // SAFETY: non-null in-bounds element slot just reserved above.
         unsafe { slot.write(value) };
     }
+    // SAFETY: `+4` is the writable count field of the same control block, and the
+    // grow above reserved capacity for `count + 1` elements, so the stored count
+    // stays within capacity.
     unsafe { bdl_wr32(ctl, 4, count2.wrapping_add(1)) };
 }
 
@@ -27950,29 +28300,60 @@ fn bdl_resolve_texture_slot(this: *const u8, handle: u32) -> u32 {
 /// `node[0x30]` value). The stock body ignores `ecx`, so this takes only the
 /// record. Bit-exact to the original, so the dedup buckets identically — and it
 /// inlines into the dedup loop instead of calling out.
-#[allow(
-    clippy::multiple_unsafe_ops_per_block,
-    clippy::undocumented_unsafe_blocks
-)]
 fn bdl_compute_sort_hash(record: *const u8) -> u32 {
     use crate::math::world::c_world_view__compute_sort_hash_fold__70a600 as fold;
+    // SAFETY: `record` addresses one 0x40-byte draw record of the view's record array (header
+    // `this+0x2c`, data pointer `this+0x34`); the sole caller `bdl_finalize` forms it from that
+    // data pointer and a bucket-0 index, and `+4` is the spatial-node pointer the record append
+    // at 0x707bf8 wrote there.
     let node = unsafe { bdl_rdp(record, 4) };
+    // SAFETY: `node` is a spatial node the builder walked and appended a record for, so its
+    // `+0x30` block is populated — the node walk loads the same field as `m30` before it
+    // classifies any batch of that node.
     let m30 = unsafe { bdl_rdp(node, 0x30) };
+    // SAFETY: same node; `+0x3b8` is its render-substate pointer, loaded as `n_sub` by the node
+    // walk on every node that reaches the record append.
     let ns = unsafe { bdl_rdp(node, 0x3b8) };
     // Seed = the node[0x30] pointer value; first folded term = record[0x1c].
+    // SAFETY: same 0x40-byte record; `+0x1c` is the batch index written next to the `+4` node
+    // pointer by the same record append, so it is an initialised in-bounds dword.
     let mut h = fold(m30 as u32, &[unsafe { bdl_rd32(record, 0x1c) }]);
+    // SAFETY: `ns` is the render substate, of which the node walk reads fields up to `+0x1b0`,
+    // so the dwords at `+0x184`/`+0x188` are in bounds. The borrow is read-only and consumed by
+    // `fold` within this expression.
     h = fold(h, unsafe { bdl_u32_range(ns, 0x184, 2) }); // ns[0x184], ns[0x188]
+    // SAFETY: same substate and the same `+0x1b0` extent; `+0x190..0x19c` ends at the `+0x19c`
+    // field the node walk itself reads. Read-only borrow, consumed here.
     h = fold(h, unsafe { bdl_u32_range(ns, 0x190, 3) }); // ns[0x190..0x198]
+    // SAFETY: same substate; `+0x84..0xec` sits well below the `+0x180` field the node walk
+    // reads, so all 27 dwords are in bounds. Read-only borrow, consumed here.
     h = fold(h, unsafe { bdl_u32_range(ns, 0x84, 27) }); // ns[0x84..0xec]
     // Conditional batch block: node[0xa0][cx*0x50 + 0xc ..], cx = word[record[0x2c]+8].
-    let cx = unsafe { bdl_rd16(bdl_rdp(record, 0x2c), 8) } as usize;
+    // SAFETY: same record; `+0x2c` holds the batch descriptor pointer (stride 0x18, an element
+    // of the node's own batch array) that the record append stored there.
+    let batch = unsafe { bdl_rdp(record, 0x2c) };
+    // SAFETY: `batch` is that 0x18-byte descriptor; `+8` is the index word the node walk reads
+    // from the same field as `w2`.
+    let cx = unsafe { bdl_rd16(batch, 8) } as usize;
+    // SAFETY: `m30` is the node's `+0x30` block; `+0x130` is the node model matrix, loaded as
+    // `m_mat` by the node walk before any batch of the node is classified.
     let m_mat = unsafe { bdl_rdp(m30, 0x130) };
+    // SAFETY: same block; `+0x54` is the dword the node walk tests that same `batch+8` word
+    // against before indexing `node+0xa0`, so it bounds that array.
     if (cx as u32) < unsafe { bdl_rd32(m_mat, 0x54) } {
-        h = fold(h, unsafe {
-            bdl_u32_range(bdl_rdp(node, 0xa0), cx * 0x50 + 0xc, 3)
-        });
+        // SAFETY: `node+0xa0` is the 0x50-stride array the node walk indexes with that same
+        // word under that same bound; the node reached a record append, so it is populated.
+        let n_a0 = unsafe { bdl_rdp(node, 0xa0) };
+        // SAFETY: `cx` was just checked against the `m_mat[0x54]` bound the node walk applies
+        // to this array, so entry `cx` exists and its dwords at `+0xc..0x18` lie inside that
+        // entry's 0x50 bytes. Read-only borrow, consumed by `fold` here.
+        h = fold(h, unsafe { bdl_u32_range(n_a0, cx * 0x50 + 0xc, 3) });
     }
+    // SAFETY: `node` is the live spatial node above, whose `+0x3b8` and `+0x3f0` fields the node
+    // walk reads, so the three dwords at `+0x1a0..0x1ac` are in bounds.
     h = fold(h, unsafe { bdl_u32_range(node, 0x1a0, 3) }); // node[0x1a0..0x1a8]
+    // SAFETY: same node and the same extent; `+0x1ac..0x1b8` is still far below `+0x3b8`.
+    // Read-only borrow, consumed by `fold` here.
     h = fold(h, unsafe { bdl_u32_range(node, 0x1ac, 3) }); // node[0x1ac..0x1b4]
     h
 }
@@ -28034,15 +28415,14 @@ fn bdl_sort_by_tex(data: *mut u32, count: u32, base: *mut u8) {
 ///
 /// Parent = the view camera matrix `this+0x9c`, scale = (1,1,1), translate =
 /// (0,0,0), alpha = 1.0. (0x70777c / 0x7077ea.)
-#[allow(
-    clippy::multiple_unsafe_ops_per_block,
-    clippy::undocumented_unsafe_blocks
-)]
 fn bdl_animate_bones_identity(base: *mut u8, node: *const u8) {
     let scale: [f32; 3] = [1.0, 1.0, 1.0];
     let translate: [f32; 3] = [0.0, 0.0, 0.0];
     cm2_shared__animate_bones__714260(
         node as *mut core::ffi::c_void,
+        // SAFETY: `base` is the `CWorldView` `this` the draw-list build was entered with, and
+        // `+0x9c` is its 4x4 camera matrix (rows `+0x9c..+0xc4`), so the offset stays inside
+        // that object; `AnimateBones` only reads it as the parent matrix.
         unsafe { base.add(0x9c).cast::<f32>() },
         scale.as_ptr(),
         translate.as_ptr(),
@@ -28055,49 +28435,78 @@ fn bdl_animate_bones_identity(base: *mut u8, node: *const u8) {
 /// Bone animation over the visible-list head `this+0x20` (camera-relative
 /// double-hop walk gated by `[view+4]&4`, else the plain single-hop walk), then
 /// a particle update pass.
-#[allow(
-    clippy::multiple_unsafe_ops_per_block,
-    clippy::undocumented_unsafe_blocks
-)]
 fn bdl_anim_phase(base: *mut u8) {
+    // SAFETY: `base` is the non-null `CWorldView` `this` the draw-list build was entered with
+    // (null-checked at its entry), and `+0x4` is its view pointer field, which the revision
+    // compare at 0x70768c already loaded and read `+0x8` through before this phase runs.
     let view = unsafe { bdl_rdp(base, 4) };
+    // SAFETY: `view` is that same view object, live enough for the caller's `+0x8` revision
+    // load; `+0x4` is the flags dword the stock gate `[view+4]&4` at the head of this phase
+    // tests bit 2 of.
     if (unsafe { bdl_rd32(view, 4) } & 4) != 0 {
         // 0x707760: sub_706cd0(ecx = view, 0x707600 callback, this).
         const CB: u32 = (crate::win::EXPECTED_IMAGE_BASE + 0x30_7600) as u32;
         const SUB_706CD0: usize = crate::win::EXPECTED_IMAGE_BASE + 0x30_6cd0;
         let f1: extern "thiscall" fn(*const u8, u32, *mut u8) =
+            // SAFETY: 0x706cd0 is a `.text` address in the loaded client, verified
+            // non-relocated by `win`'s image-base check; the signature is the convention
+            // that routine was compiled with (`ecx` = the view, callback, `this`).
             unsafe { core::mem::transmute(SUB_706CD0) };
         f1(view, CB, base);
         // Double-hop bone walk.
+        // SAFETY: `base` is that same `CWorldView`; `+0x20` is its visible-list head pointer
+        // field, the field the refresh phase pops nodes off and writes back through.
         let mut node = unsafe { bdl_rdp(base, 0x20) };
         while !node.is_null() {
+            // SAFETY: `node` is non-null by the loop condition and is a visible-list model,
+            // the same pointer handed to `AnimateBones` below; `+0x1cc` is the dword the
+            // stock walk gates that call on.
             if unsafe { bdl_rd32(node, 0x1cc) } == 0 {
                 bdl_animate_bones_identity(base, node);
             }
+            // SAFETY: `node` is still that non-null list node; `+0x48` is the forward link
+            // the visible list is chained through.
             node = unsafe { bdl_rdp(node, 0x48) };
             if node.is_null() {
                 break;
             }
+            // SAFETY: the second hop reads `+0x48`, the same forward link, off a node the
+            // null check directly above proved non-null.
             node = unsafe { bdl_rdp(node, 0x48) };
         }
         // 0x7077cc: sub_706d00(ecx = view).
         const SUB_706D00: usize = crate::win::EXPECTED_IMAGE_BASE + 0x30_6d00;
-        let f2: extern "thiscall" fn(*const u8) = unsafe { core::mem::transmute(SUB_706D00) };
+        let f2: extern "thiscall" fn(*const u8) =
+            // SAFETY: as above for 0x706d00; `__thiscall` with the view in `ecx` is the
+            // convention that routine was compiled with, and `view` is the pointer the
+            // paired 0x706cd0 call above was already handed.
+            unsafe { core::mem::transmute(SUB_706D00) };
         f2(view);
     } else {
         // 0x7077d3: plain single-hop walk.
+        // SAFETY: `base` is that same `CWorldView`; `+0x20` is its visible-list head pointer
+        // field, read here exactly as in the double-hop arm.
         let mut node = unsafe { bdl_rdp(base, 0x20) };
         while !node.is_null() {
+            // SAFETY: `node` is non-null by the loop condition and is a visible-list model,
+            // the same pointer handed to `AnimateBones` below; `+0x1cc` is the dword the
+            // stock walk gates that call on.
             if unsafe { bdl_rd32(node, 0x1cc) } == 0 {
                 bdl_animate_bones_identity(base, node);
             }
+            // SAFETY: `node` is still that non-null list node; `+0x48` is the forward link
+            // the visible list is chained through.
             node = unsafe { bdl_rdp(node, 0x48) };
         }
     }
     // 0x707830: UpdateParticlesAndChildren over the visible list.
+    // SAFETY: `base` is that same `CWorldView`; `+0x20` is its visible-list head pointer
+    // field, re-read here because the stock code at 0x707830 reloads the head for this pass.
     let mut node = unsafe { bdl_rdp(base, 0x20) };
     while !node.is_null() {
         cm2_model__update_particles_and_children__718960(node as *mut core::ffi::c_void);
+        // SAFETY: `node` is non-null by the loop condition; `+0x48` is the forward link the
+        // visible list is chained through.
         node = unsafe { bdl_rdp(node, 0x48) };
     }
 }
@@ -28105,19 +28514,24 @@ fn bdl_anim_phase(base: *mut u8) {
 /// Node-bounds refresh phase (0x707845..0x707868).
 ///
 /// Pop each node off `this+0x20`, clear its `+0x44/+0x48` links, and refresh its bounds.
-#[allow(
-    clippy::multiple_unsafe_ops_per_block,
-    clippy::undocumented_unsafe_blocks
-)]
 fn bdl_refresh_phase(base: *mut u8) {
     loop {
+        // SAFETY: `base` is the non-null `CWorldView` `this` the draw-list hook was entered
+        // with, and `+0x20` is its visible-list head pointer field.
         let node = unsafe { bdl_rdp(base, 0x20) };
         if node.is_null() {
             break;
         }
+        // SAFETY: `node` came off the visible-list head and is null-checked above; `+0x48` is
+        // the forward link the list is walked through.
         let next = unsafe { bdl_rdp(node, 0x48) };
+        // SAFETY: `base` is the live `CWorldView`; popping the head writes the node's forward
+        // link back into the writable head field at `+0x20`.
         unsafe { bdl_wr32(base, 0x20, next as u32) };
+        // SAFETY: `node` is the non-null node just unlinked; `+0x44` is one of its two list-link
+        // fields, cleared because it no longer sits on the list.
         unsafe { bdl_wr32(node as *mut u8, 0x44, 0) };
+        // SAFETY: as above; `+0x48` is the forward link, whose value is already held in `next`.
         unsafe { bdl_wr32(node as *mut u8, 0x48, 0) };
         bdl_refresh_node_bounds(node);
     }
@@ -28129,10 +28543,6 @@ fn bdl_refresh_phase(base: *mut u8) {
 /// (`0xcefff8`), heap-sort bucket-0 by texture, run-merge equal-texture runs
 /// (single-record runs spill to the `this+0x4c` bucket), then heap-sort the
 /// three remaining buckets.
-#[allow(
-    clippy::multiple_unsafe_ops_per_block,
-    clippy::undocumented_unsafe_blocks
-)]
 fn bdl_finalize(base: *mut u8) {
     const TABLE: *mut u32 = (crate::win::EXPECTED_IMAGE_BASE + 0x8e_fff8) as *mut u32;
     // The transparent-bucket comparator (0x70aa30) is reimplemented as the
@@ -28143,17 +28553,32 @@ fn bdl_finalize(base: *mut u8) {
     const CMP_TRANS: *const core::ffi::c_void =
         (crate::win::EXPECTED_IMAGE_BASE + 0x30_aa30) as *const core::ffi::c_void;
 
+    // SAFETY: `base` is the `CWorldView` `this` the draw-list builder null-checked on entry;
+    // `+0x40` is the element-count dword of its bucket-0 index header at `+0x3c`.
     let count = unsafe { bdl_rd32(base, 0x40) };
     if count > 1 {
         // 0x7086a7: clear the 251-dword scratch to -1.
         for i in 0..0xfbusize {
-            unsafe { TABLE.add(i).write(0xffff_ffff) };
+            // SAFETY: `TABLE` is the client's static 251-dword dedup scratch at 0xcefff8 and
+            // `i < 0xfb`, so the offset stays inside it.
+            let slot = unsafe { TABLE.add(i) };
+            // SAFETY: in-bounds slot per above, in writable static storage.
+            unsafe { slot.write(0xffff_ffff) };
         }
         // 0x7086c0: dedup probe — each record's +0x24 points at the canonical
         // (first) record with the same sort-hash.
         for i in 0..count as usize {
+            // SAFETY: same live view; `+0x44` is the bucket-0 index header's storage pointer,
+            // re-read per iteration as the stock loop does.
             let b0data = unsafe { bdl_rd32(base, 0x44) } as usize;
-            let rec_idx = unsafe { (b0data as *const u32).add(i).read() };
+            // SAFETY: `i < count`, and `count` is that header's element count read at `+0x40`,
+            // so the dword element is in bounds.
+            let idx_slot = unsafe { (b0data as *const u32).add(i) };
+            // SAFETY: in-bounds index element, filled by the builder's classification phase
+            // before it calls this helper.
+            let rec_idx = unsafe { idx_slot.read() };
+            // SAFETY: `+0x34` is the storage pointer of the view's draw-record array header at
+            // `+0x2c`, holding the 0x40-byte records this bucket indexes.
             let recbase = unsafe { bdl_rd32(base, 0x34) } as usize;
             let recptr = (recbase + (rec_idx as usize) * 0x40) as *const u8;
             let hash = bdl_compute_sort_hash(recptr);
@@ -28164,22 +28589,39 @@ fn bdl_finalize(base: *mut u8) {
                 if edi >= 0xfb {
                     edi = 0;
                 }
-                let entry = unsafe { TABLE.add(edi as usize).read() };
+                // SAFETY: `edi` was just wrapped below 0xfb, so it names a dword inside the
+                // 251-entry scratch.
+                let probe = unsafe { TABLE.add(edi as usize) };
+                // SAFETY: in-bounds scratch slot, initialised to -1 by the clear loop above,
+                // which runs under this same `count > 1` guard.
+                let entry = unsafe { probe.read() };
                 if entry == 0xffff_ffff || edi == start {
-                    unsafe { TABLE.add(edi as usize).write(rec_idx) };
+                    // SAFETY: `edi` is unchanged since the probe, so this is that same
+                    // in-bounds writable scratch slot.
+                    unsafe { probe.write(rec_idx) };
                     break;
                 }
                 if bdl_draw_list_equal(rec_idx, entry, base) == 0 {
                     break;
                 }
             }
-            let canonical = unsafe { TABLE.add(edi as usize).read() };
+            // SAFETY: the probe loop left `edi < 0xfb`, so this names a scratch dword.
+            let canon_slot = unsafe { TABLE.add(edi as usize) };
+            // SAFETY: initialised either way — the clear loop wrote -1 into every slot, and
+            // the probe may have overwritten this one with `rec_idx`.
+            let canonical = unsafe { canon_slot.read() };
+            // SAFETY: same record-array storage pointer at `+0x34`, re-read because the hash
+            // and equality calls above ran in between.
             let recbase2 = unsafe { bdl_rd32(base, 0x34) } as usize;
+            // SAFETY: `rec_idx` came off bucket-0, which the builder fills with indices into
+            // that 0x40-stride record array; `+0x24` is the record's canonical-index dword.
             unsafe { ((recbase2 + (rec_idx as usize) * 0x40 + 0x24) as *mut u32).write(canonical) };
         }
     }
 
     // 0x708747: heap-sort bucket-0 by texture.
+    // SAFETY: live `CWorldView`; `+0x44` is the bucket-0 index header's storage pointer, whose
+    // `count` elements the sort below reorders in place.
     let b0data = unsafe { bdl_rd32(base, 0x44) } as *mut u32;
     bdl_sort_by_tex(b0data, count, base);
 
@@ -28190,49 +28632,92 @@ fn bdl_finalize(base: *mut u8) {
     if count > 0 {
         let mut i: u32 = 0;
         while i < count {
+            // SAFETY: live view; `+0x44` is bucket-0's storage pointer, re-read per iteration
+            // as the stock loop does.
             let b0 = unsafe { bdl_rd32(base, 0x44) } as usize;
-            let leader = unsafe { ((b0 as *const u32).add(i as usize)).read() };
-            unsafe { ((b0 as *mut u32).add(out as usize)).write(leader) };
+            // SAFETY: `i < count`, the bucket-0 element count, so the element is in bounds.
+            let leader_slot = unsafe { (b0 as *const u32).add(i as usize) };
+            // SAFETY: in-bounds index element of that array.
+            let leader = unsafe { leader_slot.read() };
+            // SAFETY: the compaction cursor never overtakes the read cursor — every run
+            // advances `out` by at most `i`'s advance — so `out <= i < count` here.
+            let out_slot = unsafe { (b0 as *mut u32).add(out as usize) };
+            // SAFETY: in-bounds writable element per above.
+            unsafe { out_slot.write(leader) };
             out += 1;
             let mut j = i + 1;
             while j < count {
+                // SAFETY: live view; `+0x44` is bucket-0's storage pointer, re-read per
+                // iteration as the stock loop does.
                 let b0b = unsafe { bdl_rd32(base, 0x44) } as usize;
-                let next = unsafe { ((b0b as *const u32).add(j as usize)).read() };
+                // SAFETY: `j < count`, the bucket-0 element count, so the element is in bounds.
+                let next_slot = unsafe { (b0b as *const u32).add(j as usize) };
+                // SAFETY: in-bounds index element of that array.
+                let next = unsafe { next_slot.read() };
                 if bdl_cmp_by_tex(leader, next, base) != 0 {
                     break;
                 }
-                unsafe { ((b0b as *mut u32).add(out as usize)).write(next) };
+                // SAFETY: `out` entered this loop no greater than `j` and both advance by one
+                // per iteration, so `out <= j < count` and the destination is in bounds.
+                let dst = unsafe { (b0b as *mut u32).add(out as usize) };
+                // SAFETY: in-bounds writable element per above.
+                unsafe { dst.write(next) };
                 out += 1;
                 j += 1;
             }
             let runlen = j - i;
+            // SAFETY: `+0x34` is the storage pointer of the record array header at `+0x2c`,
+            // whose records are 0x40 bytes.
             let recbase = unsafe { bdl_rd32(base, 0x34) } as usize;
             if runlen > 1 {
+                // SAFETY: `leader` is a bucket-0 index into that record array; `+0x20` is the
+                // record dword the run leader carries its run length in.
                 unsafe { ((recbase + (leader as usize) * 0x40 + 0x20) as *mut u32).write(runlen) };
                 i = j;
             } else {
+                // SAFETY: same record, indexed as above; `+0` is the dword the singleton path
+                // clears before the record leaves bucket-0.
                 unsafe { ((recbase + (leader as usize) * 0x40) as *mut u32).write(0) };
-                unsafe { bdl_index_push_pow2(base.add(0x4c), leader) };
+                // SAFETY: `base` is the live view and `+0x4c` is its transparent-bucket index
+                // header, whose fields sit inside the view object.
+                let trans = unsafe { base.add(0x4c) };
+                // SAFETY: `trans` is a live `{cap@0,count@4,data@8,gran@0xc}` index header,
+                // which is the layout `bdl_index_push_pow2` reserves and appends through.
+                unsafe { bdl_index_push_pow2(trans, leader) };
                 out -= 1;
                 i += 1;
             }
         }
     }
     // 0x70885a: commit the compacted bucket-0 count.
+    // SAFETY: live view; `+0x3c` is the capacity dword of the bucket-0 index header.
     let cap = unsafe { bdl_rd32(base, 0x3c) };
     if out > count && out > cap {
-        unsafe { bdl_index_grow_pow2(base.add(0x3c), out) };
+        // SAFETY: `base` is the live view; `+0x3c` is the head of that same index header.
+        let ctl = unsafe { base.add(0x3c) };
+        // SAFETY: `ctl` is a live `{cap@0,count@4,data@8,gran@0xc}` index header; the grow
+        // rewrites only header fields and defers reallocation to the client's set-capacity fn.
+        unsafe { bdl_index_grow_pow2(ctl, out) };
     }
+    // SAFETY: `+0x40` is the writable element-count dword of the bucket-0 index header, an
+    // in-bounds field of the live view.
     unsafe { bdl_wr32(base, 0x40, out) };
 
     // 0x7088b8/0x7088ca/0x7088dc: heap-sort the remaining three buckets.
+    // SAFETY: live view; `+0x54` is the storage pointer of the transparent-bucket index header
+    // at `+0x4c` — the bucket the singleton spill above appended to.
     let t_data = unsafe { bdl_rd32(base, 0x54) } as *mut u32;
+    // SAFETY: `+0x50` is that same header's element-count dword.
     let t_cnt = unsafe { bdl_rd32(base, 0x50) };
     heap_sort_u_int32__71f860(CMP_TRANS, t_data, t_cnt, base.cast());
+    // SAFETY: live view; `+0x64` is the storage pointer of the index header at `+0x5c`.
     let a_data = unsafe { bdl_rd32(base, 0x64) } as *mut u32;
+    // SAFETY: `+0x60` is that same header's element-count dword.
     let a_cnt = unsafe { bdl_rd32(base, 0x60) };
     bdl_sort_opaque(a_data, a_cnt, base);
+    // SAFETY: live view; `+0x74` is the storage pointer of the index header at `+0x6c`.
     let r_data = unsafe { bdl_rd32(base, 0x74) } as *mut u32;
+    // SAFETY: `+0x70` is that same header's element-count dword.
     let r_cnt = unsafe { bdl_rd32(base, 0x70) };
     bdl_sort_opaque(r_data, r_cnt, base);
 }
@@ -28241,10 +28726,6 @@ fn bdl_finalize(base: *mut u8) {
 ///
 /// `__thiscall(this, *const C3Vector) -> i32`. Per-frame draw-list builder; see
 /// the block comment above the helpers.
-#[allow(
-    clippy::multiple_unsafe_ops_per_block,
-    clippy::undocumented_unsafe_blocks
-)]
 pub fn c_world_view__build_draw_list__707680(
     this: *mut core::ffi::c_void,
     delta_vec3: *const f32,
@@ -28255,99 +28736,172 @@ pub fn c_world_view__build_draw_list__707680(
     let base = this.cast::<u8>();
 
     // 0x707696: inc the per-frame counter.
-    unsafe { bdl_wr32(base, 0x10, bdl_rd32(base, 0x10).wrapping_add(1)) };
+    // SAFETY: `base` is the non-null `CWorldView` `this` the draw-list hook was entered
+    // with, and `+0x10` is its per-frame counter dword.
+    let frames = unsafe { bdl_rd32(base, 0x10) };
+    // SAFETY: as above; the same in-bounds dword is stored back.
+    unsafe { bdl_wr32(base, 0x10, frames.wrapping_add(1)) };
 
     // 0x70768c..0x7076b8: on view-revision change, memset the 0x708-dword
     // visibility cache at this+0x14c to -1 and re-latch the revision.
+    // SAFETY: `base` is the live `CWorldView`; `+4` is its view-state pointer field, the
+    // one the stock prologue loads first (`mov eax, [ebx+4]`) and the animation phase
+    // passes as the `this` of its view thiscalls.
     let view = unsafe { bdl_rdp(base, 4) };
-    if unsafe { bdl_rd32(base, 0x148) } != unsafe { bdl_rd32(view, 8) } {
+    // SAFETY: `base` is the live `CWorldView`; `+0x148` is the dword latching the view
+    // revision this draw list was last built against.
+    let latched = unsafe { bdl_rd32(base, 0x148) };
+    // SAFETY: `view` is that `+4` pointer, which the stock body dereferences
+    // unconditionally at this same site; `+8` is the view's revision counter.
+    let revision = unsafe { bdl_rd32(view, 8) };
+    if latched != revision {
+        // SAFETY: `base` is the live `CWorldView`; `+0x14c` starts the 0x708-dword
+        // visibility cache, so every dword written below lies inside that field.
         let cache = unsafe { base.add(0x14c) };
         for i in 0..0x708usize {
+            // SAFETY: as above — `i < 0x708`, so `cache + i*4` stays inside the cache.
             unsafe { bdl_wr32(cache, i * 4, 0xffff_ffff) };
         }
-        let rev = unsafe { bdl_rd32(bdl_rdp(base, 4), 8) };
+        // SAFETY: `+4` is the same view-state pointer field read above; the stock body
+        // re-loads it here rather than reusing the register.
+        let view_now = unsafe { bdl_rdp(base, 4) };
+        // SAFETY: `view_now` is that view pointer, dereferenced unconditionally by the
+        // stock body; `+8` is its revision counter.
+        let rev = unsafe { bdl_rd32(view_now, 8) };
+        // SAFETY: `base` is the live `CWorldView`; `+0x148` is the writable revision latch.
         unsafe { bdl_wr32(base, 0x148, rev) };
     }
 
     // 0x7076be: load the current camera matrix into this+0x9c.
-    bdl_get_current_matrix(unsafe { base.add(0x9c) });
+    // SAFETY: `base` is the live `CWorldView`; `+0x9c` is its 0x40-byte camera 4x4 (rows
+    // 0x10 apart, inverse slot at `+0xdc`), the destination `GetCurrentMatrix` fills.
+    let camera = unsafe { base.add(0x9c) };
+    bdl_get_current_matrix(camera);
 
     // 0x7076cb..0x70774c: motion-delta prologue (host-tested kernel).
     if !delta_vec3.is_null() {
+        // SAFETY: `delta_vec3` is the `C3Vector*` second argument, null-checked on the line
+        // above; the stock body reads three contiguous floats through it.
         let delta = unsafe { *delta_vec3.cast::<[f32; 3]>() };
-        let m = unsafe {
-            [
-                bdl_rdf(base, 0x9c),
-                bdl_rdf(base, 0xa0),
-                bdl_rdf(base, 0xa4),
-                bdl_rdf(base, 0xac),
-                bdl_rdf(base, 0xb0),
-                bdl_rdf(base, 0xb4),
-                bdl_rdf(base, 0xbc),
-                bdl_rdf(base, 0xc0),
-                bdl_rdf(base, 0xc4),
-            ]
-        };
-        let old = unsafe {
-            [
-                bdl_rdf(base, 0xcc),
-                bdl_rdf(base, 0xd0),
-                bdl_rdf(base, 0xd4),
-            ]
-        };
+        let m = [
+            // SAFETY: `base` is the live `CWorldView` and `+0x9c` is the camera 4x4 that
+            // `GetCurrentMatrix` filled above; this is row 0, column 0.
+            unsafe { bdl_rdf(base, 0x9c) },
+            // SAFETY: as above; row 0, column 1 of that matrix.
+            unsafe { bdl_rdf(base, 0xa0) },
+            // SAFETY: as above; row 0, column 2.
+            unsafe { bdl_rdf(base, 0xa4) },
+            // SAFETY: as above; row 1, column 0 (rows are 0x10 apart).
+            unsafe { bdl_rdf(base, 0xac) },
+            // SAFETY: as above; row 1, column 1.
+            unsafe { bdl_rdf(base, 0xb0) },
+            // SAFETY: as above; row 1, column 2.
+            unsafe { bdl_rdf(base, 0xb4) },
+            // SAFETY: as above; row 2, column 0.
+            unsafe { bdl_rdf(base, 0xbc) },
+            // SAFETY: as above; row 2, column 1.
+            unsafe { bdl_rdf(base, 0xc0) },
+            // SAFETY: as above; row 2, column 2.
+            unsafe { bdl_rdf(base, 0xc4) },
+        ];
+        let old = [
+            // SAFETY: as above; `+0xcc` is row 3, column 0 of the same 4x4 — the view
+            // translation the kernel recomputes from `m` and `delta`.
+            unsafe { bdl_rdf(base, 0xcc) },
+            // SAFETY: as above; row 3, column 1.
+            unsafe { bdl_rdf(base, 0xd0) },
+            // SAFETY: as above; row 3, column 2.
+            unsafe { bdl_rdf(base, 0xd4) },
+        ];
         let nt = crate::math::world::c_world_view__build_motion_delta__707680(&m, &old, &delta);
+        // SAFETY: `base+0xcc` is the writable translation float just read into `old[0]`.
         unsafe { bdl_wr32(base, 0xcc, nt[0].to_bits()) };
+        // SAFETY: as above, the `+0xd0` translation float.
         unsafe { bdl_wr32(base, 0xd0, nt[1].to_bits()) };
+        // SAFETY: as above, the `+0xd4` translation float.
         unsafe { bdl_wr32(base, 0xd4, nt[2].to_bits()) };
     }
 
     // 0x707752: D3DXMatrixInverse(this+0xdc, NULL, this+0x9c).
-    bdl_matrix_inverse(
-        unsafe { base.add(0xdc).cast::<f32>() },
-        core::ptr::null(),
-        unsafe { base.add(0x9c).cast::<f32>() },
-    );
+    // SAFETY: `base` is the live `CWorldView`; `+0xdc` is the 0x40-byte inverse-view matrix
+    // slot, immediately after the camera 4x4 that starts at `+0x9c`.
+    let inv_out = unsafe { base.add(0xdc).cast::<f32>() };
+    // SAFETY: as above; `+0x9c` is the camera 4x4 `GetCurrentMatrix` filled above.
+    let cam_in = unsafe { base.add(0x9c).cast::<f32>() };
+    bdl_matrix_inverse(inv_out, core::ptr::null(), cam_in);
 
     // 0x707757: animation phase; 0x707845: node-bounds refresh.
     bdl_anim_phase(base);
     bdl_refresh_phase(base);
 
     // 0x70786a..0x707890: reset the bucket counts and the record-array count.
+    // SAFETY: `base` is the live `CWorldView`; index-array headers are
+    // `{cap@0,count@4,data@8,gran@0xc}`, so `+0x40` is the count of the array at `+0x3c`.
     unsafe { bdl_wr32(base, 0x40, 0) };
+    // SAFETY: as above, the count dword of the index array headed at `+0x4c`.
     unsafe { bdl_wr32(base, 0x50, 0) };
+    // SAFETY: as above, the count dword of the index array headed at `+0x5c`.
     unsafe { bdl_wr32(base, 0x60, 0) };
+    // SAFETY: as above, the count dword of the index array headed at `+0x6c`.
     unsafe { bdl_wr32(base, 0x70, 0) };
+    // SAFETY: as above; `+0x30` is the count dword of the 0x40-byte draw-record array
+    // headed at `+0x2c`, whose data pointer `bdl_finalize` reads back at `+0x34`.
     unsafe { bdl_wr32(base, 0x30, 0) };
 
     let mut draw_idx: u32 = 0;
 
     // 0x707896..0x70838b: walk the spatial node list off this+0x24.
+    // SAFETY: `base` is the live `CWorldView`; `+0x24` is the head slot of the draw list
+    // that the animation phase above spliced the visible elements onto.
     let mut node = unsafe { bdl_rdp(base, 0x24) };
     while !node.is_null() {
+        // SAFETY: `node` is non-null by the loop condition and is a list element that
+        // spliced itself on; `+0x58` is the forward link it stored the old head in.
         let next = unsafe { bdl_rdp(node, 0x58) };
+        // SAFETY: `base` is the live `CWorldView`; popping the head stores that forward
+        // link back into the writable head slot at `+0x24`.
         unsafe { bdl_wr32(base, 0x24, next as u32) };
+        // SAFETY: `node` is the non-null element just unlinked; `+0x54` holds the address
+        // of the slot pointing at it, which is the head slot since it was the head.
         unsafe { bdl_wr32(node as *mut u8, 0x54, 0) };
+        // SAFETY: as above; `+0x58` is the forward link, already held in `next`.
         unsafe { bdl_wr32(node as *mut u8, 0x58, 0) };
+        // SAFETY: as above; `+0x50` is the gate an element tests before splicing itself
+        // onto this list, cleared so it does not re-enter until re-set.
         unsafe { bdl_wr32(node as *mut u8, 0x50, 0) };
         if bdl_object_visible(node) != 0
             && bdl_process_spatial_node(base, node, &mut draw_idx).is_none()
         {
             return 0;
         }
+        // SAFETY: `base` is the live `CWorldView`; `+0x24` is re-read because processing a
+        // node can splice further elements onto the same head.
         node = unsafe { bdl_rdp(base, 0x24) };
     }
 
     // 0x708393..0x708685: walk the child-view list off this+0x28.
+    // SAFETY: `base` is the live `CWorldView`; `+0x28` is the head slot of the second draw
+    // list, whose elements link through `+0x3e0` forward and `+0x3dc` back.
     let mut child = unsafe { bdl_rdp(base, 0x28) };
     while !child.is_null() {
-        unsafe { bdl_wr32(base, 0x28, bdl_rd32(child, 0x3e0)) };
+        // SAFETY: `child` is non-null by the loop condition; `+0x3e0` is the forward link
+        // it stored the old head in when it spliced itself on.
+        let next = unsafe { bdl_rd32(child, 0x3e0) };
+        // SAFETY: `base` is the live `CWorldView`; popping the head stores that forward
+        // link back into the writable head slot at `+0x28`.
+        unsafe { bdl_wr32(base, 0x28, next) };
+        // SAFETY: `child` is the non-null element just unlinked; `+0x3dc` holds the address
+        // of the slot pointing at it, which is the head slot since it was the head.
         unsafe { bdl_wr32(child as *mut u8, 0x3dc, 0) };
+        // SAFETY: as above; `+0x3e0` is the forward link, already held in `next`.
         unsafe { bdl_wr32(child as *mut u8, 0x3e0, 0) };
         if bdl_object_visible(child) != 0
             && bdl_process_child_view(base, child, &mut draw_idx).is_none()
         {
             return 0;
         }
+        // SAFETY: `base` is the live `CWorldView`; `+0x28` is re-read because processing a
+        // child can splice further elements onto the same head.
         child = unsafe { bdl_rdp(base, 0x28) };
     }
 
@@ -28708,62 +29262,123 @@ fn bdl_process_spatial_node(base: *mut u8, node: *const u8, draw_idx: &mut u32) 
 /// Process one visible child view (0x7083dc..0x708674).
 ///
 /// The facing test, then the ribbon/cloud fill over the child's `[0x13c]` entries.
-#[allow(
-    clippy::multiple_unsafe_ops_per_block,
-    clippy::undocumented_unsafe_blocks,
-    clippy::cognitive_complexity
-)]
+#[allow(clippy::cognitive_complexity, clippy::multiple_unsafe_ops_per_block)]
 fn bdl_process_child_view(base: *mut u8, child: *const u8, draw_idx: &mut u32) -> Option<()> {
     use crate::math::world::draw_bucket_classify__707680 as bucket;
 
-    // 0x7083dc: setup.
+    // 0x7083dc: setup. `m30` is the child's `+0x30` block, `m_mat` the model
+    // block it points to, `n_sub` the child's render-substate.
+    // SAFETY: `child` is non-null and cleared `bdl_object_visible` in the
+    // caller's child-view walk, so it is a live child view; `+0x30` is that
+    // view's block-pointer field, an in-bounds dword of it.
     let m30 = unsafe { bdl_rdp(child, 0x30) };
+    // SAFETY: `m30` is that block and `+0x130` its model-block pointer field.
+    // The stock routine loads the same chain unchecked here, so a populated
+    // `+0x30` on a visible child view is the client invariant relied on.
     let m_mat = unsafe { bdl_rdp(m30, 0x130) };
+    // SAFETY: the same live child view; `+0x3b8` is its render-substate pointer
+    // field, populated for every view this walk reaches.
     let n_sub = unsafe { bdl_rdp(child, 0x3b8) };
 
     // 0x7083f6..0x7084dd: facing flag from the projected child centre.
+    // SAFETY: `n_sub` is that render-substate; `+0x19c` is its in-bounds
+    // projection-enable dword.
     let flag8 = if unsafe { bdl_rd32(n_sub, 0x19c) } == 0 {
         1u32
     } else {
+        // SAFETY: `child + 0xfc` starts the child's 4x4 transform, the 16
+        // contiguous `f32` handed to `c44_matrix__transform_point__7bca80`
+        // below, so `+0xfc` is the first `f32` of row 0.
         let a = unsafe { bdl_rdf(child, 0xfc) };
+        // SAFETY: the second `f32` of that same row, at `+0x100`.
         let b = unsafe { bdl_rdf(child, 0x100) };
+        // SAFETY: the third `f32` of that same row, at `+0x104`.
         let c = unsafe { bdl_rdf(child, 0x104) };
         let sqlen = (a * a + b * b) + c * c;
         let mid = [
-            unsafe { bdl_rdf(m_mat, 0xc0) + bdl_rdf(m_mat, 0xb4) },
-            unsafe { bdl_rdf(m_mat, 0xc4) + bdl_rdf(m_mat, 0xb8) },
-            unsafe { bdl_rdf(m_mat, 0xc8) + bdl_rdf(m_mat, 0xbc) },
+            // SAFETY: `m_mat + 0xb4..0xcc` holds the model block's six local
+            // bound extents, one pair per axis; `+0xc0` is the `x` member of
+            // the pair the original sums here.
+            unsafe { bdl_rdf(m_mat, 0xc0) }
+                // SAFETY: the other `x` extent of that same pair, at `+0xb4`.
+                + unsafe { bdl_rdf(m_mat, 0xb4) },
+            // SAFETY: the `y` pair of those same extents, at `+0xc4`.
+            unsafe { bdl_rdf(m_mat, 0xc4) }
+                // SAFETY: the other `y` extent of that pair, at `+0xb8`.
+                + unsafe { bdl_rdf(m_mat, 0xb8) },
+            // SAFETY: the `z` pair of those same extents, at `+0xc8`.
+            unsafe { bdl_rdf(m_mat, 0xc8) }
+                // SAFETY: the other `z` extent of that pair, at `+0xbc`.
+                + unsafe { bdl_rdf(m_mat, 0xbc) },
         ];
         let scaled = [mid[0] * 0.5, mid[1] * 0.5, mid[2] * 0.5];
+        // SAFETY: `+0xcc` is the `f32` immediately after those extents in the
+        // same model block, the scale the original multiplies the row-0 length
+        // by to form the bound radius.
         let radius = sqlen.sqrt() * unsafe { bdl_rdf(m_mat, 0xcc) };
         let mut out = [0.0f32; 3];
-        c44_matrix__transform_point__7bca80(out.as_mut_ptr(), scaled.as_ptr(), unsafe {
-            child.add(0xfc).cast::<f32>()
-        });
-        let depth = unsafe {
-            ((out[2] * bdl_rdf(n_sub, 0x1a8) + out[1] * bdl_rdf(n_sub, 0x1a4))
-                + out[0] * bdl_rdf(n_sub, 0x1a0))
-                + bdl_rdf(n_sub, 0x1ac)
-        };
+        // SAFETY: this forms an address and performs no load; `+0xfc` is in
+        // bounds of the live child view, and the callee null-checks all three
+        // pointers before reading 16 `f32` through this one.
+        let xform = unsafe { child.add(0xfc).cast::<f32>() };
+        c44_matrix__transform_point__7bca80(out.as_mut_ptr(), scaled.as_ptr(), xform);
+        // The view plane occupies `n_sub + 0x1a0..0x1ac`: the normal's `x/y/z`
+        // then the distance term. Bound in the order the original issues the
+        // loads, so the add/multiply sequence below is unchanged.
+        // SAFETY: `n_sub` is the child's render-substate; `+0x1a8` is that
+        // plane normal's `z`, an in-bounds `f32` of it.
+        let plane_z = unsafe { bdl_rdf(n_sub, 0x1a8) };
+        // SAFETY: the same plane's normal `y`, at `+0x1a4`.
+        let plane_y = unsafe { bdl_rdf(n_sub, 0x1a4) };
+        // SAFETY: the same plane's normal `x`, at `+0x1a0`.
+        let plane_x = unsafe { bdl_rdf(n_sub, 0x1a0) };
+        // SAFETY: the same plane's distance term, at `+0x1ac`.
+        let plane_d = unsafe { bdl_rdf(n_sub, 0x1ac) };
+        let depth = ((out[2] * plane_z + out[1] * plane_y) + out[0] * plane_x) + plane_d;
         // 0x7084cf: fcompp(-radius, depth) -> set the flag when depth >= -radius.
         u32::from(!bucket::greater_or_unordered(-radius, depth))
     };
 
     // 0x7084e4..0x708674: ribbon/cloud fill over child[0x13c] entries.
+    // SAFETY: `m_mat` is the model block loaded above; `+0x13c` is its
+    // entry-count dword for the 0x1f8-stride array based at `+0x140`.
     let entry_count = unsafe { bdl_rd32(m_mat, 0x13c) };
     let mut off_a = 0usize;
     let mut off_b = 0usize;
     for ei in 0..entry_count {
+        // SAFETY: the same model block; `+0x140` is that array's base address.
         let entry_a = unsafe { bdl_rd32(m_mat, 0x140) as usize + off_a };
-        let valid = unsafe { bdl_rd32(bdl_rdp(child, 0x3d0).add(off_b), 0x164) };
+        // SAFETY: the same live child view; `+0x3d0` is the pointer to its
+        // per-entry state array, one 0x16c-byte record per `m_mat[0x13c]` entry.
+        let states = unsafe { bdl_rdp(child, 0x3d0) };
+        // SAFETY: `off_b` is `ei * 0x16c` with `ei < entry_count`, so this lands
+        // on the start of the `ei`-th record of that array.
+        let state = unsafe { states.add(off_b) };
+        // SAFETY: `+0x164` is an in-bounds dword of that 0x16c-byte record.
+        let valid = unsafe { bdl_rd32(state, 0x164) };
         if valid != 0 {
+            // SAFETY: the same live child view; `+0x19c` is its alpha `f32`,
+            // the field `bdl_process_spatial_node` reads at the same offset.
             let cloud_val = unsafe { bdl_rdf(child, 0x19c) };
             // 0x708530: proceed only for strictly-positive ordered value.
             if bucket::alpha_proceeds(cloud_val) {
-                let rec = unsafe { bdl_record_reserve(base.add(0x2c)) };
+                // SAFETY: `base` is the `CWorldView` `this`, null-checked on
+                // entry to `c_world_view__build_draw_list__707680`; `+0x2c` is
+                // its growable draw-record array header, in bounds of it.
+                let recs = unsafe { base.add(0x2c) };
+                // SAFETY: `recs` is the `{cap@0,count@4,data@8,gran@0xc}`
+                // control block `bdl_record_reserve` requires, and the view
+                // object keeps it alive across the call.
+                let rec = unsafe { bdl_record_reserve(recs) };
                 if rec.is_null() {
                     return None;
                 }
+                // SAFETY: `rec` is the non-null 0x40-byte record slot just
+                // reserved in the `+0x2c` array, so every offset written below
+                // is an in-bounds dword of it; `child + 0x84` is an in-bounds
+                // dword of the live child view, and `entry_a + 0x2e` a word of
+                // the 0x1f8-byte entry `off_a` selects. Kept as one block: an
+                // unrolled run of record stores transcribed from the original.
                 unsafe {
                     bdl_wr32(rec, 0x10, cloud_val.to_bits());
                     bdl_wr32(rec, 0, 4);
@@ -28775,15 +29390,28 @@ fn bdl_process_child_view(base: *mut u8, child: *const u8, draw_idx: &mut u32) -
                     bdl_wr32(rec, 0x14, bdl_rd32(child, 0x84));
                     bdl_wr32(rec, 0x18, bdl_rd32(child, 0x84));
                 }
+                // SAFETY: `entry_a` is `m_mat[0x140] + ei * 0x1f8` with
+                // `ei < entry_count`, so `+0x28` is an in-bounds word of that
+                // entry.
                 let opaque = unsafe { bdl_rd16(entry_a as *const u8, 0x28) } <= 1
                     && bucket::cloud_is_opaque(cloud_val);
                 let ctl = if opaque {
+                    // SAFETY: the same view object; `+0x4c` is one of its four
+                    // growable index-array headers (`+0x3c/0x4c/0x5c/0x6c`).
                     unsafe { base.add(0x4c) }
                 } else if flag8 != 0 {
+                    // SAFETY: the same view object; `+0x5c` is another of those
+                    // four index-array headers.
                     unsafe { base.add(0x5c) }
                 } else {
+                    // SAFETY: the same view object; `+0x6c` is the last of those
+                    // four index-array headers.
                     unsafe { base.add(0x6c) }
                 };
+                // SAFETY: `ctl` is one of the view's 4-stride index-array
+                // headers selected above, which is the
+                // `{cap@0,count@4,data@8,gran@0xc}` layout `bdl_index_push`
+                // grows and appends to.
                 unsafe { bdl_index_push(ctl, *draw_idx) };
                 *draw_idx += 1;
             }
@@ -28963,12 +29591,12 @@ pub fn c44_matrix__inverse_scaled_by_det__7bd6c0(
 /// the query box overlaps the BSP node's box, else 0.
 ///
 /// When `use_filter` is set the group's enable byte at `this+0x1d4` must be
-/// non-zero and the per-node filter `FUN_006a42b0(this, node_index)` must pass,
+/// non-zero and the per-node filter at `0x6a42b0` (`this`, `node_index`) must pass,
 /// otherwise the result is 0 with no box test. The node box lives in the node
 /// array at `*(this+0x130)`: each node is `0x20` bytes and the array's float data
 /// begins `4` bytes in, so `node = base + 4 + node_index*0x20` holds six `f32`
 /// (`min.xyz` at +0/+4/+8, `max.xyz` at +0xc/+0x10/+0x14). `node_index` is
-/// preserved across the filter call — `FUN_006a42b0` reads only `eax`/`ecx` and
+/// preserved across the filter call — `0x6a42b0` reads only `eax`/`ecx` and
 /// never touches `edx` — so the original `edx` the stock reuses for the lookup is
 /// the passed index (a conservative model would treat `EDX` as volatile
 /// across the call, but this callee preserves it).
@@ -28996,7 +29624,7 @@ pub fn c_map_obj_group__box_intersects_node_box__6a4830(
         // (passed in `edx`) intact, so reusing our own local below is faithful.
         const FILTER_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x2a_42b0;
         // SAFETY: image base verified at load; the transmuted signature matches
-        // the declared prototype of `FUN_006a42b0`.
+        // the declared prototype of the filter at `0x6a42b0`.
         let filter: extern "thiscall" fn(*mut core::ffi::c_void, i32) -> u8 =
             unsafe { core::mem::transmute(FILTER_VA) };
         if filter(this, node_index) == 0 {
@@ -29133,7 +29761,7 @@ pub fn c44_matrix__scale_rotation3x3__7bdd00(this: *mut f32, s: f32) {
 /// `C33Matrix::SetTransposed` — `__thiscall(ecx = this, stack = srcMatrix3x3)`, void.
 ///
 /// Transposes the caller-supplied row-major 3x3 (`src`) into a stack scratch,
-/// then forwards to the setter `FUN_007c0190(this, &transposed)`. `this` is
+/// then forwards to the setter at `0x7c0190` (`this`, `&transposed`). `this` is
 /// opaque here (never dereferenced by the stock body — it is threaded through to
 /// `0x7c0190`, which owns the destination matrix), so it is passed through
 /// verbatim.
@@ -29237,7 +29865,7 @@ pub fn geometry__reduce_planar_points_to_representative__636610(
 /// `void __thiscall(ecx = out, stack = left, right, bottom, top, zNear, zFar)`.
 /// Builds an off-center orthographic 4×4 row-major float matrix into `*out` (see
 /// `math::matrix44::build_ortho_proj_matrix__5c3d90`). The diagonal scale
-/// constant `k = _DAT_00801628` is read live from the host image so the reimpl
+/// constant `k` at `0x801628` is read live from the host image so the reimpl
 /// stays bit-faithful across builds. On a degenerate range (equal `left`/`right`
 /// or `bottom`/`top`, or `!(zNear < zFar)`, matching the x87 NaN polarity) the
 /// stock raises Storm error 0x57 and does NOT touch the matrix — reproduced here
@@ -29251,7 +29879,7 @@ pub fn build_ortho_proj_matrix__5c3d90(
     z_near: f32,
     z_far: f32,
 ) {
-    // `k = _DAT_00801628` (VA 0x801628 ⇒ RVA 0x401628), a read-only `.rdata`
+    // `k` at VA 0x801628 ⇒ RVA 0x401628, a read-only `.rdata`
     // f32 (2.0 in the shipped image); read live to stay value-faithful.
     const ORTHO_K: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x40_1628) as *const f32;
     // SAFETY: fixed `.rdata` dword in the live host image (base verified at load).
@@ -29632,8 +30260,8 @@ pub fn render_batch__compare_sort_key__70a710(idx_a: i32, idx_b: i32, mgr: *mut 
 /// `RET 0x4`, void. DDA-rasterizes the 2D segment `p1 -> p2` into the GLOBAL
 /// grid-cell pair list (the walk itself lives in
 /// `math::world::world_rasterize_trace_line_cells__69c780`): each emitted
-/// `(perp, major)` i32 pair is appended at the list base held in `DAT_00c962c8`
-/// through the global write cursor `DAT_00c89f40`. The cursor counts DWORDS,
+/// `(perp, major)` i32 pair is appended at the list base held at `0xc962c8`
+/// through the global write cursor at `0xc89f40`. The cursor counts DWORDS,
 /// not pairs — every store addresses `[base + cursor*4]` and bumps the cursor
 /// by one (`INC` per dword store, 0x69c7ee–0x69c7fa), two bumps per pair.
 /// Stock performs NO bounds check on the list; the raw cursor bump is
@@ -29808,7 +30436,7 @@ pub fn world_trace_line_against_terrain__69c320(
 /// DDA-walks the segment's major axis (the walk lives in
 /// `math::world::rasterizer_emit_sloped_line_dda__69c600`) and appends each
 /// emitted `(major, minor)` i32 pair to the SAME global list — base at
-/// `DAT_00c962c8`, dword write cursor `DAT_00c89f40`, two `INC`-bumped dword
+/// `0xc962c8`, dword write cursor `0xc89f40`, two `INC`-bumped dword
 /// stores per pair, NO bounds check (raw pointer + wrapping offset, never a
 /// slice — the buffer's sizing is the caller's contract). Zero callees; the
 /// three module f32 constants (grid step 0x810678, axis scale 0x8107a4,
@@ -30131,7 +30759,7 @@ pub fn cg_render_entity__update_transform__6717d0(
 /// the result via the `IDirect3DDevice9::SetTransform` virtual at
 /// `[[this+0x38a8]+0xb0]` with `D3DTS_PROJECTION = 3`, and mirrors the uploaded
 /// matrix to `this+0xf90`. The caps dword at `this+0x269c` (bit 0x100) gates the
-/// 0.2-scale step; the eps guard constant `_DAT_008029d4` is read live from the
+/// 0.2-scale step; the eps guard constant at `0x8029d4` is read live from the
 /// host image.
 pub fn c_gx_device_d3d__i_xform_set_projection__5a11d0(this: *mut u8, proj: *const f32) {
     if this.is_null() || proj.is_null() {
@@ -30156,7 +30784,7 @@ pub fn c_gx_device_d3d__i_xform_set_projection__5a11d0(this: *mut u8, proj: *con
     let caps_slot = unsafe { this.add(0x269c) };
     // SAFETY: readable caps dword; `read_unaligned` for 2-byte-aligned storage.
     let caps = unsafe { caps_slot.cast::<u32>().read_unaligned() };
-    // `_DAT_008029d4` (VA 0x8029d4 ⇒ RVA 0x4029d4), the read-only `.rdata` f32
+    // VA 0x8029d4 ⇒ RVA 0x4029d4, the read-only `.rdata` f32
     // eps guard (2^-22 in the shipped image); read live to stay value-faithful.
     const EPS: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x40_29d4) as *const f32;
     // SAFETY: fixed `.rdata` dword in the live host image (base verified at load).
@@ -31038,7 +31666,7 @@ pub fn cm2_shadow__project_collision_quads__7137c0(
 /// homogeneous-clips the polygon, and writes the NDC cull result into
 /// `outEntry`: `+0` u16 flags (`|= 1` = fully clipped), rect f32 `+4` minY /
 /// `+8` minX / `+0xc` maxY / `+0x10` maxX. If the camera (0xca7edc) lies on the
-/// portal plane (|N·cam + d| <= `_DAT_008029d0`, ordered; NaN skips) and inside
+/// portal plane (|N·cam + d| <= the eps at `0x8029d0`, ordered; NaN skips) and inside
 /// the polygon's dominant-axis 2D projection, the rect is forced to full screen
 /// (-1, -1, 1, 1) with flags left 0.
 ///
@@ -31114,7 +31742,7 @@ pub fn c_map_obj__compute_portal_ndc_rect__6b46f0(
     // --- Transform loop (0x6b4764..0x6b47da): seed [x, y, z, 1.0] into the
     // static scratch, view-proj transform in place via our own
     // `C44Matrix__TransformVector4` hook (0x7bcb40), called directly. ---
-    let matrix = (BASE + 0x8b_e2d8) as *const f32; // view-proj DAT_00cbe2d8
+    let matrix = (BASE + 0x8b_e2d8) as *const f32; // view-proj matrix at 0xcbe2d8
     let mut i: usize = 0;
     loop {
         // Stock re-reads the u16 vertex count from portal+2 on every iteration
@@ -31193,7 +31821,7 @@ pub fn c_map_obj__compute_portal_ndc_rect__6b46f0(
             .cast::<[f32; 3]>()
             .read_unaligned()
     };
-    // Normalize-path selector DAT_00c9e388 (SSE-support toggle): rsqrtss when
+    // Normalize-path selector at 0xc9e388 (SSE-support toggle): rsqrtss when
     // non-zero, FSQRT + FDIVR 1.0 when zero (flags latched at 0x6b4814,
     // consumed at 0x6b487e).
     const RSQRT_TOGGLE: *const u32 = (BASE + 0x89_e388) as *const u32;
@@ -31206,7 +31834,7 @@ pub fn c_map_obj__compute_portal_ndc_rect__6b46f0(
     let nn =
         crate::math::frustum::c_map_obj__portal_plane_normal__6b46f0(&v0, &v1, &v2, use_rsqrt, one);
 
-    // Camera position C3Vector DAT_00ca7edc; plane epsilon _DAT_008029d0.
+    // Camera position C3Vector at 0xca7edc; plane epsilon at 0x8029d0.
     const CAMERA: *const f32 = (BASE + 0x8a_7edc) as *const f32;
     // SAFETY: the fixed camera-position C3Vector in `.data`.
     let cam = unsafe { CAMERA.cast::<[f32; 3]>().read_unaligned() };
@@ -31240,7 +31868,7 @@ pub fn c_map_obj__compute_portal_ndc_rect__6b46f0(
     // max lanes -FLT_MAX (0xff7fffff). The divided x/y (and the clamped w) are
     // written back into the clipper's static buffer, exactly as stock mutates
     // it in place. ---
-    const W_EPS: *const f32 = (BASE + 0x40_1360) as *const f32; // _DAT_00801360
+    const W_EPS: *const f32 = (BASE + 0x40_1360) as *const f32; // VA 0x801360
     // SAFETY: fixed `.rdata` w-clamp epsilon dword.
     let w_eps = unsafe { W_EPS.read() };
     let mut rect = [
@@ -31657,9 +32285,9 @@ pub fn c_gx_string__emit_line_quads__5ccbe0(
     let font1 = unsafe { elq_rd_u32(thisu + 0x44) } as usize;
     // SAFETY: live CGxFont; +0x180 is the style-flags dword.
     let font_flags0 = unsafe { elq_rd_u32(font1 + 0x180) };
-    // SAFETY: fixed `.rdata` f32 in the live host image (DAT_0080306c, 4.0).
+    // SAFETY: fixed `.rdata` f32 in the live host image (0x80306c, 4.0).
     let outline_add = unsafe { elq_rd_f32(BASE + 0x40_306c) };
-    // SAFETY: fixed `.rdata` f32 in the live host image (DAT_00801628, 2.0).
+    // SAFETY: fixed `.rdata` f32 in the live host image (0x801628, 2.0).
     let shadow_add = unsafe { elq_rd_f32(BASE + 0x40_1628) };
     let glyph_height = crate::math::gx::text_glyph_height_adjust__5ccbe0(
         snapped2,
@@ -31676,7 +32304,7 @@ pub fn c_gx_string__emit_line_quads__5ccbe0(
     }
 
     // ---- one-time UV-inset static init (0x5ccce2-0x5ccd24) ----
-    // SAFETY: fixed `.data` guard byte in the live host image (DAT_00c2b9f0).
+    // SAFETY: fixed `.data` guard byte in the live host image (0xc2b9f0).
     let guard = unsafe { elq_rd_u8(BASE + 0x82_b9f0) };
     if guard & 1 == 0 {
         // SAFETY: guard byte set exactly like stock (`or dl,1`, other bits kept).
@@ -31952,7 +32580,7 @@ pub fn c_gx_string__emit_line_quads__5ccbe0(
                     // SAFETY: flags dword (0x5cd039); bit 7 = world-space.
                     let flags_g = unsafe { elq_rd_u32(thisu + 0x5c) };
                     if flags_g & 0x80 == 0 {
-                        // SAFETY: fixed `.rdata` f32 (DAT_007ffa24, 0.5) read live.
+                        // SAFETY: fixed `.rdata` f32 (0x7ffa24, 0.5) read live.
                         let bias = unsafe { elq_rd_f32(BASE + 0x3f_fa24) };
                         advance = crate::math::gx::text_round_advance__5ccbe0(advance, bias);
                     }
@@ -31981,10 +32609,10 @@ pub fn c_gx_string__emit_line_quads__5ccbe0(
                     // SAFETY: live CGxFont; +0x180 style flags re-read per glyph.
                     let fflags = unsafe { elq_rd_u32(font_y + 0x180) };
                     let y_sub = if fflags & 8 != 0 {
-                        // SAFETY: fixed `.rdata` f32 (DAT_00801628, 2.0).
+                        // SAFETY: fixed `.rdata` f32 (0x801628, 2.0).
                         unsafe { elq_rd_f32(BASE + 0x40_1628) }
                     } else if fflags & 1 != 0 {
-                        // SAFETY: fixed `.rdata` f32 (DAT_007ff9d8, 1.0).
+                        // SAFETY: fixed `.rdata` f32 (0x7ff9d8, 1.0).
                         unsafe { elq_rd_f32(BASE + 0x3f_f9d8) }
                     } else {
                         0.0
@@ -32031,13 +32659,13 @@ pub fn c_gx_string__emit_line_quads__5ccbe0(
                     // kernel's v0 lanes ARE (quad_x, quad_y, pen_z).
                     // SAFETY: fixed `.data` UV-inset statics initialised above.
                     let inset = [
-                        // SAFETY: DAT_00c2b9f8, live read like stock.
+                        // SAFETY: 0xc2b9f8, live read like stock.
                         unsafe { elq_rd_f32(BASE + 0x82_b9f8) },
-                        // SAFETY: DAT_00c2b9fc, live read like stock.
+                        // SAFETY: 0xc2b9fc, live read like stock.
                         unsafe { elq_rd_f32(BASE + 0x82_b9fc) },
-                        // SAFETY: DAT_00c2ba00, live read like stock.
+                        // SAFETY: 0xc2ba00, live read like stock.
                         unsafe { elq_rd_f32(BASE + 0x82_ba00) },
-                        // SAFETY: DAT_00c2ba04, live read like stock.
+                        // SAFETY: 0xc2ba04, live read like stock.
                         unsafe { elq_rd_f32(BASE + 0x82_ba04) },
                     ];
                     // SAFETY: flags byte re-read for the corner arm (0x5cd19e)
@@ -32375,7 +33003,7 @@ pub fn collision_sweep_volume_against_world_planes__632ba0(
     const BAND: *const f32 = (BASE + 0x40_dfec) as *const f32;
     /// Liquid height scale (.data 0x8012cc).
     const LIQUID_SCALE: *const f32 = (BASE + 0x40_12cc) as *const f32;
-    /// The liquid-surface plane-set global (&DAT_00c4e564).
+    /// The liquid-surface plane-set global at `0xc4e564`.
     ///
     /// The flag path compares `planeSet` against it BY ADDRESS.
     const LIQUID_PLANE_SET: usize = BASE + 0x84_e564;
@@ -33096,9 +33724,9 @@ pub fn c_object_wrapper__get_position__6d6a90(
 /// path runs native. Stock's return is AL-only (`SETNZ AL` over stale callee
 /// EAX bits) => `u8`.
 pub fn c_gx_aabb16__test_float_box__6b4d10(aabb16: *const i16) -> u8 {
-    /// Active-frustum index (`DAT_00c7cfe0`, live `.data` u32).
+    /// Active-frustum index (`0xc7cfe0`, live `.data` u32).
     const FRUSTUM_INDEX: *const u32 = (crate::win::EXPECTED_IMAGE_BASE + 0x87_cfe0) as *const u32;
-    /// Frustum array base (`DAT_00c7d308`), stride 0xfc per frustum.
+    /// Frustum array base (`0xc7d308`), stride 0xfc per frustum.
     const FRUSTUM_BASE: usize = crate::win::EXPECTED_IMAGE_BASE + 0x87_d308;
 
     if aabb16.is_null() {
@@ -33145,9 +33773,9 @@ pub fn collision_sweep_box_faces__632280(
     out_contact_count: *mut u32,
     best_dist: *mut f32,
 ) {
-    /// Back-face cull threshold (`DAT_007ffd74`, fixed `.rdata` f32).
+    /// Back-face cull threshold (`0x7ffd74`, fixed `.rdata` f32).
     const BACKFACE_THR: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x3f_fd74) as *const f32;
-    /// Tied-contact band epsilon (`_DAT_0080dfec`, fixed `.data` f32).
+    /// Tied-contact band epsilon (`0x80dfec`, fixed `.data` f32).
     const BAND_EPS: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x40_dfec) as *const f32;
 
     if this.is_null()
@@ -33311,14 +33939,14 @@ pub fn collision_gather_world_triangles__631e70(
     sweep_z: f32,
 ) -> u32 {
     const BASE: usize = crate::win::EXPECTED_IMAGE_BASE;
-    /// Frame-coherence cached query box (`DAT_00c4e5a0`, 6 f32).
+    /// Frame-coherence cached query box (`0xc4e5a0`, 6 f32).
     const CACHE_BOX: *mut f32 = (BASE + 0x84_e5a0) as *mut f32;
-    /// Primary gather list object (`DAT_00c4e52c`, TSGrowableArray).
+    /// Primary gather list object (`0xc4e52c`, TSGrowableArray).
     const LIST1_KEY: *mut u32 = (BASE + 0x84_e52c) as *mut u32;
-    /// Primary triangle count / base (`DAT_00c4e530` / `DAT_00c4e534`).
+    /// Primary triangle count / base (`0xc4e530` / `0xc4e534`).
     const LIST1_COUNT: *const u32 = (BASE + 0x84_e530) as *const u32;
     const LIST1_BASE: *const *mut u8 = (BASE + 0x84_e534) as *const *mut u8;
-    /// Secondary gather list object (`DAT_00c4e564`) + count/base.
+    /// Secondary gather list object (`0xc4e564`) + count/base.
     const LIST2_KEY: *mut u32 = (BASE + 0x84_e564) as *mut u32;
     const LIST2_COUNT: *const u32 = (BASE + 0x84_e568) as *const u32;
     const LIST2_BASE: *const *mut u8 = (BASE + 0x84_e56c) as *const *mut u8;
@@ -33542,10 +34170,10 @@ pub fn c_movement__compute_ground_normal__637140(
     plane_count: u32,
 ) -> *mut f32 {
     const BASE: usize = crate::win::EXPECTED_IMAGE_BASE;
-    /// Global contact-record count / base (`DAT_00c4e530`/`DAT_00c4e534`).
+    /// Global contact-record count / base (`0xc4e530`/`0xc4e534`).
     const LIST_COUNT: *const u32 = (BASE + 0x84_e530) as *const u32;
     const LIST_BASE: *const *mut u8 = (BASE + 0x84_e534) as *const *mut u8;
-    /// Upward-facing threshold (`_DAT_0080e028`, fixed `.data` f32).
+    /// Upward-facing threshold (`0x80e028`, fixed `.data` f32).
     const FACING_THR: *const f32 = (BASE + 0x40_e028) as *const f32;
     /// Stock delegate (VA): the polygon-vs-planes clip.
     ///
@@ -33750,7 +34378,7 @@ pub fn minimap__unit_blip_enum_callback__4eaa90(
     const REALLOC_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x0e_fa00;
     /// `.data` token the lookup receives in EDX (stock `MOV EDX,0x84c668`).
     const OBJ_PTR_TOKEN: u32 = (B + 0x44_c668) as u32;
-    /// Per-category blip arrays (`DAT_00bc82b0`, stride 0x10: [capacity, count, data, chunkSize]).
+    /// Per-category blip arrays (`0xbc82b0`, stride 0x10: [capacity, count, data, chunkSize]).
     const BLIP_ARRAYS: usize = B + 0x7c_82b0;
 
     if this.is_null() {
@@ -34076,19 +34704,19 @@ pub fn minimap__unit_blip_enum_callback__4eaa90(
 /// list surgery mirrors stock statement for statement; do not restructure it.
 pub fn c_world_obj_list__update_visibility__6838f0(this: *mut core::ffi::c_void) {
     const B: usize = crate::win::EXPECTED_IMAGE_BASE;
-    /// Camera depth plane `[nx,ny,nz,d]` (`DAT_00c7bcb0..bc`).
+    /// Camera depth plane `[nx,ny,nz,d]` (`0xc7bcb0..bc`).
     const DEPTH_PLANE: *const f32 = (B + 0x87_bcb0) as *const f32;
-    /// Camera reference position xyz (`DAT_00c7cf20`).
+    /// Camera reference position xyz (`0xc7cf20`).
     const REF_POS: *const f32 = (B + 0x87_cf20) as *const f32;
-    /// Squared near-distance threshold (`DAT_0081017c`, `.rdata`).
+    /// Squared near-distance threshold (`0x81017c`, `.rdata`).
     const NEAR_THRESH: *const f32 = (B + 0x41_017c) as *const f32;
-    /// Current frame stamp (`DAT_00c7b2c8`).
+    /// Current frame stamp (`0xc7b2c8`).
     const FRAME_STAMP: *const u32 = (B + 0x87_b2c8) as *const u32;
-    /// Embedded visible-list node offset within an object (`DAT_00c7cae4`).
+    /// Embedded visible-list node offset within an object (`0xc7cae4`).
     const NODE_OFFSET: *const u32 = (B + 0x87_cae4) as *const u32;
-    /// Visible-list head node pointer (`DAT_00c7cae8`).
+    /// Visible-list head node pointer (`0xc7cae8`).
     const VIS_HEAD: *mut *mut u32 = (B + 0x87_cae8) as *mut *mut u32;
-    /// Visible-object count (`DAT_00c7b600`).
+    /// Visible-object count (`0xc7b600`).
     const VIS_COUNT: *mut u32 = (B + 0x87_b600) as *mut u32;
     /// Active-frustum index / array base (same globals as 0x682f40).
     const FRUSTUM_INDEX: *const u32 = (B + 0x87_cfe0) as *const u32;
@@ -34344,24 +34972,24 @@ pub fn world_scene__cull_and_bucket_nodes__6834e0(
     cull_context: *const core::ffi::c_void,
 ) {
     const B: usize = crate::win::EXPECTED_IMAGE_BASE;
-    /// Camera depth plane `[nx,ny,nz,d]` (`DAT_00c7bcb0..bc`).
+    /// Camera depth plane `[nx,ny,nz,d]` (`0xc7bcb0..bc`).
     const DEPTH_PLANE: *const f32 = (B + 0x87_bcb0) as *const f32;
-    /// Camera reference position xyz (`DAT_00c7cf20`).
+    /// Camera reference position xyz (`0xc7cf20`).
     const REF_POS: *const f32 = (B + 0x87_cf20) as *const f32;
-    /// Squared LOD near-distance threshold (`DAT_00810178`, `.rdata`).
+    /// Squared LOD near-distance threshold (`0x810178`, `.rdata`).
     const LOD_THRESH: *const f32 = (B + 0x41_0178) as *const f32;
-    /// Visible-bucket link offset within a node (`DAT_00c7cb08`).
+    /// Visible-bucket link offset within a node (`0xc7cb08`).
     const VIS_LINK_OFF: *const u32 = (B + 0x87_cb08) as *const u32;
-    /// Visible-bucket head link pointer (`DAT_00c7cb0c`).
+    /// Visible-bucket head link pointer (`0xc7cb0c`).
     const VIS_HEAD: *mut *mut u32 = (B + 0x87_cb0c) as *mut *mut u32;
     /// Deferred-bucket link offset within a node.
     ///
-    /// (`DAT_00c7cb44` — the `this` stock hands to `TSList__GetLinkAddress`
+    /// (`0xc7cb44` — the `this` stock hands to `TSList__GetLinkAddress`
     /// 0x687a00, whose nonzero-arg path is just `*this + node`, inlined here;
     /// its zero-arg branch is unreachable — the node was already dereferenced
     /// by the skip gate).
     const DEF_LINK_OFF: *const u32 = (B + 0x87_cb44) as *const u32;
-    /// Deferred-bucket head link pointer (`DAT_00c7cb48`).
+    /// Deferred-bucket head link pointer (`0xc7cb48`).
     const DEF_HEAD: *mut *mut u32 = (B + 0x87_cb48) as *mut *mut u32;
     /// Active-frustum index / array base (same globals as 0x682ef0).
     const FRUSTUM_INDEX: *const u32 = (B + 0x87_cfe0) as *const u32;
@@ -38178,7 +38806,7 @@ pub fn cm2_scene__apply_lighting_state__5a1b60(device: *mut u8) {
     }
 }
 
-/// `FUN_005a2dd0` — `__thiscall(ecx = device, stack = stage, wrapMode)`.
+/// The stock setter at `0x5a2dd0` — `__thiscall(ecx = device, stack = stage, wrapMode)`.
 ///
 /// Pushes the per-stage sampler wrap pair (`stage+0x42`, `stage+0x4a`) from
 /// the two host LUTs at `0x80a25c`/`0x80a274`, gated on the stage bound and
