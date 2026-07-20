@@ -10,3 +10,7 @@ target/
 ghidra/
 __pycache__/
 *.pyc
+
+# Stray probe artifacts cargo's cc/build-script detection can drop in the
+# working directory.
+*.rlib

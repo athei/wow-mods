@@ -58,11 +58,12 @@ pedantic = { level = "warn", priority = -1 }
 # (per-opcode dispatchers, codegen templates) where the structural alternative
 # is fragmented helpers threading the same state.
 too_many_lines = "allow"
-# The reimplementation targets have no hardware FMA — the Wine-on-macOS build
-# baselines at nehalem and the host kernels at x86-64-v2 — so `mul_add` lowers
-# to an `fmaf` libcall and is a pessimization, not an optimization. The separate
-# multiply and add is also what the originals compiled to, which is what the
-# differential harness compares against.
+# A separate multiply and add is what the originals compiled to, and the
+# differential harness compares against that — fusing them changes the rounding
+# and the comparison fails. It is also faster on the default baseline: nehalem
+# has no hardware FMA, so `mul_add` lowers to an `fmaf` libcall. (The AVX2
+# native-Windows variant does have FMA, which is why the faithfulness argument
+# is the one that carries this and not the ISA.)
 suboptimal_flops = "allow"
 # Stricter unsafe discipline.
 missing_safety_doc = "warn"

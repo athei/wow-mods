@@ -55,7 +55,7 @@ GAME_MODS = $(dir $(WOW_EXE))mods
 
 MAKEFLAGS += --silent
 
-.PHONY: all windows windows-avx unix install bundle test fmt clippy doc check upgrade upgrade-incompat clean require-wow-exe
+.PHONY: all windows windows-avx unix install bundle test fmt clippy audit doc check upgrade upgrade-incompat clean require-wow-exe
 
 require-wow-exe:
 	test -n "$(WOW_EXE)" || { echo "error: WOW_EXE is not set (path to the client's WoW.exe)" >&2; exit 1; }
@@ -157,6 +157,12 @@ clippy:
 	cd windows && cargo clippy -p wow-turbo-dll --target $(UNIX_RELEASE_TARGET) --all-targets $(DENY_WARNINGS)
 	cd unix && cargo clippy --all-targets $(DENY_WARNINGS)
 
+# The conventions clippy can't express: doc-comment shape, the Clone/Copy derive
+# inventory, and the patterns that are banned or confined to a known set of
+# files. See docs/CONVENTIONS.md § Mechanical audit.
+audit:
+	./scripts/audit.sh
+
 # rustdoc's own lints, which no other target sees: broken and private intra-doc
 # links, malformed HTML in doc comments. clippy gates a doc block's prose; only
 # rustdoc knows whether its links resolve. `build.warnings` covers rustdoc
@@ -173,12 +179,14 @@ fmt:
 	cd windows && cargo +nightly fmt
 	cd unix && cargo +nightly fmt
 
-# One command to run before every commit: formatting, the full clippy sweep, and
-# the doc build. fmt-check first (fast, fails early on the cheapest mistake).
+# One command to run before every commit: formatting, the full clippy sweep, the
+# conventions audit, and the doc build. fmt-check first (fast, fails early on
+# the cheapest mistake).
 check:
 	cd windows && cargo +nightly fmt --check
 	cd unix && cargo +nightly fmt --check
 	$(MAKE) clippy
+	$(MAKE) audit
 	$(MAKE) doc
 
 # Semver-compatible bumps; `upgrade-incompat` needs cargo-edit.

@@ -55,10 +55,10 @@ transmute_ptr_to_ref = "warn"
 multiple_unsafe_ops_per_block = "warn"
 undocumented_unsafe_blocks = "warn"
 too_many_lines = "allow"
-# No hardware FMA on the shipped baselines (nehalem for the 32-bit build,
-# x86-64-v2 for the host `.so`), so `mul_add` lowers to an `fmaf` libcall and is
-# slower than the separate multiply and add — which is also the shape the
-# originals compiled to. Previously asserted per-site in `trig.rs` and `tsc.rs`.
+# The polynomials are written as explicit multiply-and-add because that is what
+# the originals did, and fusing the pair removes an intermediate rounding. The
+# x86-64-v2 baseline also has no hardware FMA, so `mul_add` would lower to an
+# `fmaf` libcall. Previously asserted per-site in `trig.rs` and `tsc.rs`.
 suboptimal_flops = "allow"
 
 # --- The numeric-kernel exemption -------------------------------------------

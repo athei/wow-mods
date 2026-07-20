@@ -301,11 +301,16 @@ into a local setup. Destinations come from the environment, not the Makefile:
 it) and `WINE_SDK` — plus an optional `WINE_INSTALL_DIR` — names the Wine
 trees the builtins install into.
 
+The development conventions — the reimplementation contract, doc-comment shape,
+unsafe discipline, warning suppressions, release hygiene — live in
+[`docs/CONVENTIONS.md`](docs/CONVENTIONS.md).
+
 Run **`make check`** before every commit: `cargo fmt --check`, the clippy sweep
-with `nursery` and `pedantic` enabled, and `make doc` (rustdoc, so doc links
-have to resolve). The check legs deny every warning via cargo's
-`build.warnings = "deny"`; normal builds and a plain `cargo clippy` only warn.
-`make test` runs the unit tests.
+with `nursery` and `pedantic` enabled, `make audit` (the rules clippy cannot
+express), and `make doc` (rustdoc, so doc links have to resolve). The check legs
+deny every warning via cargo's `build.warnings = "deny"`; normal builds and a
+plain `cargo clippy` only warn. Each audit finding names the section of
+`docs/CONVENTIONS.md` it comes from. `make test` runs the unit tests.
 
 Releases: pushing a `v*` tag opens a draft release through the GitHub
 workflow; upload the `dist/` zips from a local `make bundle`, generate the
