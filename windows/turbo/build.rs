@@ -500,9 +500,10 @@ fn render(m: &Manifest) -> String {
     // reimpls no longer receive an injected resolver (almost none delegate); the
     // rare hook that must call through calls `originals::<snake>()` and invokes the
     // returned `{Name}Fn` directly — no `Original` enum, no `usize`, no transmute.
-    out.push_str("/// Typed accessors for the unhooked original (the `MinHook` trampoline) of\n");
-    out.push_str("/// every hooked function: `originals::<snake>()` returns the matching\n");
-    out.push_str("/// `{Name}Fn` pointer. A reimpl that must defer to stock code (e.g. an\n");
+    out.push_str("/// Typed accessors for the unhooked original of every hooked function.\n");
+    out.push_str("///\n");
+    out.push_str("/// `originals::<snake>()` returns the matching `{Name}Fn` pointer — the\n");
+    out.push_str("/// `MinHook` trampoline. A reimpl that must defer to stock code (e.g. an\n");
     out.push_str("/// unreconstructed branch) calls it and invokes the result directly; the\n");
     out.push_str("/// pointer carries the function's original ABI. Each panics if queried\n");
     out.push_str("/// before `install_all` has published that trampoline.\n");
@@ -524,12 +525,12 @@ fn render(m: &Manifest) -> String {
     } else {
         "image_base"
     };
-    out.push_str("/// Install every hooked function over the live host image: verify + create\n");
-    out.push_str("/// each hook and publish its trampoline, then apply all queued enables in a\n");
-    out.push_str(
-        "/// single thread-freeze (one `MH_ApplyQueued` instead of one freeze per hook).\n",
-    );
-    out.push_str("/// Called once from `DllMain`; failures are logged and skipped.\n");
+    out.push_str("/// Install every hooked function over the live host image.\n");
+    out.push_str("///\n");
+    out.push_str("/// Verify and create each hook and publish its trampoline, then apply all\n");
+    out.push_str("/// queued enables in a single thread-freeze (one `MH_ApplyQueued` instead of\n");
+    out.push_str("/// one freeze per hook). Called once from `DllMain`; failures are logged and\n");
+    out.push_str("/// skipped.\n");
     let _ = writeln!(out, "pub fn install_all({param}: usize) {{");
     if !install_body.is_empty() {
         out.push_str("    let started = ::std::time::Instant::now();\n");

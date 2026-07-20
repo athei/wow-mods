@@ -162,6 +162,34 @@ doc_shape() {
     ' "$@"
 }
 
+# The doc comments a build script emits, rendered back into the shape they will
+# have in the generated file, so `doc_shape` can judge them.
+#
+# A build script writes its output as string data, so a `///` inside
+# `out.push_str("...")` is a string literal to every tool that reads the script
+# and a doc comment to every reader of the result. clippy and rustdoc do see the
+# generated file — it is `include!`d into the crate, which is how a missing pair
+# of backticks in one of these templates was caught — but the grep-shaped rules
+# never do: the generated file is untracked, so it is not in `git ls-files`.
+#
+# The transform emits one line per input line, so reported line numbers are the
+# build script's own. Lines that are not doc templates become a non-doc
+# placeholder, which is what ends a doc block for `doc_shape`.
+build_doc_templates() {
+    awk '
+        {
+            if (match($0, /push_str\("\/\/[\/!]/)) {
+                s = substr($0, RSTART + 10)     # past `push_str("`, keeping the `///`
+                sub(/\\n".*$/, "", s)           # drop the trailing newline escape and beyond
+                gsub(/\\"/, "\"", s)
+                print s
+            } else {
+                print "//"                       # not a doc line: ends any run
+            }
+        }
+    ' "$1"
+}
+
 # Every type deriving Clone and/or Copy, as `path Type Derives`. The committed
 # inventory is diffed against this, so a speculative derive cannot slip in
 # unnoticed: adding one means consciously recording it.
@@ -493,6 +521,15 @@ if [ -n "$drift" ]; then
         "derive inventory drift (< committed, > working tree). A Clone/Copy derive needs a concrete callsite; record it with scripts/audit.sh --update-derives" \
         "$drift"
 fi
+
+for script in $(git ls-files '*build.rs'); do
+    rendered=$(mktemp)
+    build_doc_templates "$script" >"$rendered"
+    findings=$(doc_shape "$rendered" | sed "s|$rendered|$script|")
+    rm -f "$rendered"
+    [ -z "$findings" ] || report 'Doc comments' \
+        'doc-comment shape in a generated-source template' "$findings"
+done
 
 drift=$(allow_scan "$@" | diff "$ALLOWS" - || true)
 if [ -n "$drift" ]; then

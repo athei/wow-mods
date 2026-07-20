@@ -16,6 +16,7 @@ But a lint can only express a lint-shaped rule, and the rules a lint *can't* exp
 | A lint **group** suppressed in source = 0, with no exception | §Warning suppressions |
 | Every suppression carries an argument | §Warning suppressions |
 | Module-level `#![allow]` confined to the recorded exception files | §Warning suppressions |
+| Doc-block shape in the doc comments a build script *emits* | §Doc comments |
 | Every crate opts into the workspace lint table; no `deny` / `forbid` level | §Warning suppressions |
 | `#[inline(always)]` confined to the recorded exception file | §Inline attributes |
 | `static … : OnceLock` confined to the recorded exception files | §`LazyLock` over `OnceLock` |
@@ -224,6 +225,14 @@ Every doc block of **two or more lines** — `///` or `//!`, on any item, includ
 A one-line doc comment is already a title and needs nothing. A block whose content is only a `# Safety` / `# Errors` / `# Panics` section still gets a title line above it — never fold the heading into the title.
 
 The title is what rustdoc puts in the summary column of every index, and what a reader sees before deciding to keep reading. A wrapped opening sentence gives them a fragment. `make audit` enforces the shape.
+
+### Generated source is source
+
+`build.rs` writes Rust as string data, so a `///` inside `out.push_str("…")` is a string literal to every tool that reads the script and a doc comment to every reader of the result.
+
+Which half of the gate sees it depends on the half. **The lints do**: the generated file is `include!`d into the crate, so clippy and rustdoc judge it exactly as they judge hand-written code — that is how a missing pair of backticks in one of these templates surfaced. **The grep-shaped rules did not**, because the generated file is untracked and so absent from `git ls-files`; two doc blocks sat there with no title line for as long as the rule existed.
+
+`make audit` now renders the doc templates back into the shape they take in the output and runs the doc-shape check over that, reporting the **build script's** line numbers. Fix a finding in the template, never in the generated file — the generated file is rewritten on the next build.
 
 ```rust
 /// `C3Vector::Normalize` — scales a vector to unit length.
