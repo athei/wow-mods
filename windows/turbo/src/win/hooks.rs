@@ -20162,6 +20162,22 @@ struct GcParShared {
     /// Thread objects serviced through the coordinator this collect
     /// (diagnostic: pass 1 always services at least the mainthread).
     threads_done: core::sync::atomic::AtomicU32,
+    /// Job selector for an epoch: 0 = mark propagation, 1 = string-table
+    /// sweep (workers grab bucket ranges via `bucket_cursor`).
+    job: core::sync::atomic::AtomicU8,
+    /// String-table bucket array for a sweep job.
+    strt_hash: core::sync::atomic::AtomicUsize,
+    /// Bucket count for a sweep job.
+    strt_size: core::sync::atomic::AtomicUsize,
+    /// Next unclaimed bucket for a sweep job.
+    bucket_cursor: core::sync::atomic::AtomicUsize,
+    /// Published chunk-span slice (`ptr`, valid for the job's duration — the
+    /// coordinator holds the index borrow until the job completes).
+    spans_ptr: core::sync::atomic::AtomicUsize,
+    /// Published chunk-span slice length.
+    spans_len: core::sync::atomic::AtomicUsize,
+    /// Dead strings freed by sweep workers (feeds the `strt.nuse` debit).
+    freed_strings: core::sync::atomic::AtomicU32,
     /// Propagation-pass generation; workers sleep until it advances.
     epoch: std::sync::Mutex<u64>,
     /// Wakes the workers for a new pass.
@@ -20325,6 +20341,66 @@ fn gc_par_propagate(shared: &GcParShared, coordinator: bool) {
     }
 }
 
+
+/// String-table sweep participant: grab bucket ranges, sweep each chain.
+///
+/// Bucket chains hold strings only, so the per-object work is the dead test
+/// plus an indexed free: chunk lookup through the published span slice and
+/// an atomic freelist push ([`crate::math::lua_gc::chunk_free_push`]) —
+/// concurrent workers may free into the same chunk. Survivor mark-clearing
+/// and unlinking touch only this worker's buckets. `nblocks` is debited
+/// atomically per free; freed counts accumulate for the coordinator's
+/// single `strt.nuse` debit. Termination mirrors the mark protocol: the
+/// cursor exhausts, active holders drain, the coordinator raises `done`.
+fn gc_par_sweep_strt(shared: &GcParShared) {
+    use core::sync::atomic::{AtomicU32, Ordering};
+    use crate::math::lua_gc::{ChunkSpan, GcHeader, chunk_free_push, chunk_owning, sweep_list};
+    const BATCH: usize = 256;
+    let g = shared.g.load(Ordering::Relaxed);
+    let strt_hash = shared.strt_hash.load(Ordering::Relaxed);
+    let strt_size = shared.strt_size.load(Ordering::Relaxed);
+    let spans_ptr = shared.spans_ptr.load(Ordering::Relaxed);
+    let spans_len = shared.spans_len.load(Ordering::Relaxed);
+    // SAFETY: the coordinator holds the index borrow for the whole job; the
+    // slice is immutable while published.
+    let spans: &[ChunkSpan] =
+        unsafe { core::slice::from_raw_parts(spans_ptr as *const ChunkSpan, spans_len) };
+    // SAFETY: `G+0x28` is nblocks; participants debit it once, atomically.
+    let nblocks = unsafe { AtomicU32::from_ptr((g + 0x28) as *mut u32) };
+    let debit = core::cell::Cell::new(0u32);
+    let mut freed_total = 0u32;
+    let mut free = |o: *mut GcHeader| {
+        let addr = o as usize;
+        // SAFETY: bucket chains hold strings; the length lives at `+0xc`.
+        let size = unsafe { *((addr + 0xc) as *const u32) }.wrapping_add(0x11);
+        debit.set(debit.get().wrapping_add(size));
+        if let Some(chunk) = chunk_owning(spans, addr) {
+            // SAFETY: `chunk` owns `addr` per the index; the block is dead.
+            unsafe { chunk_free_push(chunk, addr) };
+        } else {
+            gc_smem_free(addr as u32);
+        }
+    };
+    loop {
+        let start = shared.bucket_cursor.fetch_add(BATCH, Ordering::SeqCst);
+        if start >= strt_size {
+            break;
+        }
+        shared.active.fetch_add(1, Ordering::SeqCst);
+        let end = (start + BATCH).min(strt_size);
+        for b in start..end {
+            // SAFETY: bucket `b < strt.size` anchors an intern chain; this
+            // participant exclusively owns buckets in its claimed range.
+            freed_total += unsafe {
+                sweep_list((strt_hash + b * 4) as *mut *mut GcHeader, 0, &mut free)
+            };
+        }
+        shared.active.fetch_sub(1, Ordering::SeqCst);
+    }
+    shared.freed_strings.fetch_add(freed_total, Ordering::SeqCst);
+    nblocks.fetch_sub(debit.get(), Ordering::Relaxed);
+}
+
 /// Worker thread body: sleep between passes, propagate during them.
 fn gc_par_worker(shared: std::sync::Arc<GcParShared>) {
     let mut seen = 0u64;
@@ -20336,7 +20412,11 @@ fn gc_par_worker(shared: std::sync::Arc<GcParShared>) {
             }
             seen = *ep;
         }
-        gc_par_propagate(&shared, false);
+        if shared.job.load(core::sync::atomic::Ordering::SeqCst) == 1 {
+            gc_par_sweep_strt(&shared);
+        } else {
+            gc_par_propagate(&shared, false);
+        }
     }
 }
 
@@ -20372,6 +20452,13 @@ fn gc_pool() -> Option<&'static std::sync::Arc<GcParShared>> {
             done: core::sync::atomic::AtomicBool::new(false),
             g: core::sync::atomic::AtomicUsize::new(0),
             threads_done: core::sync::atomic::AtomicU32::new(0),
+            job: core::sync::atomic::AtomicU8::new(0),
+            strt_hash: core::sync::atomic::AtomicUsize::new(0),
+            strt_size: core::sync::atomic::AtomicUsize::new(0),
+            bucket_cursor: core::sync::atomic::AtomicUsize::new(0),
+            spans_ptr: core::sync::atomic::AtomicUsize::new(0),
+            spans_len: core::sync::atomic::AtomicUsize::new(0),
+            freed_strings: core::sync::atomic::AtomicU32::new(0),
             epoch: std::sync::Mutex::new(0),
             cv: std::sync::Condvar::new(),
         });
@@ -20411,6 +20498,7 @@ fn lua_gc_mark_parallel(l: i32, g: usize, shared: &GcParShared) {
     // SAFETY: image base verified at load; `fastcall(ecx = L)` per the disasm.
     let separateudata: extern "fastcall" fn(i32) = unsafe { core::mem::transmute(SEPARATEUDATA_VA) };
     shared.g.store(g, Ordering::Relaxed);
+    shared.job.store(0, Ordering::SeqCst);
     shared.threads_done.store(0, Ordering::Relaxed);
 
     // Roots (serial, tiny): registry-family values, mainthread, L. The
@@ -20673,21 +20761,8 @@ fn gc_pool_free_fast(idx: &GcChunkIndex, ptr: usize) -> bool {
     let Some(chunk) = crate::math::lua_gc::chunk_owning(&idx.spans, ptr) else {
         return false;
     };
-    // SAFETY: stock free order — link the block into the chunk's freelist
-    // (head at `+0x4`), bump the free count (`+0x10`).
-    let head = unsafe { *((chunk + 0x4) as *const u32) };
-    // SAFETY: see above.
-    unsafe {
-        *(ptr as *mut u32) = head;
-    }
-    // SAFETY: see above.
-    unsafe {
-        *((chunk + 0x4) as *mut u32) = ptr as u32;
-    }
-    // SAFETY: see above.
-    unsafe {
-        *((chunk + 0x10) as *mut u32) += 1;
-    }
+    // SAFETY: `chunk` owns `ptr` per the index; `ptr` is a dead block.
+    unsafe { crate::math::lua_gc::chunk_free_push(chunk, ptr) };
     true
 }
 
@@ -20803,13 +20878,7 @@ pub fn small_block_pool__realloc__6fae90(l: i32, block: u32, new_size: u32) -> *
         }
         // SAFETY: freelist push on the pre-resolved owning chunk — identical
         // state transition to stock's rescan-and-push.
-        let head = unsafe { *((chunk + 0x4) as *const u32) };
-        // SAFETY: see above.
-        unsafe { *(ptr as *mut u32) = head };
-        // SAFETY: see above.
-        unsafe { *((chunk + 0x4) as *mut u32) = ptr as u32 };
-        // SAFETY: see above.
-        unsafe { *((chunk + 0x10) as *mut u32) += 1 };
+        unsafe { crate::math::lua_gc::chunk_free_push(chunk, ptr) };
         new_block
     })
 }
@@ -20851,16 +20920,17 @@ fn lua_gc_sweep_native(l: i32) {
     }
     let nblocks = (g + 0x28) as *mut u32;
     let mut deferred: Vec<usize> = Vec::new();
+    // nblocks debits accumulate locally and write back once — the final
+    // value is exact and nothing reads nblocks mid-sweep; under a parallel
+    // sweep the write-back is atomic against the workers' own debits.
+    let debit = core::cell::Cell::new(0u32);
     GC_CHUNK_INDEX.with_borrow_mut(|idx| {
     let have_index = gc_chunk_index_refresh(g, idx);
-    // Stock `luaM_irealloc` order per block: debit nblocks (even for the
+    // Stock `luaM_irealloc` semantics per block: debit nblocks (even for the
     // null/zero blocks stock passes through), then free non-null blocks —
     // through the chunk index, or the stock path for oversize blocks.
     let free_block = |ptr: usize, size: u32| {
-        // SAFETY: `G+0x28` is the live-byte count (nblocks).
-        let debited = unsafe { *nblocks }.wrapping_sub(size);
-        // SAFETY: see above.
-        unsafe { *nblocks = debited };
+        debit.set(debit.get().wrapping_add(size));
         if ptr != 0 {
             if have_index {
                 if !gc_pool_free_fast(idx, ptr) {
@@ -20925,29 +20995,81 @@ fn lua_gc_sweep_native(l: i32) {
         }
     };
 
-    // SAFETY: `G+0x14` anchors the userdata list; layout per the doc comment.
-    unsafe {
-        sweep_list((g + 0x14) as *mut *mut GcHeader, 0, &mut free);
-    }
     // SAFETY: `G+0x4`/`G+0xc` are the string-table bucket array and size.
     let strt_hash = unsafe { *((g + 0x4) as *const usize) } as *mut *mut GcHeader;
     // SAFETY: see above.
-    let strt_size = unsafe { *((g + 0xc) as *const i32) };
-    let mut dead_strings = 0u32;
-    for i in 0..strt_size.max(0) as usize {
-        // SAFETY: `i < strt.size`, so this is a valid bucket anchor.
-        let bucket = unsafe { strt_hash.add(i) };
-        // SAFETY: the bucket anchors a well-formed intern chain.
-        dead_strings += unsafe { sweep_list(bucket, 0, &mut free) };
-    }
+    let strt_size = unsafe { *((g + 0xc) as *const i32) }.max(0) as usize;
     let nuse = (g + 0x8) as *mut u32;
-    // SAFETY: `G+0x8` is `strt.nuse`; stock sweepstrings debits freed counts.
-    let remaining = unsafe { *nuse }.wrapping_sub(dead_strings);
-    // SAFETY: see above.
-    unsafe { *nuse = remaining };
-    // SAFETY: `G+0x10` anchors the main rootgc list.
-    unsafe {
-        sweep_list((g + 0x10) as *mut *mut GcHeader, 0, &mut free);
+
+    let par = if gc_mode() == GcMode::Parallel && have_index && strt_size >= 2048 {
+        gc_pool()
+    } else {
+        None
+    };
+    if let Some(shared) = par {
+        use core::sync::atomic::Ordering;
+        // Publish the sweep job, then sweep the two linked lists on the
+        // coordinator while the workers chew the bucket ranges; every free
+        // goes through the same atomic freelist push, so no coordination
+        // beyond the cursor is needed.
+        shared.g.store(g, Ordering::Relaxed);
+        shared.job.store(1, Ordering::SeqCst);
+        shared.strt_hash.store(strt_hash as usize, Ordering::Relaxed);
+        shared.strt_size.store(strt_size, Ordering::Relaxed);
+        shared.bucket_cursor.store(0, Ordering::SeqCst);
+        shared.spans_ptr.store(idx.spans.as_ptr() as usize, Ordering::Relaxed);
+        shared.spans_len.store(idx.spans.len(), Ordering::Relaxed);
+        shared.freed_strings.store(0, Ordering::SeqCst);
+        gc_par_begin(shared);
+        // SAFETY: `G+0x14` anchors the userdata list.
+        unsafe {
+            sweep_list((g + 0x14) as *mut *mut GcHeader, 0, &mut free);
+        }
+        // SAFETY: `G+0x10` anchors the main rootgc list.
+        unsafe {
+            sweep_list((g + 0x10) as *mut *mut GcHeader, 0, &mut free);
+        }
+        // Join the bucket work, then wait out the last active holders.
+        gc_par_sweep_strt(shared);
+        while shared.active.load(Ordering::SeqCst) != 0 {
+            core::hint::spin_loop();
+        }
+        shared.done.store(true, Ordering::SeqCst);
+        shared.job.store(0, Ordering::SeqCst);
+        // SAFETY: `G+0x8` is `strt.nuse`; single debit equals stock's
+        // per-bucket debits.
+        let remaining = unsafe { *nuse }.wrapping_sub(shared.freed_strings.load(Ordering::SeqCst));
+        // SAFETY: see above.
+        unsafe { *nuse = remaining };
+        // SAFETY: `G+0x28` is nblocks; atomic against the workers' debits.
+        unsafe { core::sync::atomic::AtomicU32::from_ptr(nblocks) }
+            .fetch_sub(debit.get(), Ordering::Relaxed);
+        debit.set(0);
+    } else {
+        // SAFETY: `G+0x14` anchors the userdata list.
+        unsafe {
+            sweep_list((g + 0x14) as *mut *mut GcHeader, 0, &mut free);
+        }
+        let mut dead_strings = 0u32;
+        for i in 0..strt_size {
+            // SAFETY: `i < strt.size`, so this is a valid bucket anchor.
+            let bucket = unsafe { strt_hash.add(i) };
+            // SAFETY: the bucket anchors a well-formed intern chain.
+            dead_strings += unsafe { sweep_list(bucket, 0, &mut free) };
+        }
+        // SAFETY: `G+0x8` is `strt.nuse`; stock debits freed counts.
+        let remaining = unsafe { *nuse }.wrapping_sub(dead_strings);
+        // SAFETY: see above.
+        unsafe { *nuse = remaining };
+        // SAFETY: `G+0x10` anchors the main rootgc list.
+        unsafe {
+            sweep_list((g + 0x10) as *mut *mut GcHeader, 0, &mut free);
+        }
+        // SAFETY: `G+0x28` is nblocks; single-threaded write-back.
+        let remaining = unsafe { *nblocks }.wrapping_sub(debit.get());
+        // SAFETY: see above.
+        unsafe { *nblocks = remaining };
+        debit.set(0);
     }
     });
     for o in deferred {

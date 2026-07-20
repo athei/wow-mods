@@ -138,6 +138,43 @@ pub fn chunk_owning_span(spans: &[ChunkSpan], ptr: usize) -> Option<&ChunkSpan> 
     (ptr < s.end).then_some(s)
 }
 
+/// Push a freed block onto its chunk's freelist, atomically.
+///
+/// The same state transition as the stock free (`*block = freehead;
+/// freehead = block; freecount += 1`), implemented with a CAS loop on the
+/// freelist head so concurrent sweep workers can free into the same chunk.
+/// No allocation runs during a sweep, so the head is only contended by
+/// other frees; uncontended, the CAS costs what the plain store did.
+///
+/// # Safety
+///
+/// `chunk` must be a live chunk descriptor (freelist head at `+0x4`, free
+/// count at `+0x10`) owning `block`, and `block` must be dead — its first
+/// word becomes the freelist link.
+#[allow(clippy::cast_possible_truncation)] // guest addresses are 32-bit
+pub unsafe fn chunk_free_push(chunk: usize, block: usize) {
+    use core::sync::atomic::{AtomicU32, Ordering};
+    // SAFETY: caller guarantees a live chunk descriptor; u32 fields aligned.
+    let head = unsafe { AtomicU32::from_ptr((chunk + 0x4) as *mut u32) };
+    // SAFETY: see above.
+    let count = unsafe { AtomicU32::from_ptr((chunk + 0x10) as *mut u32) };
+    let mut h = head.load(Ordering::Relaxed);
+    loop {
+        // SAFETY: `block` is dead; its first word is ours to use as a link.
+        unsafe { *(block as *mut u32) = h };
+        match head.compare_exchange_weak(
+            h,
+            block as u32,
+            Ordering::Release,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => break,
+            Err(cur) => h = cur,
+        }
+    }
+    count.fetch_add(1, Ordering::Relaxed);
+}
+
 #[cfg(test)]
 mod tests_lua_gc {
     use super::{GcHeader, sweep_list};
@@ -238,6 +275,57 @@ mod tests_lua_gc {
         assert_eq!(freed_ids, vec![0, 2]);
         assert_eq!(collect_list(head), vec![1]);
         assert_eq!(objs[1].hdr.marked, 0x04);
+    }
+
+    // The freelist push writes GUEST-WIDTH (32-bit) link words, so these two
+    // tests only make sense where host pointers fit them; on a 64-bit test
+    // host the links would truncate real addresses.
+    #[cfg(target_pointer_width = "32")]
+    #[test]
+    fn chunk_free_push_builds_a_freelist() {
+        use super::chunk_free_push;
+        // Fake chunk descriptor: [base, freehead, size, pad, freecount].
+        let mut chunk = [0u32; 5];
+        let mut blocks = [[0u32; 4]; 3];
+        let chunk_addr = chunk.as_mut_ptr() as usize;
+        for b in &mut blocks {
+            let block = b.as_mut_ptr() as usize;
+            unsafe { chunk_free_push(chunk_addr, block) };
+        }
+        assert_eq!(chunk[4], 3);
+        // Head is the last-pushed block; links walk back in push order.
+        assert_eq!(chunk[1] as usize, blocks[2].as_ptr() as usize);
+        assert_eq!(blocks[2][0] as usize, blocks[1].as_ptr() as usize);
+        assert_eq!(blocks[1][0] as usize, blocks[0].as_ptr() as usize);
+        assert_eq!(blocks[0][0], 0);
+    }
+
+    #[cfg(target_pointer_width = "32")]
+    #[test]
+    fn chunk_free_push_survives_concurrent_pushers() {
+        use super::chunk_free_push;
+        let mut chunk = [0u32; 5];
+        let chunk_addr = chunk.as_mut_ptr() as usize;
+        let mut blocks = vec![[0u32; 4]; 4000];
+        let addrs: Vec<usize> = blocks.iter_mut().map(|b| b.as_mut_ptr() as usize).collect();
+        std::thread::scope(|s| {
+            for part in addrs.chunks(1000) {
+                s.spawn(move || {
+                    for &b in part {
+                        unsafe { chunk_free_push(chunk_addr, b) };
+                    }
+                });
+            }
+        });
+        assert_eq!(chunk[4], 4000);
+        // Every pushed block appears exactly once on the list.
+        let mut seen = 0u32;
+        let mut cur = chunk[1] as usize;
+        while cur != 0 {
+            seen += 1;
+            cur = unsafe { *(cur as *const u32) } as usize;
+        }
+        assert_eq!(seen, 4000);
     }
 
     #[test]
