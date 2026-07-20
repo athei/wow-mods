@@ -70,3 +70,80 @@ not_unsafe_ptr_arg_deref = "warn"
 transmute_ptr_to_ref = "warn"
 multiple_unsafe_ops_per_block = "warn"
 undocumented_unsafe_blocks = "warn"
+
+# --- The reimplementation exemption -----------------------------------------
+#
+# `wow_turbo` replaces client functions with Rust that has to reproduce their
+# machine behaviour, so a transcription reads nothing like idiomatic Rust and
+# a large slice of `pedantic`/`nursery` argues against the point of the file.
+# Every reimplementation module used to open with a blanket
+# `#![allow(clippy::pedantic, clippy::nursery)]`, which switched off some four
+# hundred lints to silence these thirty-four and hid everything else along with
+# them. The list below is that blanket, enumerated: the counts are what each
+# lint reports across the workspace today, so the debt is a number somebody can
+# watch instead of an unknown behind a group name. Anything NOT named here now
+# fires — which is the property the blanket cost us.
+#
+# Counts are `wow-turbo-dll` on the i686 target; the other four crates report
+# none of these. See docs/CONVENTIONS.md §"Warning suppressions".
+
+# Shape of a transcription. The originals interleave declarations with code,
+# read packed client structs through pointer casts, and carry addresses and
+# masks as literals grouped the way the source grouped them. Rewriting any of
+# it to suit a lint makes the reimplementation harder to check against the
+# behaviour it has to match.
+items_after_statements = "allow"        # 864
+cast_ptr_alignment = "allow"            # 861 — reads are already `read_unaligned`
+unreadable_literal = "allow"            # 335 — addresses and bit masks, verbatim
+similar_names = "allow"                 # 184
+semicolon_if_nothing_returned = "allow" # 159
+many_single_char_names = "allow"        # 22
+
+# Numeric conversions that must truncate, wrap and round exactly as the
+# original did. The usual fix — `try_from(..).expect(..)` — turns a silent
+# narrowing into a panic, which is a behaviour change, and in a per-frame hook
+# it is a crash. Float comparison is exact on purpose: the differential harness
+# compares bit patterns.
+cast_possible_truncation = "allow"      # 206
+cast_sign_loss = "allow"                # 178
+cast_possible_wrap = "allow"            # 79
+cast_precision_loss = "allow"           # 60
+cast_lossless = "allow"                 # 41
+float_cmp = "allow"                     # 40
+borrow_as_ptr = "allow"                 # 38
+ptr_as_ptr = "allow"                    # 24
+ptr_cast_constness = "allow"            # 12
+ptr_offset_by_literal = "allow"         # 2
+imprecise_flops = "allow"               # 2
+
+# Style preferences that fight the transcription: restructuring control flow to
+# satisfy them moves code away from the shape being reproduced, for no change
+# in what the function does.
+missing_const_for_fn = "allow"          # 82
+useless_let_if_seq = "allow"            # 19
+if_not_else = "allow"                   # 12
+suspicious_operation_groupings = "allow" # 11
+option_if_let_else = "allow"            # 5
+tuple_array_conversions = "allow"       # 3
+redundant_pub_crate = "allow"           # 3
+branches_sharing_code = "allow"         # 3
+bool_to_int_with_if = "allow"           # 3
+verbose_bit_mask = "allow"              # 1
+trivially_copy_pass_by_ref = "allow"    # 1
+single_match_else = "allow"             # 1
+redundant_else = "allow"                # 1
+needless_pass_by_value = "allow"        # 1
+needless_pass_by_ref_mut = "allow"      # 1
+derive_partial_eq_without_eq = "allow"  # 1
+
+# Test idioms. The kernel tests sweep an input range by stepping a float and
+# compare against an independent oracle, and they mask expected values with the
+# same decimal quantities the comment above each one derives — rewriting either
+# to satisfy the lint makes the test harder to read against its own reasoning.
+while_float = "allow"                   # 9
+decimal_bitwise_operands = "allow"      # 3
+
+# Debt, not policy: an ordinary finding that nothing about the domain justifies.
+# Allowed only because clearing 148 of them is its own change; the doc sweep
+# takes them.
+doc_markdown = "allow"                  # 148

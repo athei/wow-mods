@@ -1,8 +1,6 @@
 //! `quaternion` family kernels.
 #![allow(
     non_snake_case,
-    clippy::pedantic,
-    clippy::nursery,
     // intentional NaN-reject via `!(a >= b)`
     // (differs from `a < b` on NaN), bit-exact source constants kept verbatim,
     // and ABI-dictated parameter counts.
@@ -187,7 +185,7 @@ mod tests_c4_quaternion__compute_squad_tangents__7c0b60 {
         assert!(to.iter().all(|v| v.is_finite()));
         assert!((norm(&ti) - 1.0).abs() < 1e-4);
         assert!((norm(&to) - 1.0).abs() < 1e-4);
-        assert!(ti[0].abs() < 1e-4 && ti[1].abs() < 1e-4, "ti={:?}", ti);
+        assert!(ti[0].abs() < 1e-4 && ti[1].abs() < 1e-4, "ti={ti:?}");
     }
 
     #[test]
@@ -300,7 +298,7 @@ mod tests_c4_quaternion__log__7c04f0 {
             let q = exp(&v);
             let back = f(&q);
             for i in 0..3 {
-                assert!((back[i] - v[i]).abs() < 1e-4, "v={:?} back={:?}", v, back);
+                assert!((back[i] - v[i]).abs() < 1e-4, "v={v:?} back={back:?}");
             }
         }
     }

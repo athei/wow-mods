@@ -12,8 +12,6 @@
 // -> `c3_vector__normalize`, `__` marking the `::`), as in the generated table.
 #![allow(
     non_snake_case,
-    clippy::pedantic,
-    clippy::nursery,
     // As in the math kernels: NaN-aware ordered compares written `!(a >= b)` /
     // `x < lo || x >= hi` (which differ from `<`/`Range::contains` on NaN, matching
     // the originals' x87 ordered tests), and ABI-dictated parameter counts.

@@ -1,8 +1,6 @@
 //! `aabb` family kernels.
 #![allow(
     non_snake_case,
-    clippy::pedantic,
-    clippy::nursery,
     // intentional NaN-reject via `!(a >= b)`
     // (differs from `a < b` on NaN), bit-exact source constants kept verbatim,
     // and ABI-dictated parameter counts.

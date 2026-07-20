@@ -1,8 +1,6 @@
 //! `world` family kernels.
 #![allow(
     non_snake_case,
-    clippy::pedantic,
-    clippy::nursery,
     // intentional NaN-reject via `!(a >= b)`
     // (differs from `a < b` on NaN), bit-exact source constants kept verbatim,
     // and ABI-dictated parameter counts.
@@ -1146,7 +1144,7 @@ mod tests_height_bucket_insert_node_from_object__6816f0 {
             100.0,
             1.0e9,
         ];
-        for p in probes.iter() {
+        for p in &probes {
             if let Some(b) = at(*p) {
                 assert!(
                     (0..32).contains(&b),
@@ -1159,11 +1157,11 @@ mod tests_height_bucket_insert_node_from_object__6816f0 {
     #[test]
     fn clamp_low_drop_high() {
         // Everything well below zero clamps to bucket 0.
-        for p in [-1.0_f32, -10.0, -1.0e6].iter() {
+        for p in &[-1.0_f32, -10.0, -1.0e6] {
             assert_eq!(at(*p), Some(0));
         }
         // Everything well above 31 is dropped.
-        for p in [40.0_f32, 1000.0, 1.0e6].iter() {
+        for p in &[40.0_f32, 1000.0, 1.0e6] {
             assert_eq!(at(*p), None);
         }
     }
@@ -4983,7 +4981,7 @@ mod tests_c_map__load_wdl__6944a0 {
         let b = tile_bounds(10.0, 50.0, 0x40, 0x80, CONSTS);
         assert!((f64::from(b.max_x) - f64::from(b.min_x) - f64::from(C_SPAN)).abs() < 1e-3);
         assert!((f64::from(b.max_y) - f64::from(b.min_y) - f64::from(C_SPAN)).abs() < 1e-3);
-        let mid_x = (f64::from(b.min_x) + f64::from(b.max_x)) / 2.0;
+        let mid_x = f64::midpoint(f64::from(b.min_x), f64::from(b.max_x));
         assert!((f64::from(b.center[0]) - mid_x).abs() < 1e-3);
         assert!((f64::from(b.center[2]) - 30.0).abs() < 1e-6);
         let dx = f64::from(b.max_x) - f64::from(b.center[0]);

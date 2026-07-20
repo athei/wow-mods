@@ -10,8 +10,6 @@
     non_camel_case_types,
     non_snake_case,
     non_upper_case_globals,
-    clippy::pedantic,
-    clippy::nursery,
     // The differential-mode dispatch forks the thunk's single call site into two
     // `#[cfg]` arms wrapped in a block; in statement position (void returns) that
     // reads as a redundant block expression. It is the intended shape — exactly

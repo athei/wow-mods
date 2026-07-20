@@ -60,3 +60,21 @@ too_many_lines = "allow"
 # slower than the separate multiply and add — which is also the shape the
 # originals compiled to. Previously asserted per-site in `trig.rs` and `tsc.rs`.
 suboptimal_flops = "allow"
+
+# --- The numeric-kernel exemption -------------------------------------------
+#
+# `trig.rs` and `ftol.rs` reproduce the client's polynomial evaluation and its
+# float-to-int conversion bit for bit, so they carried a blanket
+# `#![allow(clippy::pedantic, clippy::nursery)]`. Enumerated here for the same
+# reason as the windows workspace: a named list with counts is debt somebody
+# can watch, and every lint not on it now fires. Counts are `--all-targets`
+# across this workspace. See docs/CONVENTIONS.md §"Warning suppressions".
+cast_precision_loss = "allow"           # 17
+cast_possible_truncation = "allow"      # 13
+must_use_candidate = "allow"            # 7
+cast_sign_loss = "allow"                # 2
+cast_possible_wrap = "allow"            # 2
+missing_const_for_fn = "allow"          # 1
+float_cmp = "allow"                     # 1
+# Debt, not policy — cleared by the doc sweep.
+doc_markdown = "allow"                  # 3

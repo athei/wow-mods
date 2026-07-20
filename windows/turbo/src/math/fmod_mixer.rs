@@ -16,7 +16,7 @@
 //! stack; the product of two f32 values is exact in f64 and the reductions are
 //! short, so accumulating in f64 (the [`super`] convention for tracking an x87
 //! original) reproduces the result to within ≤1 int16 LSB.
-#![allow(non_snake_case, clippy::pedantic, clippy::nursery)]
+#![allow(non_snake_case)]
 
 /// Round a synthesized sample to clamped 16-bit PCM, matching the original's
 /// `FISTP`→`CMP 0x7fff`/`CMP 0xffff8000` sequence: round to nearest (ties to
@@ -223,7 +223,9 @@ mod tests_fmod_mixer_fpu__348e0 {
             "seg3 negates its sum, so positive V clamps low"
         );
 
-        src.iter_mut().for_each(|x| *x = -5000.0);
+        for x in &mut src {
+            *x = -5000.0;
+        }
         let lo = run(&window, &src, 0, 1);
         assert_eq!(lo[16], -32768, "centre clamps low");
         assert_eq!(lo[17], 32767, "seg3 negated → clamps high");

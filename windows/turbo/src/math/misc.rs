@@ -1,8 +1,6 @@
 //! `misc` family kernels.
 #![allow(
     non_snake_case,
-    clippy::pedantic,
-    clippy::nursery,
     // intentional NaN-reject via `!(a >= b)`
     // (differs from `a < b` on NaN), bit-exact source constants kept verbatim,
     // and ABI-dictated parameter counts.
@@ -1317,7 +1315,7 @@ mod tests_heap_sort_u_int32__71f860 {
     /// Reference oracle: a clone sorted ascending by the standard library.
     fn oracle(data: &[u32]) -> Vec<u32> {
         let mut v = data.to_vec();
-        v.sort();
+        v.sort_unstable();
         v
     }
 
@@ -1364,7 +1362,7 @@ mod tests_heap_sort_u_int32__71f860 {
             &[6, 5, 4, 3, 2, 1],
             &[100, 0, 4_000_000_000, 1, 0xFFFF_FFFF, 17, 17, 256],
         ];
-        for case in cases.iter() {
+        for case in &cases {
             let mut data = case.to_vec();
             heap_sort_u_int32__71f860(&mut data, ascending);
             assert_eq!(data, oracle(case));

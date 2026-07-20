@@ -1,8 +1,6 @@
 //! `ui` family kernels.
 #![allow(
     non_snake_case,
-    clippy::pedantic,
-    clippy::nursery,
     // intentional NaN-reject via `!(a >= b)`
     // (differs from `a < b` on NaN), bit-exact source constants kept verbatim,
     // and ABI-dictated parameter counts.
@@ -367,7 +365,7 @@ mod tests_ui_frame_clamp_rect_to_screen__509bf0 {
             (20.0, 20.0, 20.0, 20.0, 1.0, 1.0, 0.0, 0.0),
             (3.0, 7.0, 2.0, 9.0, 8.0, 6.0, 4.0, 5.0),
         ];
-        for &(left, bottom, right, top, ex, ey, mx, my) in cases.iter() {
+        for &(left, bottom, right, top, ex, ey, mx, my) in &cases {
             let (outcode, _) = clamp(left, bottom, right, top, ex, ey, mx, my);
             let mut expected: u8 = 0;
             if bottom < mx {
@@ -400,7 +398,7 @@ mod tests_ui_frame_clamp_rect_to_screen__509bf0 {
             (-30.0, 50.0, -40.0, 60.0, 5.0, 5.0, 0.0, 0.0),
             (10.0, 80.0, 5.0, 95.0, 70.0, 70.0, 0.0, 0.0),
         ];
-        for &(left, bottom, right, top, ex, ey, mx, my) in cases.iter() {
+        for &(left, bottom, right, top, ex, ey, mx, my) in &cases {
             let width = left - right;
             let height = top - bottom;
             let (outcode, [l, b, r, t]) = clamp(left, bottom, right, top, ex, ey, mx, my);

@@ -27,8 +27,6 @@
 //! result stays bounded and correct — callers do occasionally pass such a large
 //! angle, and a garbage result there must not propagate downstream.
 #![allow(
-    clippy::pedantic,
-    clippy::nursery,
     // As in the shim math kernels: `suboptimal_flops` would suggest `mul_add`,
     // but the i686/x86-64-v2 baseline has no FMA, so `mul_add` lowers to a slow
     // libm `fma` call — the polynomials are written as explicit mul/add on purpose.
@@ -180,9 +178,11 @@ const FRAC_PI_4: f32 = core::f32::consts::FRAC_PI_4;
 const TAN_3PI_8: f32 = 2.414_213_5;
 const TAN_PI_8: f32 = 0.414_213_57;
 
-/// Arctangent of `x` in radians, result in `[-pi/2, pi/2]`. Minimax polynomial on
-/// `[-tan(pi/8), tan(pi/8)]` with two reciprocal/sum reductions folding the rest of
-/// the line in (the classic Cephes `atanf`), accurate to ~1 ULP.
+/// Arctangent of `x` in radians, result in `[-pi/2, pi/2]`.
+///
+/// Minimax polynomial on `[-tan(pi/8), tan(pi/8)]` with two reciprocal/sum
+/// reductions folding the rest of the line in (the classic Cephes `atanf`),
+/// accurate to ~1 ULP.
 pub fn atan(x: f32) -> f32 {
     let sign = x.is_sign_negative();
     let a = x.abs();
@@ -222,10 +222,12 @@ pub fn atan2(y: f32, x: f32) -> f32 {
     }
 }
 
-/// Arccosine of `x` (clamped domain `[-1, 1]`), result in `[0, pi]`. Formulated as
-/// `atan2(sqrt((1-x)(1+x)), x)` — the same identity the reference's x87 helper uses
-/// (`fsqrt; fpatan`); `(1-x)(1+x)` keeps precision near `|x| = 1` better than
-/// `1 - x*x`. `sqrt` is the hardware `sqrtss`, not a libm call.
+/// Arccosine of `x` (clamped domain `[-1, 1]`), result in `[0, pi]`.
+///
+/// Formulated as `atan2(sqrt((1-x)(1+x)), x)` — the same identity the original's
+/// x87 helper uses (`fsqrt; fpatan`); `(1-x)(1+x)` keeps precision near
+/// `|x| = 1` better than `1 - x*x`. `sqrt` is the hardware `sqrtss`, not a libm
+/// call.
 pub fn acos(x: f32) -> f32 {
     atan2(((1.0 - x) * (1.0 + x)).max(0.0).sqrt(), x)
 }

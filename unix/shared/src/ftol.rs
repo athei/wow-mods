@@ -10,7 +10,6 @@
 #![allow(
     non_snake_case,
     // Bit-manipulation on IEEE fields: the shifts/masks/casts are the point.
-    clippy::pedantic,
     clippy::nursery
 )]
 
