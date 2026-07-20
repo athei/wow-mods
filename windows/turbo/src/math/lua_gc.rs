@@ -114,6 +114,10 @@ pub struct ChunkSpan {
     /// The chunk descriptor (freelist head at `+0x4`, free count at `+0x10`).
     pub chunk: usize,
     /// The size class (0..6) this chunk belongs to.
+    ///
+    /// Read only by the 32-bit realloc path, so a host test build sees no
+    /// reader.
+    #[cfg_attr(not(target_arch = "x86"), allow(dead_code))]
     pub class: u8,
 }
 
@@ -151,7 +155,13 @@ pub fn chunk_owning_span(spans: &[ChunkSpan], ptr: usize) -> Option<&ChunkSpan> 
 /// `chunk` must be a live chunk descriptor (freelist head at `+0x4`, free
 /// count at `+0x10`) owning `block`, and `block` must be dead — its first
 /// word becomes the freelist link.
-#[allow(clippy::cast_possible_truncation)] // guest addresses are 32-bit
+// Guest addresses are 32-bit, so the block pointer narrows to the link word.
+//
+// Reached only from the 32-bit hook path and from tests gated on a 32-bit
+// pointer width (the freelist links are guest-width words), so a 64-bit host
+// test build compiles it with no caller.
+#[allow(clippy::cast_possible_truncation)]
+#[cfg_attr(not(target_pointer_width = "32"), allow(dead_code))]
 pub unsafe fn chunk_free_push(chunk: usize, block: usize) {
     use core::sync::atomic::{AtomicU32, Ordering};
     // SAFETY: caller guarantees a live chunk descriptor; u32 fields aligned.
@@ -181,6 +191,10 @@ mod tests_lua_gc {
         id: u32,
     }
 
+    // `Box` per node, not a flat `Vec<FakeObj>`: the list threads raw `next`
+    // pointers between nodes, so each needs an address independent of the
+    // vector's buffer.
+    #[allow(clippy::vec_box)]
     fn build_list(marks: &[u8]) -> Vec<Box<FakeObj>> {
         let mut objs: Vec<Box<FakeObj>> = marks
             .iter()
@@ -208,10 +222,10 @@ mod tests_lua_gc {
         let mut cur = head;
         while !cur.is_null() {
             let obj = cur.cast::<FakeObj>();
-            unsafe {
-                ids.push((*obj).id);
-                cur = (*cur).next;
-            }
+            // SAFETY: `cur` is non-null and `build_list` only links `FakeObj`s.
+            ids.push(unsafe { (*obj).id });
+            // SAFETY: `GcHeader` is `FakeObj`'s first field, so `cur` points at one.
+            cur = unsafe { (*cur).next };
         }
         ids
     }
@@ -221,11 +235,13 @@ mod tests_lua_gc {
         let mut objs = build_list(&[0x01, 0x00, 0x11, 0x00, 0x01]);
         let mut head: *mut GcHeader = (&raw mut *objs[0]).cast();
         let mut freed_ids = Vec::new();
-        let freed = unsafe {
-            sweep_list(&mut head, 0, &mut |o| {
-                freed_ids.push((*o.cast::<FakeObj>()).id);
-            })
+        let mut record = |o: *mut GcHeader| {
+            // SAFETY: the sweep hands back a live `FakeObj` before freeing it.
+            freed_ids.push(unsafe { (*o.cast::<FakeObj>()).id });
         };
+        // SAFETY: `head` anchors the list `build_list` just built, and `objs`
+        // keeps every node alive for the duration of the call.
+        let freed = unsafe { sweep_list(&raw mut head, 0, &mut record) };
         assert_eq!(freed, 2);
         assert_eq!(freed_ids, vec![1, 3]);
         assert_eq!(collect_list(head), vec![0, 2, 4]);
@@ -239,7 +255,9 @@ mod tests_lua_gc {
     fn frees_head_run_and_relinks_anchor() {
         let mut objs = build_list(&[0x00, 0x00, 0x01]);
         let mut head: *mut GcHeader = (&raw mut *objs[0]).cast();
-        let freed = unsafe { sweep_list(&mut head, 0, &mut |_| {}) };
+        // SAFETY: `head` anchors the list `build_list` just built, and `objs`
+        // keeps every node alive for the duration of the call.
+        let freed = unsafe { sweep_list(&raw mut head, 0, &mut |_| {}) };
         assert_eq!(freed, 2);
         assert_eq!(collect_list(head), vec![2]);
     }
@@ -248,7 +266,9 @@ mod tests_lua_gc {
     fn deadmask_all_frees_everything_including_fixed() {
         let mut objs = build_list(&[0x01, 0x10, 0x11]);
         let mut head: *mut GcHeader = (&raw mut *objs[0]).cast();
-        let freed = unsafe { sweep_list(&mut head, 0x100, &mut |_| {}) };
+        // SAFETY: `head` anchors the list `build_list` just built, and `objs`
+        // keeps every node alive for the duration of the call.
+        let freed = unsafe { sweep_list(&raw mut head, 0x100, &mut |_| {}) };
         assert_eq!(freed, 3);
         assert!(head.is_null());
     }
@@ -261,11 +281,13 @@ mod tests_lua_gc {
         let mut objs = build_list(&[0x04, 0x05, 0x06]);
         let mut head: *mut GcHeader = (&raw mut *objs[0]).cast();
         let mut freed_ids = Vec::new();
-        let freed = unsafe {
-            sweep_list(&mut head, 0, &mut |o| {
-                freed_ids.push((*o.cast::<FakeObj>()).id);
-            })
+        let mut record = |o: *mut GcHeader| {
+            // SAFETY: the sweep hands back a live `FakeObj` before freeing it.
+            freed_ids.push(unsafe { (*o.cast::<FakeObj>()).id });
         };
+        // SAFETY: `head` anchors the list `build_list` just built, and `objs`
+        // keeps every node alive for the duration of the call.
+        let freed = unsafe { sweep_list(&raw mut head, 0, &mut record) };
         assert_eq!(freed, 2);
         assert_eq!(freed_ids, vec![0, 2]);
         assert_eq!(collect_list(head), vec![1]);
@@ -360,7 +382,8 @@ mod tests_lua_gc {
     #[test]
     fn empty_list_is_a_noop() {
         let mut head: *mut GcHeader = core::ptr::null_mut();
-        let freed = unsafe { sweep_list(&mut head, 0, &mut |_| {}) };
+        // SAFETY: `head` is a valid anchor holding the empty (null) list.
+        let freed = unsafe { sweep_list(&raw mut head, 0, &mut |_| {}) };
         assert_eq!(freed, 0);
         assert!(head.is_null());
     }

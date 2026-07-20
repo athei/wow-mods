@@ -14,7 +14,7 @@
 //! This file is the one place the target split is declared. The crate splits
 //! by portability:
 //!
-//! * [`math`] — the portable numeric reimplementations. They depend on nothing
+//! * `math` — the portable numeric reimplementations. They depend on nothing
 //!   Windows-specific, so the crate also builds for `x86_64-apple-darwin` and
 //!   they are unit-tested there under the same Rosetta translation the shipped
 //!   32-bit DLL runs under (not a native-aarch64 stand-in).
@@ -26,7 +26,7 @@
 mod math;
 
 /// Portable Storm/MPQ reimplementation kernels (currently the zlib sector-inflate
-/// codec). Like [`math`], they depend on nothing Windows-specific and are
+/// codec). Like `math`, they depend on nothing Windows-specific and are
 /// host-unit-tested under the same toolchain.
 #[cfg(any(target_arch = "x86", test))]
 mod storm;

@@ -234,7 +234,7 @@ mod tests_filecache {
         let a = Key::new(0, 1, b"Interface/GlueXML\\gLuEsTrInGs.lua").unwrap();
         let b = Key::new(0, 1, b"INTERFACE\\GLUEXML\\GLUESTRINGS.LUA").unwrap();
         assert_eq!(a.hash, b.hash);
-        assert!(a.name[..a.len as usize] == b.name[..b.len as usize]);
+        assert_eq!(a.name[..a.len as usize], b.name[..b.len as usize]);
         // High-half bytes are left alone (identity — never merged).
         let c = Key::new(0, 1, &[0xe9, b'a']).unwrap();
         assert_eq!(c.name[0], 0xe9);

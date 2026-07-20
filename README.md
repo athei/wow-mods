@@ -283,7 +283,9 @@ WoWTranslate is Wine-on-macOS only while `wow_turbo` runs anywhere.
 ## Building
 
 Requires the Wine-on-macOS cross toolchain (`WINE_SDK`, `xwin`/`lld-link`,
-`winebuild`, `swiftc`). Two workspaces:
+`winebuild`, `swiftc`) and a rustup toolchain: stable 1.97 or newer, per
+`rust-version` in the Cargo manifests, plus nightly for `make fmt`
+(`rustfmt.toml` uses nightly-only options). Two workspaces:
 
 ```
 windows/     PE cross-compile workspace (i686): turbo, translate, bridge, version, hook
@@ -297,7 +299,13 @@ native-Windows build of `wow_turbo`), and `make install` deploys straight
 into a local setup. Destinations come from the environment, not the Makefile:
 `WOW_EXE` is the path to the client's `WoW.exe` (native mods deploy next to
 it) and `WINE_SDK` — plus an optional `WINE_INSTALL_DIR` — names the Wine
-trees the builtins install into. `make test` / `make clippy` check.
+trees the builtins install into.
+
+Run **`make check`** before every commit: `cargo fmt --check`, the clippy sweep
+with `nursery` and `pedantic` enabled, and `make doc` (rustdoc, so doc links
+have to resolve). The check legs deny every warning via cargo's
+`build.warnings = "deny"`; normal builds and a plain `cargo clippy` only warn.
+`make test` runs the unit tests.
 
 Releases: pushing a `v*` tag opens a draft release through the GitHub
 workflow; upload the `dist/` zips from a local `make bundle`, generate the

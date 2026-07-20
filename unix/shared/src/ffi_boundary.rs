@@ -13,7 +13,7 @@
 //! unsound by strict Rust convention: they accepted arbitrary pointers
 //! and synthesised an unbounded lifetime. The analogous stdlib primitives
 //! — [`core::slice::from_raw_parts`],
-//! [`Box::from_raw`](alloc::boxed::Box::from_raw),
+//! [`Box::from_raw`](std::boxed::Box::from_raw),
 //! [`core::pin::Pin::new_unchecked`] — are all `unsafe fn` for the same
 //! reason.
 //!

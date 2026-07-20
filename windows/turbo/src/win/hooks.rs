@@ -20874,10 +20874,10 @@ pub fn lua_c_collectgarbage__6f7340(l: i32) {
 
     // SAFETY: `L + 0x10` is the lua_State's global_State pointer.
     let g = unsafe { *((l_addr + 0x10) as *const usize) };
-    // SAFETY: `G + 0x28` is the live-byte count (nblocks).
     let nblocks_before = if g == 0 {
         0
     } else {
+        // SAFETY: `G + 0x28` is the live-byte count (nblocks).
         unsafe { *((g + 0x28) as *const u32) }
     };
 

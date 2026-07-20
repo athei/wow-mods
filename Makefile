@@ -37,6 +37,14 @@ OUT_i386 := windows/target/$(PE_i386)/$(PROFILE)
 OUT_avx  := windows/target/avx/$(PE_i386)/$(PROFILE)
 OUT_unix := unix/target/$(UNIX_RELEASE_TARGET)/$(PROFILE)
 
+# Hard-fail on any warning (cargo counts emitted warnings, including ones
+# replayed from cache, and errors at the end of the run) — applied only to the
+# `check` legs so normal builds and a plain `cargo clippy` stay
+# warning-tolerant. Unlike `-D warnings` (via clippy args or RUSTDOCFLAGS) this
+# changes no compiler flags, so check runs share the build cache with plain
+# invocations.
+DENY_WARNINGS := --config 'build.warnings="deny"'
+
 INSTALL_DIRS := $(WINE_SDK) $(WINE_INSTALL_DIR)
 
 # Deploy destinations come from the environment, never from hardcoded paths:
@@ -47,7 +55,7 @@ GAME_MODS = $(dir $(WOW_EXE))mods
 
 MAKEFLAGS += --silent
 
-.PHONY: all windows windows-avx unix install bundle test fmt clippy check clean require-wow-exe
+.PHONY: all windows windows-avx unix install bundle test fmt clippy doc check upgrade upgrade-incompat clean require-wow-exe
 
 require-wow-exe:
 	test -n "$(WOW_EXE)" || { echo "error: WOW_EXE is not set (path to the client's WoW.exe)" >&2; exit 1; }
@@ -143,20 +151,44 @@ test:
 	cd unix && cargo nextest run
 
 clippy:
-	cd windows && cargo clippy --target $(PE_i386) -- -D warnings
+	cd windows && cargo clippy --target $(PE_i386) $(DENY_WARNINGS)
 	# wow_turbo's tests + portable kernels only exist off the PE target; lint them
 	# on the x86_64 host target the host tests run under.
-	cd windows && cargo clippy -p wow-turbo-dll --target $(UNIX_RELEASE_TARGET) --all-targets -- -D warnings
-	cd unix && cargo clippy --all-targets -- -D warnings
+	cd windows && cargo clippy -p wow-turbo-dll --target $(UNIX_RELEASE_TARGET) --all-targets $(DENY_WARNINGS)
+	cd unix && cargo clippy --all-targets $(DENY_WARNINGS)
+
+# rustdoc's own lints, which no other target sees: broken and private intra-doc
+# links, malformed HTML in doc comments. clippy gates a doc block's prose; only
+# rustdoc knows whether its links resolve. `build.warnings` covers rustdoc
+# warnings too, so no RUSTDOCFLAGS needed.
+#
+# The windows workspace is documented for a PE target, not the host: the mods
+# are `cdylib`s that only build for *-pc-windows-msvc, so a host run would
+# silently skip them.
+doc:
+	cd windows && cargo doc --no-deps --target $(PE_i386) $(DENY_WARNINGS)
+	cd unix && cargo doc --no-deps $(DENY_WARNINGS)
 
 fmt:
 	cd windows && cargo +nightly fmt
 	cd unix && cargo +nightly fmt
 
+# One command to run before every commit: formatting, the full clippy sweep, and
+# the doc build. fmt-check first (fast, fails early on the cheapest mistake).
 check:
 	cd windows && cargo +nightly fmt --check
 	cd unix && cargo +nightly fmt --check
 	$(MAKE) clippy
+	$(MAKE) doc
+
+# Semver-compatible bumps; `upgrade-incompat` needs cargo-edit.
+upgrade:
+	cd windows && cargo update
+	cd unix && cargo update
+
+upgrade-incompat:
+	cd windows && cargo upgrade --incompatible && cargo update
+	cd unix && cargo upgrade --incompatible && cargo update
 
 clean:
 	cd windows && cargo clean
