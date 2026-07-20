@@ -76,6 +76,12 @@ mod enabled {
         assert!(size_of::<Entry>() == 48);
     };
 
+    /// `size_of::<Entry>()` as the header's `u32` field.
+    ///
+    /// The `const` block above pins the size to 48, so this narrowing is exact
+    /// and has no runtime failure path — which is why `init` cannot panic.
+    const ENTRY_SIZE_U32: u32 = size_of::<Entry>() as u32;
+
     pub const FILE_SIZE: usize = size_of::<Header>() + NUM_ENTRIES * size_of::<Entry>();
 
     pub(super) static HEADER_PTR: AtomicPtr<Header> = AtomicPtr::new(core::ptr::null_mut());
@@ -115,10 +121,7 @@ mod enabled {
             let fresh = Header {
                 magic: MAGIC,
                 version: VERSION,
-                // size_of::<Entry>() == 48 — bounded above by the
-                // compile-time const_assert near the type definition.
-                entry_size: u32::try_from(size_of::<Entry>())
-                    .expect("Entry size fits u32 (const_assert-bounded)"),
+                entry_size: ENTRY_SIZE_U32,
                 entry_count: NUM_ENTRIES as u64,
                 write_index: AtomicU64::new(0),
                 init_marker: AtomicU8::new(2),
@@ -167,8 +170,8 @@ mod enabled {
         let n = tag.len().min(16);
         let mut tag_buf = [0u8; 16];
         tag_buf[..n].copy_from_slice(&tag.as_bytes()[..n]);
-        // n <= 16 by construction (the `.min(16)` above), so this never panics.
-        let tag_len = u8::try_from(n).expect("n is tag.len().min(16) — fits u8");
+        // `n` is `tag.len().min(16)`, so the narrowing is exact.
+        let tag_len = n as u8;
         let new_entry = Entry {
             seq,
             tid: platform::current_tid(),
@@ -416,14 +419,17 @@ mod enabled {
         }
 
         pub fn write_str(bytes: &[u8]) {
-            // SAFETY: kernel32 WriteFile on the std error handle. Wine
+            // SAFETY: `GetStdHandle` is a kernel32 export taking a constant
+            // selector; it reports failure by return value, not by faulting.
+            let h = unsafe { GetStdHandle(STD_ERROR_HANDLE) };
+            if h.is_null() || h == INVALID_HANDLE_VALUE {
+                return;
+            }
+            let mut written = 0u32;
+            // SAFETY: `h` is a valid std-error handle checked just above; `bytes`
+            // is a live slice for the call and `written` a live stack dword. Wine
             // routes fd 2 and STD_ERROR_HANDLE to the same terminal.
             unsafe {
-                let h = GetStdHandle(STD_ERROR_HANDLE);
-                if h.is_null() || h == INVALID_HANDLE_VALUE {
-                    return;
-                }
-                let mut written = 0u32;
                 let _ = WriteFile(
                     h,
                     bytes.as_ptr(),

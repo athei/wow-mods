@@ -57,7 +57,7 @@ GAME_MODS = $(dir $(WOW_EXE))mods
 
 MAKEFLAGS += --silent
 
-.PHONY: all windows windows-avx unix install bundle test fmt clippy audit doc check \
+.PHONY: all windows windows-avx unix install bundle test fmt clippy audit doc check check-all \
         lint-counts lint-counts-update update-inventories \
         upgrade upgrade-incompat clean require-wow-exe require-wine-sdk
 
@@ -240,6 +240,35 @@ check:
 	$(MAKE) clippy
 	$(MAKE) audit
 	$(MAKE) doc
+
+# Everything the tree can check without a running client. `check` is the fast
+# pre-commit gate and deliberately stays seconds; this is the one to run before
+# a release, after touching a lint table, or after touching anything behind a
+# `cfg`. It is minutes, because each leg below compiles under different flags
+# and so cannot share check's build cache.
+#
+# What it adds, and why none of it belongs in `check`:
+#   - the `cfg`-gated code. `check` compiles neither the differential harness
+#     nor the breadcrumb ring, so ~455 lines of unsafe mmap/FFI and every
+#     generated `*_diff` capture function are invisible to it. That is not
+#     hypothetical: this leg was added after `CRUMB=1` turned up three findings
+#     the gate had never seen.
+#   - the annotated lint counts, which need a force-warn run per leg.
+#   - the tests, which `check` leaves out because a green build and a green test
+#     say nothing about whether a reimplementation still matches the original.
+#     They are still worth running before a release.
+#
+# Still NOT covered, and not coverable here: the differential harness itself.
+# `DIFF=1 make install`, then exercise the touched arms against a live client.
+# docs/CONVENTIONS.md § The reimplementation contract — that comparison is the
+# definition of done, and no amount of static checking substitutes for it.
+check-all: check
+	CRUMB=1 $(MAKE) clippy
+	CRUMB=1 $(MAKE) doc
+	DIFF=1 $(MAKE) clippy
+	DIFF=1 $(MAKE) doc
+	$(MAKE) lint-counts
+	$(MAKE) test
 
 # Semver-compatible bumps; `upgrade-incompat` needs cargo-edit.
 upgrade:

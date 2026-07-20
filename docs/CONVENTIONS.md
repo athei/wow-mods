@@ -31,10 +31,20 @@ Lint suppressions do **not** use that shape, and the difference is the point. A 
 
 `scripts/audit.sh --file <path>` runs the per-file subset — doc shape, `pub(crate)`, the lint-group ban and the confined patterns — for an editor hook that wants feedback at edit time. It deliberately skips the release-hygiene rules, which are scoped by exclusion sets (the vendored addon, the licence texts, this document) that a lone path cannot reconstruct, and the inventory diffs, which are whole-tree by definition. It is edit-time feedback, not a substitute for `make audit`.
 
-Two targets sit outside `make check` because they cost minutes rather than seconds:
+### `make check-all`
 
-- **`make lint-counts`** re-measures the finding count annotated against every exempted lint in the workspace manifests, and fails if one has moved. `make lint-counts-update` rewrites them. Each leg force-warns the exempted lints, which changes the compiler flags, so it cannot share `check`'s build cache. Run it when you touch a lint table.
+`make check` compiles the tree one way. Code behind a `cfg` is therefore invisible to it — neither the differential harness nor the breadcrumb ring is built, so around 455 lines of unsafe mmap and Win32 FFI, plus every generated `*_diff` capture function, are linted by nothing. That is not a theoretical hole: the first `CRUMB=1` run turned up three findings the gate had never seen, two of them functions carrying a panic path their own comments argued could not be reached.
+
+`make check-all` is the complete gate — `check`, then the same legs under `CRUMB=1` and `DIFF=1`, then the lint counts, then the tests. It takes about forty seconds against warm target dirs rather than the handful of seconds `check` costs, because each `cfg` compiles under different flags and so keeps its own cache. Run it before a release, after touching a lint table, and after touching anything behind a `cfg`.
+
+`check` stays the fast pre-commit gate. Splitting them is deliberate: a gate nobody runs because it is slow protects nothing.
+
+Two of its legs are also useful alone:
+
+- **`make lint-counts`** re-measures the finding count annotated against every exempted lint in the workspace manifests, and fails if one has moved. `make lint-counts-update` rewrites them.
 - **`make update-inventories`** regenerates both committed inventories after a deliberate change.
+
+**What no target covers**, and what none can: the differential harness itself. `DIFF=1 make install`, then exercise the touched arms against a live client. See §The reimplementation contract — that comparison is the definition of done, and nothing static substitutes for it.
 
 ### `make doc`
 
