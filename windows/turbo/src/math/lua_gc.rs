@@ -117,6 +117,7 @@ pub struct ChunkSpan {
     ///
     /// Read only by the 32-bit realloc path, so a host test build sees no
     /// reader.
+    // Read only on the 32-bit realloc path, so a host test build has no reader.
     #[cfg_attr(not(target_arch = "x86"), allow(dead_code))]
     pub class: u8,
 }

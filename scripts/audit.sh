@@ -260,7 +260,9 @@ derive_scan() {
 allow_argued() {
     awk '
         function check() {
-            if (!argued && buf !~ /\/\//)
+            # Only a `cfg_attr` that actually wraps an allow/expect is a
+            # suppression; `#[cfg_attr(..., link(...))]` and friends are not.
+            if (buf ~ /(allow|expect)\(/ && !argued && buf !~ /\/\//)
                 printf "%s:%d: suppression with no argument; say why the structural fix does not apply\n", \
                     FILENAME, attrline
             buf = ""
@@ -272,7 +274,7 @@ allow_argued() {
                 if ($0 ~ /\)\]/) { inattr = 0; check() }
                 next
             }
-            if ($0 ~ /^[ \t]*#!?\[(allow|expect)\(/) {
+            if ($0 ~ /^[ \t]*#!?\[(allow|expect|cfg_attr)\(/) {
                 buf = $0
                 argued = lastc
                 attrline = FNR
@@ -624,12 +626,13 @@ fi
 # as a diary of how the engineering got written, and not as a document that
 # assumes the reader has access to things they do not.
 
-# Everything tracked, minus four things that cannot be held to these rules.
-# The generated lockfiles carry 118 `[[package]]` stanzas that would poison a
-# bracket-shaped rule. The verbatim licence texts must never be edited to
-# satisfy a lint — MinHook's BSD notice names a disassembler engine and has to
-# keep doing so. And this script and the document it enforces both have to
-# quote the patterns they ban in order to state the rule at all.
+# Everything tracked, minus the files that cannot be held to these rules. The
+# generated lockfiles carry over a hundred `[[package]]` stanzas that would
+# poison a bracket-shaped rule. The verbatim licence texts (LICENSE,
+# THIRD-PARTY-LICENSES.md, and the vendored addon's LICENSE) must never be edited
+# to satisfy a lint — MinHook's BSD notice names a disassembler engine and has to
+# keep doing so. And this script and the document it enforces both have to quote
+# the patterns they ban in order to state the rule at all.
 RELEASE=$(git ls-files |
     grep -vE '^(unix|windows)/Cargo\.lock$|^LICENSE$|^THIRD-PARTY-LICENSES\.md$|^addon/WoWTranslate/LICENSE$|^scripts/audit\.sh$|^docs/CONVENTIONS\.md$' || true)
 
