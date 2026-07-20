@@ -9,7 +9,6 @@ windows/turbo/src/math/aabb.rs non_snake_case 1
 windows/turbo/src/math/boundsfit.rs clippy::excessive_precision 1
 windows/turbo/src/math/boundsfit.rs clippy::neg_cmp_op_on_partial_ord 1
 windows/turbo/src/math/boundsfit.rs clippy::too_many_arguments 1
-windows/turbo/src/math/boundsfit.rs clippy::type_complexity 1
 windows/turbo/src/math/boundsfit.rs non_snake_case 1
 windows/turbo/src/math/collision.rs clippy::excessive_precision 1
 windows/turbo/src/math/collision.rs clippy::neg_cmp_op_on_partial_ord 1
@@ -105,7 +104,6 @@ windows/turbo/src/win/hooks.rs clippy::manual_range_contains 1
 windows/turbo/src/win/hooks.rs clippy::multiple_unsafe_ops_per_block 12
 windows/turbo/src/win/hooks.rs clippy::neg_cmp_op_on_partial_ord 1
 windows/turbo/src/win/hooks.rs clippy::too_many_arguments 1
-windows/turbo/src/win/hooks.rs clippy::type_complexity 2
 windows/turbo/src/win/hooks.rs clippy::undocumented_unsafe_blocks 1
 windows/turbo/src/win/hooks.rs non_snake_case 1
 windows/turbo/src/win/symbols.rs clippy::too_many_arguments 1

@@ -243,7 +243,6 @@ mod tests_bounds_fit__accumulate_moment__71bce0 {
     const K: [f32; 6] = [K2, K3, K4, K5, K6, K7];
     const ID3: [f32; 9] = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
 
-    #[allow(clippy::type_complexity)]
     fn call(
         weight: &[f32; 3],
         vec: &[f32; 3],

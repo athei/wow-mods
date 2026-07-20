@@ -4707,18 +4707,8 @@ pub fn c_gx_string__build_geometry__5cdc20(this: *mut u8) {
     // value), RET 0x20; stateful (allocates region records).
     const BG_LINK_CLOSE_VA: usize = BASE + 0x1c_d310;
     // SAFETY: image base verified at load; signature matches the callee.
-    #[allow(clippy::type_complexity)]
-    let link_close: extern "thiscall" fn(
-        *mut u8,
-        u32,
-        u32,
-        u32,
-        u32,
-        u32,
-        u32,
-        u32,
-        u32,
-    ) -> u32 = unsafe { core::mem::transmute(BG_LINK_CLOSE_VA) };
+    let link_close: extern "thiscall" fn(*mut u8, u32, u32, u32, u32, u32, u32, u32, u32) -> u32 =
+        unsafe { core::mem::transmute(BG_LINK_CLOSE_VA) };
     // 0x5cdf70 geometry finalize — thiscall(this), RET 0; stateful.
     const BG_FINALIZE_VA: usize = BASE + 0x1c_df70;
     // SAFETY: image base verified at load; signature matches the callee.
@@ -5018,7 +5008,6 @@ pub fn glyph_cache_page__create_texture__5cf4d0(page: *mut u8, style_flag: u32) 
     // 0x58a980 CGxTexFlags ctor — thiscall(&flags; 8 dwords), returns &flags.
     const CT_FLAGS_CTOR_VA: usize = BASE + 0x18_a980;
     // SAFETY: image base verified at load; signature matches the callee.
-    #[allow(clippy::type_complexity)]
     let flags_ctor: extern "thiscall" fn(
         *mut u32,
         u32,
