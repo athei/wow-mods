@@ -230,7 +230,6 @@ pub fn c33_matrix__scale_by_scalar__672d80(
 /// `C33Matrix::Determinant` — `__cdecl(m00, m01, m02, m10, m11, m12, m20, m21, m22)`.
 ///
 /// Returns the 3×3 determinant (rule of Sarrus) of the row-major scalars.
-#[allow(clippy::too_many_arguments)]
 pub fn c33_matrix__determinant__7bc040(
     m00: f32,
     m01: f32,
@@ -1096,7 +1095,6 @@ pub fn c4_plane__from_triangle__637480(
 ///
 /// Builds the inner SQUAD tangents at `q_cur`, writing `out_tangent_in` and
 /// `out_tangent_out`, void.
-#[allow(clippy::too_many_arguments)]
 pub fn c4_quaternion__compute_squad_tangents__7c0b60(
     q_prev: *const f32,
     q_cur: *const f32,
@@ -1454,7 +1452,6 @@ pub fn c_cubic_spline__sq_mag2_d__454980(v: *const f32) -> f32 {
 /// Reads the cruise speed at `this+0x18` and the acceleration at `this+0x20`,
 /// maps `distance` onto a trapezoidal speed profile, writes the phase code
 /// (`0xa2`/`0xa3`/`0xa4`) to `*outPhase` and returns the displacement as `f64`.
-#[allow(clippy::too_many_arguments)]
 pub fn cg_game_object_display_mo_transport__eval_move_distance__5f8dc0(
     this: *mut core::ffi::c_void,
     distance: f32,
@@ -3601,7 +3598,6 @@ unsafe fn write_sprite_vertex(out: *mut u8, lanes: [u32; 6]) {
 /// LLVM inlines its SSE body in place of the stock per-vertex x87 call, and the
 /// color byte-order flag (`device+0x258`, the `GetFormatDesc` result the original
 /// re-reads every vertex) is read once before the loops.
-#[allow(clippy::too_many_arguments)]
 pub fn c_gx_batch__fill_sprite_quads__5c8710(
     this: *mut u8,
     out_verts: *mut u8,
@@ -4313,7 +4309,6 @@ pub fn c_gx_font__measure_text_run__5c7300(
 /// The tail splits wide/narrow: the full-line width multiplies the WIDE
 /// units-per-pixel quotient, the break-rewind width multiplies the
 /// FST-narrowed copy.
-#[allow(clippy::too_many_lines)]
 pub fn c_gx_font__fit_text_to_width__5c7470(
     font: *mut u8,
     text: *mut u8,
@@ -4684,7 +4679,6 @@ fn glyph_width_probe(
 /// the stock passes from uninitialized stack are zero-initialized here
 /// (deterministic; the EmitLineQuads hook writes them before any status-2 close
 /// consumes them — same knowing deviation as its hit-test pads).
-#[allow(clippy::too_many_lines)]
 pub fn c_gx_string__build_geometry__5cdc20(this: *mut u8) {
     let thisu = this as usize;
     const BASE: usize = crate::win::EXPECTED_IMAGE_BASE;
@@ -5334,7 +5328,6 @@ pub fn c_gx_font__set_glyph_tex_coords__5c7f80(this: *mut u8, a: i32, b: i32) {
     let u48 = unsafe { elq_rd_u32(thisu + 0x48) };
     // SAFETY: fixed `.rdata` f32 texture scale in the live host image.
     let sx = unsafe { elq_rd_f32(crate::win::EXPECTED_IMAGE_BASE + 0x40_a8ac) };
-    #[allow(clippy::cast_precision_loss)]
     let sy = 1.0f32 / GLYPH_PAGE_H as f32;
     let coords = crate::math::gx::glyph_tex_coords__5c7f80(a, b, u30, u48, sx, sy);
     for (i, c) in coords.iter().enumerate() {
@@ -7034,7 +7027,6 @@ pub fn c_movement__is_position_finite__616bf0(this: *mut core::ffi::c_void) -> i
 /// state flags allow) and a submerged arm (the secondary handler). Own math is
 /// the surface/ripple/ offset level scaling; every event callee is a delegate.
 /// All FCOMP polarities pinned (NaN routing preserved per branch).
-#[allow(clippy::too_many_lines)]
 pub fn cg_unit_c__update_water_interaction__6030c0(
     this: *mut u8,
     param1: u32,
@@ -9175,7 +9167,6 @@ pub fn collision_ray_polygon_sweep_distance__632830(
 /// the winning face index into `*out_face_flags`. Returns 1 if any hit was
 /// recorded. The trailing two stack dwords are unused by the original (popped by
 /// its `ret 0x20`).
-#[allow(clippy::too_many_arguments)]
 pub fn collision_sweep_polygon_against_faces__632700(
     face_set: *const u8,
     sweep_dir: *const f32,
@@ -9339,7 +9330,6 @@ pub fn height_bucket_insert_node_at_pos_sub__681970(
     // 2-D bucket-pair array: word0 (node-base) at 0x87bd70, word1 (head) at
     // 0x87bd74, each pair `slot_idx` int-elements (== (sub_index+bucket*9)*3) in.
     const PAIR_BASE: usize = crate::win::EXPECTED_IMAGE_BASE + 0x87_bd70;
-    #[allow(clippy::cast_sign_loss)]
     let pair = (PAIR_BASE as *mut i32).wrapping_add(slot_idx as usize);
     // `pair[0]` = per-object node-base ptr, `pair[1]` = list head ptr.
 
@@ -9350,7 +9340,6 @@ pub fn height_bucket_insert_node_at_pos_sub__681970(
     } else {
         // SAFETY: `pair[0]` is the per-object node-base pointer for this slot.
         let node_base = unsafe { pair.read() } as usize;
-        #[allow(clippy::cast_sign_loss)]
         let addr = node_base.wrapping_add(object_node as usize);
         addr as *mut i32
     };
@@ -9468,7 +9457,6 @@ pub fn height_bucket_insert_node_at_pos__6818b0(object_node: i32, world_pos: *co
     } else {
         // SAFETY: `hbase[0]` is the per-object node-base pointer for this bucket.
         let node_base = unsafe { hbase.read() } as usize;
-        #[allow(clippy::cast_sign_loss)]
         let addr = node_base.wrapping_add(object_node as usize);
         addr as *mut i32
     };
@@ -12635,7 +12623,6 @@ pub fn cm2_model__build_emitter_transform__7106c0(
             // chain_hops, out_info)`; writes up to fifteen dwords (the zeroed
             // buffer mirrors the original's two default-fill sub-ctors).
             let mut out_info = [0u32; 15];
-            #[allow(clippy::cast_possible_wrap)]
             cm2_model__get_animation_info__711a20(
                 this,
                 info7[0],
@@ -14161,7 +14148,6 @@ pub fn collide_bsp_node_trace_segment__6bc370(
 /// when the new distance is NOT ordered-greater-or-equal than the running
 /// fraction (a NaN distance stores, matching `TEST AH,5; JP`). Returns
 /// whether any hit was recorded (outMapObj non-zero).
-#[allow(clippy::too_many_lines)]
 pub fn c_world__intersect_map_obj_segment__6a8840(
     start: *const f32,
     end: *const f32,
@@ -15021,7 +15007,6 @@ pub fn map_chunk__query_wmo_groups__6abc40(
 /// append are the two indirect call-outs (matching SP). The two pure leaves the
 /// stock seeds with (zero a vec3, write an identity matrix) are inlined as plain
 /// stores. Returns 1 (the stock body writes no EAX before `ret 0x8`).
-#[allow(clippy::similar_names)]
 pub fn map_chunk__query_doodad_sets__6abe60(
     doodad_set_list: *mut i32,
     query_box: *const f32,
@@ -21923,7 +21908,6 @@ pub fn c_particle_emitter__render_particles__7b3a10(
 // direct transcription of the stock body, where one-unsafe-op-per-block would
 // fragment each strided pointer read into noise; allowed for this driver only.
 #[allow(
-    clippy::too_many_arguments,
     clippy::multiple_unsafe_ops_per_block,
     clippy::undocumented_unsafe_blocks
 )]
@@ -22850,7 +22834,6 @@ pub fn c_particle_emitter__emit_particles__7b5550(this: *mut u8, dt: f32, ctx: *
 ///   only the low words; zeroed here).
 ///
 /// Un-diffable: void; device state and GPU buffer writes.
-#[allow(clippy::too_many_lines)]
 pub fn c_particle_emitter__render__7b3d20(this: *mut u8, parent_matrix: *const f32) {
     if this.is_null() {
         return;
@@ -23642,8 +23625,7 @@ fn update_child_emitters_7b5a10(
 /// pointer, so its byte image must match the stock frame exactly.
 #[allow(
     clippy::multiple_unsafe_ops_per_block,
-    clippy::undocumented_unsafe_blocks,
-    clippy::too_many_lines
+    clippy::undocumented_unsafe_blocks
 )]
 // REASON: dense impure command-stream driver. Every block reads in-bounds device
 // fields (validated against the stock body) or calls a bounds-checked original
@@ -23877,10 +23859,8 @@ pub fn gx_light_apply_scene_lighting__71c730(
 // in the host-tested kernel `crate::math::weather::weather_raindrop_vertex__675ac0`.
 #[cfg(target_arch = "x86")]
 #[allow(
-    clippy::too_many_lines,
     clippy::multiple_unsafe_ops_per_block,
-    clippy::undocumented_unsafe_blocks,
-    clippy::cast_ptr_alignment
+    clippy::undocumented_unsafe_blocks
 )]
 pub extern "thiscall" fn weather_draw_rain_drops__675ac0(this: *mut core::ffi::c_void) {
     if this.is_null() {
@@ -24783,7 +24763,6 @@ pub fn cm2_scene__trace_line__7089c0(
 // `seq_ticks` / `ftol__40a2b0` kernels (the stock body uses `fild`/`fmul`/
 // `__ftol`).
 #[allow(
-    clippy::too_many_arguments,
     clippy::multiple_unsafe_ops_per_block,
     clippy::undocumented_unsafe_blocks
 )]
@@ -25096,7 +25075,6 @@ fn advance_event_track_seq(inst: *mut u8, hdr: *const u8, seq_idx: u32, delta: u
 /// ret 0x24). The forward arm increments the segment cursor and uses `window_hi - acc`; the reverse
 /// arm decrements and uses `acc - window_hi`.
 #[allow(
-    clippy::too_many_arguments,
     clippy::multiple_unsafe_ops_per_block,
     clippy::undocumented_unsafe_blocks
 )]
@@ -25373,7 +25351,6 @@ fn fire_segment(
 #[allow(
     clippy::multiple_unsafe_ops_per_block,
     clippy::undocumented_unsafe_blocks,
-    clippy::too_many_lines,
     clippy::cognitive_complexity
 )]
 pub fn c_gx_batch__update_fog_state__70baf0(this: *mut u8) {
@@ -25718,7 +25695,6 @@ pub fn c_gx_batch__update_fog_state__70baf0(this: *mut u8) {
 #[allow(
     clippy::multiple_unsafe_ops_per_block,
     clippy::undocumented_unsafe_blocks,
-    clippy::too_many_lines,
     clippy::cognitive_complexity
 )]
 pub fn c_particle_emitter__apply_render_state__70c190(this: *mut core::ffi::c_void) {
@@ -26223,13 +26199,7 @@ pub fn world__query_object_boxes__6ad330(
 // buffer reproduces the stock's overlapping record windows exactly.
 #[allow(
     clippy::multiple_unsafe_ops_per_block,
-    clippy::undocumented_unsafe_blocks,
-    clippy::too_many_lines,
-    clippy::cast_ptr_alignment,
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    clippy::cast_possible_wrap,
-    clippy::similar_names
+    clippy::undocumented_unsafe_blocks
 )]
 pub fn cloud_update_layer__6cffc0(this: *mut core::ffi::c_void) {
     if this.is_null() {
@@ -26513,10 +26483,7 @@ pub fn cloud_update_layer__6cffc0(this: *mut core::ffi::c_void) {
 // call this reimpl directly by name so LLVM keeps them direct calls.
 #[allow(
     clippy::multiple_unsafe_ops_per_block,
-    clippy::undocumented_unsafe_blocks,
-    clippy::similar_names,
-    clippy::too_many_lines,
-    clippy::cast_ptr_alignment
+    clippy::undocumented_unsafe_blocks
 )]
 pub fn cm2_model__update_particles_and_children__718960(this: *mut core::ffi::c_void) {
     if this.is_null() {
@@ -27240,11 +27207,8 @@ unsafe fn wr_u32(base: *mut u8, off: usize, v: u32) {
 // gather would fragment into noise under one-unsafe-op-per-block; the per-fn
 // allow mirrors the QueryLiquidAtPoint driver.
 #[allow(
-    clippy::too_many_arguments,
-    clippy::too_many_lines,
     clippy::multiple_unsafe_ops_per_block,
-    clippy::undocumented_unsafe_blocks,
-    clippy::cast_ptr_alignment
+    clippy::undocumented_unsafe_blocks
 )]
 pub fn c_world__collect_tile_geometry__6aadc0(
     tile_x: i32,
@@ -27621,7 +27585,6 @@ fn collect_tile_debug_draw_emit__6aadc0(elem: *mut f32, color: u32) {
 /// plane via the stock `C4Plane::FromTriangle`, and submits. (0x6ab043..0x6ab19c)
 #[allow(
     clippy::undocumented_unsafe_blocks,
-    clippy::too_many_arguments,
     clippy::multiple_unsafe_ops_per_block
 )]
 fn collect_tile_debug_draw_culled__6aadc0(
@@ -28168,8 +28131,7 @@ fn bdl_refresh_phase(base: *mut u8) {
 /// three remaining buckets.
 #[allow(
     clippy::multiple_unsafe_ops_per_block,
-    clippy::undocumented_unsafe_blocks,
-    clippy::too_many_lines
+    clippy::undocumented_unsafe_blocks
 )]
 fn bdl_finalize(base: *mut u8) {
     const TABLE: *mut u32 = (crate::win::EXPECTED_IMAGE_BASE + 0x8e_fff8) as *mut u32;
@@ -28281,8 +28243,7 @@ fn bdl_finalize(base: *mut u8) {
 /// the block comment above the helpers.
 #[allow(
     clippy::multiple_unsafe_ops_per_block,
-    clippy::undocumented_unsafe_blocks,
-    clippy::too_many_lines
+    clippy::undocumented_unsafe_blocks
 )]
 pub fn c_world_view__build_draw_list__707680(
     this: *mut core::ffi::c_void,
@@ -28404,7 +28365,6 @@ pub fn c_world_view__build_draw_list__707680(
 #[allow(
     clippy::multiple_unsafe_ops_per_block,
     clippy::undocumented_unsafe_blocks,
-    clippy::too_many_lines,
     clippy::cognitive_complexity
 )]
 fn bdl_process_spatial_node(base: *mut u8, node: *const u8, draw_idx: &mut u32) -> Option<()> {
@@ -28751,7 +28711,6 @@ fn bdl_process_spatial_node(base: *mut u8, node: *const u8, draw_idx: &mut u32) 
 #[allow(
     clippy::multiple_unsafe_ops_per_block,
     clippy::undocumented_unsafe_blocks,
-    clippy::too_many_lines,
     clippy::cognitive_complexity
 )]
 fn bdl_process_child_view(base: *mut u8, child: *const u8, draw_idx: &mut u32) -> Option<()> {
@@ -29100,7 +29059,6 @@ pub fn normalize_angle_to_pi__6084f0(angle: f32) -> f32 {
 /// Dedup-latch: if any incoming float differs from the cached rect at
 /// `this+0xf38` (NaN counts as a change), store all six and raise the dirty flag
 /// at `this+0xf34`. No callees.
-#[allow(clippy::too_many_arguments)]
 pub fn c_gx_device__set_viewport__592530(
     this: *mut core::ffi::c_void,
     a0: f32,
@@ -29329,7 +29287,6 @@ pub fn build_ortho_proj_matrix__5c3d90(
 /// directly) on the global device singleton; on a bad box raises
 /// STORM_ERROR_INVALID_PARAMETER (0x57) via the stock Storm helper, delegated by
 /// VA.
-#[allow(clippy::too_many_arguments)]
 pub fn gx_set_viewport__58af60(x0: f32, x1: f32, y0: f32, y1: f32, min_z: f32, max_z: f32) {
     const BASE: usize = crate::win::EXPECTED_IMAGE_BASE;
     // SAFETY: the device depth-range near global is an f32 at fixed VA 0x7ffd74
@@ -32220,7 +32177,6 @@ pub fn world_compute_vertex_outcode__686d20(out: *mut u32, v: *const u32) -> u32
 /// (the stock body's `MOV EAX,ECX` survives to RET). Maps a tracked object's
 /// world-XY delta from the minimap center into the blip's 2-float local offset;
 /// arg 3 (`ctr_z`) is dead in the stock body. Pure leaf, zero callees.
-#[allow(clippy::too_many_arguments)]
 pub fn minimap__project_blip_delta__4eaa30(
     out: *mut f32,
     ctr_x: f32,
@@ -32392,7 +32348,6 @@ pub fn cg_object_c__update_selection_circle_transform__614cd0(
 /// All FNSTSW-bit compare polarities live in the `math::collision` sweep
 /// kernels; the heavy sub-queries are delegated (three of them land in
 /// already-native hooks via their patched VAs).
-#[allow(clippy::too_many_arguments)]
 pub fn collision_sweep_volume_against_world_planes__632ba0(
     ctx: *mut core::ffi::c_void,
     plane_set: *const u8,
@@ -33176,7 +33131,6 @@ pub fn c_gx_aabb16__test_float_box__6b4d10(aabb16: *const i16) -> u8 {
 /// `*(this+0x30)` is the world face-set pair whose two dwords stock forwards as
 /// the trailing sweep args its callee never reads (ret 0x20 pops them unread) —
 /// we read them faithfully but null-guard the pointer.
-#[allow(clippy::too_many_arguments)]
 pub fn collision_sweep_box_faces__632280(
     this: *mut core::ffi::c_void,
     world_ctx: *const u8,
@@ -33271,7 +33225,6 @@ pub fn collision_sweep_box_faces__632280(
 
         // hitDist scratch seeded from maxDist per face (stock 0x632324).
         let mut hit_dist = max_dist;
-        #[allow(clippy::cast_possible_wrap)]
         if collision_sweep_polygon_against_faces__632700(
             world_ctx,
             sweep_dir,
@@ -33780,7 +33733,6 @@ pub fn c_map_obj_group_node__query_children_overlap__6a3dc0(
 /// AL-only tracker predicates are delegated as `u8`; the two polymorphic vfuncs
 /// (+0x14 GetPosition, zoom vfunc +0x1c returning ST0) go through the LIVE
 /// vtable.
-#[allow(clippy::too_many_lines)]
 pub fn minimap__unit_blip_enum_callback__4eaa90(
     this: *mut core::ffi::c_void,
     guid_lo: u32,
@@ -34916,7 +34868,6 @@ pub fn cg_object_c__update_selection_circle_and_visuals__614a90(
     }
 
     // Our OsGetTimeMs hook (0x42c010 is a JMP thunk onto it) — direct call.
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let now = os_get_time_ms__42b790() as u32;
 
     // Circle fade + alpha.
@@ -34934,7 +34885,6 @@ pub fn cg_object_c__update_selection_circle_and_visuals__614a90(
         if dur != 0 {
             // SAFETY: the fade start-time dword at +0xec.
             let start = unsafe { base.wrapping_add(0xec).cast::<u32>().read_unaligned() };
-            #[allow(clippy::cast_possible_wrap)]
             let elapsed = now.wrapping_sub(start) as i32;
             if elapsed.wrapping_sub(dur) < 0 {
                 // SAFETY: fixed engine f32 global; read by value.
@@ -34981,7 +34931,6 @@ pub fn cg_object_c__update_selection_circle_and_visuals__614a90(
     // SAFETY: the pulse start-time dword at +0xa0.
     let t0 = unsafe { base.wrapping_add(0xa0).cast::<u32>().read_unaligned() };
     if t0 != 0 && now > t0 {
-        #[allow(clippy::cast_possible_wrap)]
         let e = now.wrapping_sub(t0) as i32;
         let v = if e < 2000 {
             // SAFETY: fixed engine f32 globals; read by value.
@@ -35028,7 +34977,6 @@ pub fn cg_object_c__update_selection_circle_and_visuals__614a90(
         }
         // SAFETY: the kill-time dword of the live head node.
         let kill = unsafe { ((head as usize + 0x50) as *const u32).read_unaligned() };
-        #[allow(clippy::cast_possible_wrap)]
         let alive = (now.wrapping_sub(kill) as i32) < 0;
         if alive {
             break;
@@ -35237,10 +35185,7 @@ pub fn day_night_blend_nearby_lights__6d2d00(out_params: *mut u8, use_water_set:
             unsafe { ((heap + 8 * idx as usize) as *mut u32).write_unaligned(dist.to_bits()) };
             let heap2 = heap_data(&arr);
             // SAFETY: the payload = the table slot pointer.
-            #[allow(clippy::cast_possible_truncation)]
-            unsafe {
-                ((heap2 + 8 * idx as usize + 4) as *mut u32).write_unaligned(slot as u32)
-            };
+            unsafe { ((heap2 + 8 * idx as usize + 4) as *mut u32).write_unaligned(slot as u32) };
         }
         i = i.wrapping_add(1);
     }
@@ -35548,7 +35493,6 @@ pub fn c_world__collect_geometry_in_box__6aa8b0(
 ///   unreachable here since the cursor is non-zero at every advance.
 ///
 /// Un-diffable: result vector grown through callees (6aa8b0 precedent).
-#[allow(clippy::too_many_lines)]
 pub fn c_world__collect_geometry_from_nodes__6aaab0(
     box_ptr: *mut f32,
     result: *mut u32,
@@ -35661,7 +35605,6 @@ pub fn c_world__collect_geometry_from_nodes__6aaab0(
                     scratch.as_ptr(),
                 );
 
-                #[allow(clippy::cast_possible_wrap)]
                 if object_test_value_threshold__6a4670(
                     geom as *const core::ffi::c_void,
                     xformed.as_ptr(),
@@ -35831,7 +35774,6 @@ pub fn c_world__collect_geometry_from_nodes__6aaab0(
 ///   refresh.
 ///
 /// Un-diffable: void; player/CM2 state writes through delegates.
-#[allow(clippy::too_many_lines)]
 pub fn cg_player_c__on_frame_update__607ed0(this: *mut u8, param: u32) {
     if this.is_null() {
         return;
@@ -35973,11 +35915,9 @@ pub fn cg_player_c__on_frame_update__607ed0(this: *mut u8, param: u32) {
         unsafe { core::mem::transmute(REFRESH_ANIM_VA) };
 
     // Frame clock — OUR hook, low dword like stock EAX.
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let now = os_get_time_ms__42b790() as u32;
     // SAFETY: the last-update ms dword at +0xc18.
     let last = unsafe { this.wrapping_add(0xc18).cast::<u32>().read_unaligned() };
-    #[allow(clippy::cast_possible_wrap)]
     if now.wrapping_sub(last) as i32 >= 0 {
         detail_fade(this, now);
     }
@@ -35996,7 +35936,6 @@ pub fn cg_player_c__on_frame_update__607ed0(this: *mut u8, param: u32) {
     let mut mark = false;
     if is_target {
         let active = active_player();
-        #[allow(clippy::cast_possible_truncation)]
         let obj = object_ptr(
             0x10,
             OBJ_TOKEN,
@@ -36016,7 +35955,6 @@ pub fn cg_player_c__on_frame_update__607ed0(this: *mut u8, param: u32) {
             // SAFETY: the fixed blink-timestamp global.
             let blink_last = unsafe { BLINK_MS.read() };
             let mut remaining_base = blink_last;
-            #[allow(clippy::cast_possible_wrap)]
             if now.wrapping_sub(blink_last).wrapping_sub(0x1f4) as i32 >= 0 {
                 // SAFETY: the fixed blink-phase global, flip-on-zero.
                 let phase = unsafe { BLINK_PHASE.read() };
@@ -36026,7 +35964,6 @@ pub fn cg_player_c__on_frame_update__607ed0(this: *mut u8, param: u32) {
                 unsafe { BLINK_MS.write(now) };
                 remaining_base = now;
             }
-            #[allow(clippy::cast_possible_wrap)]
             let remaining = remaining_base.wrapping_sub(now).wrapping_add(0x1f4) as i32;
             // SAFETY: the blink phase, RE-READ after the flip like stock.
             let phase = unsafe { BLINK_PHASE.read() };
@@ -36185,7 +36122,6 @@ pub fn cg_player_c__on_frame_update__607ed0(this: *mut u8, param: u32) {
         let d58 = unsafe { this.wrapping_add(0xd58).cast::<u32>().read_unaligned() };
         if mvf & 0xc == 0 && d58 & 1 == 0 {
             // Turn-rate step: OUR clock hook, kernel pick (NaN rate wins).
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let now2 = os_get_time_ms__42b790() as u32;
             // SAFETY: the last-turn ms dword at +0xcb0.
             let turn_ms = unsafe { this.wrapping_add(0xcb0).cast::<u32>().read_unaligned() };
@@ -36479,7 +36415,6 @@ pub fn cg_unit_c__update_facing_interpolation__600cd0(unit: *mut core::ffi::c_vo
             unsafe { flags_ptr.write_unaligned(f & !1) };
             // Our OsGetTimeMs hook (0x42c010 is a JMP thunk onto it); the
             // stock store keeps only the LOW dword.
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let now = os_get_time_ms__42b790() as u32;
             // SAFETY: the turn timestamp dword at +0xcb0.
             unsafe { base.wrapping_add(0xcb0).cast::<u32>().write_unaligned(now) };
@@ -36515,7 +36450,6 @@ pub fn cg_unit_c__update_facing_interpolation__600cd0(unit: *mut core::ffi::c_vo
     if id != 0 && id > 0 && id <= unsafe { SPLINE_MAX.read() } {
         // SAFETY: the spline-table base global.
         let tbl = unsafe { SPLINE_TBL.read() };
-        #[allow(clippy::cast_sign_loss)]
         let entry_ptr = (tbl as usize).wrapping_add(4_usize.wrapping_mul(id as usize));
         // SAFETY: the id-indexed spline entry pointer.
         let entry = unsafe { (entry_ptr as *const u32).read_unaligned() };
@@ -36599,7 +36533,6 @@ pub fn cg_unit_c__update_facing_interpolation__600cd0(unit: *mut core::ffi::c_vo
         // object*`, `RET 0xC` (ObjectPtr precedent; mask 8, tag 0x142b).
         let object_ptr: extern "fastcall" fn(u32, u32, u32, u32, u32) -> *mut u8 =
             unsafe { core::mem::transmute(OBJ_PTR_VA) };
-        #[allow(clippy::cast_possible_truncation)]
         let obj = object_ptr(8, OBJ_PTR_TOKEN, guid as u32, (guid >> 32) as u32, 0x142b);
         if obj.is_null() {
             break 'sel keep;
@@ -37089,7 +37022,6 @@ pub fn c_movement__build_swept_bounds_and_query_world__633840(
 /// `pd−1 >= 0` OR unordered; and the hover lift clamps to `1 − downT`
 /// wide with a NaN lift taking the clamp. The plane/table bases
 /// (`0xc4e534/544/530`) are re-read at every use site exactly as stock.
-#[allow(clippy::too_many_lines)]
 pub fn c_movement__step_ground_move__6367b0(
     this: *mut core::ffi::c_void,
     _timestamp_ms: i32,
@@ -37176,7 +37108,6 @@ pub fn c_movement__step_ground_move__6367b0(
 
     // SAFETY: the normalized 2D direction pair behind `dir2d`.
     let d2 = unsafe { dir2d.cast::<[f32; 2]>().read_unaligned() };
-    #[allow(clippy::cast_precision_loss)]
     let total_ms_f = time_ms as f32;
     let mut remaining_ms = total_ms_f;
     let mut consumed = 0.0f32;
@@ -37338,7 +37269,6 @@ pub fn c_movement__step_ground_move__6367b0(
                     };
                     let before = remaining;
                     let mut out = [0.0f32; 3];
-                    #[allow(clippy::cast_possible_wrap)]
                     let cp = c_movement__compute_slope_climb_delta__635c00(
                         this,
                         out.as_mut_ptr(),
@@ -37386,7 +37316,6 @@ pub fn c_movement__step_ground_move__6367b0(
                 // SAFETY: the plane normal, re-read.
                 let n2 = unsafe { (plane2 as *const [f32; 3]).read_unaligned() };
                 let mut out = [0.0f32; 3];
-                #[allow(clippy::cast_possible_wrap)]
                 let cp = c_movement__compute_slope_climb_delta__635c00(
                     this,
                     out.as_mut_ptr(),
@@ -37822,7 +37751,6 @@ pub fn c_movement__step_movement__634040(
         let fv = delta_ms.wrapping_sub(consumed);
         let timestamp = time_ms.wrapping_add_unsigned(consumed);
         let step_dist = crate::math::collision::step_distance__634040(fv, ms2s, speed);
-        #[allow(clippy::cast_possible_wrap)]
         if c_movement__build_swept_bounds_and_query_world__633840(
             this, step_dist, fv as i32, dir[0], dir[1], dir[2],
         ) == 0
@@ -37938,7 +37866,6 @@ pub fn c_movement__step_movement__634040(
     };
     if ground_normal {
         // ComputeBoxGroundNormal (0x6332a0) is our own hook — direct call.
-        #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
         c_movement__compute_box_ground_normal__6332a0(this as i32);
     }
     // SAFETY: the context position triple at +0x10 (the anchored-point
@@ -38117,7 +38044,6 @@ impl GxLightRec {
 /// redundant Layer-B sets (~597k calls/s), now early-outed inline. Light
 /// uploads were already change-detected by the dirty words and are
 /// transcribed verbatim.
-#[allow(clippy::too_many_lines)]
 pub fn cm2_scene__apply_lighting_state__5a1b60(device: *mut u8) {
     if device.is_null() {
         return;

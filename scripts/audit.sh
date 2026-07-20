@@ -273,12 +273,14 @@ fi
 # as a diary of how the engineering got written, and not as a document that
 # assumes the reader has access to things they do not.
 
-# Everything tracked, minus the generated lockfiles (118 `[[package]]` stanzas
-# that would poison a bracket-shaped rule) and the verbatim licence texts,
-# which must never be edited to satisfy a lint — MinHook's BSD notice names a
-# disassembler engine and has to keep doing so.
+# Everything tracked, minus four things that cannot be held to these rules.
+# The generated lockfiles carry 118 `[[package]]` stanzas that would poison a
+# bracket-shaped rule. The verbatim licence texts must never be edited to
+# satisfy a lint — MinHook's BSD notice names a disassembler engine and has to
+# keep doing so. And this script and the document it enforces both have to
+# quote the patterns they ban in order to state the rule at all.
 RELEASE=$(git ls-files |
-    grep -vE '^(unix|windows)/Cargo\.lock$|^LICENSE$|^THIRD-PARTY-LICENSES\.md$|^addon/WoWTranslate/LICENSE$' || true)
+    grep -vE '^(unix|windows)/Cargo\.lock$|^LICENSE$|^THIRD-PARTY-LICENSES\.md$|^addon/WoWTranslate/LICENSE$|^scripts/audit\.sh$|^docs/CONVENTIONS\.md$' || true)
 
 # First-party source: the release set minus the vendored addon.
 SRC=$(printf '%s\n' "$RELEASE" | grep -vE "^$VENDORED" || true)

@@ -43,7 +43,6 @@ fn qadd(a: &[f32; 4], b: &[f32; 4]) -> [f32; 4] {
 ///
 /// `tension`/`continuity`/`bias` are TCB-style spline parameters. Returns `(tangent_in,
 /// tangent_out)`, each `tangent = q_cur (x) Exp(weighted log-combination)`.
-#[allow(clippy::too_many_arguments)]
 pub fn c4_quaternion__compute_squad_tangents__7c0b60(
     q_prev: &[f32; 4],
     q_cur: &[f32; 4],

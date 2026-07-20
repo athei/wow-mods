@@ -449,7 +449,6 @@ mod tests_c_particle_emitter__update_particle_physics__7b2680 {
 /// channel additionally scales by `scale` before the bias. When `prec_sel != 1.0`
 /// the `u`/`v` interpolation parameter is replaced by `pow(frac * prec_sel, pow_k)`
 /// evaluated in extended precision; otherwise the linear `frac` is used directly.
-#[allow(clippy::too_many_arguments)]
 pub fn c_particle_emitter__compute_vertex_color_uv__7b9b10(
     age: f32,
     scale: f32,
@@ -525,7 +524,6 @@ mod tests_c_particle_emitter__compute_vertex_color_uv__7b9b10 {
     // Drive the kernel with a chosen lifetime `frac` by setting `age - t0 = frac`
     // and the linear remap to identity (`inv_span = 1`, `color_mul = 1`,
     // `color_add = 0`). All non-exercised channels are zeroed.
-    #[allow(clippy::too_many_arguments)]
     fn with_frac(
         frac: f32,
         scale: f32,

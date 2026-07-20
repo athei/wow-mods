@@ -2390,7 +2390,6 @@ fn sweep_finish(best: &mut f32, best_so_far: f32) -> u32 {
 /// re-clip. `best` is the running best distance (lowered on a closer hit). The
 /// two separation epsilons gate the cheap and re-clip "all outside" tests; the
 /// clip epsilons feed the folded clip. Returns `1` on a hit, else `0`.
-#[allow(clippy::too_many_arguments)]
 pub fn collision_ray_polygon_sweep_distance__632830(
     verts: &mut [f32; 45],
     tags: &mut [f32; 15],
@@ -2528,7 +2527,6 @@ mod tests_collision_ray_polygon_sweep_distance__632830 {
 /// `<= best` wins, updating `best` and writing that face's index to `out_face`.
 /// Returns `1` if any hit was recorded. All epsilons are the host band /
 /// separation constants.
-#[allow(clippy::too_many_arguments)]
 pub fn collision_sweep_polygon_against_faces__632700(
     faces: &[[f32; 13]],
     sweep_dir: &[f32; 3],

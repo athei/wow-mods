@@ -373,7 +373,6 @@ pub fn unproject_ray_translate(ray: &mut [f32; 3], origin: &[f32; 3]) {
 }
 
 #[cfg(test)]
-#[allow(non_snake_case)]
 mod tests_c_world_frame__unproject_cursor_to_world_ray__4813b0 {
     use super::{
         NdcCursor, c_world_frame__unproject_cursor_to_world_ray__4813b0, unproject_ray_translate,
@@ -5009,7 +5008,6 @@ mod tests_c_map__load_wdl__6944a0 {
         assert!(max.is_nan());
     }
 
-    #[allow(clippy::cast_possible_truncation)]
     fn narrow(v: f64) -> f32 {
         v as f32
     }
@@ -6038,7 +6036,6 @@ mod tests_anim_scroll_param__711fe0 {
 ///
 /// The 4-term plane dot `m60·p60 + m64·p64 + m5c·p5c + c − w`, folded wide with
 /// one narrow at the `FSTP` into the object's `+0x78` slot.
-#[allow(clippy::too_many_arguments)]
 pub fn depth_bucket_project__681a40(
     m60: f32,
     m64: f32,
@@ -6063,7 +6060,6 @@ pub fn depth_bucket_project__681a40(
 /// The second plane dot stays 80-bit (never stored), so `scale × proj2` narrows
 /// only after the full wide fold, then `round(narrow − bias)` picks the
 /// 0x20-slot bucket.
-#[allow(clippy::too_many_arguments)]
 pub fn depth_bucket_index__681a40(
     m60: f32,
     m64: f32,

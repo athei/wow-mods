@@ -135,7 +135,14 @@ Each dereference, each transmute, each FFI call gets its own block with its own 
 Two exceptions, both recorded as per-site allows:
 
 - **A tight loop where every iteration performs the same operation.** One block, one comment.
-- **A long verbatim transcription.** A handful of bodies in `hooks.rs` carry sixty to a hundred unsafe operations in one block — a direct transcription of a stock routine, where one-op-per-block would mean a comment every two or three lines and the block-wide comment enumerating the offset families is genuinely more useful. These are named individually; a new one needs the same argument.
+- **A long verbatim transcription.** Three bodies in `hooks.rs` carry between twenty-six and a hundred and six unsafe operations in one block — a direct transcription of a stock routine, where one-op-per-block would mean a comment every two or three lines and the block-wide comment enumerating the offset families is genuinely more useful.
+
+**The rest is debt, and it is measured.** Forty-five `#[allow]` attributes currently suppress this pair of lints, and between them they cover 334 blocks: 314 carry two to four operations and would split cleanly, 11 carry five to twenty-five, and 3 are the transcriptions above. The small ones are worth splitting — the work is lexical and changes no code — but each needs a `// SAFETY:` comment that says something true about the specific operation, so it is a deliberate pass rather than a mechanical one, and it wants the differential harness green afterwards. Recount at any time with:
+
+    cargo clippy -p wow-turbo-dll --target i686-pc-windows-msvc -- \
+        --force-warn clippy::multiple_unsafe_ops_per_block
+
+Adding a *new* allow for either lint needs the argument above, not just a reference to the count.
 
 ## Doc comments
 

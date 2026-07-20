@@ -90,7 +90,6 @@ pub fn tsc_hz() -> u64 {
 // Plain mul/add, not `mul_add`: on i686 (no FMA) `mul_add` is an fmaf/fma
 // LIBCALL. Bit-identical here anyway — hi·2^32 is exact (power-of-two scale),
 // so the sum's single rounding matches the fused form.
-#[allow(clippy::suboptimal_flops)]
 pub fn u64_to_f64_exact(v: u64) -> f64 {
     let hi = u32::try_from(v >> 32).expect("u64 >> 32 fits u32");
     let lo = u32::try_from(v & 0xFFFF_FFFF).expect("u64 masked to 32 bits fits u32");

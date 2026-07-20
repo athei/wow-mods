@@ -64,7 +64,6 @@ pub mod ulp;
 /// A kernel that computes in `f64` to track an x87 80-bit original narrows each
 /// result into an `f32` field, where the mantissa loss is acceptable. Most
 /// kernels compute directly in `f32` and never need this.
-#[allow(clippy::cast_possible_truncation)]
 const fn f64_to_f32(v: f64) -> f32 {
     v as f32
 }

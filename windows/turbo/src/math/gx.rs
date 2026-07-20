@@ -395,7 +395,6 @@ mod tests_c_gx_device__set_viewport__592530 {
 /// `x0<x1 && y0<y1 && minZ<=maxZ && near<=minZ && maxZ<=far`; then snaps
 /// `x0/y0<=near → 0.0` and `x1/y1>=far → 1.0` (matching the stock
 /// `if (x0 <= near) x0 = 0; if (far <= x1) x1 = 1; …`).
-#[allow(clippy::too_many_arguments)]
 pub fn gx_set_viewport__58af60(
     x0: f32,
     x1: f32,

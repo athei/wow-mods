@@ -160,7 +160,6 @@ pub fn chunk_owning_span(spans: &[ChunkSpan], ptr: usize) -> Option<&ChunkSpan> 
 // Reached only from the 32-bit hook path and from tests gated on a 32-bit
 // pointer width (the freelist links are guest-width words), so a 64-bit host
 // test build compiles it with no caller.
-#[allow(clippy::cast_possible_truncation)]
 #[cfg_attr(not(target_pointer_width = "32"), allow(dead_code))]
 pub unsafe fn chunk_free_push(chunk: usize, block: usize) {
     use core::sync::atomic::{AtomicU32, Ordering};
