@@ -23,19 +23,24 @@ use wow_shared::{TranslateParams, TranslateStatus};
 
 use crate::{LOG_TARGET, unix_call};
 
-/// 16 KiB per output item. Apple Translation refuses inputs above 1000
-/// codepoints anyway; chat messages are well under that.
+/// 16 KiB per output item.
+///
+/// Apple Translation refuses inputs above 1000 codepoints anyway; chat messages
+/// are well under that.
 const OUT_SLOT_BYTES: usize = 16 * 1024;
 
-/// Cap on how many queued requests one batch coalesces. Bounds the transient
-/// output allocation (`MAX_BATCH * OUT_SLOT_BYTES`) and the Swift-side batch.
+/// Cap on how many queued requests one batch coalesces.
+///
+/// Bounds the transient output allocation (`MAX_BATCH * OUT_SLOT_BYTES`) and the
+/// Swift-side batch.
 const MAX_BATCH: usize = 32;
 
-/// Depth of the pending-request queue: four coalesced batches. Deep enough that
-/// no realistic chat burst reaches it, shallow enough that a wedged unix side
-/// sheds load. Without a bound, a worker stuck in one `Translate` thunk lets the
-/// addon's 25 s request timeout free its in-flight slots and enqueue another
-/// round, forever, none of which anyone is waiting for any more.
+/// Depth of the pending-request queue: four coalesced batches.
+///
+/// Deep enough that no realistic chat burst reaches it, shallow enough that a
+/// wedged unix side sheds load. Without a bound, a worker stuck in one `Translate`
+/// thunk lets the addon's 25 s request timeout free its in-flight slots and
+/// enqueue another round, forever, none of which anyone is waiting for any more.
 const WORK_QUEUE_DEPTH: usize = 4 * MAX_BATCH;
 
 pub struct Request {
@@ -53,20 +58,23 @@ pub struct Completed {
 
 /// Why [`enqueue`] turned a request away.
 pub enum EnqueueError {
-    /// The worker is a full [`WORK_QUEUE_DEPTH`] behind — the unix side is
-    /// wedged or very slow. Transient: the addon shows the untranslated line
-    /// and the next message tries again.
+    /// The worker is a full [`WORK_QUEUE_DEPTH`] behind.
+    ///
+    /// The unix side is wedged or very slow. Transient: the addon shows the
+    /// untranslated line and the next message tries again.
     Full,
-    /// The worker thread is gone, so nothing will ever drain the queue. The
-    /// addon latches `dllAvailable = false` on this one.
+    /// The worker thread is gone, so nothing will ever drain the queue.
+    ///
+    /// The addon latches `dllAvailable = false` on this one.
     Closed,
 }
 
-/// Both directions live behind one `LazyLock` so the worker thread and
-/// the two channels are constructed atomically. `mpsc::Receiver` is
-/// `!Sync`, hence the `Mutex` on `done_rx`; the hook only polls from one
-/// thread anyway (Lua is single-threaded), so the lock is effectively
-/// uncontended.
+/// Both directions live behind one `LazyLock`.
+///
+/// The worker thread and the two channels are constructed atomically.
+/// `mpsc::Receiver` is `!Sync`, hence the `Mutex` on `done_rx`; the hook only
+/// polls from one thread anyway (Lua is single-threaded), so the lock is
+/// effectively uncontended.
 struct Channels {
     work_tx: mpsc::SyncSender<Request>,
     done_rx: Mutex<mpsc::Receiver<Completed>>,
@@ -86,8 +94,10 @@ static CHANNELS: LazyLock<Channels> = LazyLock::new(|| {
     }
 });
 
-/// Hand a request to the worker. Never blocks: this runs on the game's Lua
-/// thread, so a saturated queue sheds the request rather than stalling a frame.
+/// Hand a request to the worker.
+///
+/// Never blocks: this runs on the game's Lua thread, so a saturated queue sheds
+/// the request rather than stalling a frame.
 pub fn enqueue(req: Request) -> Result<(), EnqueueError> {
     CHANNELS.work_tx.try_send(req).map_err(|e| match e {
         mpsc::TrySendError::Full(_) => EnqueueError::Full,
@@ -95,8 +105,9 @@ pub fn enqueue(req: Request) -> Result<(), EnqueueError> {
     })
 }
 
-/// Drain up to `max` completed results in one lock acquisition so the hook's
-/// `poll` can surface a whole burst in a single Lua tick.
+/// Drain up to `max` completed results in one lock acquisition.
+///
+/// The hook's `poll` can surface a whole burst in a single Lua tick.
 pub fn drain_completed(max: usize) -> Vec<Completed> {
     let mut out = Vec::new();
     if let Ok(rx) = CHANNELS.done_rx.lock() {
@@ -131,9 +142,10 @@ fn worker(work_rx: &mpsc::Receiver<Request>, done_tx: &mpsc::Sender<Completed>) 
     }
 }
 
-/// Partition a coalesced batch into runs that share a `(src_lang, tgt_lang)`
-/// pair, preserving arrival order within each run. Chat is usually one pair, so
-/// this is almost always a single group; a linear scan is cheap at batch size.
+/// Partition a coalesced batch into runs that share a `(src_lang, tgt_lang)` pair.
+///
+/// Arrival order is preserved within each run. Chat is usually one pair, so this
+/// is almost always a single group; a linear scan is cheap at batch size.
 fn group_by_pair(batch: Vec<Request>) -> Vec<Vec<Request>> {
     let mut groups: Vec<Vec<Request>> = Vec::new();
     for req in batch {
@@ -149,8 +161,9 @@ fn group_by_pair(batch: Vec<Request>) -> Vec<Vec<Request>> {
     groups
 }
 
-/// Translate one same-pair group in a single batched thunk call, returning a
-/// [`Completed`] per request in input order.
+/// Translate one same-pair group in a single batched thunk call.
+///
+/// Returns a [`Completed`] per request in input order.
 fn translate_group(reqs: &[Request]) -> Vec<Completed> {
     let count = reqs.len();
     let src_lang = &reqs[0].src_lang;

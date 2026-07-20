@@ -54,10 +54,11 @@ mod tests_cg_game_object_c__get_world_position__7c4b80 {
     }
 }
 
-/// Render-proxy scale factor: the product of the two base axis scales with
-/// the active third-axis scale. `use_alt_scale` selects the alternate third
-/// scale (the original picks it when the object carries a secondary model
-/// handle).
+/// Render-proxy scale factor.
+///
+/// The product of the two base axis scales with the active third-axis scale.
+/// `use_alt_scale` selects the alternate third scale (the original picks it
+/// when the object carries a secondary model handle).
 pub fn cg_object__gather_render_proxy_by_guid__483340(
     scale_x: f32,
     scale_y: f32,
@@ -139,8 +140,10 @@ mod tests_cg_unit_c__is_footstep_near_liquid__60a740 {
     }
 }
 
-/// Segment-cursor advance with wrap: `cur + 1`, or `0` once it reaches
-/// `count` (folded stock helper at `0x5f6260`).
+/// Segment-cursor advance with wrap.
+///
+/// `cur + 1`, or `0` once it reaches `count` (folded stock helper at
+/// `0x5f6260`).
 pub fn cg_game_object_display_transport__advance_segment__5f6260(cur: u32, count: u32) -> u32 {
     let next = cur.wrapping_add(1);
     if next == count { 0 } else { next }
@@ -161,8 +164,7 @@ pub fn cg_game_object_display_transport__segment_frac__5f6280(
     super::f64_to_f32(num / den)
 }
 
-/// Spline sample: the keyframe-position lerp rotated by the orientation
-/// quaternion.
+/// Spline sample: the keyframe-position lerp rotated by the orientation quaternion.
 ///
 /// `quat` is `[x, y, z, w]`. The doubled-product rotation matrix is built
 /// and narrowed to `f32` exactly where the original stores it, then
@@ -291,8 +293,9 @@ mod tests_cg_game_object_display_transport__eval_spline_position__5f6280 {
     }
 }
 
-/// Rotates a local-space surface normal into world space by the upper 3x3
-/// block of a 16-float (row stride 4) transform.
+/// Rotates a local-space surface normal into world space.
+///
+/// By the upper 3x3 block of a 16-float (row stride 4) transform.
 ///
 /// Lane wiring matches the original's x87 schedule: each output sums the
 /// `z` lane first, then `y`, then `x`, against one matrix column.
@@ -445,8 +448,7 @@ mod tests_cg_render_entity__accumulate_bounds__672a20 {
     }
 }
 
-/// Colour-derived direction and anchor/pull position for a coloured-vector
-/// submission.
+/// Colour-derived direction and anchor/pull position for a coloured-vector submission.
 ///
 /// `color` holds the raw colour bytes in output lane order; each lane expands
 /// as `byte * inv255 * intensity`. With `pull = Some((target, weight))` the
@@ -566,8 +568,10 @@ pub fn object_draw_debug_box_recursive__6a8050(bx: u8, by: u8, bz: u8, scale: f3
     ]
 }
 
-/// Scales a 3-float vector by a weight, each product exact in `f64` and
-/// narrowed to `f32` where the original stores it.
+/// Scales a 3-float vector by a weight.
+///
+/// Each product exact in `f64` and narrowed to `f32` where the original
+/// stores it.
 pub fn object_draw_debug_box_recursive_weight__6a8050(v: &[f32; 3], w: f32) -> [f32; 3] {
     let wf = f64::from(w);
     [
@@ -931,8 +935,10 @@ mod tests_object_query_overlapping_boxes__6a3b10 {
     }
 }
 
-/// `Orientation::SetPosition` change-test kernel (`0x7adcd0`): true when the new
-/// position differs from the stored one on any of the three components.
+/// `Orientation::SetPosition` change-test kernel (`0x7adcd0`).
+///
+/// True when the new position differs from the stored one on any of the three
+/// components.
 ///
 /// Stock compares each component with the x87 `FLD stored; FCOMP new; FNSTSW AX;
 /// TEST AH,0x44; JP` idiom. After `FCOMP`, `AH` carries `C3` (bit `0x40`) and
@@ -1002,11 +1008,12 @@ mod tests_orientation__set_position__7adcd0 {
     }
 }
 
-/// `CGRenderEntity::UpdateTransform` (0x6717d0) — move-delta kernel: the world
-/// displacement `xform.translation - entity.position`. Each lane is computed
-/// wide and narrowed to `f32` exactly where stock spills it (`FSUB` + `FSTP
-/// dword` into the `C3Vector::Set` scratch), so the squared length below runs
-/// on the narrowed deltas just like the original.
+/// `CGRenderEntity::UpdateTransform` (0x6717d0) — move-delta kernel.
+///
+/// The world displacement `xform.translation - entity.position`. Each lane is
+/// computed wide and narrowed to `f32` exactly where stock spills it (`FSUB` +
+/// `FSTP dword` into the `C3Vector::Set` scratch), so the squared length below
+/// runs on the narrowed deltas just like the original.
 #[must_use]
 pub fn cg_render_entity__update_transform_delta__6717d0(
     trans: &[f32; 3],
@@ -1019,8 +1026,10 @@ pub fn cg_render_entity__update_transform_delta__6717d0(
     ]
 }
 
-/// Move test: `|dx² + dy² + dz²|` (x87 sum order `(dz² + dy²) + dx²`, then
-/// `FABS`) against the squared threshold (stock `.rdata` VA 0x801360). Stock is
+/// Move test.
+///
+/// `|dx² + dy² + dz²|` (x87 sum order `(dz² + dy²) + dx²`, then `FABS`) against
+/// the squared threshold (stock `.rdata` VA 0x801360). Stock is
 /// `FCOMP; FNSTSW; TEST AH,5; JP` feeding a `SETZ` inversion: the parity jump
 /// lands on the `EAX = 0` arm for `>`, `==` AND the unordered compare, and the
 /// `SETZ` then raises the republish flag — so "moved" means **not strictly
@@ -1038,8 +1047,9 @@ pub fn cg_render_entity__update_transform_moved__6717d0(delta: &[f32; 3], thresh
     !(len2.abs() < f64::from(threshold))
 }
 
-/// Uniform scale = `sqrt(row0 · row0)` (x87 sum order `(m00² + m01²) + m02²`,
-/// then `FSQRT`). Returns both the narrowed `f32` stock stores at
+/// Uniform scale = `sqrt(row0 · row0)` (x87 sum order `(m00² + m01²) + m02²`, then `FSQRT`).
+///
+/// Returns both the narrowed `f32` stock stores at
 /// `entity+0x30` (`FST dword`, which keeps the value on the x87 stack) and the
 /// wide value the subsequent unit-scale test consumes unrounded.
 #[must_use]
@@ -1049,10 +1059,12 @@ pub fn cg_render_entity__update_transform_scale__6717d0(row0: &[f32; 3]) -> (f32
     (super::f64_to_f32(wide), wide)
 }
 
-/// Unit-scale test on the wide (unrounded) scale: `|scale - one| < eps`
-/// STRICTLY (`FCOMP eps; TEST AH,5; JNP` — the no-parity jump fires only on
-/// the ordered `<`). A NaN scale compares unordered and FALLS THROUGH to the
-/// rescale branch (which then divides `one / NaN`), exactly like stock.
+/// Unit-scale test on the wide (unrounded) scale.
+///
+/// `|scale - one| < eps` STRICTLY (`FCOMP eps; TEST AH,5; JNP` — the no-parity
+/// jump fires only on the ordered `<`). A NaN scale compares unordered and
+/// FALLS THROUGH to the rescale branch (which then divides `one / NaN`),
+/// exactly like stock.
 #[must_use]
 pub fn cg_render_entity__update_transform_scale_is_unit__6717d0(
     scale_wide: f64,
@@ -1062,16 +1074,19 @@ pub fn cg_render_entity__update_transform_scale_is_unit__6717d0(
     (scale_wide - f64::from(one)).abs() < f64::from(eps)
 }
 
-/// Rescale factor `one / scale`, where `scale` is the already-narrowed `f32`
-/// re-read from `entity+0x30` (`FDIV dword [entity+0x30]`). Unguarded divide,
-/// exactly like stock: a zero scale yields `inf`, a NaN scale yields `NaN`.
+/// Rescale factor `one / scale`.
+///
+/// Where `scale` is the already-narrowed `f32` re-read from `entity+0x30`
+/// (`FDIV dword [entity+0x30]`). Unguarded divide, exactly like stock: a zero
+/// scale yields `inf`, a NaN scale yields `NaN`.
 #[must_use]
 pub fn cg_render_entity__update_transform_inv_scale__6717d0(one: f32, scale: f32) -> f32 {
     super::f64_to_f32(f64::from(one) / f64::from(scale))
 }
 
-/// Extent-degeneracy predicate (per lane `FLD min; FCOMP max; TEST AH,0x41;
-/// JP` → collapse): the box collapses to the entity position iff any lane has
+/// Extent-degeneracy predicate (per lane `FLD min; FCOMP max; TEST AH,0x41; JP` → collapse).
+///
+/// The box collapses to the entity position iff any lane has
 /// `min > max` STRICTLY or compares unordered (NaN). `min == max` does NOT
 /// collapse — the box transforms normally (`AH&0x41 == 0x40`, odd parity).
 /// Rust `!(min <= max)` reproduces the mask exactly. `ext` is
@@ -1082,10 +1097,12 @@ pub fn cg_render_entity__update_transform_extent_collapsed__6717d0(ext: &[f32; 6
     !(ext[0] <= ext[3]) || !(ext[1] <= ext[4]) || !(ext[2] <= ext[5])
 }
 
-/// Box midpoint: `(min' + max') * half` per lane (stock `.rdata` half at VA
-/// 0x7ffa24 = 0.5), narrowed at the stock `FSTP dword` spill. The `f32 * f32`
-/// product is exact in `f64`, so the single narrowing matches the x87 store
-/// rounding bit-for-bit.
+/// Box midpoint.
+///
+/// `(min' + max') * half` per lane (stock `.rdata` half at VA 0x7ffa24 = 0.5),
+/// narrowed at the stock `FSTP dword` spill. The `f32 * f32` product is exact
+/// in `f64`, so the single narrowing matches the x87 store rounding
+/// bit-for-bit.
 #[must_use]
 pub fn cg_render_entity__update_transform_midpoint__6717d0(sum: &[f32; 3], half: f32) -> [f32; 3] {
     [
@@ -1095,9 +1112,11 @@ pub fn cg_render_entity__update_transform_midpoint__6717d0(sum: &[f32; 3], half:
     ]
 }
 
-/// Bounding radius: `sqrt(|max' - mid|²)` over the STORED `f32` max corner
-/// (`entity+0x50`) and midpoint (`entity+0x5c`) — x87 sum order
-/// `(dz² + dy²) + dx²` — narrowed at the final `FSTP dword [entity+0x68]`.
+/// Bounding radius.
+///
+/// `sqrt(|max' - mid|²)` over the STORED `f32` max corner (`entity+0x50`) and
+/// midpoint (`entity+0x5c`) — x87 sum order `(dz² + dy²) + dx²` — narrowed at
+/// the final `FSTP dword [entity+0x68]`.
 #[must_use]
 pub fn cg_render_entity__update_transform_radius__6717d0(maxc: &[f32; 3], mid: &[f32; 3]) -> f32 {
     let dx = f64::from(maxc[0]) - f64::from(mid[0]);
@@ -1244,10 +1263,12 @@ mod tests_cg_render_entity__update_transform__6717d0 {
     }
 }
 
-/// Selection-circle anchor smoothing (`CGObject_C__UpdateSelectionCircleTransform`
-/// @0x614cd0, hot core): exponential lerp of the stored anchor toward the
-/// ground point, `anchor' = ground + (anchor − ground)·k` with
-/// `k = pow(K, dt)` computed by the caller (retiring the x87 `_CIpow`).
+/// Selection-circle anchor smoothing.
+///
+/// `CGObject_C__UpdateSelectionCircleTransform` @0x614cd0, hot core:
+/// exponential lerp of the stored anchor toward the ground point,
+/// `anchor' = ground + (anchor − ground)·k` with `k = pow(K, dt)` computed
+/// by the caller (retiring the x87 `_CIpow`).
 ///
 /// Rounding mirrors the stock x87 chain: the three deltas are f32
 /// single-rounded; the X lane's `d.x·k + ground.x` stays extended until one
@@ -1266,9 +1287,10 @@ pub fn selection_circle_smooth__614cd0(anchor: &[f32; 3], ground: &[f32; 3], k: 
     [x, ky + ground[1], kz + ground[2]]
 }
 
-/// Selection-circle isotropic scale (`@0x614cd0` tail): `base · f94 · f90`
-/// multiplied in the stock order (`f94·f90` first — exact — then `·base`),
-/// rounded once at the store like the x87 `FMULP`/`FST`.
+/// Selection-circle isotropic scale (`@0x614cd0` tail).
+///
+/// `base · f94 · f90` multiplied in the stock order (`f94·f90` first — exact —
+/// then `·base`), rounded once at the store like the x87 `FMULP`/`FST`.
 pub fn selection_circle_scale__614cd0(base: f32, f94: f32, f90: f32) -> f32 {
     (f64::from(f94) * f64::from(f90) * f64::from(base)) as f32
 }
@@ -1286,8 +1308,9 @@ mod tests_selection_circle__614cd0 {
         assert_eq!(out[2].to_bits(), 3.0f32.to_bits());
     }
 
-    /// k = 1 keeps the anchor unchanged (delta + ground restores the input
-    /// bit-exactly for representable values).
+    /// k = 1 keeps the anchor unchanged.
+    ///
+    /// Delta + ground restores the input bit-exactly for representable values.
     #[test]
     fn k_one_keeps_anchor() {
         let a = [5.5f32, -3.25, 9.125];
@@ -1297,8 +1320,9 @@ mod tests_selection_circle__614cd0 {
         assert_eq!(out[2].to_bits(), a[2].to_bits());
     }
 
-    /// Midpoint blend: k = 0.5 lands halfway (exact halves chosen so every
-    /// step is representable).
+    /// Midpoint blend.
+    ///
+    /// k = 0.5 lands halfway (exact halves chosen so every step is representable).
     #[test]
     fn k_half_blends() {
         let out = selection_circle_smooth__614cd0(&[4.0, 8.0, -2.0], &[2.0, 4.0, 2.0], 0.5);
@@ -1307,9 +1331,10 @@ mod tests_selection_circle__614cd0 {
         assert_eq!(out[2].to_bits(), 0.0f32.to_bits());
     }
 
-    /// The Y lane really is double-rounded through an f32 local (stock FSTP/
-    /// reload) while X stays extended: sweep until the two chains disagree,
-    /// proving the asymmetry is live.
+    /// The Y lane really is double-rounded through an f32 local.
+    ///
+    /// (Stock FSTP/reload) while X stays extended: sweep until the two chains
+    /// disagree, proving the asymmetry is live.
     #[test]
     fn y_lane_uses_stored_f32_intermediate() {
         let mut found = false;
@@ -1343,8 +1368,10 @@ mod tests_selection_circle__614cd0 {
         );
     }
 
-    /// NaN ground: the caller's gate skips the smoothing entirely, but if a
-    /// NaN sneaks into a non-gated lane it must propagate, not panic.
+    /// NaN ground.
+    ///
+    /// The caller's gate skips the smoothing entirely, but if a NaN sneaks
+    /// into a non-gated lane it must propagate, not panic.
     #[test]
     fn nan_propagates() {
         let out = selection_circle_smooth__614cd0(&[1.0, f32::NAN, 3.0], &[0.0, 0.0, 0.0], 0.5);
@@ -1352,8 +1379,9 @@ mod tests_selection_circle__614cd0 {
     }
 }
 
-/// Selection-circle fade for `CGObject_C::UpdateSelectionCircleAndVisuals`
-/// (@0x614a90, 0x614b34–0x614b96): cubic-eased lerp of the circle alpha
+/// Selection-circle fade for `CGObject_C::UpdateSelectionCircleAndVisuals`.
+///
+/// @0x614a90, 0x614b34–0x614b96: cubic-eased lerp of the circle alpha
 /// animation `{from, to}` at `elapsed/dur`.
 ///
 /// `FILD/FIDIV` divide the SIGNED dwords wide; `FST` narrows `t` but keeps
@@ -1374,8 +1402,9 @@ pub fn selection_fade__614a90(elapsed: i32, dur: i32, lo: f32, hi: f32, from: f3
     super::f64_to_f32((f64::from(to) - f64::from(from)) * fade + f64::from(from))
 }
 
-/// Two-second cosine scale pulse (0x614bdb–0x614c26): blends the recorded
-/// old scale toward the live `vfunc+0x1c` target.
+/// Two-second cosine scale pulse (0x614bdb–0x614c26).
+///
+/// Blends the recorded old scale toward the live `vfunc+0x1c` target.
 ///
 /// The angle narrows once (`FSTP` after the two constant multiplies) before
 /// the `FCOS`; the blend weight `(−cos)·half + half` and the lerp fold wide
@@ -1395,8 +1424,9 @@ pub fn scale_pulse__614a90(
     super::f64_to_f32(w * (f64::from(target) - f64::from(old)) + f64::from(old))
 }
 
-/// Spell-visual survivor fade (0x614c58–0x614ca7): cubic ease of the
-/// remaining-lifetime fraction, clamped to `[0, 1]`.
+/// Spell-visual survivor fade (0x614c58–0x614ca7).
+///
+/// Cubic ease of the remaining-lifetime fraction, clamped to `[0, 1]`.
 ///
 /// The remaining time FILDs as a 64-bit integer whose HIGH DWORD is forced
 /// zero (0x614c60) — an already-expired tail node's negative remainder
@@ -1416,8 +1446,9 @@ pub fn visual_fade__614a90(remaining_raw: u32, k1: f32, lo: f32, hi: f32) -> f32
     }
 }
 
-/// Circle alpha product (0x614baa–0x614bb7): `base(+0x100) · fade(+0xf4)`,
-/// one narrow into the pushed argument.
+/// Circle alpha product (0x614baa–0x614bb7).
+///
+/// `base(+0x100) · fade(+0xf4)`, one narrow into the pushed argument.
 pub fn circle_alpha__614a90(base_alpha: f32, fade: f32) -> f32 {
     super::f64_to_f32(f64::from(base_alpha) * f64::from(fade))
 }
@@ -1488,8 +1519,9 @@ mod tests_selection_visuals__614a90 {
     }
 }
 
-/// Facing delta + epsilon snap for `CGUnit_C::UpdateFacingInterpolation`
-/// (@0x600cd0, 0x600ea8–0x600ed7): `d = target − orientation` with the
+/// Facing delta + epsilon snap for `CGUnit_C::UpdateFacingInterpolation`.
+///
+/// @0x600cd0, 0x600ea8–0x600ed7: `d = target − orientation` with the
 /// WIDE delta feeding the |d| FABS/FCOMP snap gate (snap iff `|d| <= eps`
 /// ORDERED — `TEST AH,0x41; JP` routes NaN to smoothing) and one narrow
 /// into the scratch slot. On snap the WIDE target narrows into the
@@ -1501,9 +1533,10 @@ pub fn facing_delta_snap__600cd0(target: f64, current: f32, eps: f32) -> (f32, f
     (d, super::f64_to_f32(target), snap)
 }
 
-/// ±2π wrap of the facing delta (0x600ed8–0x600f0b): `d > hi` ordered
-/// subtracts a period, else `d < lo` ordered adds one (each a wide fold,
-/// one narrow); anything else — including NaN — passes through.
+/// ±2π wrap of the facing delta (0x600ed8–0x600f0b).
+///
+/// `d > hi` ordered subtracts a period, else `d < lo` ordered adds one (each a
+/// wide fold, one narrow); anything else — including NaN — passes through.
 pub fn facing_wrap__600cd0(d: f32, hi: f32, lo: f32, two_pi: f32) -> f32 {
     if d > hi {
         super::f64_to_f32(f64::from(d) - f64::from(two_pi))
@@ -1514,8 +1547,9 @@ pub fn facing_wrap__600cd0(d: f32, hi: f32, lo: f32, two_pi: f32) -> f32 {
     }
 }
 
-/// Four-sample history average + overshoot guard (0x600f7b–0x600fcb): the
-/// sum seeds from the 0.0 global and folds the four history floats wide,
+/// Four-sample history average + overshoot guard (0x600f7b–0x600fcb).
+///
+/// The sum seeds from the 0.0 global and folds the four history floats wide,
 /// scales by the quarter constant, then the average is used only when it
 /// does NOT overshoot the raw delta in the delta's direction:
 /// `d > 0` ordered keeps the average iff NOT `d < avg` (a NaN average
@@ -1536,7 +1570,8 @@ pub fn facing_smooth__600cd0(d: f32, hist: [f32; 4], quarter: f32, zero: f32) ->
     if use_avg { super::f64_to_f32(avg) } else { d }
 }
 
-/// Half-step apply + final [0, 2π) wrap (0x600fcb–0x601018):
+/// Half-step apply + final [0, 2π) wrap (0x600fcb–0x601018).
+///
 /// `result·half + orientation` folds wide; `v < 0` ordered adds a period,
 /// else `v >= 2π` ordered subtracts one, NaN stores as-is; one narrow into
 /// the orientation store.
@@ -1630,12 +1665,13 @@ mod tests_facing_interpolation__600cd0 {
     }
 }
 
-/// Target-highlight blink byte of `CGPlayer_C::OnFrameUpdate`
-/// (0x607f9b..0x607fbe): the remaining-ms `FILD` (exact) × the 1/500 scale,
-/// optionally folded through `one − t` when the blink phase word is
-/// NON-zero (the stock `JZ` skips the `FSUBR` on zero), × the byte scale,
-/// then the CRT `__ftol` — the caller keeps AL (bits 8..15 of the packed
-/// color dword). The whole chain runs wide; no intermediate narrows.
+/// Target-highlight blink byte of `CGPlayer_C::OnFrameUpdate` (0x607f9b..0x607fbe).
+///
+/// The remaining-ms `FILD` (exact) × the 1/500 scale, optionally folded through
+/// `one − t` when the blink phase word is NON-zero (the stock `JZ` skips the
+/// `FSUBR` on zero), × the byte scale, then the CRT `__ftol` — the caller keeps
+/// AL (bits 8..15 of the packed color dword). The whole chain runs wide; no
+/// intermediate narrows.
 #[must_use]
 pub fn blink_byte__607ed0(remaining: i32, phase: u32, k_inv: f32, one: f32, k_byte: f32) -> u8 {
     let mut t = f64::from(remaining) * f64::from(k_inv);
@@ -1646,26 +1682,29 @@ pub fn blink_byte__607ed0(remaining: i32, phase: u32, k_inv: f32, one: f32, k_by
     (crate::math::misc::ftol__40a2b0(t) as u32 & 0xff) as u8
 }
 
-/// Turn-assist wrap argument of `CGPlayer_C::OnFrameUpdate`
-/// (0x6080c2..0x6080d1): `(c98 − c94) + step` folds entirely wide and
-/// narrows ONCE into the NormalizeAngleToPi stack argument (a per-op f32
-/// model would round the intermediate difference a second time). `step`
-/// arrives pre-negated by the parity select (`FCHS`, exact).
+/// Turn-assist wrap argument of `CGPlayer_C::OnFrameUpdate` (0x6080c2..0x6080d1).
+///
+/// `(c98 − c94) + step` folds entirely wide and narrows ONCE into the
+/// NormalizeAngleToPi stack argument (a per-op f32 model would round the
+/// intermediate difference a second time). `step` arrives pre-negated by the
+/// parity select (`FCHS`, exact).
 #[must_use]
 pub fn facing_assist_arg__607ed0(c98: f32, c94: f32, step: f32) -> f32 {
     super::f64_to_f32((f64::from(c98) - f64::from(c94)) + f64::from(step))
 }
 
-/// Turn-assist blend of `CGPlayer_C::OnFrameUpdate` (0x6080db..0x6080e8):
-/// the wrapped delta × the quarter constant + the current facing, wide,
+/// Turn-assist blend of `CGPlayer_C::OnFrameUpdate` (0x6080db..0x6080e8).
+///
+/// The wrapped delta × the quarter constant + the current facing, wide,
 /// one narrow into the second NormalizeAngleToPi argument.
 #[must_use]
 pub fn facing_assist_blend__607ed0(wrapped: f32, quarter: f32, c94: f32) -> f32 {
     super::f64_to_f32(f64::from(wrapped) * f64::from(quarter) + f64::from(c94))
 }
 
-/// Turn-rate step of `CGPlayer_C::OnFrameUpdate` (0x6081dd..0x608204): the
-/// ms delta `FILD`s as a ZERO-EXTENDED qword (exact), the three-factor
+/// Turn-rate step of `CGPlayer_C::OnFrameUpdate` (0x6081dd..0x608204).
+///
+/// The ms delta `FILD`s as a ZERO-EXTENDED qword (exact), the three-factor
 /// rate chain stays wide, and the `FCOM`+`TEST AH,0x41` pick keeps the
 /// RATE on `rate <= |d|` **or unordered** (a NaN rate survives the pick),
 /// switching to `|d|` only on an ordered `rate > |d|`; one narrow.
@@ -1680,8 +1719,9 @@ pub fn turn_step__607ed0(dt_ms: u32, k_a: f32, unit_rate: f32, k_b: f32, abs_del
     super::f64_to_f32(chosen)
 }
 
-/// The sign-transfer idiom of `CGPlayer_C::OnFrameUpdate` (used at
-/// 0x60819b, 0x60820f, 0x6082e6, 0x608383): integer
+/// The sign-transfer idiom of `CGPlayer_C::OnFrameUpdate`.
+///
+/// Used at 0x60819b, 0x60820f, 0x6082e6, 0x608383: integer
 /// `((mag ^ sign) & 0x7fffffff) ^ sign` — the magnitude bits of `mag` with
 /// the sign bit of `sign_src`, exact for every payload including NaNs.
 #[must_use]
@@ -1758,16 +1798,18 @@ mod tests_on_frame_update__607ed0 {
     }
 }
 
-/// Shadow-transform uniform scale (0x613fd7..0x613fe9): `s94 × s90 × sel`
-/// where `sel` is the override/base scale selected by the model flag. The
-/// x87 fold `(s94 × s90) × sel` stays 80-bit, one narrow.
+/// Shadow-transform uniform scale (0x613fd7..0x613fe9).
+///
+/// `s94 × s90 × sel` where `sel` is the override/base scale selected by the
+/// model flag. The x87 fold `(s94 × s90) × sel` stays 80-bit, one narrow.
 pub fn shadow_scale__613ef0(s94: f32, s90: f32, sel: f32) -> f32 {
     super::f64_to_f32(f64::from(s94) * f64::from(s90) * f64::from(sel))
 }
 
-/// Shadow bounds-center pre-scale sums (0x614031..0x614050): the three
-/// model-data pairings `(md3+md0, md1+md4, md2+md5)`, each a single-narrow
-/// `FADD`. The caller then halves the vector via the Scale hook.
+/// Shadow bounds-center pre-scale sums (0x614031..0x614050).
+///
+/// The three model-data pairings `(md3+md0, md1+md4, md2+md5)`, each a
+/// single-narrow `FADD`. The caller then halves the vector via the Scale hook.
 pub fn shadow_bounds_center__613ef0(md: [f32; 6]) -> [f32; 3] {
     [
         super::f64_to_f32(f64::from(md[3]) + f64::from(md[0])),

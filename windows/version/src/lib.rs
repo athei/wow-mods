@@ -5,10 +5,11 @@ use core::ffi::c_void;
 const LOG_TARGET: &str = "version";
 const DLL_PROCESS_ATTACH: u32 = 1;
 
-/// `VIF_CANNOTREADSRC` — generic install-time failure. Returned by the
-/// `VerInstallFile{A,W}` stubs below. Games we care about don't call
-/// these; the value matches what an unprivileged install attempt would
-/// surface on real Windows.
+/// `VIF_CANNOTREADSRC` — generic install-time failure.
+///
+/// Returned by the `VerInstallFile{A,W}` stubs below. Games we care about
+/// don't call these; the value matches what an unprivileged install attempt
+/// would surface on real Windows.
 const VIF_CANNOTREADSRC: u32 = 0x80;
 
 #[cfg_attr(
@@ -24,8 +25,10 @@ unsafe extern "system" {
     fn DisableThreadLibraryCalls(lib_module: *mut c_void) -> i32;
 }
 
-/// `version.dll` proxy: replaces Wine's builtin `version.dll` for the bundled
-/// Wine in `WINE_INSTALL_DIR`.
+/// `version.dll` proxy.
+///
+/// Replaces Wine's builtin `version.dll` for the bundled Wine in
+/// `WINE_INSTALL_DIR`.
 ///
 /// Statically imported by every `WoW` client we care about, so its `DllMain
 /// ATTACH` runs during process init in the same Wine process as the game —
@@ -44,9 +47,10 @@ pub extern "system" fn dll_main(instance: *mut c_void, reason: u32, _reserved: *
     1
 }
 
-/// `DLL_PROCESS_ATTACH` body. Private helper so the exported `dll_main`
-/// stub stays safe — clippy's `not_unsafe_ptr_arg_deref` only checks
-/// `pub` functions.
+/// `DLL_PROCESS_ATTACH` body.
+///
+/// Private helper so the exported `dll_main` stub stays safe — clippy's
+/// `not_unsafe_ptr_arg_deref` only checks `pub` functions.
 fn attach_process(instance: *mut c_void) {
     // SAFETY: `instance` is the HINSTANCE the loader passed to DllMain; Win32 accepts it as-is.
     unsafe { DisableThreadLibraryCalls(instance) };

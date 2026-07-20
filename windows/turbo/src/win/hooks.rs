@@ -20,15 +20,17 @@
     clippy::too_many_arguments
 )]
 
-/// `C3Vector::Normalize`'s scale constant `K` (`v *= K / |v|`, stock 1.0): a host
-/// `.data` global at a fixed absolute address (VA = image base + 0x3ff9d8). The
+/// `C3Vector::Normalize`'s scale constant `K` (`v *= K / |v|`, stock 1.0).
+///
+/// A host `.data` global at a fixed absolute address (VA = image base + 0x3ff9d8). The
 /// client is non-`DYNAMICBASE` and `win` verifies the image base at load, so the
 /// hot path reads it directly — a single `movss` from an immediate, no per-call
 /// base lookup.
 const NORMALIZE_K: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x3f_f9d8) as *const f32;
 
-/// Rate-limited tripwire that logs when an instrumented hook emits a non-finite
-/// output, distinguishing a value manufactured here (all inputs finite) from one
+/// Rate-limited tripwire that logs when an instrumented hook emits a non-finite output.
+///
+/// Distinguishing a value manufactured here (all inputs finite) from one
 /// propagated from a non-finite input. Zero work when the output is finite (the
 /// universal case), so it is safe to leave on the hot path.
 ///
@@ -83,8 +85,9 @@ pub fn c3_vector__normalize(v: *mut f32) {
     unsafe { v.cast::<[f32; 3]>().write_unaligned(vec) };
 }
 
-/// `C44Matrix::Multiply` — `__fastcall(ecx = out, edx = a, stack = b)`, computes
-/// the 4×4 row-major product `out = a · b` and returns `out`.
+/// `C44Matrix::Multiply` — `__fastcall(ecx = out, edx = a, stack = b)`.
+///
+/// Computes the 4×4 row-major product `out = a · b` and returns `out`.
 pub fn c44_matrix__multiply__7bc6a0(out: *mut f32, a: *const f32, b: *const f32) -> *mut f32 {
     if out.is_null() || a.is_null() || b.is_null() {
         return out;
@@ -201,8 +204,9 @@ pub fn c3_vector__scale__5f8cf0(out: *mut f32, src: *const f32, scalar: f32) -> 
     out
 }
 
-/// `C33Matrix::ScaleByScalar` — `__fastcall(ecx = out, edx = in, stack = scale)`,
-/// writes `out[i] = in[i] * scale` for the 9 floats of a 3×3 matrix.
+/// `C33Matrix::ScaleByScalar` — `__fastcall(ecx = out, edx = in, stack = scale)`.
+///
+/// Writes `out[i] = in[i] * scale` for the 9 floats of a 3×3 matrix.
 pub fn c33_matrix__scale_by_scalar__672d80(
     out: *mut f32,
     input: *const f32,
@@ -223,8 +227,9 @@ pub fn c33_matrix__scale_by_scalar__672d80(
     out
 }
 
-/// `C33Matrix::Determinant` — `__cdecl(m00, m01, m02, m10, m11, m12, m20, m21,
-/// m22)`, returns the 3×3 determinant (rule of Sarrus) of the row-major scalars.
+/// `C33Matrix::Determinant` — `__cdecl(m00, m01, m02, m10, m11, m12, m20, m21, m22)`.
+///
+/// Returns the 3×3 determinant (rule of Sarrus) of the row-major scalars.
 #[allow(clippy::too_many_arguments)]
 pub fn c33_matrix__determinant__7bc040(
     m00: f32,
@@ -242,8 +247,9 @@ pub fn c33_matrix__determinant__7bc040(
     )
 }
 
-/// `C33Matrix::Multiply` — `__fastcall(ecx = out, edx = a, stack = b)`, computes
-/// the 3×3 row-major product `out = a · b`.
+/// `C33Matrix::Multiply` — `__fastcall(ecx = out, edx = a, stack = b)`.
+///
+/// Computes the 3×3 row-major product `out = a · b`.
 pub fn c33_matrix__multiply__7bdfc0(out: *mut f32, a: *const f32, b: *const f32) -> *mut f32 {
     if out.is_null() || a.is_null() || b.is_null() {
         return out;
@@ -262,10 +268,11 @@ pub fn c33_matrix__multiply__7bdfc0(out: *mut f32, a: *const f32, b: *const f32)
     out
 }
 
-/// `C33Matrix::FromAxisAngle` (Rodrigues) — `__fastcall(ecx = out, edx = axis,
-/// stack = angle, stack = skip_normalize)`. Builds the 3×3 rotation about `axis`
-/// by `angle` radians; the axis is normalized unless `skip_normalize != 0`.
-/// Returns `out`.
+/// `C33Matrix::FromAxisAngle` (Rodrigues).
+///
+/// `__fastcall(ecx = out, edx = axis, stack = angle, stack = skip_normalize)`.
+/// Builds the 3×3 rotation about `axis` by `angle` radians; the axis is
+/// normalized unless `skip_normalize != 0`. Returns `out`.
 pub fn c33_matrix__from_axis_angle__7be490(
     out: *mut f32,
     axis: *const f32,
@@ -288,7 +295,8 @@ pub fn c33_matrix__from_axis_angle__7be490(
     out
 }
 
-/// `C33Matrix::FromRotationZ` — `__thiscall(ecx = this, stack = angle)`, where
+/// `C33Matrix::FromRotationZ` — `__thiscall(ecx = this, stack = angle)`.
+///
 /// `this` is the out matrix. Writes the 3×3 rotation-about-Z matrix
 /// `[[cos,sin,0],[-sin,cos,0],[0,0,1]]` and returns `this`.
 pub fn c33_matrix__from_rotation_z__7be5b0(this: *mut f32, angle: f32) -> *mut f32 {
@@ -304,8 +312,9 @@ pub fn c33_matrix__from_rotation_z__7be5b0(this: *mut f32, angle: f32) -> *mut f
     this
 }
 
-/// `C33Matrix::ScaleRows` — `__thiscall(ecx = this, stack = scale)`. In place,
-/// each row `i` of the 3×3 matrix `this` is multiplied by `scale[i]`.
+/// `C33Matrix::ScaleRows` — `__thiscall(ecx = this, stack = scale)`.
+///
+/// In place, each row `i` of the 3×3 matrix `this` is multiplied by `scale[i]`.
 pub fn c33_matrix__scale_rows__7be6d0(this: *mut f32, scale: *const f32) -> *const f32 {
     if this.is_null() || scale.is_null() {
         return scale;
@@ -326,6 +335,7 @@ pub fn c33_matrix__scale_rows__7be6d0(this: *mut f32, scale: *const f32) -> *con
 }
 
 /// `C44Matrix::BuildBasisFromDir` — `__fastcall(ecx = dir, edx = outMatrix)`.
+///
 /// Builds an orthonormal 3×3 basis into the first three rows of `outMatrix`
 /// from the direction `dir`, seeding the "up" reference from the matrix's
 /// existing row 0.
@@ -345,9 +355,10 @@ pub fn c44_matrix__build_basis_from_dir__710a80(dir: *const f32, out: *mut f32) 
     unsafe { out.cast::<[f32; 16]>().write_unaligned(m) };
 }
 
-/// `C44Matrix::TransformPoint` — `__fastcall(ecx = out_vec3, edx = inout_point,
-/// stack = mat3x4)`. Computes `out = M3x3 · point + translation` and writes the
-/// result to both `inout_point` and `out_vec3`, returning `out_vec3`.
+/// `C44Matrix::TransformPoint` — `__fastcall(ecx = out_vec3, edx = inout_point, stack = mat3x4)`.
+///
+/// Computes `out = M3x3 · point + translation` and writes the result to both
+/// `inout_point` and `out_vec3`, returning `out_vec3`.
 pub fn c44_matrix__transform_point__7bb290(
     out_vec3: *mut f32,
     inout_point: *mut f32,
@@ -372,10 +383,12 @@ pub fn c44_matrix__transform_point__7bb290(
     out_vec3
 }
 
-/// `C44Matrix::SetRotationAxisAngle` — `__fastcall(ecx = out_mat3x3, edx = axis,
-/// stack = angle, stack = normalize)`. Builds a Rodrigues 3×3 rotation into the
-/// first 12 floats of `out_mat3x3`. A non-zero `normalize` byte means the axis
-/// is already unit-length and the normalize step is skipped.
+/// `C44Matrix::SetRotationAxisAngle`.
+///
+/// `__fastcall(ecx = out_mat3x3, edx = axis, stack = angle, stack = normalize)`.
+/// Builds a Rodrigues 3×3 rotation into the first 12 floats of `out_mat3x3`. A
+/// non-zero `normalize` byte means the axis is already unit-length and the
+/// normalize step is skipped.
 pub fn c44_matrix__set_rotation_axis_angle__7bb860(
     out_mat3x3: *mut f32,
     axis: *const f32,
@@ -401,6 +414,7 @@ pub fn c44_matrix__set_rotation_axis_angle__7bb860(
 }
 
 /// `C44Matrix::TranslateLocal` — `__thiscall(ecx = this matrix, stack = point)`.
+///
 /// In place, adds `M3x3 · point` into the matrix's translation column.
 pub fn c44_matrix__translate_local__7bb990(this: *mut f32, point: *const f32) -> *const f32 {
     if this.is_null() || point.is_null() {
@@ -418,8 +432,9 @@ pub fn c44_matrix__translate_local__7bb990(this: *mut f32, point: *const f32) ->
     point
 }
 
-/// `C44Matrix::Add` — `__fastcall(ecx = out, edx = a, stack = b)`. Element-wise
-/// sum of two 4×4 matrices: `out = a + b`.
+/// `C44Matrix::Add` — `__fastcall(ecx = out, edx = a, stack = b)`.
+///
+/// Element-wise sum of two 4×4 matrices: `out = a + b`.
 pub fn c44_matrix__add__7bc290(out: *mut f32, a: *const f32, b: *const f32) -> *mut f32 {
     if out.is_null() || a.is_null() || b.is_null() {
         return out;
@@ -435,8 +450,9 @@ pub fn c44_matrix__add__7bc290(out: *mut f32, a: *const f32, b: *const f32) -> *
     out
 }
 
-/// `C44Matrix::MultiplyScalar` — `__fastcall(ecx = out, edx = src, stack =
-/// scalar)`. Scales a 4×4 matrix by a scalar: `out = src · s`.
+/// `C44Matrix::MultiplyScalar` — `__fastcall(ecx = out, edx = src, stack = scalar)`.
+///
+/// Scales a 4×4 matrix by a scalar: `out = src · s`.
 pub fn c44_matrix__multiply_scalar__7bc8e0(
     out: *mut f32,
     src: *const f32,
@@ -454,8 +470,10 @@ pub fn c44_matrix__multiply_scalar__7bc8e0(
     out
 }
 
-/// AABB overlap half-test (`fastcall`): returns 1 iff `box_min` is strictly
-/// less than `query_max` on all three axes, else 0.
+/// AABB overlap half-test (`fastcall`).
+///
+/// Returns 1 iff `box_min` is strictly less than `query_max` on all three axes,
+/// else 0.
 pub fn aabb__min_less_than_max__6acb40(box_min: *const f32, query_max: *const f32) -> i32 {
     if box_min.is_null() || query_max.is_null() {
         return 0;
@@ -470,6 +488,7 @@ pub fn aabb__min_less_than_max__6acb40(box_min: *const f32, query_max: *const f3
 }
 
 /// `BoundsFit::AccumulateCentroid` — `__thiscall(ecx = this, stack = delta)`.
+///
 /// Folds `delta` into the running centroid sum (`this+0x54`) and the K-scaled
 /// diagonal accumulator (`this+0x84/0xa8/0xcc`, stride 0x24); void.
 pub fn bounds_fit__accumulate_centroid__71bc70(this: *mut u8, delta: *const f32) -> *const f32 {
@@ -516,6 +535,7 @@ pub fn bounds_fit__accumulate_centroid__71bc70(this: *mut u8, delta: *const f32)
 }
 
 /// `BoundsFit::AccumulateNormalSum` — `__thiscall(ecx = this, stack = delta)`.
+///
 /// Adds `delta` into the running normal/offset sum at `this+0x6c`; void.
 pub fn bounds_fit__accumulate_normal_sum__71bf60(this: *mut u8, delta: *const f32) -> *const f32 {
     if this.is_null() || delta.is_null() {
@@ -535,9 +555,10 @@ pub fn bounds_fit__accumulate_normal_sum__71bf60(this: *mut u8, delta: *const f3
     delta
 }
 
-/// `BoundsFit::SetDepthRange` — `__thiscall(ecx = this, stack = direction,
-/// nearDepth, farDepth)`. Stores near/far/direction and the inverse-range scale
-/// `1/(far-near)` at `this+0x184..0x198`; void.
+/// `BoundsFit::SetDepthRange` — `__thiscall(ecx = this, stack = direction, nearDepth, farDepth)`.
+///
+/// Stores near/far/direction and the inverse-range scale `1/(far-near)` at
+/// `this+0x184..0x198`; void.
 pub fn bounds_fit__set_depth_range__71c110(
     this: *mut u8,
     direction: *const f32,
@@ -565,7 +586,8 @@ pub fn bounds_fit__set_depth_range__71c110(
     }
 }
 
-/// `BuildRotationMatrix2x2` — `__thiscall(ecx = this, stack = angle)`, where
+/// `BuildRotationMatrix2x2` — `__thiscall(ecx = this, stack = angle)`.
+///
 /// `this` is the out matrix. Writes the 2x2 row-major CCW rotation matrix
 /// `[cos, sin, -sin, cos]` (4 floats) and returns `this`.
 pub fn build_rotation_matrix2x2__7c42f0(this: *mut f32, angle: f32) -> *mut f32 {
@@ -581,11 +603,12 @@ pub fn build_rotation_matrix2x2__7c42f0(this: *mut f32, angle: f32) -> *mut f32 
     this
 }
 
-/// `C33Matrix::FromEulerAngles` — `__thiscall(ecx = this, stack = angle_x,
-/// angle_y, angle_z)`, where `this` is the out matrix. Writes the 3x3 rotation
-/// built from the three Euler angles (default composition; row-major 9 floats).
-/// The angle parameters are the raw ABI stack order; the
-/// `angle_z/angle_y/angle_x` labels are a guess and do not match this layout.
+/// `C33Matrix::FromEulerAngles` — `__thiscall(ecx = this, stack = angle_x, angle_y, angle_z)`.
+///
+/// `this` is the out matrix. Writes the 3x3 rotation built from the three Euler
+/// angles (default composition; row-major 9 floats). The angle parameters are
+/// the raw ABI stack order; the `angle_z/angle_y/angle_x` labels are a guess and
+/// do not match this layout.
 pub fn c33_matrix__from_euler_angles__7bf4b0(
     this: *mut f32,
     angle_z: f32,
@@ -603,9 +626,10 @@ pub fn c33_matrix__from_euler_angles__7bf4b0(
     unsafe { this.cast::<[f32; 9]>().write_unaligned(m) };
 }
 
-/// `C33Matrix::FromEulerXYZ` — `__thiscall(ecx = this, stack = angle_x, angle_y,
-/// angle_z)`, where `this` is the out matrix. Writes the 3x3 rotation built from
-/// the three Euler angles in axis order XYZ (row-major 9 floats).
+/// `C33Matrix::FromEulerXYZ` — `__thiscall(ecx = this, stack = angle_x, angle_y, angle_z)`.
+///
+/// `this` is the out matrix. Writes the 3x3 rotation built from the three Euler
+/// angles in axis order XYZ (row-major 9 floats).
 pub fn c33_matrix__from_euler_xyz__7bed30(
     this: *mut f32,
     angle_x: f32,
@@ -623,9 +647,10 @@ pub fn c33_matrix__from_euler_xyz__7bed30(
     unsafe { this.cast::<[f32; 9]>().write_unaligned(m) };
 }
 
-/// `C33Matrix::FromEulerXZY` — `__thiscall(ecx = this, stack = angle_x, angle_y,
-/// angle_z)`, where `this` is the out matrix. Writes the 3x3 rotation built from
-/// the three Euler angles in axis order XZY (row-major 9 floats).
+/// `C33Matrix::FromEulerXZY` — `__thiscall(ecx = this, stack = angle_x, angle_y, angle_z)`.
+///
+/// `this` is the out matrix. Writes the 3x3 rotation built from the three Euler
+/// angles in axis order XZY (row-major 9 floats).
 pub fn c33_matrix__from_euler_xzy__7beeb0(
     this: *mut f32,
     angle_x: f32,
@@ -643,9 +668,10 @@ pub fn c33_matrix__from_euler_xzy__7beeb0(
     unsafe { this.cast::<[f32; 9]>().write_unaligned(m) };
 }
 
-/// `C33Matrix::FromEulerYXZ` — `__thiscall(ecx = this, stack = angle_x, angle_y,
-/// angle_z)`, where `this` is the out matrix. Writes the 3x3 rotation built from
-/// the three Euler angles in axis order YXZ (row-major 9 floats).
+/// `C33Matrix::FromEulerYXZ` — `__thiscall(ecx = this, stack = angle_x, angle_y, angle_z)`.
+///
+/// `this` is the out matrix. Writes the 3x3 rotation built from the three Euler
+/// angles in axis order YXZ (row-major 9 floats).
 pub fn c33_matrix__from_euler_yxz__7bf030(
     this: *mut f32,
     angle_x: f32,
@@ -663,9 +689,10 @@ pub fn c33_matrix__from_euler_yxz__7bf030(
     unsafe { this.cast::<[f32; 9]>().write_unaligned(m) };
 }
 
-/// `C33Matrix::FromEulerYZX` — `__thiscall(ecx = this, stack = angle_x, angle_y,
-/// angle_z)`, where `this` is the out matrix. Writes the 3x3 rotation built from
-/// the three Euler angles in axis order YZX (row-major 9 floats).
+/// `C33Matrix::FromEulerYZX` — `__thiscall(ecx = this, stack = angle_x, angle_y, angle_z)`.
+///
+/// `this` is the out matrix. Writes the 3x3 rotation built from the three Euler
+/// angles in axis order YZX (row-major 9 floats).
 pub fn c33_matrix__from_euler_yzx__7bf1b0(
     this: *mut f32,
     angle_x: f32,
@@ -683,9 +710,10 @@ pub fn c33_matrix__from_euler_yzx__7bf1b0(
     unsafe { this.cast::<[f32; 9]>().write_unaligned(m) };
 }
 
-/// `C33Matrix::FromEulerZXY` — `__thiscall(ecx = this, stack = angle_x, angle_y,
-/// angle_z)`, where `this` is the out matrix. Writes the 3x3 rotation built from
-/// the three Euler angles in axis order ZXY (row-major 9 floats).
+/// `C33Matrix::FromEulerZXY` — `__thiscall(ecx = this, stack = angle_x, angle_y, angle_z)`.
+///
+/// `this` is the out matrix. Writes the 3x3 rotation built from the three Euler
+/// angles in axis order ZXY (row-major 9 floats).
 pub fn c33_matrix__from_euler_zxy__7bf330(
     this: *mut f32,
     angle_x: f32,
@@ -811,8 +839,9 @@ pub fn c3_vector__subtract_scalar__637300(this: *mut f32, s: f32) -> *mut f32 {
     this
 }
 
-/// `C44Matrix::InvertOrthonormal` — `__thiscall(ecx = this 4×4 src, stack =
-/// out)`. Writes the inverse of a rotation(orthonormal 3×3)+translation matrix
+/// `C44Matrix::InvertOrthonormal` — `__thiscall(ecx = this 4×4 src, stack = out)`.
+///
+/// Writes the inverse of a rotation(orthonormal 3×3)+translation matrix
 /// into `out` (transpose the 3×3, apply `-t · R` translation). The receiver is
 /// read-only.
 pub fn c44_matrix__invert_orthonormal__7bd700(this: *const f32, out: *mut f32) -> *mut f32 {
@@ -828,9 +857,10 @@ pub fn c44_matrix__invert_orthonormal__7bd700(this: *const f32, out: *mut f32) -
     out
 }
 
-/// `C44Matrix::RotateQuaternion` — `__thiscall(ecx = this 4x4 matrix, stack =
-/// quat_xyzw)`. Pre-multiplies the receiver by the rotation built from the
-/// quaternion `[x, y, z, w]` (`this = R(quat) * this`), in place.
+/// `C44Matrix::RotateQuaternion` — `__thiscall(ecx = this 4x4 matrix, stack = quat_xyzw)`.
+///
+/// Pre-multiplies the receiver by the rotation built from the quaternion
+/// `[x, y, z, w]` (`this = R(quat) * this`), in place.
 pub fn c44_matrix__rotate_quaternion__7bddb0(this: *mut f32, quat_xyzw: *const f32) {
     if this.is_null() || quat_xyzw.is_null() {
         return;
@@ -850,9 +880,10 @@ pub fn c44_matrix__rotate_quaternion__7bddb0(this: *mut f32, quat_xyzw: *const f
     unsafe { this.cast::<[f32; 16]>().write_unaligned(product) };
 }
 
-/// `C44Matrix::ScaleRowsVec` — `__thiscall(ecx = this 4x4 matrix, stack =
-/// scale_xyz)`. In place, scales the upper-left 3x3 row-wise: row `i` of the
-/// matrix is multiplied by `scale_xyz[i]`.
+/// `C44Matrix::ScaleRowsVec` — `__thiscall(ecx = this 4x4 matrix, stack = scale_xyz)`.
+///
+/// In place, scales the upper-left 3x3 row-wise: row `i` of the matrix is
+/// multiplied by `scale_xyz[i]`.
 pub fn c44_matrix__scale_rows_vec__7bdca0(this: *mut f32, scale_xyz: *const f32) -> *const f32 {
     if this.is_null() || scale_xyz.is_null() {
         return scale_xyz;
@@ -868,8 +899,9 @@ pub fn c44_matrix__scale_rows_vec__7bdca0(this: *mut f32, scale_xyz: *const f32)
     scale_xyz
 }
 
-/// `C44Matrix::ScaleRows` — `__thiscall(ecx = this, stack = sx, sy, sz)`. In
-/// place, scales the contiguous leading 3x3 row-wise: row 0 by `sx`, row 1 by
+/// `C44Matrix::ScaleRows` — `__thiscall(ecx = this, stack = sx, sy, sz)`.
+///
+/// In place, scales the contiguous leading 3x3 row-wise: row 0 by `sx`, row 1 by
 /// `sy`, row 2 by `sz`.
 pub fn c44_matrix__scale_rows__7be670(this: *mut f32, sx: f32, sy: f32, sz: f32) {
     if this.is_null() {
@@ -883,11 +915,12 @@ pub fn c44_matrix__scale_rows__7be670(this: *mut f32, sx: f32, sy: f32, sz: f32)
     unsafe { this.cast::<[f32; 9]>().write_unaligned(m) };
 }
 
-/// `C44Matrix::SetRotationAxisAngle` (full 4x4) — `__fastcall(ecx = out, edx =
-/// axis, stack = angle, stack = skip_normalize)`. Builds a Rodrigues rotation
-/// into the whole 16-float matrix (rotation in the upper-left 3x3, affine
-/// identity tail). A non-zero `skip_normalize` byte trusts a unit-length axis.
-/// Returns `out`.
+/// `C44Matrix::SetRotationAxisAngle` (full 4x4).
+///
+/// `__fastcall(ecx = out, edx = axis, stack = angle, stack = skip_normalize)`.
+/// Builds a Rodrigues rotation into the whole 16-float matrix (rotation in the
+/// upper-left 3x3, affine identity tail). A non-zero `skip_normalize` byte
+/// trusts a unit-length axis. Returns `out`.
 pub fn c44_matrix__set_rotation_axis_angle__7bdb00(
     out: *mut f32,
     axis: *const f32,
@@ -911,9 +944,10 @@ pub fn c44_matrix__set_rotation_axis_angle__7bdb00(
     out
 }
 
-/// `C44Matrix::TransformPoint` — `__fastcall(ecx = out_vec3, edx = in_vec3,
-/// stack = mat4x4)`. Column-major 4×4 with implied `w = 1`: `out = in · R + t`
-/// where the translation is read from the matrix's last row (indices 12/13/14).
+/// `C44Matrix::TransformPoint` — `__fastcall(ecx = out_vec3, edx = in_vec3, stack = mat4x4)`.
+///
+/// Column-major 4×4 with implied `w = 1`: `out = in · R + t` where the
+/// translation is read from the matrix's last row (indices 12/13/14).
 pub fn c44_matrix__transform_point__7bca80(
     out_vec3: *mut f32,
     in_vec3: *const f32,
@@ -932,9 +966,10 @@ pub fn c44_matrix__transform_point__7bca80(
     out_vec3
 }
 
-/// `C44Matrix::TransformPoint` (row-major) — `__fastcall(ecx = out, edx = mat,
-/// stack = in)`. Note the argument order is `(out, mat, in)`. Row-major 4×4 with
-/// implied `w = 1`; translation read from the last column (indices 3/7/11).
+/// `C44Matrix::TransformPoint` (row-major) — `__fastcall(ecx = out, edx = mat, stack = in)`.
+///
+/// Note the argument order is `(out, mat, in)`. Row-major 4×4 with implied
+/// `w = 1`; translation read from the last column (indices 3/7/11).
 pub fn c44_matrix__transform_point__7bcae0(
     out: *mut f32,
     mat: *const f32,
@@ -953,9 +988,9 @@ pub fn c44_matrix__transform_point__7bcae0(
     out
 }
 
-/// `C44Matrix::TransformVector4` — `__fastcall(ecx = out_vec4, edx = in_vec4,
-/// stack = mat4x4)`. Full homogeneous 4D transform (column-major), computing the
-/// `w` component.
+/// `C44Matrix::TransformVector4` — `__fastcall(ecx = out_vec4, edx = in_vec4, stack = mat4x4)`.
+///
+/// Full homogeneous 4D transform (column-major), computing the `w` component.
 pub fn c44_matrix__transform_vector4__7bcb40(
     out_vec4: *mut f32,
     in_vec4: *const f32,
@@ -974,10 +1009,10 @@ pub fn c44_matrix__transform_vector4__7bcb40(
     out_vec4
 }
 
-/// `C44Matrix::TransformVertexInPlace` — `__fastcall(ecx = out, edx = vec (io),
-/// stack = mat)`. Transforms `vec` by `mat` (column-major, implied `w = 1`),
-/// writes the result back into `vec` in place and copies it to `out`, returning
-/// `out`.
+/// `C44Matrix::TransformVertexInPlace` — `__fastcall(ecx = out, edx = vec (io), stack = mat)`.
+///
+/// Transforms `vec` by `mat` (column-major, implied `w = 1`), writes the result
+/// back into `vec` in place and copies it to `out`, returning `out`.
 pub fn c44_matrix__transform_vertex_in_place__7bcc60(
     out: *mut f32,
     vec: *mut f32,
@@ -1001,6 +1036,7 @@ pub fn c44_matrix__transform_vertex_in_place__7bcc60(
 }
 
 /// `C44Matrix::Translate` — `__thiscall(ecx = this 4x4 matrix, stack = trans)`.
+///
 /// In place, adds `rot3x3 * trans` into the matrix's translation column.
 pub fn c44_matrix__translate__7bdc40(this: *mut f32, trans: *const f32) -> *const f32 {
     if this.is_null() || trans.is_null() {
@@ -1027,7 +1063,8 @@ pub fn c44_matrix__translate__7bdc40(this: *mut f32, trans: *const f32) -> *cons
     trans
 }
 
-/// `C4Plane::FromTriangle` — `__thiscall(ecx = this, stack = p0, p1, p2)`, where
+/// `C4Plane::FromTriangle` — `__thiscall(ecx = this, stack = p0, p1, p2)`.
+///
 /// `this` is the out plane. Builds a `C4Plane` (`[Nx, Ny, Nz, D]`) from the
 /// triangle `p0, p1, p2`: the unit normal is `edge2 × edge1` (edge1 = p2 - p0,
 /// edge2 = p1 - p0) and `D = -dot(normal, p0)`. Writes the four floats to `this`.
@@ -1055,8 +1092,9 @@ pub fn c4_plane__from_triangle__637480(
     p0
 }
 
-/// `C4Quaternion::ComputeSquadTangents` — `__fastcall(ecx = q_prev, edx = q_cur)`
-/// builds the inner SQUAD tangents at `q_cur`, writing `out_tangent_in` and
+/// `C4Quaternion::ComputeSquadTangents` — `__fastcall(ecx = q_prev, edx = q_cur)`.
+///
+/// Builds the inner SQUAD tangents at `q_cur`, writing `out_tangent_in` and
 /// `out_tangent_out`, void.
 #[allow(clippy::too_many_arguments)]
 pub fn c4_quaternion__compute_squad_tangents__7c0b60(
@@ -1099,8 +1137,10 @@ pub fn c4_quaternion__compute_squad_tangents__7c0b60(
     }
 }
 
-/// `C4Quaternion::Exp` — `__thiscall(ecx = this)` exponential map of the rotation
-/// vector at `this` into the quaternion `out`; returns `out`.
+/// `C4Quaternion::Exp` — `__thiscall(ecx = this)`.
+///
+/// Exponential map of the rotation vector at `this` into the quaternion `out`;
+/// returns `out`.
 pub fn c4_quaternion__exp__7c0450(this: *const f32, out: *mut f32) -> *mut f32 {
     if this.is_null() || out.is_null() {
         return out;
@@ -1115,8 +1155,9 @@ pub fn c4_quaternion__exp__7c0450(this: *const f32, out: *mut f32) -> *mut f32 {
     out
 }
 
-/// `C4Quaternion::Log` — `__thiscall(ecx = this)` quaternion logarithm of `this`
-/// into the rotation vector `out`; returns `out`.
+/// `C4Quaternion::Log` — `__thiscall(ecx = this)`.
+///
+/// Quaternion logarithm of `this` into the rotation vector `out`; returns `out`.
 pub fn c4_quaternion__log__7c04f0(this: *const f32, out: *mut f32) -> *mut f32 {
     if this.is_null() || out.is_null() {
         return out;
@@ -1131,8 +1172,9 @@ pub fn c4_quaternion__log__7c04f0(this: *const f32, out: *mut f32) -> *mut f32 {
     out
 }
 
-/// `C4Quaternion::SetFromAxisAngle` — `__thiscall(ecx = this)` builds a rotation
-/// quaternion in place from `angle` and a unit `axis`, void.
+/// `C4Quaternion::SetFromAxisAngle` — `__thiscall(ecx = this)`.
+///
+/// Builds a rotation quaternion in place from `angle` and a unit `axis`, void.
 pub fn c4_quaternion__set_from_axis_angle__7c02c0(
     this: *mut f32,
     angle: f32,
@@ -1151,8 +1193,9 @@ pub fn c4_quaternion__set_from_axis_angle__7c02c0(
     axis
 }
 
-/// `C4Quaternion::Slerp` — `__fastcall(ecx = out, edx = qa)` spherical-linear
-/// interpolation of `qa`->`qb` by `t` into `out`; returns `out`.
+/// `C4Quaternion::Slerp` — `__fastcall(ecx = out, edx = qa)`.
+///
+/// Spherical-linear interpolation of `qa`->`qb` by `t` into `out`; returns `out`.
 pub fn c4_quaternion__slerp__7c0570(
     out: *mut f32,
     qa: *const f32,
@@ -1175,6 +1218,7 @@ pub fn c4_quaternion__slerp__7c0570(
 }
 
 /// `CAaBox::FromPoints` — `__fastcall(ecx = outBox, edx = points, stack = count)`.
+///
 /// Computes the AABB over `count` stride-3 `C3Vector` points into `out_box`
 /// (`[min3,max3]`) and returns it; `count == 0` yields a zeroed box.
 pub fn c_aa_box__from_points__7c1450(
@@ -1202,8 +1246,9 @@ pub fn c_aa_box__from_points__7c1450(
     out_box
 }
 
-/// `CAaBox::IntersectSegment` — `__fastcall(ecx = box, edx = segStart, stack =
-/// segEnd)`. Slab-method segment-vs-AABB test; returns 1 on hit, 0 on miss.
+/// `CAaBox::IntersectSegment` — `__fastcall(ecx = box, edx = segStart, stack = segEnd)`.
+///
+/// Slab-method segment-vs-AABB test; returns 1 on hit, 0 on miss.
 pub fn c_aa_box__intersect_segment__6dc5a0(
     box6: *const f32,
     seg_start: *const f32,
@@ -1222,10 +1267,11 @@ pub fn c_aa_box__intersect_segment__6dc5a0(
     crate::math::aabb::c_aa_box__intersect_segment__6dc5a0(b, s, e)
 }
 
-/// `CAaBox::TransformBy3x3` — `__fastcall(ecx = col0, edx = col1, stack = col2,
-/// mat3x3, dstBox)`. Accumulates a separating-axis box transform: per component
-/// adds `min(col_j[i]*mat[j], col_j[i]*mat[j+3])` into the running min and the
-/// max into the running max. `dst_box` is read and written in place.
+/// `CAaBox::TransformBy3x3` — `__fastcall(ecx = col0, edx = col1, stack = col2, mat3x3, dstBox)`.
+///
+/// Accumulates a separating-axis box transform: per component adds
+/// `min(col_j[i]*mat[j], col_j[i]*mat[j+3])` into the running min and the max
+/// into the running max. `dst_box` is read and written in place.
 pub fn c_aa_box__transform_by3x3__6dc470(
     col0: *const f32,
     col1: *const f32,
@@ -1253,8 +1299,9 @@ pub fn c_aa_box__transform_by3x3__6dc470(
     unsafe { dst_box.cast::<[f32; 6]>().write_unaligned(out) };
 }
 
-/// `CCubicSpline::ArcLengthToSegment` — `__thiscall(ecx = this)`. Scales
-/// `distance` by `*(this+0x4)` and walks the per-segment length table at
+/// `CCubicSpline::ArcLengthToSegment` — `__thiscall(ecx = this)`.
+///
+/// Scales `distance` by `*(this+0x4)` and walks the per-segment length table at
 /// `*(this+0x20)` (the `seg_length_table` argument is unused by the original),
 /// writing the resolved segment index and local fractional distance.
 pub fn c_cubic_spline__arc_length_to_segment__453840(
@@ -1297,9 +1344,10 @@ pub fn c_cubic_spline__arc_length_to_segment__453840(
     out_seg_index
 }
 
-/// `CCubicSpline::EvalBasisQuadratic` — `__thiscall(ecx = this)`. Reads four
-/// vec3 control points from `*(this+0x10) + cp_index*0xc`, a 4-row basis matrix
-/// from `basis_coeffs`, and writes the 3-float tangent to `out`.
+/// `CCubicSpline::EvalBasisQuadratic` — `__thiscall(ecx = this)`.
+///
+/// Reads four vec3 control points from `*(this+0x10) + cp_index*0xc`, a 4-row
+/// basis matrix from `basis_coeffs`, and writes the 3-float tangent to `out`.
 pub fn c_cubic_spline__eval_basis_quadratic__453640(
     this: *mut core::ffi::c_void,
     cp_index: i32,
@@ -1334,10 +1382,12 @@ pub fn c_cubic_spline__eval_basis_quadratic__453640(
     }
 }
 
-/// `CCubicSpline::EvalSegmentPos` — `__thiscall(ecx = this)`. In linear mode
-/// (`*(this+0x28) == 0`) lerps the two interior control points by `local_t`. The
-/// cubic mode evaluates a fixed Catmull-Rom basis held in a host `.rdata` global
-/// that this reimplementation does not reconstruct, so it defers to the original.
+/// `CCubicSpline::EvalSegmentPos` — `__thiscall(ecx = this)`.
+///
+/// In linear mode (`*(this+0x28) == 0`) lerps the two interior control points
+/// by `local_t`. The cubic mode evaluates a fixed Catmull-Rom basis held in a
+/// host `.rdata` global that this reimplementation does not reconstruct, so it
+/// defers to the original.
 pub fn c_cubic_spline__eval_segment_pos__4541b0(
     this: *mut core::ffi::c_void,
     seg_index: i32,
@@ -1398,7 +1448,8 @@ pub fn c_cubic_spline__sq_mag2_d__454980(v: *const f32) -> f32 {
     crate::math::spline::c_cubic_spline__sq_mag2_d__454980(vv)
 }
 
-/// `CGGameObjectDisplay_MoTransport::EvalMoveDistance` —
+/// `CGGameObjectDisplay_MoTransport::EvalMoveDistance`.
+///
 /// `__thiscall(ecx = this, stack = distance, totalDistance, outPhase, accelEnabled, decelEnabled)`.
 /// Reads the cruise speed at `this+0x18` and the acceleration at `this+0x20`,
 /// maps `distance` onto a trapezoidal speed profile, writes the phase code
@@ -1447,10 +1498,11 @@ pub fn cg_game_object_display_mo_transport__eval_move_distance__5f8dc0(
     result
 }
 
-/// `CGxLight::UpdateFromSource` — `__thiscall(ecx = this, stack = src)`. Refreshes
-/// the `CGxLight` receiver from a packed light-source record, flipping per-field
-/// dirty bits at `this+0x50`/`this+0x52` only where a value changed; returns
-/// `this`.
+/// `CGxLight::UpdateFromSource` — `__thiscall(ecx = this, stack = src)`.
+///
+/// Refreshes the `CGxLight` receiver from a packed light-source record,
+/// flipping per-field dirty bits at `this+0x50`/`this+0x52` only where a value
+/// changed; returns `this`.
 ///
 /// `src` is a `u32` record: `[0]`=flags (bit 1 = positional vs directional),
 /// `[1..3]`=position, `[4]`/`[5]`/`[6]`=packed-BGRA diffuse/ambient/specular,
@@ -1563,6 +1615,7 @@ pub fn c_gx_light__update_from_source__593040(
 }
 
 /// `CMovement::AccelCurveOffset` — `__thiscall(ecx = this, stack = delta_ms)`.
+///
 /// Reads the flag word (`+0x40`), live speed (`+0xa0`), and positional bias
 /// (`+0x18`) from the receiver and returns the eased speed plus the bias.
 pub fn c_movement__accel_curve_offset__7c5f30(this: *mut u8, delta_ms: u32) -> f32 {
@@ -1584,9 +1637,10 @@ pub fn c_movement__accel_curve_offset__7c5f30(this: *mut u8, delta_ms: u32) -> f
     crate::math::movement::c_movement__accel_curve_offset__7c5f30(flags, cur_speed, delta_ms, bias)
 }
 
-/// `CMovement::ApplyAccelCurve` — `__thiscall(ecx = this, stack = dt)`. Reads the
-/// flag word (`+0x40`) and live speed (`+0xa0`) from the receiver and returns the
-/// eased speed over `dt`.
+/// `CMovement::ApplyAccelCurve` — `__thiscall(ecx = this, stack = dt)`.
+///
+/// Reads the flag word (`+0x40`) and live speed (`+0xa0`) from the receiver and
+/// returns the eased speed over `dt`.
 pub fn c_movement__apply_accel_curve__7c5e70(this: *mut u8, dt: f32) -> f32 {
     if this.is_null() {
         return 0.0;
@@ -1602,9 +1656,11 @@ pub fn c_movement__apply_accel_curve__7c5e70(this: *mut u8, dt: f32) -> f32 {
     crate::math::movement::c_movement__apply_accel_curve__7c5e70(flags, cur_speed, dt)
 }
 
-/// `CMovement::ComputeForwardVector` — `__fastcall(ecx = this)`. Reads the scalar
-/// facing (`+0x50`) and pitch (`+0x54`) and the flag word (`+0x40`) from the
-/// receiver, then writes the cached heading/cos/sin fields back in place.
+/// `CMovement::ComputeForwardVector` — `__fastcall(ecx = this)`.
+///
+/// Reads the scalar facing (`+0x50`) and pitch (`+0x54`) and the flag word
+/// (`+0x40`) from the receiver, then writes the cached heading/cos/sin fields
+/// back in place.
 pub fn c_movement__compute_forward_vector__7c5880(this: *mut u8) {
     if this.is_null() {
         return;
@@ -1656,6 +1712,7 @@ pub fn c_movement__compute_forward_vector__7c5880(this: *mut u8) {
 }
 
 /// `CParticleEmitter::SetAlpha` — `__fastcall(ecx = this, stack = alpha)`.
+///
 /// Quantizes `alpha` to a byte (`trunc(alpha * 255 + 0.5)`) and stores its low
 /// 8 bits at `this + 0x12f`, where the subsequent `SetColor` reads it. `this`
 /// is the raw ECX pointer value carried as an `i32` (the original's `int this`).
@@ -1677,6 +1734,7 @@ pub fn c_particle_emitter__set_alpha__7b7b10(this: i32, alpha: f32) {
 }
 
 /// `CParticleEmitter::SetColor` — `__fastcall(ecx = this, stack = c0, c1, c2)`.
+///
 /// Reads the alpha byte the prior `SetAlpha` stored at `this + 0x12f`, packs it
 /// with the three quantized float channels into a `D3DCOLOR`, and writes the
 /// result to `this + 0x12c`. `this` is the raw ECX pointer value carried as an
@@ -1705,6 +1763,7 @@ pub fn c_particle_emitter__set_color__7b7a80(this: i32, c0: f32, c1: f32, c2: f3
 }
 
 /// `CParticleEmitter::SetGravity` — `__thiscall(ecx = this, stack = gravity)`.
+///
 /// Writes `max(gravity, 0.0)` to the emitter's gravity slot at `this + 0xa8`.
 pub fn c_particle_emitter__set_gravity__7b4bf0(this: *mut core::ffi::c_void, gravity: f32) {
     if this.is_null() {
@@ -1723,10 +1782,12 @@ pub fn c_particle_emitter__set_gravity__7b4bf0(this: *mut core::ffi::c_void, gra
     }
 }
 
-/// Cubic-spline position eval (SiliconPatch hook). The receiver holds, at byte
-/// offset 0x10, a pointer to the basis-coefficient table; `segment` selects a
-/// 4-row block (3 floats/row) within it. `control_pts` is 4 polynomial rows of
-/// 4 coefficients; the weighted sum is written to `out_vec3`.
+/// Cubic-spline position eval (SiliconPatch hook).
+///
+/// The receiver holds, at byte offset 0x10, a pointer to the basis-coefficient
+/// table; `segment` selects a 4-row block (3 floats/row) within it.
+/// `control_pts` is 4 polynomial rows of 4 coefficients; the weighted sum is
+/// written to `out_vec3`.
 pub fn c_spline_eval_point__453580(
     this: *mut core::ffi::c_void,
     segment: i32,
@@ -1763,11 +1824,13 @@ pub fn c_spline_eval_point__453580(
     }
 }
 
-/// `CWorldBsp::AabbTriangleOverlap` — `__fastcall(ecx = box, edx = vert0,
-/// stack = vert1, vert2)`. Returns `1` if the AABB and triangle are separated
-/// by one of the three coordinate axes (disjoint), `0` if no coordinate axis
-/// separates them (potential overlap). `box` is `[min_xyz, max_xyz]` (6 f32);
-/// each vert is a `C3Vector` (3 f32).
+/// `CWorldBsp::AabbTriangleOverlap`.
+///
+/// `__fastcall(ecx = box, edx = vert0, stack = vert1,
+/// vert2)`. Returns `1` if the AABB and triangle are separated by one of the
+/// three coordinate axes (disjoint), `0` if no coordinate axis separates them
+/// (potential overlap). `box` is `[min_xyz, max_xyz]` (6 f32); each vert is a
+/// `C3Vector` (3 f32).
 pub fn c_world_bsp__aabb_triangle_overlap__6b8b70(
     boxx: *const f32,
     vert0: *const f32,
@@ -1792,6 +1855,7 @@ pub fn c_world_bsp__aabb_triangle_overlap__6b8b70(
 }
 
 /// `CWorldFrustum::ClassifyPoint` — `__thiscall(ecx = this)` point clip-outcode.
+///
 /// Writes the full plane-bit outcode to `out_mask` and returns the bit of the
 /// last failing plane (0 if the point is fully inside the frustum).
 pub fn c_world_frustum__classify_point__686c20(
@@ -1814,8 +1878,9 @@ pub fn c_world_frustum__classify_point__686c20(
     ret
 }
 
-/// `CWorldFrustum::TestOrientedBox` — `__thiscall(ecx = this)` oriented-AABB cull;
-/// returns 3 if the box may be visible, 0 if any plane fully rejects it.
+/// `CWorldFrustum::TestOrientedBox` — `__thiscall(ecx = this)` oriented-AABB cull.
+///
+/// Returns 3 if the box may be visible, 0 if any plane fully rejects it.
 pub fn c_world_frustum__test_oriented_box__6869c0(
     this: *const core::ffi::c_void,
     aabb_min_max: *const f32,
@@ -1836,8 +1901,9 @@ pub fn c_world_frustum__test_oriented_box__6869c0(
     crate::math::frustum::c_world_frustum__test_oriented_box__6869c0(planes, aabb, orient, trans)
 }
 
-/// `CWorldFrustum::TestSphere` — `__thiscall(ecx = this)` bounding-sphere cull;
-/// returns 3 if the sphere may be visible, 0 if any plane fully rejects it.
+/// `CWorldFrustum::TestSphere` — `__thiscall(ecx = this)` bounding-sphere cull.
+///
+/// Returns 3 if the sphere may be visible, 0 if any plane fully rejects it.
 pub fn c_world_frustum__test_sphere__686b80(
     this: *const core::ffi::c_void,
     sphere: *const f32,
@@ -1853,6 +1919,7 @@ pub fn c_world_frustum__test_sphere__686b80(
 }
 
 /// `Cloud_GradientSample` — `__fastcall(ecx = stops, edx = count, stack = t)`.
+///
 /// Samples a circular `(position, value)` gradient (8-byte stride) at `t` by
 /// piecewise-linear interpolation between the bracketing stops, wrapping at the
 /// array ends. Returns the interpolated value.
@@ -1868,10 +1935,11 @@ pub fn cloud_gradient_sample__6cf6c0(stops: *const f32, count: u32, t: f32) -> f
     crate::math::misc::cloud_gradient_sample__6cf6c0(pairs, t)
 }
 
-/// `CollideBoxBox` — `__fastcall(ecx = boxA, edx = boxB)`, OBB-vs-OBB overlap
-/// test (Separating Axis Theorem). Returns `1` on overlap, `0` when separated.
-/// Each box is 15 contiguous `f32`: center, half-extents, then three
-/// orientation rows.
+/// `CollideBoxBox` — `__fastcall(ecx = boxA, edx = boxB)`.
+///
+/// OBB-vs-OBB overlap test (Separating Axis Theorem). Returns `1` on overlap,
+/// `0` when separated. Each box is 15 contiguous `f32`: center, half-extents,
+/// then three orientation rows.
 pub fn collide_box_box__7c3780(box_a: *const f32, box_b: *const f32) -> i32 {
     if box_a.is_null() || box_b.is_null() {
         return 0;
@@ -1886,12 +1954,14 @@ pub fn collide_box_box__7c3780(box_a: *const f32, box_b: *const f32) -> i32 {
     crate::math::collision::collide_box_box__7c3780(a, b)
 }
 
-/// `CollideLineTriangleIndexed16` — `__fastcall(ecx = segment, edx = vertexBase,
-/// stack = triIndices, outT, outUV, edgeTol)`. Möller-Trumbore line-segment vs an
-/// indexed triangle: the three vertices are fetched from `vertexBase` by the
-/// 16-bit `triIndices` (stride `0xc`, a `C3Vector`). On a hit it writes the ray
-/// parameter `t` to `outT` and the barycentrics `(u, v)` to `outUV`, returning 1;
-/// otherwise it leaves the out-params untouched and returns 0.
+/// `CollideLineTriangleIndexed16`.
+///
+/// `__fastcall(ecx = segment, edx = vertexBase, stack = triIndices, outT,
+/// outUV, edgeTol)`. Möller-Trumbore line-segment vs an indexed triangle: the
+/// three vertices are fetched from `vertexBase` by the 16-bit `triIndices`
+/// (stride `0xc`, a `C3Vector`). On a hit it writes the ray parameter `t` to
+/// `outT` and the barycentrics `(u, v)` to `outUV`, returning 1; otherwise it
+/// leaves the out-params untouched and returns 0.
 pub fn collide_line_triangle_indexed16__7c29f0(
     segment: *const f32,
     vertex_base: i32,
@@ -1944,7 +2014,9 @@ pub fn collide_line_triangle_indexed16__7c29f0(
     }
 }
 
-/// `CollideLineTriangleIndexed32` — `__fastcall(ecx = segment, edx = vertex_base,
+/// `CollideLineTriangleIndexed32`.
+///
+/// `__fastcall(ecx = segment, edx = vertex_base,
 /// stack = tri_indices, out_t, out_uv, edge_tol)`. Möller-Trumbore line-segment
 /// vs triangle intersection where the triangle's three vertices are gathered
 /// from a vertex array: vertex `i` is at byte address `vertex_base +
@@ -2010,10 +2082,12 @@ pub fn collide_line_triangle_indexed32__7c2c40(
     1
 }
 
-/// `CollideLineTriangle` — `__fastcall(ecx = segment, edx = triVerts, stack =
-/// outT, outUV, edgeTol)`. Möller–Trumbore line-segment vs triangle test: on a
-/// hit it writes `t` to `outT` and `(u, v)` to `outUV` (each only when non-null)
-/// and returns 1; on a miss it returns 0 and writes nothing.
+/// `CollideLineTriangle`.
+///
+/// `__fastcall(ecx = segment, edx = triVerts, stack = outT, outUV, edgeTol)`.
+/// Möller–Trumbore line-segment vs triangle test: on a hit it writes `t` to
+/// `outT` and `(u, v)` to `outUV` (each only when non-null) and returns 1; on a
+/// miss it returns 0 and writes nothing.
 pub fn collide_line_triangle__7c27d0(
     segment: *const f32,
     tri_verts: *const f32,
@@ -2050,6 +2124,7 @@ pub fn collide_line_triangle__7c27d0(
 }
 
 /// `Collision::BuildPrismPlanes` — `__cdecl(center, height, radius, outPlanes)`.
+///
 /// Writes the 9 swept-prism clip planes (`[A,B,C,D]` ×9 = 36 contiguous `f32`)
 /// into `outPlanes`; `center` is a read-only `C3Vector`.
 pub fn collision_build_prism_planes__631440(
@@ -2069,9 +2144,10 @@ pub fn collision_build_prism_planes__631440(
     unsafe { out.cast::<[f32; 36]>().write_unaligned(planes) };
 }
 
-/// Builds the 4 swept-edge side planes + 1 cap plane of a quad face into
-/// `out_planes` (20 contiguous f32 = 5 planes of `[Nx,Ny,Nz,D]`). Gathers the 4
-/// ring vertices from `verts` (3-f32 stride) via the four `idx4` indices.
+/// Builds the 4 swept-edge side planes + 1 cap plane of a quad face into `out_planes`.
+///
+/// `out_planes` is 20 contiguous f32 = 5 planes of `[Nx,Ny,Nz,D]`. Gathers the
+/// 4 ring vertices from `verts` (3-f32 stride) via the four `idx4` indices.
 /// Returns 1 on success, 0 if any swept edge is degenerate.
 pub fn collision_build_quad_face_clip_planes__632f80(
     verts: *const f32,
@@ -2116,7 +2192,9 @@ pub fn collision_build_quad_face_clip_planes__632f80(
     }
 }
 
-/// `Collision::RayPlaneIntersectTime` — `__fastcall(ecx = plane, edx = motion,
+/// `Collision::RayPlaneIntersectTime`.
+///
+/// `__fastcall(ecx = plane, edx = motion,
 /// stack = point)`. Returns the parametric `t` (an x87 `double`) at which the
 /// ray `point + t·motion` crosses `plane`; all three pointers are read-only.
 pub fn collision_ray_plane_intersect_time__6329e0(
@@ -2137,17 +2215,20 @@ pub fn collision_ray_plane_intersect_time__6329e0(
     crate::math::collision::collision_ray_plane_intersect_time__6329e0(pl, mo, pt)
 }
 
-/// `Frustum::CullBox`'s cull threshold: a fixed host `.rdata` float at absolute
-/// VA `0x008101b4` (image base + 0x4101b4). The client is non-`DYNAMICBASE` and
-/// `win` verifies the image base at load, so the hook reads it directly with no
-/// per-call base lookup. The signed distance of the box's positive vertex to a
-/// plane being below this value means the box is fully outside that plane.
+/// `Frustum::CullBox`'s cull threshold.
+///
+/// A fixed host `.rdata` float at absolute VA `0x008101b4` (image base +
+/// 0x4101b4). The client is non-`DYNAMICBASE` and `win` verifies the image base
+/// at load, so the hook reads it directly with no per-call base lookup. The
+/// signed distance of the box's positive vertex to a plane being below this
+/// value means the box is fully outside that plane.
 const CULL_THRESHOLD: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x41_01b4) as *const f32;
 
-/// `Frustum::CullBox` — `__thiscall(ecx = this frustum, stack = box)`. Tests the
-/// axis-aligned `box` (min corner at +0, max corner at +0xc) against the six
-/// frustum planes stored one float into `this`. Returns 0 if the box is fully
-/// outside any plane, else 3 (inside or intersecting).
+/// `Frustum::CullBox` — `__thiscall(ecx = this frustum, stack = box)`.
+///
+/// Tests the axis-aligned `box` (min corner at +0, max corner at +0xc) against
+/// the six frustum planes stored one float into `this`. Returns 0 if the box is
+/// fully outside any plane, else 3 (inside or intersecting).
 pub fn frustum__cull_box__686940(this: *const f32, box_min_max: *const f32) -> u32 {
     if this.is_null() || box_min_max.is_null() {
         return 0;
@@ -2169,6 +2250,7 @@ pub fn frustum__cull_box__686940(this: *const f32, box_min_max: *const f32) -> u
 }
 
 /// `GxLight::PackFogGradientBlock` — `__thiscall(ecx = this, stack = out)`.
+///
 /// Lazily (dirty bit `0x4` at `this+0x14`) packs the 28-float fog/light
 /// gradient block at `this+0xf0` from the 27 source params at `this+0x84`,
 /// scaling each lane by one of the eight host column constants
@@ -2234,12 +2316,13 @@ pub fn gx_light_pack_fog_gradient_block__71c4e0(this: *mut u8, out: *mut f32) {
     unsafe { out.cast::<[f32; 28]>().write_unaligned(*block) };
 }
 
-/// `GxLight::PrepareAmbientAndLightDirs` — `__thiscall(ecx = this)`. Lazily
-/// (dirty bit `0x2` at `this+0x14`) normalizes the cached ambient direction,
-/// rotates it through the object's row-major 3×3, then updates the primary
-/// light direction and the light-direction accumulator. Reads the host light
-/// globals (eps², eps, the normalize numerator, and the two light scales) by
-/// fixed absolute address (base verified at load; client non-`DYNAMICBASE`).
+/// `GxLight::PrepareAmbientAndLightDirs` — `__thiscall(ecx = this)`.
+///
+/// Lazily (dirty bit `0x2` at `this+0x14`) normalizes the cached ambient
+/// direction, rotates it through the object's row-major 3×3, then updates the
+/// primary light direction and the light-direction accumulator. Reads the host
+/// light globals (eps², eps, the normalize numerator, and the two light scales)
+/// by fixed absolute address (base verified at load; client non-`DYNAMICBASE`).
 pub fn gx_light_prepare_ambient_and_light_dirs__71c2f0(this: *mut u8) {
     if this.is_null() {
         return;
@@ -2313,8 +2396,10 @@ pub fn gx_light_prepare_ambient_and_light_dirs__71c2f0(this: *mut u8) {
     unsafe { flags_out_ptr.cast::<u32>().write(flags | 2) };
 }
 
-/// `HeadingFromDelta2D` — `__fastcall(ecx = from, edx = to)`, returns the heading
-/// (radians) of the 2D vector from `from` to `to` as a `double`.
+/// `HeadingFromDelta2D` — `__fastcall(ecx = from, edx = to)`.
+///
+/// Returns the heading (radians) of the 2D vector from `from` to `to` as a
+/// `double`.
 pub fn heading_from_delta2_d__47f220(from: *const f32, to: *const f32) -> f64 {
     if from.is_null() || to.is_null() {
         return 0.0;
@@ -2339,8 +2424,10 @@ pub fn lerp_clamp01__674ba0(a: f32, b: f32, t: f32) -> f32 {
     crate::math::misc::lerp_clamp01__674ba0(a, b, t)
 }
 
-/// `Math_LerpFloat` — `__stdcall(a, b, t)`, branch-balanced linear interpolation
-/// `a + (b - a) * t`, returns the interpolated `f32`.
+/// `Math_LerpFloat` — `__stdcall(a, b, t)`.
+///
+/// Branch-balanced linear interpolation `a + (b - a) * t`, returns the
+/// interpolated `f32`.
 pub fn math_lerp_float__6d15f0(a: f32, b: f32, t: f32) -> f32 {
     crate::math::misc::math_lerp_float__6d15f0(a, b, t)
 }
@@ -2350,12 +2437,13 @@ pub fn math_scale_one_third__6d6e50(x: f32) -> f32 {
     crate::math::misc::math_scale_one_third__6d6e50(x)
 }
 
-/// `Object::TestValueThreshold` — `__thiscall(ecx = this, stack = pValue)`
-/// half-open AABB overlap predicate. The object stores an enable flag at
-/// `+0x1d4`, a min corner at `+0x1a0..+0x1a8`, and a max corner at
-/// `+0x1ac..+0x1b4`; `pValue` is a six-float query (upper corner in lanes
-/// `0..=2`, lower corner in lanes `3..=5`). A clear enable flag short-circuits
-/// to `false`.
+/// `Object::TestValueThreshold`.
+///
+/// `__thiscall(ecx = this, stack = pValue)` half-open AABB overlap predicate.
+/// The object stores an enable flag at `+0x1d4`, a min corner at
+/// `+0x1a0..+0x1a8`, and a max corner at `+0x1ac..+0x1b4`; `pValue` is a
+/// six-float query (upper corner in lanes `0..=2`, lower corner in lanes
+/// `3..=5`). A clear enable flag short-circuits to `false`.
 pub fn object_test_value_threshold__6a4670(
     this: *const core::ffi::c_void,
     p_value: *const f32,
@@ -2384,9 +2472,11 @@ pub fn object_test_value_threshold__6a4670(
     crate::math::misc::object_test_value_threshold__6a4670(obj_min, obj_max, query)
 }
 
-/// `QuadElement::SeedFromFill` — `__thiscall(ecx = this, stack = fill)`, where
-/// `this` is the out element. Seeds the 13 `f32` of a `0x34`-byte `QuadElement`
-/// (header `{0, 0, 1.0, center}` then nine bound floats) from a single `fill`.
+/// `QuadElement::SeedFromFill` — `__thiscall(ecx = this, stack = fill)`.
+///
+/// `this` is the out element. Seeds the 13 `f32` of a `0x34`-byte
+/// `QuadElement` (header `{0, 0, 1.0, center}` then nine bound floats) from a
+/// single `fill`.
 pub fn quad_element__seed_from_fill__7bf7b0(this: *mut f32, fill: f32) {
     if this.is_null() {
         return;
@@ -2399,7 +2489,9 @@ pub fn quad_element__seed_from_fill__7bf7b0(this: *mut f32, fill: f32) {
     unsafe { this.cast::<[f32; 13]>().write_unaligned(e) };
 }
 
-/// `Sphere_TestCellDirection` — `__fastcall(ecx = cell_corners, edx = sphere,
+/// `Sphere_TestCellDirection`.
+///
+/// `__fastcall(ecx = cell_corners, edx = sphere,
 /// stack = dir)`. `cell_corners` points at a cell's two opposite corners (min
 /// `[f32; 3]` at +0, max `[f32; 3]` at +0xc); `sphere` is `[cx, cy, cz,
 /// radius]`. Tests whether the sphere overlaps the cell along direction `dir`
@@ -2470,7 +2562,9 @@ pub fn lua_h_arrayindex__6fa4a0(this: *const u8) -> i32 {
     crate::math::misc::lua_h_arrayindex__6fa4a0(tag, number)
 }
 
-/// `BoundsFit::AccumulateMoment` — `__thiscall(ecx = this, stack = weight, stack
+/// `BoundsFit::AccumulateMoment`.
+///
+/// `__thiscall(ecx = this, stack = weight, stack
 /// = vec)`. Folds one weighted direction sample into the accumulator at `this`:
 /// optionally rotates `vec` by the column-major 3x3 at `(*this)+0x9c`, then
 /// updates the 3x4 moment block (`this+0x18`), the running weight sums
@@ -2614,8 +2708,10 @@ pub fn bounds_fit__accumulate_moment__71bce0(this: *mut u8, weight: *const f32, 
     unsafe { shz_p.cast::<[f32; 9]>().write_unaligned(new_sh_z) };
 }
 
-/// `C3Vector::GreaterEqualAll` — `__fastcall(ecx = a, edx = b)`. Returns `1` iff
-/// `a` dominates `b` component-wise (an AABB-containment primitive), else `0`.
+/// `C3Vector::GreaterEqualAll` — `__fastcall(ecx = a, edx = b)`.
+///
+/// Returns `1` iff `a` dominates `b` component-wise (an AABB-containment
+/// primitive), else `0`.
 pub fn c3_vector__greater_equal_all__699330(a: *const f32, b: *const f32) -> i32 {
     if a.is_null() || b.is_null() {
         return 0;
@@ -2628,9 +2724,11 @@ pub fn c3_vector__greater_equal_all__699330(a: *const f32, b: *const f32) -> i32
     crate::math::vector::c3_vector__greater_equal_all__699330(a, b)
 }
 
-/// `C3Vector::IsValid` — `__stdcall(stack = vec)`. Returns `1` iff all three
-/// components are finite (neither NaN nor infinite), else `0`. The original's
-/// per-lane finiteness helper is a pure inlined exponent-bit test.
+/// `C3Vector::IsValid` — `__stdcall(stack = vec)`.
+///
+/// Returns `1` iff all three components are finite (neither NaN nor infinite),
+/// else `0`. The original's per-lane finiteness helper is a pure inlined
+/// exponent-bit test.
 pub fn c3_vector__is_valid__6337d0(vec: *const f32) -> u8 {
     if vec.is_null() {
         return 0;
@@ -2641,8 +2739,10 @@ pub fn c3_vector__is_valid__6337d0(vec: *const f32) -> u8 {
     crate::math::vector::c3_vector__is_valid__6337d0(vec)
 }
 
-/// `C3Vector::MaxInPlace` — `__thiscall(ecx = dst, stack = src)`. Grows `dst` to
-/// the component-wise maximum of `dst` and `src` in place; returns nothing.
+/// `C3Vector::MaxInPlace` — `__thiscall(ecx = dst, stack = src)`.
+///
+/// Grows `dst` to the component-wise maximum of `dst` and `src` in place;
+/// returns nothing.
 pub fn c3_vector__max_in_place__6b11f0(dst: *mut f32, src: *const f32) {
     if dst.is_null() || src.is_null() {
         return;
@@ -2657,9 +2757,10 @@ pub fn c3_vector__max_in_place__6b11f0(dst: *mut f32, src: *const f32) {
     unsafe { dst.cast::<[f32; 3]>().write_unaligned(dv) };
 }
 
-/// `C3Vector::Max` — `__fastcall(ecx = result, edx = a, stack = b)`. Writes the
-/// component-wise maximum of `a` and `b` into `result` and returns it (the
-/// original leaves `result` in `EAX` for chaining callers).
+/// `C3Vector::Max` — `__fastcall(ecx = result, edx = a, stack = b)`.
+///
+/// Writes the component-wise maximum of `a` and `b` into `result` and returns
+/// it (the original leaves `result` in `EAX` for chaining callers).
 pub fn c3_vector__max__6992c0(result: *mut f32, a: *const f32, b: *const f32) -> *mut f32 {
     if result.is_null() || a.is_null() || b.is_null() {
         return result;
@@ -2675,6 +2776,7 @@ pub fn c3_vector__max__6992c0(result: *mut f32, a: *const f32, b: *const f32) ->
 }
 
 /// `CGxDevice::CopyCurrentMatrix` — `__thiscall(ecx = this, stack = dst)`.
+///
 /// Copies the current (top-of-stack) 4×4 matrix into `dst[16]`. The matrix
 /// stack base is at `this+0x1ac8` with a `0x40`-byte stride; the live top index
 /// is the dword at `this+0x1ac0`, so the source slot is
@@ -2697,13 +2799,14 @@ pub fn c_gx_device__copy_current_matrix__592730(this: *mut u8, dst: *mut f32) {
     unsafe { dst.cast::<[f32; 16]>().write_unaligned(out) };
 }
 
-/// `CMapChunk::BuildGridVertices` — `__fastcall(ecx = this)`. Builds a 9x9 grid
-/// of vertex positions into the chunk object at `this+0x34`. Cell indices come
-/// from the sub-object at `this+0x1c` (`+0x90` row count, `+0x8c` column count,
-/// `+0x74` base height); per-vertex heights come from the 8-byte-stride array at
-/// `*(this+0xc)` (float at +4 of each entry). The grid cell size, world origin,
-/// and divisor are fixed host globals read by absolute address (base verified at
-/// load; client non-`DYNAMICBASE`).
+/// `CMapChunk::BuildGridVertices` — `__fastcall(ecx = this)`.
+///
+/// Builds a 9x9 grid of vertex positions into the chunk object at `this+0x34`.
+/// Cell indices come from the sub-object at `this+0x1c` (`+0x90` row count,
+/// `+0x8c` column count, `+0x74` base height); per-vertex heights come from the
+/// 8-byte-stride array at `*(this+0xc)` (float at +4 of each entry). The grid
+/// cell size, world origin, and divisor are fixed host globals read by absolute
+/// address (base verified at load; client non-`DYNAMICBASE`).
 pub fn c_map_chunk__build_grid_vertices__68d540(this: *mut core::ffi::c_void) {
     if this.is_null() {
         return;
@@ -2774,9 +2877,11 @@ pub fn c_map_chunk__build_grid_vertices__68d540(this: *mut core::ffi::c_void) {
     unsafe { out.cast::<[[f32; 3]; 81]>().write(grid) };
 }
 
-/// `CMapChunk::DecompressVertexNormals` — `__fastcall(ecx = this)`. Decodes the 145
-/// packed signed-byte vertex normals at `*(this+0xf18)` into the inline f32 normal
-/// array at `this+0x170` (12-byte stride). Pure leaf: no call-outs, no globals.
+/// `CMapChunk::DecompressVertexNormals` — `__fastcall(ecx = this)`.
+///
+/// Decodes the 145 packed signed-byte vertex normals at `*(this+0xf18)` into
+/// the inline f32 normal array at `this+0x170` (12-byte stride). Pure leaf: no
+/// call-outs, no globals.
 pub fn c_map_chunk__decompress_vertex_normals__6aff10(this: *mut core::ffi::c_void) {
     if this.is_null() {
         return;
@@ -2802,11 +2907,13 @@ pub fn c_map_chunk__decompress_vertex_normals__6aff10(this: *mut core::ffi::c_vo
     unsafe { out.cast::<[[f32; 3]; 145]>().write(normals) };
 }
 
-/// `CMovement::GetActiveSplineSource` — `__fastcall(ecx = this)`. Returns the
-/// per-step spline/velocity source vec3 block at `this+0x144` unless the gating
-/// scalar at `this+0x148` is bit-exactly equal to the host zero sentinel
-/// (`DAT_007ffd74`), in which case there is no active source and the original
-/// returns NULL. A pointer return: a chaining caller dereferences the result.
+/// `CMovement::GetActiveSplineSource` — `__fastcall(ecx = this)`.
+///
+/// Returns the per-step spline/velocity source vec3 block at `this+0x144`
+/// unless the gating scalar at `this+0x148` is bit-exactly equal to the host
+/// zero sentinel (`DAT_007ffd74`), in which case there is no active source and
+/// the original returns NULL. A pointer return: a chaining caller dereferences
+/// the result.
 pub fn c_movement__get_active_spline_source__618920(this: *mut f32) -> *mut f32 {
     if this.is_null() {
         return core::ptr::null_mut();
@@ -2828,11 +2935,12 @@ pub fn c_movement__get_active_spline_source__618920(this: *mut f32) -> *mut f32 
     }
 }
 
-/// `CMovement::IntegrateArc_FlatTurn` — `__thiscall(ecx = this; stack: dt,
-/// speedOverride, outDelta)`. Planar arc integrator (forward + yaw turn, no
-/// pitch): when `speed_override` is null the turn rate is resolved from the
-/// receiver's flags/raw fields, then the local displacement is written to
-/// `out_delta[0..3]`.
+/// `CMovement::IntegrateArc_FlatTurn`.
+///
+/// `__thiscall(ecx = this; stack: dt, speedOverride, outDelta)`. Planar arc
+/// integrator (forward + yaw turn, no pitch): when `speed_override` is null the
+/// turn rate is resolved from the receiver's flags/raw fields, then the local
+/// displacement is written to `out_delta[0..3]`.
 pub fn c_movement__integrate_arc_flat_turn__7c52c0(
     this: *mut u8,
     dt: f32,
@@ -2887,11 +2995,13 @@ pub fn c_movement__integrate_arc_flat_turn__7c52c0(
     out_delta
 }
 
-/// `CMovement::IntegrateArc_FwdTurnPitch` — `__thiscall(ecx = this; stack: dt,
-/// speedOverride, outDelta)`. Full constant-turn-rate arc integrator (forward
-/// speed + yaw turn + pitch). Resolves the forward speed (from `speedOverride`
-/// or the receiver's flags) and the turn rate, reads the host clamp/scale
-/// globals, then writes the local displacement to `out_delta[0..3]`.
+/// `CMovement::IntegrateArc_FwdTurnPitch`.
+///
+/// `__thiscall(ecx = this; stack: dt, speedOverride, outDelta)`. Full
+/// constant-turn-rate arc integrator (forward speed + yaw turn + pitch).
+/// Resolves the forward speed (from `speedOverride` or the receiver's flags)
+/// and the turn rate, reads the host clamp/scale globals, then writes the local
+/// displacement to `out_delta[0..3]`.
 pub fn c_movement__integrate_arc_fwd_turn_pitch__7c4fd0(
     this: *mut u8,
     dt: f32,
@@ -2970,10 +3080,11 @@ pub fn c_movement__integrate_arc_fwd_turn_pitch__7c4fd0(
     unsafe { out_delta.cast::<[f32; 3]>().write_unaligned(delta) };
 }
 
-/// `CMovement::IntegrateArc_TurnPitch` — `__thiscall(ecx = this; stack: dt,
-/// outDelta)`. Arc integrator with pitch advance/clamp and implicit speed.
-/// Resolves the turn rate from the receiver's flags/raw fields, reads the host
-/// clamp globals, then writes the local displacement to `out_delta[0..3]`.
+/// `CMovement::IntegrateArc_TurnPitch` — `__thiscall(ecx = this; stack: dt, outDelta)`.
+///
+/// Arc integrator with pitch advance/clamp and implicit speed. Resolves the
+/// turn rate from the receiver's flags/raw fields, reads the host clamp
+/// globals, then writes the local displacement to `out_delta[0..3]`.
 pub fn c_movement__integrate_arc_turn_pitch__7c5180(this: *mut u8, dt: f32, out_delta: *mut f32) {
     if this.is_null() || out_delta.is_null() {
         return;
@@ -3036,7 +3147,9 @@ pub fn c_movement__integrate_arc_turn_pitch__7c5180(this: *mut u8, dt: f32, out_
     unsafe { out_delta.cast::<[f32; 3]>().write_unaligned(delta) };
 }
 
-/// `CParticleEmitter::UpdateParticlePhysics` — `__thiscall(ecx = this, stack =
+/// `CParticleEmitter::UpdateParticlePhysics`.
+///
+/// `__thiscall(ecx = this, stack =
 /// particle, dt)`. Integrates one particle record for `dt`: applies the emitter
 /// acceleration while the particle is younger than its lifespan, an optional
 /// spawn-velocity bonus (flag `0x40000`), gravity (the ½·g·dt² kinematic term on
@@ -3144,15 +3257,16 @@ pub fn c_particle_emitter__update_particle_physics__7b2680(
     i32::from(alive)
 }
 
-/// `CWorld::PointInLiquidGrid` — `__fastcall(ecx = pos)`. Returns 1 if the world
-/// XY in `pos` falls inside the loaded-terrain liquid grid and that cell's liquid
-/// bit is set, else 0. Maps XY relative to the host map origin into the 64x64
-/// chunk grid `DAT_00c96318`, dereferences the chunk pointer (`+0x278` sub-table)
-/// and its liquid bitfield (`+0xf1c`). Map origin, bounds, cell/sub scales, and
-/// the rounding bias are fixed host globals read by absolute address (base
-/// verified at load; client non-`DYNAMICBASE`). The pure kernel computes the
-/// coordinate->index mapping and bounds; this adapter performs the live grid and
-/// chunk reads and the final bit test.
+/// `CWorld::PointInLiquidGrid` — `__fastcall(ecx = pos)`.
+///
+/// Returns 1 if the world XY in `pos` falls inside the loaded-terrain liquid
+/// grid and that cell's liquid bit is set, else 0. Maps XY relative to the host
+/// map origin into the 64x64 chunk grid `DAT_00c96318`, dereferences the chunk
+/// pointer (`+0x278` sub-table) and its liquid bitfield (`+0xf1c`). Map origin,
+/// bounds, cell/sub scales, and the rounding bias are fixed host globals read
+/// by absolute address (base verified at load; client non-`DYNAMICBASE`). The
+/// pure kernel computes the coordinate->index mapping and bounds; this adapter
+/// performs the live grid and chunk reads and the final bit test.
 pub fn c_world__point_in_liquid_grid__69b350(pos: *const f32) -> u32 {
     if pos.is_null() {
         return 0;
@@ -3231,6 +3345,7 @@ pub fn c_world__point_in_liquid_grid__69b350(pos: *const f32) -> u32 {
 }
 
 /// `EvalPolynomialHorner` — `__fastcall(ecx = degree, edx = coeffs, stack = x)`.
+///
 /// Evaluates the `degree + 1`-coefficient polynomial at `x` by Horner's scheme.
 /// Pure: reads only the `coeffs` array and the scalar args.
 pub fn eval_polynomial_horner__453620(degree: u32, coeffs: *const f32, x: f32) -> f32 {
@@ -3244,11 +3359,12 @@ pub fn eval_polynomial_horner__453620(degree: u32, coeffs: *const f32, x: f32) -
     crate::math::lua::eval_polynomial_horner__453620(degree, slice, x)
 }
 
-/// `Frustum::ComputeC3Vector` — `__fastcall(ecx = result, edx = a, stack = b)`,
-/// returns the `result` pointer. Writes the per-component minimum of the two
-/// 3-vectors `a` and `b` into `result[0..2]` (with `b` taken on ties / unordered
-/// compares) and returns `result` for a chaining caller (the original leaves the
-/// result pointer in EAX via `mov eax, ecx`).
+/// `Frustum::ComputeC3Vector` — `__fastcall(ecx = result, edx = a, stack = b)`.
+///
+/// Returns the `result` pointer. Writes the per-component minimum of the two
+/// 3-vectors `a` and `b` into `result[0..2]` (with `b` taken on ties /
+/// unordered compares) and returns `result` for a chaining caller (the original
+/// leaves the result pointer in EAX via `mov eax, ecx`).
 pub fn frustum_compute_c3_vector__699250(
     result: *mut f32,
     a: *const f32,
@@ -3268,12 +3384,14 @@ pub fn frustum_compute_c3_vector__699250(
     result
 }
 
-/// `GxLight::ClampColorComponentToByte` — `__fastcall(ecx = out_packed, edx =
-/// out_max, stack = in_rgb, baseline)`. Writes the running max of
-/// `(baseline, in_rgb[0..2])` to `*out_max`; when that max reaches the host
-/// threshold (`.rdata` `0x0080c5c8`, `1e-5`) it normalizes each channel by the
-/// reciprocal max, clamps to `[0, 255]`, and packs the four bytes into the
-/// `D3DCOLOR`-style dword at `*out_packed` (else `0`).
+/// `GxLight::ClampColorComponentToByte`.
+///
+/// `__fastcall(ecx = out_packed, edx = out_max, stack = in_rgb, baseline)`.
+/// Writes the running max of `(baseline, in_rgb[0..2])` to `*out_max`; when
+/// that max reaches the host threshold (`.rdata` `0x0080c5c8`, `1e-5`) it
+/// normalizes each channel by the reciprocal max, clamps to `[0, 255]`, and
+/// packs the four bytes into the `D3DCOLOR`-style dword at `*out_packed` (else
+/// `0`).
 pub fn gx_light_clamp_color_component_to_byte__71ca80(
     out_packed: *mut u32,
     out_max: *mut f32,
@@ -3300,8 +3418,9 @@ pub fn gx_light_clamp_color_component_to_byte__71ca80(
     unsafe { out_packed.write(packed) };
 }
 
-/// `M2BatchSortCompare` — `__fastcall(ecx = index_a, edx = index_b)`,
-/// stack-arg `elem_base`. Reads the two float sort keys of each indexed element
+/// `M2BatchSortCompare` — `__fastcall(ecx = index_a, edx = index_b)`.
+///
+/// Stack-arg `elem_base`. Reads the two float sort keys of each indexed element
 /// (`elem_base + index*0x10 + 4` = key Y, `+ 8` = key Z; stride 16 bytes) and
 /// defers the ordering to the portable
 /// [`crate::math::m2::m2_batch_sort_compare__70a060`] kernel.
@@ -3329,8 +3448,9 @@ pub fn m2_batch_sort_compare__70a060(index_a: u32, index_b: u32, elem_base: *con
     )
 }
 
-/// `OsGui_ScaleX` — forward X aspect scale: `xScale * x`. `xScale` is the
-/// runtime-set host global at `0x832a44`.
+/// `OsGui_ScaleX` — forward X aspect scale: `xScale * x`.
+///
+/// `xScale` is the runtime-set host global at `0x832a44`.
 pub fn os_gui_scale_x__41ae60(x: f32) -> f32 {
     const X_SCALE: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x43_2a44) as *const f32;
     // SAFETY: fixed, initialized `.data` X aspect-scale dword in the live host image.
@@ -3338,8 +3458,9 @@ pub fn os_gui_scale_x__41ae60(x: f32) -> f32 {
     crate::math::ui::os_gui_scale_x__41ae60(x, scale)
 }
 
-/// `OsGui_ScaleY` — forward Y aspect scale: `yScale * y`. `yScale` is the
-/// runtime-set host global at `0x832a48`.
+/// `OsGui_ScaleY` — forward Y aspect scale: `yScale * y`.
+///
+/// `yScale` is the runtime-set host global at `0x832a48`.
 pub fn os_gui_scale_y__41ae70(y: f32) -> f32 {
     const Y_SCALE: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x43_2a48) as *const f32;
     // SAFETY: fixed, initialized `.data` Y aspect-scale dword in the live host image.
@@ -3347,8 +3468,9 @@ pub fn os_gui_scale_y__41ae70(y: f32) -> f32 {
     crate::math::ui::os_gui_scale_y__41ae70(y, scale)
 }
 
-/// `OsGui_UnscaleX` — inverse X aspect scale: `x / xScale`. `xScale` is the
-/// runtime-set host global at `0x832a44`.
+/// `OsGui_UnscaleX` — inverse X aspect scale: `x / xScale`.
+///
+/// `xScale` is the runtime-set host global at `0x832a44`.
 pub fn os_gui_unscale_x__41ae40(x: f32) -> f32 {
     const X_SCALE: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x43_2a44) as *const f32;
     // SAFETY: fixed, initialized `.data` X aspect-scale dword in the live host image.
@@ -3356,8 +3478,9 @@ pub fn os_gui_unscale_x__41ae40(x: f32) -> f32 {
     crate::math::ui::os_gui_unscale_x__41ae40(x, scale)
 }
 
-/// `OsGui_UnscaleY` — inverse Y aspect scale: `y / yScale`. `yScale` is the
-/// runtime-set host global at `0x832a48`.
+/// `OsGui_UnscaleY` — inverse Y aspect scale: `y / yScale`.
+///
+/// `yScale` is the runtime-set host global at `0x832a48`.
 pub fn os_gui_unscale_y__41ae50(y: f32) -> f32 {
     const Y_SCALE: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x43_2a48) as *const f32;
     // SAFETY: fixed, initialized `.data` Y aspect-scale dword in the live host image.
@@ -3365,7 +3488,9 @@ pub fn os_gui_unscale_y__41ae50(y: f32) -> f32 {
     crate::math::ui::os_gui_unscale_y__41ae50(y, scale)
 }
 
-/// `Plane_IntersectRayParam` — `__fastcall(ecx = ray, edx = plane, stack =
+/// `Plane_IntersectRayParam`.
+///
+/// `__fastcall(ecx = ray, edx = plane, stack =
 /// outT, outPoint, epsilon)`, returns `1` on a hit / coincidence and `0` on a
 /// miss. `ecx` packs a parametric ray (point `[0..3]`, direction `[3..6]`),
 /// `edx` packs a plane (normal `[0..3]`, offset `[3]`). Reads the host
@@ -3439,16 +3564,18 @@ pub fn plane_intersect_ray_param__7c22b0(
     1
 }
 
-/// Swap the R and B bytes of a packed `D3DCOLOR`
-/// (`[b0, b1, b2, b3] -> [b2, b1, b0, b3]`) — the byte-order conversion the sprite
-/// and particle quad fills apply when the device's vertex-color format selects it.
+/// Swap the R and B bytes of a packed `D3DCOLOR` (`[b0, b1, b2, b3] -> [b2, b1, b0, b3]`).
+///
+/// The byte-order conversion the sprite and particle quad fills apply when the
+/// device's vertex-color format selects it.
 fn fill_sprite_swizzle(c: u32) -> u32 {
     let b = c.to_le_bytes();
     u32::from_le_bytes([b[2], b[1], b[0], b[3]])
 }
 
-/// Write one `FillSpriteQuads` output vertex (`[x, y, z, color, u, v]`, six raw
-/// lane dwords, stride 0x18).
+/// Write one `FillSpriteQuads` output vertex.
+///
+/// The vertex is `[x, y, z, color, u, v]`, six raw lane dwords, stride 0x18.
 ///
 /// # Safety
 /// `out` must address six writable, 4-aligned, contiguous `u32`.
@@ -3457,7 +3584,9 @@ unsafe fn write_sprite_vertex(out: *mut u8, lanes: [u32; 6]) {
     unsafe { out.cast::<[u32; 6]>().write(lanes) };
 }
 
-/// `CGxBatch::FillSpriteQuads` — `__thiscall`. Builds device output vertices
+/// `CGxBatch::FillSpriteQuads` — `__thiscall`.
+///
+/// Builds device output vertices
 /// (stride 0x18: `[x, y, z, color, u, v]`) for a batch of sprite/particle quads,
 /// reading the batch's source elements (`this+0x10`, stride 0x14: `[x, y, z, u,
 /// v]`) over `[start_index, start_index + count)`. When `snap_pixels` is set a
@@ -3679,9 +3808,11 @@ pub fn c_gx_batch__fill_sprite_quads__5c8710(
     }
 }
 
-/// `SnapCoordToPixelY` — thiscall where `ecx` is a no-snap flag (non-null leaves
-/// the coordinate unchanged) and the snap multiplies by the integer Y device
-/// pixel-scale global at `0xc2b9a4`, rounding half away from zero.
+/// `SnapCoordToPixelY`.
+///
+/// thiscall where `ecx` is a no-snap flag (non-null leaves the coordinate
+/// unchanged) and the snap multiplies by the integer Y device pixel-scale
+/// global at `0xc2b9a4`, rounding half away from zero.
 pub fn snap_coord_to_pixel_y__5c7010(no_snap: *mut core::ffi::c_void, coord: f32) -> f32 {
     if !no_snap.is_null() {
         return coord;
@@ -3692,10 +3823,12 @@ pub fn snap_coord_to_pixel_y__5c7010(no_snap: *mut core::ffi::c_void, coord: f32
     crate::math::ui::snap_coord_to_pixel_y__5c7010(coord, scale)
 }
 
-/// `Object__SnapValueToUnit` — byte-identical thiscall twin of
-/// [`snap_coord_to_pixel_y__5c7010`] snapping against the integer X device
-/// pixel-scale global at `0xc2b9a0`: `ecx` is a no-snap flag (non-null leaves
-/// the value unchanged), otherwise the scaled value rounds half away from zero.
+/// `Object__SnapValueToUnit`.
+///
+/// Byte-identical thiscall twin of [`snap_coord_to_pixel_y__5c7010`] snapping
+/// against the integer X device pixel-scale global at `0xc2b9a0`: `ecx` is a
+/// no-snap flag (non-null leaves the value unchanged), otherwise the scaled
+/// value rounds half away from zero.
 pub fn object__snap_value_to_unit__5c6fa0(no_snap: *mut core::ffi::c_void, value: f32) -> f32 {
     if !no_snap.is_null() {
         return value;
@@ -3706,10 +3839,11 @@ pub fn object__snap_value_to_unit__5c6fa0(no_snap: *mut core::ffi::c_void, value
     crate::math::ui::snap_coord_to_pixel_y__5c7010(value, scale)
 }
 
-/// `CGxFont::SubPixelAdvance` — thiscall(ecx = font; glyph*, worldFlag,
-/// lineHeight f32), RET 0xC, ST0 return. Only the LOW BYTE of `worldFlag` is
-/// tested (stock `MOV AL, [ebp+0xc]`). Byte 0: CRT-ceil of the glyph advance
-/// at `glyph+0x50`. Otherwise `lineHeight / [font+0x24c] * glyph+0x50` — the
+/// `CGxFont::SubPixelAdvance` — thiscall(ecx = font; glyph*, worldFlag, lineHeight f32).
+///
+/// RET 0xC, ST0 return. Only the LOW BYTE of `worldFlag` is tested (stock
+/// `MOV AL, [ebp+0xc]`). Byte 0: CRT-ceil of the glyph advance at
+/// `glyph+0x50`. Otherwise `lineHeight / [font+0x24c] * glyph+0x50` — the
 /// stock `SnapValueToUnit(1, lineHeight)` call is an identity (nonzero flag
 /// returns its input) and the 0x5cae90 pixel-height getter is a bare
 /// `mov eax,[ecx+0x24c]`; both fold inline. No null guards, like stock.
@@ -3733,8 +3867,9 @@ pub fn c_gx_font__sub_pixel_advance__5cb080(
     crate::math::gx::glyph_scaled_advance__5cb080(line_height, px, adv)
 }
 
-/// `CGxFont::GetKernedAdvance` — thiscall(ecx = font; glyph, nextGlyph),
-/// RET 0x8, ST0 return. Hash-cached kerned pair advance:
+/// `CGxFont::GetKernedAdvance` — thiscall(ecx = font; glyph, nextGlyph), RET 0x8, ST0 return.
+///
+/// Hash-cached kerned pair advance:
 ///
 /// * Probe: bucket by `mask & glyph` over the 12-byte-stride bucket array at
 ///   `font+0x58` (mask `font+0x60`; 0xffffffff = table uninitialized), tagged
@@ -3925,10 +4060,12 @@ pub fn c_gx_font__get_kerned_advance__5ca2d0(font: *mut u8, glyph: u32, next_gly
     ceiled
 }
 
-/// `CGxFont::ComputeGlyphAdvance` — fastcall(ecx = prevCodepoint, edx = font;
-/// stack: lineHeight f32, flags, text*), RET 0xC, ST0 return. The first arg
-/// is the previous CODEPOINT, not a `uint*` (the glyph-cache
-/// find-or-insert consumes it as a cp, matching EmitLineQuads' pinned proto).
+/// `CGxFont::ComputeGlyphAdvance`.
+///
+/// fastcall(ecx = prevCodepoint, edx = font; stack: lineHeight f32, flags,
+/// text*), RET 0xC, ST0 return. The first arg is the previous CODEPOINT, not a
+/// `uint*` (the glyph-cache find-or-insert consumes it as a cp, matching
+/// EmitLineQuads' pinned proto).
 ///
 /// prevCp 0 returns the layout sentinel float (`0x7ffd74`). Otherwise the
 /// escape-token parser walks `text` for the next printable codepoint (class
@@ -4020,10 +4157,12 @@ pub fn c_gx_font__compute_glyph_advance__5c6b70(
     crate::math::gx::glyph_advance_plus_width__5c6b70(subadv, width)
 }
 
-/// `CGxFont::MeasureTextRun` — fastcall(ecx = font, edx = text; stack:
-/// reqHeight f32, outBytes*, outWidth*, outNext*, flags), RET 0x14. EAX
-/// leaks the outBytes pointer on the sentinel path (no caller consumes it) —
-/// declared and returned as such on every path.
+/// `CGxFont::MeasureTextRun`.
+///
+/// fastcall(ecx = font, edx = text; stack: reqHeight f32, outBytes*, outWidth*,
+/// outNext*, flags), RET 0x14. EAX leaks the outBytes pointer on the sentinel
+/// path (no caller consumes it) — declared and returned as such on every
+/// path.
 ///
 /// Entry gate is the same `TEST AH,0x44; JP` shape as ComputeGlyphAdvance:
 /// reqHeight EQUAL to the layout sentinel zeroes the three outs (in
@@ -4158,9 +4297,11 @@ pub fn c_gx_font__measure_text_run__5c7300(
     out_bytes
 }
 
-/// `CGxFont::FitTextToWidth` — fastcall(ecx = font, edx = text) + 8 stack
-/// args (fontHeight f32, maxWidth f32, outBytes*, outLineWidth*, outNext*,
-/// indentWidth f32, flags, inoutWordBreak byte*), RET 0x20.
+/// `CGxFont::FitTextToWidth`.
+///
+/// fastcall(ecx = font, edx = text) + 8 stack args (fontHeight f32, maxWidth
+/// f32, outBytes*, outLineWidth*, outNext*, indentWidth f32, flags,
+/// inoutWordBreak byte*), RET 0x20.
 ///
 /// Corrections: both rounds are the CRT
 /// CEIL helper (0x73fdf5), the pixel budget FIMULs the device Y scale as a
@@ -4393,13 +4534,14 @@ pub fn c_gx_font__fit_text_to_width__5c7470(
 /// Trace target for the glyph-cache/text-layout diagnostics below.
 const GLYPH_TRACE_TARGET: &str = "wow_turbo::glyph";
 
-/// Per-call-site counters for a null glyph-cache find-or-insert (0x5cabd0)
-/// return. The cache's eviction path retries only the single atlas row it
-/// just freed, so under many-distinct-glyph pressure the insert can fail even
-/// though other rows hold evictable space; the caller then silently drops
-/// that codepoint from its width accumulation (measure/advance/fit) or quad
-/// emit for this build. A justified line measured short shifts sideways —
-/// the crowd text-jitter signature. Bumped only on the (rare) null path.
+/// Per-call-site counters for a null glyph-cache find-or-insert (0x5cabd0) return.
+///
+/// The cache's eviction path retries only the single atlas row it just freed,
+/// so under many-distinct-glyph pressure the insert can fail even though other
+/// rows hold evictable space; the caller then silently drops that codepoint
+/// from its width accumulation (measure/advance/fit) or quad emit for this
+/// build. A justified line measured short shifts sideways — the crowd
+/// text-jitter signature. Bumped only on the (rare) null path.
 static GLYPH_NULL_MEASURE: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 /// See [`GLYPH_NULL_MEASURE`].
 static GLYPH_NULL_ADVANCE: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
@@ -4408,8 +4550,10 @@ static GLYPH_NULL_FIT: core::sync::atomic::AtomicU32 = core::sync::atomic::Atomi
 /// See [`GLYPH_NULL_MEASURE`].
 static GLYPH_NULL_EMIT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 
-/// Counts (and, under the `wow_turbo::glyph` TRACE target, logs a
-/// rate-limited note for) a null glyph-cache return at one call site.
+/// Counts a null glyph-cache return at one call site.
+///
+/// And, under the `wow_turbo::glyph` TRACE target, logs a rate-limited note for
+/// that return.
 #[cold]
 fn glyph_cache_null(counter: &core::sync::atomic::AtomicU32, site: &str, codepoint: u32) {
     let n = counter.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
@@ -4420,9 +4564,10 @@ fn glyph_cache_null(counter: &core::sync::atomic::AtomicU32, site: &str, codepoi
     }
 }
 
-/// Sum of the layout-side null counters (measure/advance/fit — not emit),
-/// snapshotted around a line's measure so a width change can be attributed
-/// to a dropped glyph.
+/// Sum of the layout-side null counters (measure/advance/fit — not emit).
+///
+/// Snapshotted around a line's measure so a width change can be attributed to a
+/// dropped glyph.
 fn glyph_layout_nulls() -> u32 {
     GLYPH_NULL_MEASURE
         .load(core::sync::atomic::Ordering::Relaxed)
@@ -4430,11 +4575,13 @@ fn glyph_layout_nulls() -> u32 {
         .wrapping_add(GLYPH_NULL_FIT.load(core::sync::atomic::Ordering::Relaxed))
 }
 
-/// Width-instability detector: fires when the measured width of an IDENTICAL
-/// line (same bytes, font, and requested height) changes between geometry
-/// builds. Centered/right-justified lines derive their horizontal origin
-/// directly from this width, so any run-to-run variance is a horizontal
-/// shift of the whole line — the visible jitter.
+/// Width-instability detector.
+///
+/// Fires when the measured width of an IDENTICAL line (same bytes, font, and
+/// requested height) changes between geometry builds. Centered/right-justified
+/// lines derive their horizontal origin directly from this width, so any
+/// run-to-run variance is a horizontal shift of the whole line — the visible
+/// jitter.
 ///
 /// This is the permanent glyph-cache regression gauge, so the thrash
 /// signature WARNS in the default log configuration — but only when the
@@ -4523,20 +4670,20 @@ fn glyph_width_probe(
 }
 
 /// `CGxString::BuildGeometry` — thiscall(ecx = this), plain RET, void.
-/// (Re)builds the string's glyph-quad geometry: skip if already built
-/// (line count `this+0x9c`) or no text (`this+0x48`). Per line: fit via the
-/// inlined 0x5c7260 dispatcher (world strings MEASURE the run, screen
-/// strings LINE-FIT; sub-sentinel height / non-positive width zero the
-/// outs), justification snap (center = width×half negated wide, right =
-/// exact negate), OUR EmitLineQuads, hyperlink-region carry (status 2
-/// closes via the 0x5cd310 delegate taking the 8-dword region block by
-/// value), pen steps down by the line advance until the block height
-/// budget (`this+0x40`, STRICT less-than; NaN stops) or a single-line flag
-/// ends the walk. Screen strings pre-scale the line spacing through the
-/// biased-__ftol seed. The four trailing region dwords the stock passes
-/// from uninitialized stack are zero-initialized here (deterministic; the
-/// EmitLineQuads hook writes them before any status-2 close consumes them —
-/// same knowing deviation as its hit-test pads).
+///
+/// (Re)builds the string's glyph-quad geometry: skip if already built (line
+/// count `this+0x9c`) or no text (`this+0x48`). Per line: fit via the inlined
+/// 0x5c7260 dispatcher (world strings MEASURE the run, screen strings LINE-FIT;
+/// sub-sentinel height / non-positive width zero the outs), justification snap
+/// (center = width×half negated wide, right = exact negate), OUR
+/// EmitLineQuads, hyperlink-region carry (status 2 closes via the 0x5cd310
+/// delegate taking the 8-dword region block by value), pen steps down by the
+/// line advance until the block height budget (`this+0x40`, STRICT less-than;
+/// NaN stops) or a single-line flag ends the walk. Screen strings pre-scale the
+/// line spacing through the biased-__ftol seed. The four trailing region dwords
+/// the stock passes from uninitialized stack are zero-initialized here
+/// (deterministic; the EmitLineQuads hook writes them before any status-2 close
+/// consumes them — same knowing deviation as its hit-test pads).
 #[allow(clippy::too_many_lines)]
 pub fn c_gx_string__build_geometry__5cdc20(this: *mut u8) {
     let thisu = this as usize;
@@ -4839,18 +4986,21 @@ pub fn c_gx_string__build_geometry__5cdc20(this: *mut u8) {
 // (SetGlyphTexCoords below).
 // ---------------------------------------------------------------------------
 
-/// Glyph-page width in pixels — stock 256, UNCHANGED: the style blits step
-/// their destination by a hardcoded 0x200-byte (256px × 16bpp) row pitch and
-/// the refresh path addresses rows as `y * 256`, so widening would require
-/// reimplementing all four pixel-copy variants.
+/// Glyph-page width in pixels — stock 256, UNCHANGED.
+///
+/// The style blits step their destination by a hardcoded 0x200-byte (256px ×
+/// 16bpp) row pitch and the refresh path addresses rows as `y * 256`, so
+/// widening would require reimplementing all four pixel-copy variants.
 const GLYPH_PAGE_W: u32 = 0x100;
 /// Glyph-page height in pixels — stock 256, raised for 4× glyph capacity.
 const GLYPH_PAGE_H: u32 = 0x400;
 /// Staging-surface row pitch in bytes: 16-bit texels, [`GLYPH_PAGE_W`] wide.
+///
 /// Equals stock's hardcoded 0x200 — the invariant the whole shape rests on.
 const GLYPH_PAGE_PITCH: u32 = GLYPH_PAGE_W * 2;
 
 /// CPU staging surface the texture data callback hands to the Gx layer.
+///
 /// Replaces stock's static 256×256×2 buffer at VA 0xc2ba48, which is too
 /// small for the enlarged page.
 struct GlyphStaging(core::cell::UnsafeCell<[u8; (GLYPH_PAGE_PITCH * GLYPH_PAGE_H) as usize]>);
@@ -4863,11 +5013,12 @@ static GLYPH_STAGING: GlyphStaging = GlyphStaging(core::cell::UnsafeCell::new(
 ));
 
 /// `GlyphCachePage::CreateTexture` — thiscall(ecx = page; styleFlag), RET 4.
+///
 /// Builds the page's `CGxTexFlags` (outline bit from the nonzero style flag)
 /// and creates the callback-fed page texture, storing the handle at `page+0`.
 /// DEVIATION: the texture is [`GLYPH_PAGE_W`]×[`GLYPH_PAGE_H`] (stock
-/// 256×256). The callback VA stays stock's 0x5cf520 — its prologue is hooked,
-/// so the Gx layer's pulls land in our replacement below.
+/// 256×256). The callback VA stays stock's 0x5cf520 — its prologue is
+/// hooked, so the Gx layer's pulls land in our replacement below.
 pub fn glyph_cache_page__create_texture__5cf4d0(page: *mut u8, style_flag: u32) {
     const BASE: usize = crate::win::EXPECTED_IMAGE_BASE;
     // 0x58a980 CGxTexFlags ctor — thiscall(&flags; 8 dwords), returns &flags.
@@ -4919,12 +5070,13 @@ pub fn glyph_cache_page__create_texture__5cf4d0(page: *mut u8, style_flag: u32) 
     );
 }
 
-/// `GlyphCachePage::SetRowHeight` — thiscall(ecx = page; font, cellHeight),
-/// RET 8. (Re)builds the page's shelf rows (0x10-byte `__AUTEXTURECACHEROW__`
-/// records: max-free-extent, link offset, node list) for the font's cell
-/// height, then seeds every row's free extent with the row width. DEVIATION:
-/// row count = [`GLYPH_PAGE_H`]/height (stock 256/height); the extent seed
-/// stays 0x100 because the row WIDTH is unchanged.
+/// `GlyphCachePage::SetRowHeight` — thiscall(ecx = page; font, cellHeight), RET 8.
+///
+/// (Re)builds the page's shelf rows (0x10-byte `__AUTEXTURECACHEROW__` records:
+/// max-free-extent, link offset, node list) for the font's cell height, then
+/// seeds every row's free extent with the row width. DEVIATION: row count =
+/// [`GLYPH_PAGE_H`]/height (stock 256/height); the extent seed stays 0x100
+/// because the row WIDTH is unchanged.
 pub fn glyph_cache_page__set_row_height__5cf360(page: *mut u8, font: u32, cell_height: u32) {
     const BASE: usize = crate::win::EXPECTED_IMAGE_BASE;
     // Guest `.rdata` "__AUTEXTURECACHEROW__" allocation tag.
@@ -5045,17 +5197,18 @@ pub fn glyph_cache_page__set_row_height__5cf360(page: *mut u8, font: u32, cell_h
     }
 }
 
-/// `GlyphCache::TexDataCallback` — thiscall(ecx = event; x, y, mip?, page,
-/// outPitch*, outData*), RET 0x18. The Gx layer's pull for the callback-fed
-/// page texture: events 0/2 are ignored; otherwise every node of every shelf
-/// row is re-blitted into the staging surface and the surface pointer+pitch
-/// are returned. The stock main path leaves `outData` in EAX at RET (last
-/// epilogue load), so the ABI is declared returns-arg6 and every path returns
-/// it — the stock early-out leaves EAX as entry garbage instead, which no
-/// caller may rely on, so a defined value there is faithful-or-better.
-/// DEVIATION: the surface is [`GLYPH_STAGING`] (stock: the static 128 KiB
-/// buffer at VA 0xc2ba48, too small for the taller page); the pitch is
-/// unchanged.
+/// `GlyphCache::TexDataCallback`.
+///
+/// thiscall(ecx = event; x, y, mip?, page, outPitch*, outData*), RET 0x18. The
+/// Gx layer's pull for the callback-fed page texture: events 0/2 are ignored;
+/// otherwise every node of every shelf row is re-blitted into the staging
+/// surface and the surface pointer+pitch are returned. The stock main path
+/// leaves `outData` in EAX at RET (last epilogue load), so the ABI is declared
+/// returns-arg6 and every path returns it — the stock early-out leaves EAX as
+/// entry garbage instead, which no caller may rely on, so a defined value there
+/// is faithful-or-better. DEVIATION: the surface is [`GLYPH_STAGING`] (stock:
+/// the static 128 KiB buffer at VA 0xc2ba48, too small for the taller page);
+/// the pitch is unchanged.
 pub fn glyph_cache__tex_data_callback__5cf520(
     event: u32,
     _x: u32,
@@ -5093,11 +5246,12 @@ pub fn glyph_cache__tex_data_callback__5cf520(
     out_data
 }
 
-/// `GlyphCachePage::RefreshNode` — thiscall(ecx = page; node), RET 4. Blits
-/// one glyph's rasterized bitmap (descriptor at `node+0x38`) into its shelf
-/// cell of the staging surface via the style-dispatch blit 0x5cf310 (which
-/// steps rows by the unchanged 0x200-byte pitch). DEVIATION: destination is
-/// [`GLYPH_STAGING`] instead of the stock static buffer.
+/// `GlyphCachePage::RefreshNode` — thiscall(ecx = page; node), RET 4.
+///
+/// Blits one glyph's rasterized bitmap (descriptor at `node+0x38`) into its
+/// shelf cell of the staging surface via the style-dispatch blit 0x5cf310
+/// (which steps rows by the unchanged 0x200-byte pitch). DEVIATION: destination
+/// is [`GLYPH_STAGING`] instead of the stock static buffer.
 pub fn glyph_cache_page__refresh_node__5cf5f0(page: *mut u8, node: *mut u8) {
     let pageu = page as usize;
     // SAFETY: live page record; +0 is the texture handle.
@@ -5134,11 +5288,12 @@ pub fn glyph_cache_page__refresh_node__5cf5f0(page: *mut u8, node: *mut u8) {
     blit(page, nodeu + 0x38, dst);
 }
 
-/// `GlyphCachePage::FlushDirty` — thiscall(ecx = page), plain RET. If the
-/// page's dirty byte (`page+8`, set by the cache on insert/evict) is set and
-/// the texture exists, merges the full page rect into the texture's update
-/// region (the Gx layer then pulls fresh data through the callback above)
-/// and clears the flag. DEVIATION: the rect is the enlarged page
+/// `GlyphCachePage::FlushDirty` — thiscall(ecx = page), plain RET.
+///
+/// If the page's dirty byte (`page+8`, set by the cache on insert/evict) is set
+/// and the texture exists, merges the full page rect into the texture's update
+/// region (the Gx layer then pulls fresh data through the callback above) and
+/// clears the flag. DEVIATION: the rect is the enlarged page
 /// ([`GLYPH_PAGE_W`]×[`GLYPH_PAGE_H`]; stock 256×256).
 pub fn glyph_cache_page__flush_dirty__5cfc50(page: *mut u8) {
     let pageu = page as usize;
@@ -5163,6 +5318,7 @@ pub fn glyph_cache_page__flush_dirty__5cfc50(page: *mut u8) {
 }
 
 /// `CGxFont::SetGlyphTexCoords` — thiscall(ecx = this; cellA, cellB), RET 0x8.
+///
 /// Writes the four scaled texture coords at `this+0x60..0x6c` from the signed
 /// wrap product `a*b` (row × cellHeight = the V pair), the zero-extended
 /// `a*b+b`, and the u32 column fields at `this+0x30`/`+0x48` (the U pair).
@@ -5188,11 +5344,12 @@ pub fn c_gx_font__set_glyph_tex_coords__5c7f80(this: *mut u8, a: i32, b: i32) {
     }
 }
 
-/// `UIFrame_RectOverlapDistance` — fastcall (`ecx` = list index, `edx` = query
-/// rect of 4 f32). Reads the obstacle-rect list table at `0xbe0b90`/`0xbe0b94`
-/// (16-byte stride per list index: count then list pointer), scans for an
-/// overlap and writes the clearance distance for `direction` to `out_distance`,
-/// returning 1 on a hit and 0 otherwise.
+/// `UIFrame_RectOverlapDistance` — fastcall (`ecx` = list index, `edx` = query rect of 4 f32).
+///
+/// Reads the obstacle-rect list table at `0xbe0b90`/`0xbe0b94` (16-byte stride
+/// per list index: count then list pointer), scans for an overlap and writes
+/// the clearance distance for `direction` to `out_distance`, returning 1 on a
+/// hit and 0 otherwise.
 pub fn ui_frame_rect_overlap_distance__509220(
     list_index: i32,
     rect: *const f32,
@@ -5238,11 +5395,13 @@ pub fn ui_frame_rect_overlap_distance__509220(
     }
 }
 
-/// `luaH_hashnum` — `__thiscall(ecx = t, stack = double n)`. Returns the
-/// main-position node pointer for a number key: biases `n` by the fixed host
-/// bias double (`0x8015b8`, stock `1.0`), folds the resulting bit pattern, and
-/// indexes the table's `node[]` (base at `t+0x10`, `lsizenode` byte at `t+7`,
-/// 0x28-byte stride). Leaves the node pointer in `eax`, so it is returned.
+/// `luaH_hashnum` — `__thiscall(ecx = t, stack = double n)`.
+///
+/// Returns the main-position node pointer for a number key: biases `n` by the
+/// fixed host bias double (`0x8015b8`, stock `1.0`), folds the resulting bit
+/// pattern, and indexes the table's `node[]` (base at `t+0x10`, `lsizenode`
+/// byte at `t+7`, 0x28-byte stride). Leaves the node pointer in `eax`, so it is
+/// returned.
 pub fn lua_h_hashnum__6fa260(t: *mut u8, n: f64) -> *mut u8 {
     if t.is_null() {
         return core::ptr::null_mut();
@@ -5265,10 +5424,11 @@ pub fn lua_h_hashnum__6fa260(t: *mut u8, n: f64) -> *mut u8 {
     off as *mut u8
 }
 
-/// `luaO_rawequalObj` — `__fastcall(ecx = t1, edx = t2)`. Primitive equality of
-/// two tagged values: tags (`+0`) must match, then nil is always equal, a number
-/// compares the `f64` payload (`+8`), and any other tag compares the value
-/// dword (`+8`). Pure: reads only the two value structures.
+/// `luaO_rawequalObj` — `__fastcall(ecx = t1, edx = t2)`.
+///
+/// Primitive equality of two tagged values: tags (`+0`) must match, then nil is
+/// always equal, a number compares the `f64` payload (`+8`), and any other tag
+/// compares the value dword (`+8`). Pure: reads only the two value structures.
 pub fn lua_o_rawequal_obj__6f58b0(t1: *const i32, t2: *const i32) -> bool {
     if t1.is_null() || t2.is_null() {
         return false;
@@ -5298,15 +5458,17 @@ pub fn lua_o_rawequal_obj__6f58b0(t1: *const i32, t2: *const i32) -> bool {
     crate::math::lua::lua_o_rawequal_obj__6f58b0(tag_a, tag_b, num_a, num_b, val_a, val_b)
 }
 
-/// `CM2Shared::GetBoundsCenter` — `__thiscall(ecx = this, [esp+4] = out)`. Lazily
-/// builds the model header (when `this+0x10` is null) by calling the original,
-/// side-effecting initializer, then reads the M2 bounding box at
-/// `*(*(this+0x30) + 0x130)` (min at `+0xb4`, max at `+0xc0`, radius at `+0xcc`),
-/// writes the centre `(min+max)*0.5` into `out[0..3]` and the radius into
-/// `out[3]`, and returns `out` (the original leaves it in EAX for chaining
-/// callers). The init routine is called by fixed absolute VA — it is not itself
-/// hooked, so this runs the stock code — and the `0.5` constant is read from its
-/// host `.data` slot (base verified at load; client non-`DYNAMICBASE`).
+/// `CM2Shared::GetBoundsCenter` — `__thiscall(ecx = this, [esp+4] = out)`.
+///
+/// Lazily builds the model header (when `this+0x10` is null) by calling the
+/// original, side-effecting initializer, then reads the M2 bounding box at
+/// `*(*(this+0x30) + 0x130)` (min at `+0xb4`, max at `+0xc0`, radius at
+/// `+0xcc`), writes the centre `(min+max)*0.5` into `out[0..3]` and the radius
+/// into `out[3]`, and returns `out` (the original leaves it in EAX for chaining
+/// callers). The init routine is called by fixed absolute VA — it is not
+/// itself hooked, so this runs the stock code — and the `0.5` constant is
+/// read from its host `.data` slot (base verified at load; client
+/// non-`DYNAMICBASE`).
 pub fn cm2_shared__get_bounds_center__713680(this: *mut u8, out: *mut f32) -> *mut f32 {
     if this.is_null() || out.is_null() {
         return out;
@@ -5365,15 +5527,17 @@ pub fn cm2_shared__get_bounds_center__713680(this: *mut u8, out: *mut f32) -> *m
     out
 }
 
-/// `BoundsFit::AddObject` — `__thiscall(ecx = this, stack = object)`. Folds one
-/// scene object (gated on `object+0x60 != 0`) into the fit. When the object kind
-/// at `object+8` is not 1, it forwards to the stock, already-hooked accumulate
-/// trio (`AccumulateCentroid`, `AccumulateMoment`, `AccumulateNormalSum`), each
-/// `__thiscall` by absolute VA. When kind == 1 it maintains a fixed 4-slot
-/// max-heap of squared distances from the fit origin (`this+4..0xc`) to the
-/// object centre (`object+0xc..0x14`): object pointers at `this+0x160`, keys at
-/// `this+0x170`, count at `this+0x180`. The squared distance and heap update are
-/// the pure kernel; the field reads/writes and the kind!=1 call-outs are here.
+/// `BoundsFit::AddObject` — `__thiscall(ecx = this, stack = object)`.
+///
+/// Folds one scene object (gated on `object+0x60 != 0`) into the fit. When the
+/// object kind at `object+8` is not 1, it forwards to the stock, already-hooked
+/// accumulate trio (`AccumulateCentroid`, `AccumulateMoment`,
+/// `AccumulateNormalSum`), each `__thiscall` by absolute VA. When kind == 1 it
+/// maintains a fixed 4-slot max-heap of squared distances from the fit origin
+/// (`this+4..0xc`) to the object centre (`object+0xc..0x14`): object pointers
+/// at `this+0x160`, keys at `this+0x170`, count at `this+0x180`. The squared
+/// distance and heap update are the pure kernel; the field reads/writes and the
+/// kind!=1 call-outs are here.
 pub fn bounds_fit__add_object__71bf90(this: *mut u8, object: *mut u8) {
     if this.is_null() || object.is_null() {
         return;
@@ -5446,19 +5610,20 @@ pub fn bounds_fit__add_object__71bf90(this: *mut u8, object: *mut u8) {
     unsafe { count_ptr.write(updated.count) };
 }
 
-/// `BoundsFit::FinalizePlanes` — `__fastcall(ecx = fit)`. Transforms each of the
-/// `fit+0x180` accumulated plane points (local point at `*entry+0xc`) into world
-/// space by the 4x4 at `*fit+0x9c`, writing the result to `*entry+0x18`; then,
-/// when the direction-valid flag at `fit+0x19c` is set, rotates the accumulated
-/// direction at `fit+0x1a0` by that matrix's upper-left 3x3 (no translation),
-/// normalizes it (guarding a tiny magnitude via the `.rdata` epsilon at
-/// `0x4029d4`, with numerator `1.0` at `0x3ff9d8`), and recomputes the plane
-/// offset `fit+0x1ac = -dot(dir, reference_point_world)`. The reference point is
-/// `-old_offset * old_dir` transformed by the same 4x4. The done-bit (bit0 of
-/// `fit+0x14`) short-circuits a repeat call. The point transform is the stock,
-/// already-hooked `C44Matrix::TransformPoint` (`__fastcall`, returns `out` in
-/// EAX), called by absolute VA; the direction rotation + normalize is the pure
-/// kernel.
+/// `BoundsFit::FinalizePlanes` — `__fastcall(ecx = fit)`.
+///
+/// Transforms each of the `fit+0x180` accumulated plane points (local point at
+/// `*entry+0xc`) into world space by the 4x4 at `*fit+0x9c`, writing the result
+/// to `*entry+0x18`; then, when the direction-valid flag at `fit+0x19c` is set,
+/// rotates the accumulated direction at `fit+0x1a0` by that matrix's upper-left
+/// 3x3 (no translation), normalizes it (guarding a tiny magnitude via the
+/// `.rdata` epsilon at `0x4029d4`, with numerator `1.0` at `0x3ff9d8`), and
+/// recomputes the plane offset `fit+0x1ac = -dot(dir, reference_point_world)`.
+/// The reference point is `-old_offset * old_dir` transformed by the same 4x4.
+/// The done-bit (bit0 of `fit+0x14`) short-circuits a repeat call. The point
+/// transform is the stock, already-hooked `C44Matrix::TransformPoint`
+/// (`__fastcall`, returns `out` in EAX), called by absolute VA; the direction
+/// rotation + normalize is the pure kernel.
 pub fn bounds_fit__finalize_planes__71c160(fit: *mut i32) {
     if fit.is_null() {
         return;
@@ -5555,15 +5720,17 @@ pub fn bounds_fit__finalize_planes__71c160(fit: *mut i32) {
     unsafe { done_ptr.write(done | 1) };
 }
 
-/// `BuildBoxProjectionMatrix` — `__fastcall(ecx = this, edx = secondary_out,
-/// stack = aabb, post_mul, arg4, centered_flag)`. Builds a light/projection
-/// matrix pair from an axis-aligned box: writes the primary 4x4 into `this` and
-/// the secondary 4x4 into `secondary_out` (degenerate boxes leave both
-/// untouched). The box origin comes from the live world-state struct reached
-/// through the host global `0xb4b2bc`; the float constants (degenerate epsilon,
-/// the reciprocal/translate numerator, the texel bias, and the `pi * -0.5`
-/// rotation angle) are read from `.data`. `arg4` is a raw 32-bit element value
-/// stored verbatim into two slots of the secondary matrix.
+/// `BuildBoxProjectionMatrix`.
+///
+/// `__fastcall(ecx = this, edx = secondary_out, stack = aabb, post_mul, arg4, centered_flag)`.
+/// Builds a light/projection matrix pair from an axis-aligned box: writes the
+/// primary 4x4 into `this` and the secondary 4x4 into `secondary_out`
+/// (degenerate boxes leave both untouched). The box origin comes from the live
+/// world-state struct reached through the host global `0xb4b2bc`; the float
+/// constants (degenerate epsilon, the reciprocal/translate numerator, the texel
+/// bias, and the `pi * -0.5` rotation angle) are read from `.data`. `arg4` is a
+/// raw 32-bit element value stored verbatim into two slots of the secondary
+/// matrix.
 pub fn build_box_projection_matrix__6d6fa0(
     this: *mut f32,
     secondary_out: *mut f32,
@@ -5653,18 +5820,20 @@ pub fn build_box_projection_matrix__6d6fa0(
     unsafe { secondary_out.cast::<[f32; 16]>().write_unaligned(secondary) };
 }
 
-/// `C44Matrix::InvertWithScale`'s reference constant `k` (`f = k / scale²`,
-/// stock ~1.0) and comparison epsilon: fixed host `.data`/`.rdata` floats at
+/// `C44Matrix::InvertWithScale`'s reference constant `k` and comparison epsilon.
+///
+/// (`f = k / scale²`, stock ~1.0.) Fixed host `.data`/`.rdata` floats at
 /// absolute addresses (image base verified at load), read directly. `k` aliases
 /// the same dword as `C3Vector::Normalize`'s scale constant.
 const INVERT_WITH_SCALE_K: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x3f_f9d8) as *const f32;
 const INVERT_WITH_SCALE_EPS: *const f32 =
     (crate::win::EXPECTED_IMAGE_BASE + 0x40_26bc) as *const f32;
 
-/// `C44Matrix::InvertWithScale` — `__thiscall(ecx = this 4×4 src, stack = out,
-/// stack = scale)`. Inverts a rotation + uniform-scale + translation matrix into
-/// `out`: an orthonormal fast path when `scale` ~ the host reference constant,
-/// else the scaled inverse-transpose. The receiver is read-only. Returns `out`.
+/// `C44Matrix::InvertWithScale` — `__thiscall(ecx = this 4×4 src, stack = out, stack = scale)`.
+///
+/// Inverts a rotation + uniform-scale + translation matrix into `out`: an
+/// orthonormal fast path when `scale` ~ the host reference constant, else the
+/// scaled inverse-transpose. The receiver is read-only. Returns `out`.
 pub fn c44_matrix__invert_with_scale__7bd820(
     this: *const f32,
     out: *mut f32,
@@ -5688,15 +5857,16 @@ pub fn c44_matrix__invert_with_scale__7bd820(
     out
 }
 
-/// `CCubicSpline::EvalSegmentTangent` — `__thiscall(ecx = this)`. Computes the
-/// 3-float TANGENT (cubic derivative) of segment `seg_index` at `local_t`. The
-/// original loads a fixed degree-2 derivative basis (12 contiguous baked floats
-/// at host `.data` VA `image base + 0x705dd8`) into a 16-slot stride-4 matrix
-/// (each row's 4th column forced to 0.0, last to 1.0) and forwards to
-/// `EvalBasisQuadratic`. The pad column is never read by the evaluator, so the
-/// reimplementation reuses the shipped `eval_basis_quadratic` kernel after
-/// expanding the baked rows. `void` return (the original restores ESP/EBP and
-/// returns nothing).
+/// `CCubicSpline::EvalSegmentTangent` — `__thiscall(ecx = this)`.
+///
+/// Computes the 3-float TANGENT (cubic derivative) of segment `seg_index` at
+/// `local_t`. The original loads a fixed degree-2 derivative basis (12
+/// contiguous baked floats at host `.data` VA `image base + 0x705dd8`) into a
+/// 16-slot stride-4 matrix (each row's 4th column forced to 0.0, last to 1.0)
+/// and forwards to `EvalBasisQuadratic`. The pad column is never read by the
+/// evaluator, so the reimplementation reuses the shipped `eval_basis_quadratic`
+/// kernel after expanding the baked rows. `void` return (the original restores
+/// ESP/EBP and returns nothing).
 pub fn c_cubic_spline__eval_segment_tangent__454250(
     this: *mut core::ffi::c_void,
     seg_index: i32,
@@ -5748,14 +5918,15 @@ pub fn c_cubic_spline__eval_segment_tangent__454250(
     }
 }
 
-/// `CDataStore::PutInt32` (duplicate codegen) — `__thiscall(ecx = this, stack =
-/// value)`; the terminal `ret 4` pops the one stack arg and the function returns
-/// `this` in `EAX` for chaining callers (so the real return type is a pointer,
-/// not `void`). Appends the 4-byte `value` to the byte stream: when the write
+/// `CDataStore::PutInt32` (duplicate codegen) — `__thiscall(ecx = this, stack = value)`.
+///
+/// The terminal `ret 4` pops the one stack arg and the function returns `this`
+/// in `EAX` for chaining callers (so the real return type is a pointer, not
+/// `void`). Appends the 4-byte `value` to the byte stream: when the write
 /// cursor at `this+0x10` would over/under-run the mapped window (origin
 /// `this+0x8`, capacity `this+0xc`), the stream grows its window through the
-/// object's `vtable[+0xc]` virtual method (a Storm-heap side effect, kept in the
-/// host) before storing at `base(this+0x4) - window(this+0x8) + cursor` and
+/// object's `vtable[+0xc]` virtual method (a Storm-heap side effect, kept in
+/// the host) before storing at `base(this+0x4) - window(this+0x8) + cursor` and
 /// advancing the cursor by 4.
 pub fn c_data_store__put_int32_dup__4183d0(
     this: *mut core::ffi::c_void,
@@ -5839,6 +6010,7 @@ pub fn c_data_store__put_int32_dup__4183d0(
 }
 
 /// `CGGameObject_C::GetWorldPosition` — `__thiscall(ecx = this, outPos)`.
+///
 /// When the transform-parent GUID is zero the object's local position is copied
 /// straight out. Otherwise the stock `CGGameObject_C::BuildWorldTransform`
 /// resolves the parent through the object manager (and its vtable getters),
@@ -5899,14 +6071,16 @@ pub fn cg_game_object_c__get_world_position__7c4b80(
     out_pos
 }
 
-/// `CGObject::GatherRenderProxyByGuid` — render-proxy gather callback. The
-/// stock convention is `__fastcall`-shaped with `ecx` unused, `edx = outProxy`,
-/// and `[guidLo, guidHi, lodArg]` on the stack (`ret 0xc`). Resolves the object
-/// by GUID through the stock object manager, gates on a visibility vtable method
-/// plus a state-flag bit, then fills the 24-dword proxy: model handle, a 6-float
-/// bounding box, the scale product (pure kernel), and a 16-float world transform
-/// read back from a vtable getter. The object-manager resolve and the two
-/// virtual calls dispatch through the live host image.
+/// `CGObject::GatherRenderProxyByGuid` — render-proxy gather callback.
+///
+/// The stock convention is `__fastcall`-shaped with `ecx` unused,
+/// `edx = outProxy`, and `[guidLo, guidHi, lodArg]` on the stack (`ret 0xc`).
+/// Resolves the object by GUID through the stock object manager, gates on a
+/// visibility vtable method plus a state-flag bit, then fills the 24-dword
+/// proxy: model handle, a 6-float bounding box, the scale product (pure
+/// kernel), and a 16-float world transform read back from a vtable getter. The
+/// object-manager resolve and the two virtual calls dispatch through the live
+/// host image.
 pub fn cg_object__gather_render_proxy_by_guid__483340(
     _unused: i32,
     out_proxy: *mut i32,
@@ -6030,6 +6204,7 @@ pub fn cg_object__gather_render_proxy_by_guid__483340(
 }
 
 /// `CGUnit_C::IsFootstepNearLiquid` — `__thiscall(ecx = this, worldPos)`.
+///
 /// Queries the unit's world object (`this+0xe0`) for the liquid surface height
 /// and type, then for its liquid flags, and classifies whether `worldPos.z`
 /// sits in the near-surface band (the pure kernel). Both world-object queries
@@ -6111,11 +6286,13 @@ pub fn cg_unit_c__is_footstep_near_liquid__60a740(
 }
 
 /// `CGxDevice::SetPlaneFloat` — `__thiscall(ecx = this, stack = index, value)`.
-/// Writes `value` into the plane entry at `*(this+0x2824) + index*0x18` only when
-/// it changed (strict ordered inequality, matching the x87 `FCOMP`/`JNP` test).
-/// On a change it first calls the stock active-list grower `FUN_00594010`
-/// (`__thiscall(this, index)`) by absolute VA — that path touches the Storm heap,
-/// so it stays in the host — then stores the new value.
+///
+/// Writes `value` into the plane entry at `*(this+0x2824) + index*0x18` only
+/// when it changed (strict ordered inequality, matching the x87 `FCOMP`/`JNP`
+/// test). On a change it first calls the stock active-list grower
+/// `FUN_00594010` (`__thiscall(this, index)`) by absolute VA — that path
+/// touches the Storm heap, so it stays in the host — then stores the new
+/// value.
 pub fn c_gx_device__set_plane_float__593770(this: *mut core::ffi::c_void, index: i32, value: f32) {
     if this.is_null() {
         return;
@@ -6147,18 +6324,20 @@ pub fn c_gx_device__set_plane_float__593770(this: *mut core::ffi::c_void, index:
     }
 }
 
-/// `CM2Model::GetAnimationInfo` — `__thiscall(ecx = this, stack = animationId,
-/// chainHops, pOutInfo)`. Resolves `animationId` against the model's M2 sequence
-/// data and fills the ~15-dword `pOutInfo`. Lazily builds the header (when
-/// `this+0x10` is null), resolves the sequence alias via the stock alias-resolve
-/// (writing the resolved pair into `pOutInfo+0x34`/`+0x38`) and the stock
-/// id->index lookup, then follows the sub-sequence `next` link (`entry+0x40`)
-/// `chainHops` times. On an in-range index it writes: flags (`+0x10`), duration
-/// (`+0x8 - +0x4`), `|boundVec| * move-speed`, the 6-float bound box (`entry+0x24`),
-/// the box centre `(min+max)*0.5` and the box radius (`entry+0x3c`); an
-/// out-of-range index zeroes those fields. The lazy-init and the two resolvers
-/// run the stock code by absolute VA (base verified at load; client
-/// non-`DYNAMICBASE`); the bound math is the pure kernel.
+/// `CM2Model::GetAnimationInfo`.
+///
+/// `__thiscall(ecx = this, stack = animationId, chainHops, pOutInfo)`. Resolves
+/// `animationId` against the model's M2 sequence data and fills the ~15-dword
+/// `pOutInfo`. Lazily builds the header (when `this+0x10` is null), resolves
+/// the sequence alias via the stock alias-resolve (writing the resolved pair
+/// into `pOutInfo+0x34`/`+0x38`) and the stock id->index lookup, then follows
+/// the sub-sequence `next` link (`entry+0x40`) `chainHops` times. On an
+/// in-range index it writes: flags (`+0x10`), duration (`+0x8 - +0x4`),
+/// `|boundVec| * move-speed`, the 6-float bound box (`entry+0x24`), the box
+/// centre `(min+max)*0.5` and the box radius (`entry+0x3c`); an out-of-range
+/// index zeroes those fields. The lazy-init and the two resolvers run the stock
+/// code by absolute VA (base verified at load; client non-`DYNAMICBASE`); the
+/// bound math is the pure kernel.
 pub fn cm2_model__get_animation_info__711a20(
     this: *mut core::ffi::c_void,
     animation_id: u32,
@@ -6346,18 +6525,19 @@ pub fn cm2_model__get_animation_info__711a20(
     }
 }
 
-/// `CM2Model::GetAttachmentWorldPos` — `__thiscall(ecx = this, stack = outPos,
-/// attachmentId)`. Computes the world-space position of the model attachment
-/// `attachmentId` into `outPos`. Lazily builds the model header (when
-/// `this+0x10` is null) by the stock initializer, resolves the attachment-record
-/// index via the stock id->index lookup, refreshes the bone matrices (the stock
-/// recursive bone-animation pipeline), then performs the two-stage transform: the
+/// `CM2Model::GetAttachmentWorldPos` — `__thiscall(ecx = this, stack = outPos, attachmentId)`.
+///
+/// Computes the world-space position of the model attachment `attachmentId`
+/// into `outPos`. Lazily builds the model header (when `this+0x10` is null) by
+/// the stock initializer, resolves the attachment-record index via the stock
+/// id->index lookup, refreshes the bone matrices (the stock recursive
+/// bone-animation pipeline), then performs the two-stage transform: the
 /// record's local offset (`rec+8`) through the parent bone matrix
 /// (`this+0x94 + boneIdx*0x40`) and that result through the model world matrix
-/// (`*(this+0x2c) + 0xdc`). Each transform is the stock `C44Matrix::TransformPoint`.
-/// Returns `outPos` (the original leaves it in EAX for chaining callers). All
-/// callees run the stock code by absolute VA (base verified at load; client
-/// non-`DYNAMICBASE`).
+/// (`*(this+0x2c) + 0xdc`). Each transform is the stock
+/// `C44Matrix::TransformPoint`. Returns `outPos` (the original leaves it in EAX
+/// for chaining callers). All callees run the stock code by absolute VA (base
+/// verified at load; client non-`DYNAMICBASE`).
 pub fn cm2_model__get_attachment_world_pos__712d50(
     this: *mut core::ffi::c_void,
     out_pos: *mut f32,
@@ -6471,18 +6651,20 @@ pub fn cm2_model__get_attachment_world_pos__712d50(
     out_pos
 }
 
-/// `CM2Shared::SampleQuatTrack` — `__fastcall(ecx = this, edx = animCtx, stack
-/// = track, out_quat)`. Locates the bracketing keyframe pair for the primary
-/// timestamp (`animCtx+0x98`/`+0x9c`) via the stock keyframe-search, then writes
-/// the interpolated quaternion into `out_quat[3..7]`: the step path
-/// (`track[0]==0`) copies the lo key verbatim, otherwise the kernel lerps the
-/// two 16-byte key quaternions by the search's factor (`out_quat[2]`). When a
-/// secondary animation is active (`animCtx+0x10c` differs from the host sentinel
-/// and `track[1]==-1`) it samples the second track, lerps into `out_quat[10..14]`
-/// and blends the two with the D3DX quaternion-slerp dispatched through the host
-/// runtime pointer. Both the keyframe search and the slerp run the stock code by
-/// absolute VA; the sentinel is read from its `.data` slot (base verified at
-/// load; client non-`DYNAMICBASE`).
+/// `CM2Shared::SampleQuatTrack`.
+///
+/// `__fastcall(ecx = this, edx = animCtx, stack = track, out_quat)`. Locates
+/// the bracketing keyframe pair for the primary timestamp
+/// (`animCtx+0x98`/`+0x9c`) via the stock keyframe-search, then writes the
+/// interpolated quaternion into `out_quat[3..7]`: the step path (`track[0]==0`)
+/// copies the lo key verbatim, otherwise the kernel lerps the two 16-byte key
+/// quaternions by the search's factor (`out_quat[2]`). When a secondary
+/// animation is active (`animCtx+0x10c` differs from the host sentinel and
+/// `track[1]==-1`) it samples the second track, lerps into `out_quat[10..14]`
+/// and blends the two with the D3DX quaternion-slerp dispatched through the
+/// host runtime pointer. Both the keyframe search and the slerp run the stock
+/// code by absolute VA; the sentinel is read from its `.data` slot (base
+/// verified at load; client non-`DYNAMICBASE`).
 pub fn cm2_shared__sample_quat_track__713ea0(
     this: *mut core::ffi::c_void,
     anim_ctx: i32,
@@ -6630,16 +6812,18 @@ pub fn cm2_shared__sample_quat_track__713ea0(
     }
 }
 
-/// `CM2_SetAnimatedVec3Masked` — `__fastcall(ecx = container, edx = index, stack
-/// = value, axisMask)`. Reads the track's current vec3 via the stock
-/// `CM2::GetCurrentTrackValue`, merges it per axis with the supplied `value`
-/// under `axisMask` (set bit keeps the existing lane, clear bit takes the
-/// supplied lane), then — when the slot is a valid type-3 animated node
-/// (`node+0xc == 3`, `node+0xd` bit1 clear) — zeroes the node's cached vec3 and
-/// dispatches its vtbl `+0xc` setter with the merged vector. On any validation
-/// miss it forwards `ERROR_INVALID_PARAMETER` to the stock `Storm_SetLastError`.
-/// The current-value read, the virtual setter and the error shim run the stock
-/// code by absolute VA (base verified at load; client non-`DYNAMICBASE`).
+/// `CM2_SetAnimatedVec3Masked`.
+///
+/// `__fastcall(ecx = container, edx = index, stack = value, axisMask)`. Reads
+/// the track's current vec3 via the stock `CM2::GetCurrentTrackValue`, merges
+/// it per axis with the supplied `value` under `axisMask` (set bit keeps the
+/// existing lane, clear bit takes the supplied lane), then — when the slot is
+/// a valid type-3 animated node (`node+0xc == 3`, `node+0xd` bit1 clear) —
+/// zeroes the node's cached vec3 and dispatches its vtbl `+0xc` setter with the
+/// merged vector. On any validation miss it forwards `ERROR_INVALID_PARAMETER`
+/// to the stock `Storm_SetLastError`. The current-value read, the virtual
+/// setter and the error shim run the stock code by absolute VA (base verified
+/// at load; client non-`DYNAMICBASE`).
 pub fn cm2_set_animated_vec3_masked__7ac250(
     container: i32,
     index: u32,
@@ -6737,12 +6921,14 @@ pub fn cm2_set_animated_vec3_masked__7ac250(
     }
 }
 
-/// `CMath_WrapAngle` — `__stdcall(stack = angle) -> float` (the terminal `ret 4`
-/// pops the single stack arg; the result returns in `ST0`). fmod-style wrap of
-/// `angle` into a canonical period: subtracts `trunc(angle/period)*period`, then
-/// one more `period` when `angle < threshold`. The reciprocal, period, and
-/// threshold are host globals read by fixed absolute address (base verified at
-/// load; client non-`DYNAMICBASE`).
+/// `CMath_WrapAngle` — `__stdcall(stack = angle) -> float`.
+///
+/// (the terminal `ret 4` pops the single stack arg; the result returns in
+/// `ST0`). fmod-style wrap of `angle` into a canonical period: subtracts
+/// `trunc(angle/period)*period`, then one more `period` when
+/// `angle < threshold`. The reciprocal, period, and threshold are host globals
+/// read by fixed absolute address (base verified at load; client
+/// non-`DYNAMICBASE`).
 pub fn c_math_wrap_angle__7abbe0(angle: f32) -> f32 {
     const RECIP: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x8f_5730) as *const f32;
     const PERIOD: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x8f_5734) as *const f32;
@@ -6762,10 +6948,11 @@ pub fn c_math_wrap_angle__7abbe0(angle: f32) -> f32 {
     w
 }
 
-/// `CMovement::ComputeBoxGroundNormal` — `__thiscall(ecx = this)`. Builds the 6
-/// axis-aligned planes of the mover's collision box from its half-extents
-/// (`this+0x10/+0x14/+0x18`) and contact radii (`this+0xb0` horizontal,
-/// `this+0xb4` vertical), then runs the stock ground-normal solver
+/// `CMovement::ComputeBoxGroundNormal` — `__thiscall(ecx = this)`.
+///
+/// Builds the 6 axis-aligned planes of the mover's collision box from its
+/// half-extents (`this+0x10/+0x14/+0x18`) and contact radii (`this+0xb0`
+/// horizontal, `this+0xb4` vertical), then runs the stock ground-normal solver
 /// `CMovement::ComputeGroundNormal` over those planes (it averages the global
 /// collision-contact list, so it stays in the host) and stores the resulting
 /// ground normal into `this+0x24/+0x28/+0x2c`.
@@ -6806,10 +6993,12 @@ pub fn c_movement__compute_box_ground_normal__6332a0(this: i32) {
     );
 }
 
-/// `CMovement::IsPositionFinite` — `__fastcall(ecx = this) -> i32`. Reads the
-/// mover position (`this+0x10/+0x14/+0x18` = x/y/z), requires each finite, then
-/// range-checks the world-relative X/Y against the playable rectangle. The
-/// world-origin bias and the `[min, max)` bounds are fixed host globals.
+/// `CMovement::IsPositionFinite` — `__fastcall(ecx = this) -> i32`.
+///
+/// Reads the mover position (`this+0x10/+0x14/+0x18` = x/y/z), requires each
+/// finite, then range-checks the world-relative X/Y against the playable
+/// rectangle. The world-origin bias and the `[min, max)` bounds are fixed host
+/// globals.
 pub fn c_movement__is_position_finite__616bf0(this: *mut core::ffi::c_void) -> i32 {
     if this.is_null() {
         return 0;
@@ -6836,14 +7025,15 @@ pub fn c_movement__is_position_finite__616bf0(this: *mut core::ffi::c_void) -> i
     )
 }
 
-/// `CGUnit_C::UpdateWaterInteraction` — thiscall(ecx = this; param1, param2,
-/// threshold f32, param4), RET 0x10, void. Per-frame liquid interaction:
-/// early-outs on movement flag `0x400`, then splits on flag `0x200000` into
-/// a surface arm (fires the splash sound + ripples on a level crossing, and
-/// the primary liquid-event handler when the state flags allow) and a
-/// submerged arm (the secondary handler). Own math is the surface/ripple/
-/// offset level scaling; every event callee is a delegate. All FCOMP
-/// polarities pinned (NaN routing preserved per branch).
+/// `CGUnit_C::UpdateWaterInteraction`.
+///
+/// thiscall(ecx = this; param1, param2, threshold f32, param4), RET 0x10, void.
+/// Per-frame liquid interaction: early-outs on movement flag `0x400`, then
+/// splits on flag `0x200000` into a surface arm (fires the splash sound +
+/// ripples on a level crossing, and the primary liquid-event handler when the
+/// state flags allow) and a submerged arm (the secondary handler). Own math is
+/// the surface/ripple/ offset level scaling; every event callee is a delegate.
+/// All FCOMP polarities pinned (NaN routing preserved per branch).
 #[allow(clippy::too_many_lines)]
 pub fn cg_unit_c__update_water_interaction__6030c0(
     this: *mut u8,
@@ -6961,14 +7151,15 @@ pub fn cg_unit_c__update_water_interaction__6030c0(
     }
 }
 
-/// `CGxUI::EmitTexturedQuadBatch` — fastcall(ecx = posArray f32*,
-/// edx = offsetArray f32*; color, uvBase f32*[8], uvScale f32*[2]), RET 0xC,
-/// void. Resizes the device vertex buffer for four 0x30-byte vertices
-/// (GxResizeBuffer, returns the buffer; the lock vtable call returns the
-/// vertex cursor — the two `extraout_EAX` values), then per vertex copies
-/// the position triple + color and computes four UV coordinates
-/// `uvBase[k] × uvScale + offset[vertex]`, and finally commits and submits
-/// the batch. All device ops stay delegates; only the UV math is native.
+/// `CGxUI::EmitTexturedQuadBatch`.
+///
+/// fastcall(ecx = posArray f32*, edx = offsetArray f32*; color, uvBase f32*[8],
+/// uvScale f32*[2]), RET 0xC, void. Resizes the device vertex buffer for four
+/// 0x30-byte vertices (GxResizeBuffer, returns the buffer; the lock vtable call
+/// returns the vertex cursor — the two `extraout_EAX` values), then per
+/// vertex copies the position triple + color and computes four UV coordinates
+/// `uvBase[k] × uvScale + offset[vertex]`, and finally commits and submits the
+/// batch. All device ops stay delegates; only the UV math is native.
 pub fn c_gx_ui__emit_textured_quad_batch__6cd750(
     pos_array: *const f32,
     offset_array: *const f32,
@@ -7036,18 +7227,18 @@ pub fn c_gx_ui__emit_textured_quad_batch__6cd750(
     submit_batch(buffer, BASE + 0x80_ecc8, 6);
 }
 
-/// `CGObject_C::UpdateShadowTransform` — thiscall(ecx = this; forceUpdate),
-/// RET 4, void. No-op unless the object has a shadow render-entity at
-/// `this+0xe0`. Builds the shadow transform from identity: translate by the
-/// world position (vtable +0x14 GetPosition), rotate about +Z by the facing
-/// (vtable +0x18 GetFacing), uniform-scale by `s94 × s90 × (model ? s9c :
-/// s98)`. If a ready model is present, derives a bounds-center bias from its
-/// bounding box (halved via the Scale hook). Submits the transform, the
-/// +0xc0 bias vector, and the derived center to the shadow entity's
-/// UpdateTransform (our hook). Translate/ScaleRotation3x3/Scale/
-/// UpdateTransform are our hooks; RotateAxisAngle and the model
-/// load/copy callees stay delegates, GetPosition/GetFacing are live vtable
-/// calls.
+/// `CGObject_C::UpdateShadowTransform` — thiscall(ecx = this; forceUpdate), RET 4, void.
+///
+/// No-op unless the object has a shadow render-entity at `this+0xe0`. Builds
+/// the shadow transform from identity: translate by the world position (vtable
+/// +0x14 GetPosition), rotate about +Z by the facing (vtable +0x18 GetFacing),
+/// uniform-scale by `s94 × s90 × (model ? s9c : s98)`. If a ready model is
+/// present, derives a bounds-center bias from its bounding box (halved via the
+/// Scale hook). Submits the transform, the +0xc0 bias vector, and the derived
+/// center to the shadow entity's UpdateTransform (our hook).
+/// Translate/ScaleRotation3x3/Scale/ UpdateTransform are our hooks;
+/// RotateAxisAngle and the model load/copy callees stay delegates,
+/// GetPosition/GetFacing are live vtable calls.
 pub fn cg_object_c__update_shadow_transform__613ef0(this: *mut u8, force_update: i32) {
     let thisu = this as usize;
     const BASE: usize = crate::win::EXPECTED_IMAGE_BASE;
@@ -7138,13 +7329,14 @@ pub fn cg_object_c__update_shadow_transform__613ef0(this: *mut u8, force_update:
     );
 }
 
-/// `CMovement::InterpolatePositionTowardPathNode` — thiscall(ecx = this;
-/// timeMs, inoutPos f32*[3]), RET 8, u32. Fetches the next valid path node
-/// (TSList at `this+0x150`, delegate); if none, or its time has already
-/// passed (`node.time − timeMs < 0`), clears `this+0x14c` and returns 0.
-/// Otherwise lerps `inoutPos` toward the node point (`node+0x10`) by
-/// `(node.time − timeMs) / period` and returns 1. On return
-/// `EDX` is just the preserved `this` — no register hazard here.
+/// `CMovement::InterpolatePositionTowardPathNode`.
+///
+/// thiscall(ecx = this; timeMs, inoutPos f32*[3]), RET 8, u32. Fetches the next
+/// valid path node (TSList at `this+0x150`, delegate); if none, or its time has
+/// already passed (`node.time − timeMs < 0`), clears `this+0x14c` and returns
+/// 0. Otherwise lerps `inoutPos` toward the node point (`node+0x10`) by
+/// `(node.time − timeMs) / period` and returns 1. On return `EDX` is just the
+/// preserved `this` — no register hazard here.
 pub fn c_movement__interpolate_position_toward_path_node__6191c0(
     this: *mut u8,
     time_ms: i32,
@@ -7183,11 +7375,11 @@ pub fn c_movement__interpolate_position_toward_path_node__6191c0(
     1
 }
 
-/// `CMovement::InterpolateFacing` — thiscall(ecx = this; baseOrientation
-/// f32), RET 4, f32 in ST0. When no turn is active (mover GUID at
-/// `this+0x38/+0x3c` both zero) returns the input unchanged; otherwise adds
-/// the active turn delta from the mover (GetFacingAngle 0x630b70 delegate)
-/// and wraps the sum into `[low, 2π)`.
+/// `CMovement::InterpolateFacing` — thiscall(ecx = this; baseOrientation f32), RET 4, f32 in ST0.
+///
+/// When no turn is active (mover GUID at `this+0x38/+0x3c` both zero) returns
+/// the input unchanged; otherwise adds the active turn delta from the mover
+/// (GetFacingAngle 0x630b70 delegate) and wraps the sum into `[low, 2π)`.
 pub fn c_movement__interpolate_facing__7c4ae0(this: *mut u8, base_orientation: f32) -> f32 {
     let thisu = this as usize;
     const BASE: usize = crate::win::EXPECTED_IMAGE_BASE;
@@ -7211,13 +7403,14 @@ pub fn c_movement__interpolate_facing__7c4ae0(this: *mut u8, base_orientation: f
     crate::math::movement::interpolate_facing__7c4ae0(facing, base_orientation, two_pi, low)
 }
 
-/// `Obj::ReinsertIntoProjectedDepthBucket` — fastcall(ecx = this), bare RET,
-/// void. A leaf (no callees): projects the object position at `this+0x5c`
-/// through two plane rows (the first cached to `this+0x78`, the second
-/// rounded to a `[0, 31]` bucket index — an index of 32+ EARLY-RETURNS
-/// without relinking), then unlinks the object from its current tagged
-/// TSList bucket and relinks it at the head of `bucket[index]` in the array
-/// at `0xc7bda0` (0x6c stride). Reuses [`ts_link_unlink`] for the unlink.
+/// `Obj::ReinsertIntoProjectedDepthBucket` — fastcall(ecx = this), bare RET, void.
+///
+/// A leaf (no callees): projects the object position at `this+0x5c` through two
+/// plane rows (the first cached to `this+0x78`, the second rounded to a
+/// `[0, 31]` bucket index — an index of 32+ EARLY-RETURNS without relinking),
+/// then unlinks the object from its current tagged TSList bucket and relinks it
+/// at the head of `bucket[index]` in the array at `0xc7bda0` (0x6c stride).
+/// Reuses [`ts_link_unlink`] for the unlink.
 pub fn obj__reinsert_into_projected_depth_bucket__681a40(this: *mut u8) {
     let thisu = this as usize;
     const BASE: usize = crate::win::EXPECTED_IMAGE_BASE;
@@ -7300,13 +7493,15 @@ pub fn obj__reinsert_into_projected_depth_bucket__681a40(this: *mut u8) {
     unsafe { ((head + 4) as *mut u32).write(thisu as u32) };
 }
 
-/// `AnimRecordTable::GetScrolledParamsById` — thiscall(ecx = this; id,
-/// outBlock u32*[7]), RET 0x8, void. Lazily initializes the table (delegate
-/// when `this+0x10` is null), resolves the id to a slot via the u16 hash
-/// lookup (sentinel `0xffffffff` selects slot 0), then fills seven dwords
-/// from the `0x118`-byte record at `this+0x90 + slot*0x118`: two raw fields,
-/// the scrolled coordinate `ftol((counter − base) × scale) + offset`, and
-/// four more raw fields. Only the scroll term is float math.
+/// `AnimRecordTable::GetScrolledParamsById`.
+///
+/// thiscall(ecx = this; id, outBlock u32*[7]), RET 0x8, void. Lazily
+/// initializes the table (delegate when `this+0x10` is null), resolves the id
+/// to a slot via the u16 hash lookup (sentinel `0xffffffff` selects slot 0),
+/// then fills seven dwords from the `0x118`-byte record at
+/// `this+0x90 + slot*0x118`: two raw fields, the scrolled coordinate
+/// `ftol((counter − base) × scale) + offset`, and four more raw fields. Only
+/// the scroll term is float math.
 pub fn anim_record_table__get_scrolled_params_by_id__711fe0(
     this: *mut u8,
     id: u32,
@@ -7367,11 +7562,12 @@ pub fn anim_record_table__get_scrolled_params_by_id__711fe0(
     }
 }
 
-/// `CGUnit_C::GetStateDependentScalar` — thiscall(ecx = this), bare RET,
-/// f32 in ST0. Returns the per-object scalar at `this+0xb8` when the unit is
-/// airborne or swimming, else the global default at `0x801628`. The airborne
-/// predicate (0x5fa550, reading `*(this+0x15c)`) stays a delegate; the body
-/// is otherwise a pure two-way field select.
+/// `CGUnit_C::GetStateDependentScalar` — thiscall(ecx = this), bare RET, f32 in ST0.
+///
+/// Returns the per-object scalar at `this+0xb8` when the unit is airborne or
+/// swimming, else the global default at `0x801628`. The airborne predicate
+/// (0x5fa550, reading `*(this+0x15c)`) stays a delegate; the body is otherwise
+/// a pure two-way field select.
 pub fn cg_unit_c__get_state_dependent_scalar__617430(this: *mut u8) -> f32 {
     const BASE: usize = crate::win::EXPECTED_IMAGE_BASE;
     // 0x5fa550 IsAirborneOrSwimming — thiscall(ecx = movementState), RET 0.
@@ -7390,11 +7586,13 @@ pub fn cg_unit_c__get_state_dependent_scalar__617430(this: *mut u8) -> f32 {
     }
 }
 
-/// `CMovement::ComputeSlopeClimbDelta` — `__thiscall(ecx = this, stack = outVec,
-/// dir, distInOut, planeNx, planeNy, planeNz, useCombinedNormal, combinedNormal)
-/// -> *mut f32` (returns `outVec` in EAX). Computes the vertical slope-climb
-/// delta `dz = -dot(n, dir) * dist / n.z` with the steep-plane combined-normal
-/// swap, `|n.z|~0` → ±FLT_MAX saturation, and the ±stepHeight clamp (rescaling
+/// `CMovement::ComputeSlopeClimbDelta`.
+///
+/// `__thiscall(ecx = this, stack = outVec, dir, distInOut, planeNx, planeNy,
+/// planeNz, useCombinedNormal, combinedNormal) -> *mut f32`
+/// (returns `outVec` in EAX). Computes the vertical slope-climb delta
+/// `dz = -dot(n, dir) * dist / n.z` with the steep-plane combined-normal swap,
+/// `|n.z|~0` → ±FLT_MAX saturation, and the ±stepHeight clamp (rescaling
 /// `*distInOut`), then writes `outVec = (0, 0, dz)`.
 ///
 /// `combinedNormal` is dereferenced unconditionally, matching the stock body
@@ -7465,12 +7663,14 @@ pub fn c_movement__compute_slope_climb_delta__635c00(
     out_vec
 }
 
-/// `CMovement::StepSplineAndSnapPosition` — `__thiscall(ecx = this, deltaTime,
-/// packedSpeed, splineDelta) -> u32`. Advances the active spline via the stock
-/// path solver `CMovement::UpdateSplinePath`, then conditionally snaps the
-/// mover world position to `base + splineDelta` when the move passes a
-/// horizontal distance-vs-tolerance check. Returns 0 once the step is consumed
-/// (spline finished or position snapped), else 1.
+/// `CMovement::StepSplineAndSnapPosition`.
+///
+/// `__thiscall(ecx = this, deltaTime, packedSpeed, splineDelta) -> u32`.
+/// Advances the active spline via the stock path solver
+/// `CMovement::UpdateSplinePath`, then conditionally snaps the mover world
+/// position to `base + splineDelta` when the move passes a horizontal
+/// distance-vs-tolerance check. Returns 0 once the step is consumed (spline
+/// finished or position snapped), else 1.
 ///
 /// Holds the prior facing yaw (`+0x1c`) if the solver leaves it non-finite, so a
 /// degenerate spline segment cannot propagate a non-finite orientation into the
@@ -7749,21 +7949,23 @@ pub fn c_particle_emitter__compute_vertex_color_uv__7b9b10(
     unsafe { out_v.write(v) };
 }
 
-/// `CParticleEmitter::SpawnParticle` — `__thiscall(ecx = this, [esp+4] =
-/// particle, [esp+8] = dt, [esp+0xc] = emitterPos)`. Initialises a freshly
-/// allocated particle: a random lifetime (a fraction of `dt` clamped at the
-/// emitter lifespan `this+0x14`) and a random spawn direction built from two
-/// angle spreads (`this+0x24`, `this+0x28`) at radius `this+0x18`, integrated
-/// one step under the emitter's z acceleration `this+0x1c`, then offset by the
-/// emitter world origin `emitterPos`. The three random words come from the
-/// stock shared RNG `FUN_004531e0` (`__fastcall(ecx = &state) -> u32`), which
-/// reads and mutates the fixed global RNG-state struct `DAT_00cf5be0` — it is
-/// called out to by absolute VA so the global advances exactly as in the
-/// original (the values cannot be baked or the stream desyncs). `this+0x20` is
-/// copied verbatim into `particle+0x20` as a raw dword. The pure kernel does the
-/// float math; `one`/`half`/`zero` are read from their host `.data` slots (base
-/// verified at load; client non-`DYNAMICBASE`). The original leaves the
-/// `emitterPos` pointer in EAX on return, so the shim mirrors it.
+/// `CParticleEmitter::SpawnParticle`.
+///
+/// `__thiscall(ecx = this, [esp+4] = particle, [esp+8] = dt, [esp+0xc] = emitterPos)`.
+/// Initialises a freshly allocated particle: a random lifetime (a fraction of
+/// `dt` clamped at the emitter lifespan `this+0x14`) and a random spawn
+/// direction built from two angle spreads (`this+0x24`, `this+0x28`) at radius
+/// `this+0x18`, integrated one step under the emitter's z acceleration
+/// `this+0x1c`, then offset by the emitter world origin `emitterPos`. The three
+/// random words come from the stock shared RNG `FUN_004531e0`
+/// (`__fastcall(ecx = &state) -> u32`), which reads and mutates the fixed
+/// global RNG-state struct `DAT_00cf5be0` — it is called out to by absolute
+/// VA so the global advances exactly as in the original (the values cannot be
+/// baked or the stream desyncs). `this+0x20` is copied verbatim into
+/// `particle+0x20` as a raw dword. The pure kernel does the float math;
+/// `one`/`half`/`zero` are read from their host `.data` slots (base verified at
+/// load; client non-`DYNAMICBASE`). The original leaves the `emitterPos`
+/// pointer in EAX on return, so the shim mirrors it.
 pub fn c_particle_emitter__spawn_particle__7ba200(
     this: *mut core::ffi::c_void,
     particle: *mut f32,
@@ -7959,14 +8161,17 @@ pub fn c_particle_system__update_spawn_transform__7b76c0(
     unsafe { prev_r0_ptr.cast::<[f32; 3]>().write_unaligned(row0) };
 }
 
-/// `CWorldFrame::UnprojectCursorToWorldRay` — `__thiscall(ecx = this, stack =
-/// screenX, screenY, rayNear, rayFar)`. Normalizes the screen cursor into NDC
-/// against the viewport rect (`this+0x390/0x394/0x398/0x39c`) and the fixed NDC
-/// bounds; returns 0 if outside. Otherwise builds the ray via the stock
-/// `CWorldFrame::BuildPickRayFromNDC` (`__fastcall(ecx=rayNear, edx=rayFar,
-/// stack=ndcX, ndcY)`, `ret 8`) — that path reads the active-camera global and
-/// Storm's last-error, so it stays in the host — then translates both endpoints
-/// by the camera origin (`*(this+0x65b8) + 8/0xc/0x10`). Returns 1 on success.
+/// `CWorldFrame::UnprojectCursorToWorldRay`.
+///
+/// `__thiscall(ecx = this, stack = screenX, screenY, rayNear, rayFar)`.
+/// Normalizes the screen cursor into NDC against the viewport rect
+/// (`this+0x390/0x394/0x398/0x39c`) and the fixed NDC bounds; returns 0 if
+/// outside. Otherwise builds the ray via the stock
+/// `CWorldFrame::BuildPickRayFromNDC`
+/// (`__fastcall(ecx=rayNear, edx=rayFar, stack=ndcX, ndcY)`, `ret 8`) — that
+/// path reads the active-camera global and Storm's last-error, so it stays in
+/// the host — then translates both endpoints by the camera origin
+/// (`*(this+0x65b8) + 8/0xc/0x10`). Returns 1 on success.
 pub fn c_world_frame__unproject_cursor_to_world_ray__4813b0(
     this: *mut core::ffi::c_void,
     screen_x: f32,
@@ -8043,13 +8248,15 @@ pub fn c_world_frame__unproject_cursor_to_world_ray__4813b0(
     1
 }
 
-/// `CWorldLiquid::QueryHeightAtPoint` (`__fastcall(ecx = liquidChunk, edx =
-/// flags, stack = point, outType, outHeight, outNormal) -> hit`). Picks the
-/// liquid surface height under a world-space point by bilinearly interpolating
-/// the chunk's vertex heightfield, then reports it when the surface lies above
-/// the point. The `edx` flags slot is unused by the body. Returns 1 on hit /
-/// surface-present, 0 on miss (boolean in the low byte, matching the reference's
-/// `AL`).
+/// `CWorldLiquid::QueryHeightAtPoint`.
+///
+/// `__fastcall(ecx = liquidChunk, edx = flags, stack = point, outType,
+/// outHeight, outNormal) -> hit`.
+/// Picks the liquid surface height under a world-space point by bilinearly
+/// interpolating the chunk's vertex heightfield, then reports it when the
+/// surface lies above the point. The `edx` flags slot is unused by the body.
+/// Returns 1 on hit / surface-present, 0 on miss (boolean in the low byte,
+/// matching the reference's `AL`).
 pub fn c_world_liquid__query_height_at_point__6b9f10(
     liquid_chunk: i32,
     _flags: u32,
@@ -8184,13 +8391,15 @@ pub fn c_world_liquid__query_height_at_point__6b9f10(
     }
 }
 
-/// `CWorldView::CompareDrawListOpaque` — `__fastcall(ecx = indexA, edx = indexB,
-/// stack = worldView)`. Heap-sort comparator for the opaque draw list: indexes
-/// two 0x40-byte draw elements out of the element array (`*(worldView+0x34)`),
-/// then orders them by a key chain (priority table when `*(worldView+0x148) & 4`,
-/// then several float/int fields, then the texture key when `& 2`). On an
-/// undecided tie it falls through to the stock extended comparator
-/// `FUN_0070aa30` (`__fastcall(indexA, indexB, stack=worldView)`, `ret 4`).
+/// `CWorldView::CompareDrawListOpaque`.
+///
+/// `__fastcall(ecx = indexA, edx = indexB, stack = worldView)`. Heap-sort
+/// comparator for the opaque draw list: indexes two 0x40-byte draw elements out
+/// of the element array (`*(worldView+0x34)`), then orders them by a key chain
+/// (priority table when `*(worldView+0x148) & 4`, then several float/int
+/// fields, then the texture key when `& 2`). On an undecided tie it falls
+/// through to the stock extended comparator `FUN_0070aa30`
+/// (`__fastcall(indexA, indexB, stack=worldView)`, `ret 4`).
 pub fn c_world_view__compare_draw_list_opaque__70ae10(
     index_a: u32,
     index_b: u32,
@@ -8292,11 +8501,13 @@ fn read_draw_elem(e: *const u8) -> crate::math::world::DrawElem {
     }
 }
 
-/// `CWorldView::CompareDrawListByTexture` — `__fastcall(ecx = indexA, edx =
-/// indexB, stack = worldView)`, `ret 4`. Heap-sort comparator for the bucket-0
-/// (texture-major) draw list: indexes two 0x40-byte draw elements out of the
-/// element array (`*(worldView+0x34)`) and orders them by the unsigned texture
-/// key at element `+0x24`. Yields `-1` / `0` / `1`.
+/// `CWorldView::CompareDrawListByTexture`.
+///
+/// `__fastcall(ecx = indexA, edx = indexB, stack = worldView)`, `ret 4`.
+/// Heap-sort comparator for the bucket-0 (texture-major) draw list: indexes two
+/// 0x40-byte draw elements out of the element array (`*(worldView+0x34)`) and
+/// orders them by the unsigned texture key at element `+0x24`. Yields `-1` /
+/// `0` / `1`.
 ///
 /// The stock body compares `key(b)` against `key(a)` (`CMP ECX,EAX; JBE`) and
 /// materialises the positive arm with the `SBB EAX,EAX; NEG EAX` carry idiom, so
@@ -8334,19 +8545,21 @@ pub fn c_world_view__compare_draw_list_by_texture__70aa00(
     }
 }
 
-/// `FUN_0041af70` — `__fastcall(ecx, edx) -> (ecx - edx) >> 2` (arithmetic
-/// shift). Orders two texture pointers by address; the extended comparator
-/// consumes only the sign, but the value is transcribed exactly.
+/// `FUN_0041af70` — `__fastcall(ecx, edx) -> (ecx - edx) >> 2` (arithmetic shift).
+///
+/// Orders two texture pointers by address; the extended comparator consumes
+/// only the sign, but the value is transcribed exactly.
 fn texture_ptr_quarter_diff__41af70(a: u32, b: u32) -> i32 {
     (a.wrapping_sub(b) as i32) >> 2
 }
 
-/// `CWorldView::CompareDrawListExtended` — `__fastcall(ecx = indexA, edx =
-/// indexB, stack = worldView)`, `ret 4`. Heap-sort comparator for the
-/// transparent draw bucket, and the tie-break fallthrough of
-/// `CompareDrawListOpaque` (0x70ae10). Indexes two 0x40-byte draw elements out
-/// of the element array (`*(worldView+0x34)`) and orders them by a chain keyed
-/// on the element type tag `*elem`:
+/// `CWorldView::CompareDrawListExtended`.
+///
+/// `__fastcall(ecx = indexA, edx = indexB, stack = worldView)`, `ret 4`.
+/// Heap-sort comparator for the transparent draw bucket, and the tie-break
+/// fallthrough of `CompareDrawListOpaque` (0x70ae10). Indexes two 0x40-byte
+/// draw elements out of the element array (`*(worldView+0x34)`) and orders
+/// them by a chain keyed on the element type tag `*elem`:
 ///
 /// * signed three-way on the tag itself;
 /// * tag ≤ 1 — (tag 0 only: a leading identity run — `elem+0x38` when
@@ -8560,6 +8773,7 @@ pub fn c_world_view__compare_draw_list_extended__70aa30(
 }
 
 /// `Cloud::ApplyDepthRangeAndColor` — `__thiscall(ecx = this, stack = boundsFit)`.
+///
 /// Picks a sky-tint RGB triple and a near/far depth window from the cloud/sky
 /// environment block (host global `0x00ce9b60`) and forwards them to
 /// `BoundsFit::SetDepthRange` for a shadow/CSM bounds-fit pass.
@@ -8673,10 +8887,12 @@ pub fn cloud_apply_depth_range_and_color__6c31e0(
     bounds_fit__set_depth_range__71c110(bounds_fit.cast(), color.as_ptr(), near_depth, far_depth);
 }
 
-/// `Collision::BuildFaceEdgePlanes` — `__fastcall(ecx = vert_array, edx =
-/// vert_indices, stack = face_plane, extrude, out_planes)`. Builds the four clip
-/// planes (three extruded edge planes + one cap plane, 16 contiguous f32) of a
-/// swept triangle face. The triangle's three vertices are gathered from
+/// `Collision::BuildFaceEdgePlanes`.
+///
+/// `__fastcall(ecx = vert_array, edx = vert_indices, stack = face_plane,
+/// extrude, out_planes)`. Builds the four clip planes (three extruded edge
+/// planes + one cap plane, 16 contiguous f32) of a swept triangle face. The
+/// triangle's three vertices are gathered from
 /// `vert_array + vert_indices[i]*0xc`; `extrude` is the sweep offset and
 /// `face_plane` the cap normal. Returns 1 on success, 0 if any edge is
 /// degenerate.
@@ -8741,12 +8957,14 @@ pub fn collision_build_face_edge_planes__632460(
     }
 }
 
-/// `Collision::ClipPolygonByPlane` — `__fastcall(ecx = plane, edx = polygon,
-/// stack = plane_index)`. Sutherland-Hodgman clip of the convex polygon at
-/// `polygon` (vertices at `+0` with a 3-f32 stride, classification tags at
-/// `+0xb4`, vertex count at `+0xf0`) by `plane`, in place. The clip band and the
-/// orientation zero are the host `.data` epsilons. Returns nothing; the polygon's
-/// count/verts/tags are updated in place.
+/// `Collision::ClipPolygonByPlane`.
+///
+/// `__fastcall(ecx = plane, edx = polygon, stack = plane_index)`.
+/// Sutherland-Hodgman clip of the convex polygon at `polygon` (vertices at `+0`
+/// with a 3-f32 stride, classification tags at `+0xb4`, vertex count at `+0xf0`)
+/// by `plane`, in place. The clip band and the orientation zero are the host
+/// `.data` epsilons. Returns nothing; the polygon's count/verts/tags are updated
+/// in place.
 pub fn collision_clip_polygon_by_plane__6318c0(
     plane: *const f32,
     polygon: *mut u8,
@@ -8800,9 +9018,10 @@ pub fn collision_clip_polygon_by_plane__6318c0(
     unsafe { count_slot.cast::<i32>().write(new_count as i32) };
 }
 
-/// `Collision::PlaneBoxClearanceTest` — `__fastcall(ecx = planeIdx, edx =
-/// worldPos)`. Builds the four side clip-planes of the indexed world plane's
-/// local box (initialised to `(0,0,1,0)` then filled by the stock
+/// `Collision::PlaneBoxClearanceTest` — `__fastcall(ecx = planeIdx, edx = worldPos)`.
+///
+/// Builds the four side clip-planes of the indexed world plane's local box
+/// (initialised to `(0,0,1,0)` then filled by the stock
 /// `Collision_BuildFaceEdgePlanes` from the plane entry's vertices), then tests
 /// `worldPos` against the three side planes: returns `1` only if it lies on the
 /// inner side of all three (each `dot(n, pos) + d <= threshold`), else `0`.
@@ -8858,13 +9077,15 @@ pub fn collision_plane_box_clearance_test__6335d0(plane_idx: i32, world_pos: *co
     crate::math::collision::collision_plane_box_clearance_test__6335d0(&box_planes, pos, threshold)
 }
 
-/// `Collision::RayPolygonSweepDistance` — `__fastcall(ecx = polygon, edx =
-/// ray_origin, stack = vert_array, vert_base, best_dist)`. Finds the nearest
-/// distance at which `ray_origin` swept along `vert_array[vert_base]` first
-/// reaches the interior of the polygon at `polygon` (verts at `+0`, tags at
-/// `+0xb4`, count at `+0xf0`), re-clipping the polygon against the nine bounding
-/// planes when the cheap pass is inconclusive. Writes the closer distance to
-/// `*best_dist` and returns 1 on a hit, else 0. The polygon is mutated in place.
+/// `Collision::RayPolygonSweepDistance`.
+///
+/// `__fastcall(ecx = polygon, edx = ray_origin, stack = vert_array, vert_base,
+/// best_dist)`. Finds the nearest distance at which `ray_origin` swept along
+/// `vert_array[vert_base]` first reaches the interior of the polygon at
+/// `polygon` (verts at `+0`, tags at `+0xb4`, count at `+0xf0`), re-clipping the
+/// polygon against the nine bounding planes when the cheap pass is inconclusive.
+/// Writes the closer distance to `*best_dist` and returns 1 on a hit, else 0.
+/// The polygon is mutated in place.
 pub fn collision_ray_polygon_sweep_distance__632830(
     polygon: *mut u8,
     ray_origin: *const f32,
@@ -8944,14 +9165,16 @@ pub fn collision_ray_polygon_sweep_distance__632830(
     hit
 }
 
-/// `Collision::SweepPolygonAgainstFaces` — `__fastcall(ecx = face_set, edx =
-/// sweep_dir, stack = clip_planes, clip_plane_count, prism_verts, vert_base,
-/// best_dist, out_face_flags, +2 unused)`. Sweeps a clipped polygon against the
-/// world faces in `face_set` (count at `+4`, face array at `+8`, stride `0x34` =
-/// plane `[nx,ny,nz,d]` then a 9-float polygon at `+0x10`), recording the closest
-/// hit into `*best_dist` and the winning face index into `*out_face_flags`.
-/// Returns 1 if any hit was recorded. The trailing two stack dwords are unused by
-/// the original (popped by its `ret 0x20`).
+/// `Collision::SweepPolygonAgainstFaces`.
+///
+/// `__fastcall(ecx = face_set, edx = sweep_dir, stack = clip_planes,
+/// clip_plane_count, prism_verts, vert_base, best_dist, out_face_flags, +2
+/// unused)`. Sweeps a clipped polygon against the world faces in `face_set`
+/// (count at `+4`, face array at `+8`, stride `0x34` = plane `[nx,ny,nz,d]` then
+/// a 9-float polygon at `+0x10`), recording the closest hit into `*best_dist` and
+/// the winning face index into `*out_face_flags`. Returns 1 if any hit was
+/// recorded. The trailing two stack dwords are unused by the original (popped by
+/// its `ret 0x20`).
 #[allow(clippy::too_many_arguments)]
 pub fn collision_sweep_polygon_against_faces__632700(
     face_set: *const u8,
@@ -9076,15 +9299,16 @@ pub fn heap_sort_u_int32__71f860(
     crate::math::misc::heap_sort_u_int32__71f860(slice, |a, b| cmp(a, b, context));
 }
 
-/// `HeightBucket_InsertNodeAtPosSub` (`__fastcall(ecx = object_node, edx = sub_index,
-/// stack = world_pos)`). Same scene-plane projection to a 0..=31 Z-bucket as
-/// `height_bucket_insert_node_at_pos__6818b0`, but indexes a 2-D bucket-pair
-/// array at `0x87bd70`: the flat int-element slot is `(sub_index + bucket*9)*3`
-/// (the pure kernel returns this). Word 0 of the slot pair is the per-object
-/// node-base pointer and word 1 the list head. Identical Storm tagged-prev
-/// intrusive-list surgery; raw host-memory mutation stays here. Terminal
-/// `RET 4` (one stack arg cleaned), so this is fastcall. A full reimpl ignores
-/// `_original`.
+/// `HeightBucket_InsertNodeAtPosSub`.
+///
+/// (`__fastcall(ecx = object_node, edx = sub_index, stack = world_pos)`). Same
+/// scene-plane projection to a 0..=31 Z-bucket as
+/// `height_bucket_insert_node_at_pos__6818b0`, but indexes a 2-D bucket-pair array at
+/// `0x87bd70`: the flat int-element slot is `(sub_index + bucket*9)*3` (the pure
+/// kernel returns this). Word 0 of the slot pair is the per-object node-base pointer
+/// and word 1 the list head. Identical Storm tagged-prev intrusive-list surgery; raw
+/// host-memory mutation stays here. Terminal `RET 4` (one stack arg cleaned), so this
+/// is fastcall. A full reimpl ignores `_original`.
 pub fn height_bucket_insert_node_at_pos_sub__681970(
     object_node: i32,
     sub_index: i32,
@@ -9197,6 +9421,7 @@ pub fn height_bucket_insert_node_at_pos_sub__681970(
 }
 
 /// `HeightBucket_InsertNodeAtPos` (`__fastcall(ecx = object_node, edx = world_pos)`).
+///
 /// Projects `world_pos` onto the scene Z-bucket plane (host `.data` coeffs at
 /// `0x87cfb8`, scale `0x410174`, bias `0x46861c`) to a 0..=31 bucket via the pure
 /// kernel, then re-links an intrusive node into that bucket's global list. The
@@ -9320,6 +9545,7 @@ pub fn height_bucket_insert_node_at_pos__6818b0(object_node: i32, world_pos: *co
 }
 
 /// `HeightBucket_InsertNodeFromObject` — `__fastcall(ecx = objectNode)`.
+///
 /// Re-buckets an intrusive scene node into one of 32 global height buckets: it
 /// projects the node's stored world position (`node+0x5c/0x60/0x64` minus the
 /// base height at `node+0x68`) through the `.data` plane equation
@@ -9438,12 +9664,13 @@ pub fn height_bucket_insert_node_from_object__6816f0(object_node: i32) {
     unsafe { head_out.write(link as u32) };
 }
 
-/// `HeightBucket::RasterizeCellOccluder` — `__fastcall(ecx = node)`. Rasterizes
-/// one cell's near silhouette into the screen-space horizon occlusion buffer in
-/// two passes (column edges, then row edges). The LOD entry `*(node+0xb8)*4`
-/// selects the per-row edge count (`0x810f60`, f32) and stride (`0x810f70`, i32)
-/// from the host tables; the two passes seed their 9-entry index lists at
-/// frustum-dependent offsets (`0x88`/`8` when the bound globals
+/// `HeightBucket::RasterizeCellOccluder` — `__fastcall(ecx = node)`.
+///
+/// Rasterizes one cell's near silhouette into the screen-space horizon occlusion
+/// buffer in two passes (column edges, then row edges). The LOD entry
+/// `*(node+0xb8)*4` selects the per-row edge count (`0x810f60`, f32) and stride
+/// (`0x810f70`, i32) from the host tables; the two passes seed their 9-entry
+/// index lists at frustum-dependent offsets (`0x88`/`8` when the bound globals
 /// `0xc7d118`/`0xc7d11c` fall below `0xc7cf20`/`0xc7cf24`). Each pass calls the
 /// stock edge rasterizer `FUN_00681b50` (`__fastcall(ecx=vertArray,
 /// edx=edgeIndices, stack=edgeCount, worldOffset, 0)`, `ret 0xc`) over the cell
@@ -9512,14 +9739,16 @@ pub fn height_bucket__rasterize_cell_occluder__6c15d0(node: i32) {
     );
 }
 
-/// `HeightBucket::RasterizeEdges` — `__fastcall(ecx = verts, edx = indices,
-/// stack = count, offset, _unused)`. Rasterizes a poly-line occluder into the
-/// 320-column screen-space horizon buffer: each indexed source vertex (plus a
-/// shared offset) is projected through the host view matrix and perspective-
-/// divided, then each consecutive edge raises every covered horizon column to the
-/// nearer endpoint depth. Gated by the host occlusion-enable byte and a depth
-/// band. Reads the view matrix, focal, near-plane, column scale/bias and writes
-/// the shared horizon buffer by fixed absolute address (client non-DYNAMICBASE).
+/// `HeightBucket::RasterizeEdges`.
+///
+/// `__fastcall(ecx = verts, edx = indices, stack = count, offset, _unused)`.
+/// Rasterizes a poly-line occluder into the 320-column screen-space horizon
+/// buffer: each indexed source vertex (plus a shared offset) is projected through
+/// the host view matrix and perspective-divided, then each consecutive edge
+/// raises every covered horizon column to the nearer endpoint depth. Gated by the
+/// host occlusion-enable byte and a depth band. Reads the view matrix, focal,
+/// near-plane, column scale/bias and writes the shared horizon buffer by fixed
+/// absolute address (client non-DYNAMICBASE).
 pub fn height_bucket__rasterize_edges__681b50(
     verts: i32,
     indices: *const i32,
@@ -9619,11 +9848,12 @@ pub fn height_bucket__rasterize_edges__681b50(
     }
 }
 
-/// `HeightBucket::TestBox` — `__fastcall(ecx = box, edx = flags)`. Projects the 8
-/// AABB corners (`box[0..3]` = min, `box[3..6]` = max) through the host view
-/// matrix, perspective-divides, maps to a horizon-column span and tests the
-/// topmost projected height against every covered horizon column. Returns 2 when
-/// the box is fully occluded, else 0 (visible). Reads the same occlusion gate,
+/// `HeightBucket::TestBox` — `__fastcall(ecx = box, edx = flags)`.
+///
+/// Projects the 8 AABB corners (`box[0..3]` = min, `box[3..6]` = max) through the
+/// host view matrix, perspective-divides, maps to a horizon-column span and tests
+/// the topmost projected height against every covered horizon column. Returns 2
+/// when the box is fully occluded, else 0 (visible). Reads the same occlusion gate,
 /// view matrix and projection globals as the rasterizer and reads (never writes)
 /// the shared horizon buffer.
 pub fn height_bucket__test_box__686180(aabb: *const f32, flags: u32) -> u32 {
@@ -9699,9 +9929,10 @@ pub fn height_bucket__test_box__686180(aabb: *const f32, flags: u32) -> u32 {
     2
 }
 
-/// `HeightBucket::TestSphere` — `__fastcall(ecx = center, edx = flags, stack =
-/// radius)`. Projects a bounding sphere through the host view matrix (center) and
-/// a separate radius matrix (screen-space radius), maps to a horizon-column span
+/// `HeightBucket::TestSphere` — `__fastcall(ecx = center, edx = flags, stack = radius)`.
+///
+/// Projects a bounding sphere through the host view matrix (center) and a
+/// separate radius matrix (screen-space radius), maps to a horizon-column span
 /// and tests the sphere's top height against every covered column. Returns 2 when
 /// fully occluded, else 0 (visible). Reads the occlusion gate, both matrices and
 /// the projection globals, and reads the shared horizon buffer.
@@ -9791,9 +10022,10 @@ pub fn height_bucket__test_sphere__686000(center: *const f32, flags: u32, radius
     2
 }
 
-/// `Light::AnimateColorAndIntensity` — `__fastcall(ecx = this)`. Per-frame
-/// interpolation tick for an animated color/light object: marches the three
-/// current color bytes (`this+0x9c..0x9e`) toward the target bytes
+/// `Light::AnimateColorAndIntensity` — `__fastcall(ecx = this)`.
+///
+/// Per-frame interpolation tick for an animated color/light object: marches
+/// the three current color bytes (`this+0x9c..0x9e`) toward the target bytes
 /// (`this+0xf4..0xf6`) by a frame-dt-scaled integer increment (floored at 1),
 /// clamping at the target; if nothing moved and the object is not manual
 /// (`this+0x90` bit0) snaps the color to the host default; then steps the
@@ -9907,8 +10139,9 @@ pub fn light_animate_color_and_intensity__69e770(this: *mut u8) {
     }
 }
 
-/// `Orientation::SetYaw` — `__thiscall(ecx = this, stack = angle)`, void; the
-/// terminal `ret 4` pops the single pointer arg. Wraps `*angle` through the
+/// `Orientation::SetYaw` — `__thiscall(ecx = this, stack = angle)`, void.
+///
+/// The terminal `ret 4` pops the single pointer arg. Wraps `*angle` through the
 /// stock `CMath_WrapAngle` (called by absolute VA — dispatches through whatever
 /// is installed there), stores the wrapped yaw at `this+0x1c` and sets dirty bit
 /// `0x8` in the flags byte at `this+0xd` only when it changed (ordered `!=`,
@@ -9992,14 +10225,15 @@ pub fn set_clamped_value01__453480(
     method(this, clamped, user_data);
 }
 
-/// `TerrainHeightCache::SampleAtCell` — `__thiscall(ecx = page-grid base, stack =
-/// cell, z)`. Returns the cached terrain height for an integer grid cell. The
-/// cell `(col, row)` is read from `cell[0]`/`cell[1]`; the world XY is
-/// reconstructed from the page-grid origin and host scale globals (with `z`
-/// carried into the raycast position), then the value is page-indexed. A sentinel
-/// cell is filled via the stock `TerrainHeight_RaycastDown` (`0x67c7f0`) and
-/// cached. Reads scale globals and the empty-cell sentinel by fixed absolute
-/// address (client non-DYNAMICBASE).
+/// `TerrainHeightCache::SampleAtCell` — `__thiscall(ecx = page-grid base, stack = cell, z)`.
+///
+/// Returns the cached terrain height for an integer grid cell. The cell
+/// `(col, row)` is read from `cell[0]`/`cell[1]`; the world XY is reconstructed
+/// from the page-grid origin and host scale globals (with `z` carried into the
+/// raycast position), then the value is page-indexed. A sentinel cell is filled via
+/// the stock `TerrainHeight_RaycastDown` (`0x67c7f0`) and cached. Reads scale
+/// globals and the empty-cell sentinel by fixed absolute address (client
+/// non-DYNAMICBASE).
 pub fn terrain_height_cache_sample_at_cell__67ca90(
     this: *mut core::ffi::c_void,
     cell: *mut u32,
@@ -10083,11 +10317,12 @@ pub fn terrain_height_cache_sample_at_cell__67ca90(
     cached
 }
 
-/// `TerrainHeightCache::SampleAtPos` — `__thiscall(ecx = this cache, stack =
-/// posXY)`. Returns the cached terrain height for a world XY. The position is
-/// shifted to grid-local space (origin at `this+0x1000`/`+0x1004`, scaled by a
-/// host global), quantized to a 32x32 cell via the bit-reinterpret trick, and the
-/// value read from `this + cell*4`. A sentinel cell is filled via the stock
+/// `TerrainHeightCache::SampleAtPos` — `__thiscall(ecx = this cache, stack = posXY)`.
+///
+/// Returns the cached terrain height for a world XY. The position is shifted to
+/// grid-local space (origin at `this+0x1000`/`+0x1004`, scaled by a host global),
+/// quantized to a 32x32 cell via the bit-reinterpret trick, and the value read
+/// from `this + cell*4`. A sentinel cell is filled via the stock
 /// `TerrainHeight_RaycastDown` (`0x67c7f0`) using the original posXY (its third
 /// float is the raycast Z) and cached. Out-of-grid returns the sentinel.
 pub fn terrain_height_cache_sample_at_pos__67c820(
@@ -10164,16 +10399,18 @@ pub fn terrain_height_cache_sample_at_pos__67c820(
     cached
 }
 
-/// `UIFrame::ClampRectToScreen` — `__fastcall(ecx = out_rect, edx = outcode_only,
-/// stack = left, bottom, right, top)`. Cohen-Sutherland-clamps a UI rect to the
-/// screen and returns the outcode byte; when `outcode_only == 0` it also writes
-/// the clamped rect to `out_rect`. The screen extents come from the cursor-scale
-/// globals (`xScale`/`yScale` times one, minus the screen-extent globals); the
-/// derived extents are also memoized once into mutable cache globals (read by
-/// other host code), guarded by an init-flag byte. The two `OsGui::Scale*`
-/// callees are pure `scale * coord` reads, so they are folded into the host read
-/// directly rather than dispatched. All globals are addressed by fixed absolute
-/// VA (base verified at load; client non-`DYNAMICBASE`).
+/// `UIFrame::ClampRectToScreen`.
+///
+/// `__fastcall(ecx = out_rect, edx = outcode_only, stack = left, bottom, right,
+/// top)`. Cohen-Sutherland-clamps a UI rect to the screen and returns the outcode
+/// byte; when `outcode_only == 0` it also writes the clamped rect to `out_rect`.
+/// The screen extents come from the cursor-scale globals (`xScale`/`yScale` times
+/// one, minus the screen-extent globals); the derived extents are also memoized
+/// once into mutable cache globals (read by other host code), guarded by an
+/// init-flag byte. The two `OsGui::Scale*` callees are pure `scale * coord` reads,
+/// so they are folded into the host read directly rather than dispatched. All
+/// globals are addressed by fixed absolute VA (base verified at load; client
+/// non-`DYNAMICBASE`).
 pub fn ui_frame_clamp_rect_to_screen__509bf0(
     out_rect: *mut f32,
     outcode_only: i32,
@@ -10242,13 +10479,15 @@ pub fn ui_frame_clamp_rect_to_screen__509bf0(
     outcode
 }
 
-/// `World_QueryTileGridBox_TerrainPass` (`__fastcall(ecx = aabb, edx =
-/// callbackCtx, stack = flags) -> hit byte`). Projects the query AABB through
-/// the world tile-grid affine map (scale/bias `.data` globals) and iterates the
-/// covered 8x8 tile blocks, OR-ing the hit byte returned by the stock per-block
-/// terrain query `World_QueryTerrainTileBlock`. That callee resolves world map
-/// chunks, rasterizes the heightmap and dispatches sub-object tests, so it stays
-/// in the host and is invoked by absolute VA.
+/// `World_QueryTileGridBox_TerrainPass`.
+///
+/// (`__fastcall(ecx = aabb, edx = callbackCtx, stack = flags) -> hit byte`).
+/// Projects the query AABB through the world tile-grid affine map (scale/bias
+/// `.data` globals) and iterates the covered 8x8 tile blocks, OR-ing the hit
+/// byte returned by the stock per-block terrain query
+/// `World_QueryTerrainTileBlock`. That callee resolves world map chunks,
+/// rasterizes the heightmap and dispatches sub-object tests, so it stays in the
+/// host and is invoked by absolute VA.
 pub fn world_query_tile_grid_box_terrain_pass__6ad4e0(
     aabb: *const f32,
     callback_ctx: i32,
@@ -10309,13 +10548,14 @@ pub fn world_query_tile_grid_box_terrain_pass__6ad4e0(
     u32::from(any_hit)
 }
 
-/// `luaH_get` — `__thiscall(ecx = t, edx = key)`. Dispatches a table lookup on the
-/// key's tag: a number key that is an exact `i32` takes the integer fast path
-/// (`luaH_getnum`); a number with a fractional value falls through to the generic
-/// node walk (`luaH_getany`); a string key uses the interned-string lookup
-/// (`luaH_getstr`); every other tag uses the generic walk. Each helper returns the
-/// `TValue*` for the key (or the `luaO_nilobject` sentinel on a miss). Returns
-/// `*mut i32`; a chaining caller faults on a `void` return.
+/// `luaH_get` — `__thiscall(ecx = t, edx = key)`.
+///
+/// Dispatches a table lookup on the key's tag: a number key that is an exact `i32`
+/// takes the integer fast path (`luaH_getnum`); a number with a fractional value
+/// falls through to the generic node walk (`luaH_getany`); a string key uses the
+/// interned-string lookup (`luaH_getstr`); every other tag uses the generic walk.
+/// Each helper returns the `TValue*` for the key (or the `luaO_nilobject` sentinel
+/// on a miss). Returns `*mut i32`; a chaining caller faults on a `void` return.
 pub fn lua_h_get__6fa7a0(t: *mut u8, key: *const u8) -> *mut i32 {
     const NIL_OBJECT: usize = crate::win::EXPECTED_IMAGE_BASE + 0x41_1bc0;
     if t.is_null() || key.is_null() {
@@ -10359,13 +10599,15 @@ pub fn lua_h_get__6fa7a0(t: *mut u8, key: *const u8) -> *mut i32 {
     }
 }
 
-/// `luaH_getnum` — `__fastcall(ecx = t, edx = key)`. Fetches the value slot for an
-/// integer key: a key in `1..=sizearray` indexes the array part directly,
-/// otherwise the main-position hash node is located by the stock `luaH_hashnum`
-/// and its collision chain (linked through each node's `next` at +0x20) is walked
-/// for a number node whose `f64` payload equals the key. Returns the matching
-/// value slot (`node+0x10`), or the `luaO_nilobject` sentinel on a miss. Returns
-/// `*mut i32` (a `TValue*`); a chaining caller faults on a `void` return.
+/// `luaH_getnum` — `__fastcall(ecx = t, edx = key)`.
+///
+/// Fetches the value slot for an integer key: a key in `1..=sizearray` indexes the
+/// array part directly, otherwise the main-position hash node is located by the
+/// stock `luaH_hashnum` and its collision chain (linked through each node's `next`
+/// at +0x20) is walked for a number node whose `f64` payload equals the key. Returns
+/// the matching value slot (`node+0x10`), or the `luaO_nilobject` sentinel on a
+/// miss. Returns `*mut i32` (a `TValue*`); a chaining caller faults on a `void`
+/// return.
 pub fn lua_h_getnum__6fa700(t: *mut u8, key: i32) -> *mut i32 {
     const NIL_OBJECT: usize = crate::win::EXPECTED_IMAGE_BASE + 0x41_1bc0;
     if t.is_null() {
@@ -10409,16 +10651,18 @@ pub fn lua_h_getnum__6fa700(t: *mut u8, key: i32) -> *mut i32 {
     NIL_OBJECT as *mut i32
 }
 
-/// `luaH_mainposition` — `__fastcall(ecx = t, edx = key)`. Returns the
-/// main-position node pointer for `key` in table `t`, dispatching on the key's
-/// type tag at `*key`: boolean/`nil` (`1`) masks the value dword (`key+8`),
-/// number (`3`) folds the biased `f64` (`key+8`) via the shared `luaH_hashnum`
-/// reduction, string (`4`) masks the string's cached hash (`*(key+8) + 8`), and
-/// integer/other (`2`/default) reduce the value dword modulo the bucket count.
-/// The node array base is at `t+0x10`, `lsizenode` is the byte at `t+7`, the
-/// disambiguation bias double is the fixed host `.data` slot (`0x8015b8`, stock
-/// `1.0`), and the 40-byte node stride is `0x28`. The original leaves the node
-/// pointer in EAX, so it is returned (a chaining caller dereferences it).
+/// `luaH_mainposition` — `__fastcall(ecx = t, edx = key)`.
+///
+/// Returns the main-position node pointer for `key` in table `t`, dispatching
+/// on the key's type tag at `*key`: boolean/`nil` (`1`) masks the value dword
+/// (`key+8`), number (`3`) folds the biased `f64` (`key+8`) via the shared
+/// `luaH_hashnum` reduction, string (`4`) masks the string's cached hash
+/// (`*(key+8) + 8`), and integer/other (`2`/default) reduce the value dword
+/// modulo the bucket count. The node array base is at `t+0x10`, `lsizenode` is
+/// the byte at `t+7`, the disambiguation bias double is the fixed host `.data`
+/// slot (`0x8015b8`, stock `1.0`), and the 40-byte node stride is `0x28`. The
+/// original leaves the node pointer in EAX, so it is returned (a chaining
+/// caller dereferences it).
 pub fn lua_h_mainposition__6fa1a0(t: *mut u8, key: *const u8) -> *mut u8 {
     if t.is_null() || key.is_null() {
         return core::ptr::null_mut();
@@ -10470,14 +10714,16 @@ pub fn lua_h_mainposition__6fa1a0(t: *mut u8, key: *const u8) -> *mut u8 {
     off as *mut u8
 }
 
-/// `luaH_set` — `__fastcall(ecx = L, edx = t, stack = key)`. Returns the writable
-/// value slot for `key`, inserting it when absent. It first looks the key up
-/// (`luaH_get`) and clears the table's cached-flags byte (`t+6`); on a hit it is a
-/// pure query that leaves the table unchanged. On a miss it rejects an illegal key
-/// — a nil key raises "table index is nil" and a `NaN` number key raises "table
-/// index is NaN" through the stock `luaG_runerror` (a non-returning `longjmp`) —
-/// then allocates the node via the stock `luaH_newkey`. The lookup, the error
-/// raise, and the node allocation all run in the host image.
+/// `luaH_set` — `__fastcall(ecx = L, edx = t, stack = key)`.
+///
+/// Returns the writable value slot for `key`, inserting it when absent. It first
+/// looks the key up (`luaH_get`) and clears the table's cached-flags byte (`t+6`);
+/// on a hit it is a pure query that leaves the table unchanged. On a miss it
+/// rejects an illegal key — a nil key raises "table index is nil" and a `NaN`
+/// number key raises "table index is NaN" through the stock `luaG_runerror` (a
+/// non-returning `longjmp`) — then allocates the node via the stock
+/// `luaH_newkey`. The lookup, the error raise, and the node allocation all run in
+/// the host image.
 pub fn lua_h_set__6fa840(l: i32, t: *mut u8, key: *mut i32) -> *mut i32 {
     if t.is_null() || key.is_null() {
         return core::ptr::null_mut();
@@ -10530,9 +10776,10 @@ pub fn lua_h_set__6fa840(l: i32, t: *mut u8, key: *mut i32) -> *mut i32 {
     newkey(l, t, key)
 }
 
-/// Raises a Lua runtime error with a fixed format string through the stock
-/// `luaG_runerror` (`__cdecl`, non-returning). Factored out so both the nil-key
-/// and `NaN`-key paths share one call-out site.
+/// Raises a Lua runtime error with a fixed format string through the stock `luaG_runerror`.
+///
+/// (`__cdecl`, non-returning). Factored out so both the nil-key and `NaN`-key
+/// paths share one call-out site.
 fn run_lua_error(l: i32, msg: *const u8) {
     const RUNERROR_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x2f_c870;
     // SAFETY: a fixed `.text` entry in the live host image (base verified at
@@ -10542,14 +10789,15 @@ fn run_lua_error(l: i32, msg: *const u8) {
     runerror(l, msg);
 }
 
-/// Walks one string-table bucket chain for a `len`-and-content match of `bytes`,
-/// adding a full-hash pre-check (`*(TS+0x08) == hash`) the stock walk omits — it
+/// Walks one string-table bucket chain for a `len`-and-content match of `bytes`.
+///
+/// Adds a full-hash pre-check (`*(TS+0x08) == hash`) the stock walk omits — it
 /// rejects same-bucket entries whose stored hash differs before the full-length
 /// `memcmp`, the hot cost for long collision-heavy strings. `buckets` is
-/// `strt.hash` (the `TString*` array base), `size` its power-of-two length;
-/// `hash` selects `buckets[(size - 1) & hash]`. Returns the matching `TString*`,
-/// or null on a miss. TString layout: `next` +0x00, cached hash +0x08, `len`
-/// +0x0c, data +0x10.
+/// `strt.hash` (the `TString*` array base), `size` its power-of-two length; `hash`
+/// selects `buckets[(size - 1) & hash]`. Returns the matching `TString*`, or null
+/// on a miss. TString layout: `next` +0x00, cached hash +0x08, `len` +0x0c, data
+/// +0x10.
 fn lua_s_intern_probe(buckets: *const *mut u8, size: u32, bytes: &[u8], hash: u32) -> *mut u8 {
     if buckets.is_null() || size == 0 {
         return core::ptr::null_mut();
@@ -10583,12 +10831,13 @@ fn lua_s_intern_probe(buckets: *const *mut u8, size: u32, bytes: &[u8], hash: u3
     core::ptr::null_mut()
 }
 
-/// `luaS_newlstr` — `__fastcall(ecx = L, edx = str, stack = len)`. Interns a byte
-/// string: hashes it, probes the global string-table bucket, and returns the
-/// existing `TString*` on a `len`+content match; on a miss it allocates and links
-/// a new node through the stock helper at `0x6f9d90` (which copies the bytes,
-/// stores the hash at `+0x08`, buckets by it, bumps `strt.nuse` and may resize).
-/// `global_State G = *(L+0x10)`; string table fields `strt.hash` `G+0x04`,
+/// `luaS_newlstr` — `__fastcall(ecx = L, edx = str, stack = len)`.
+///
+/// Interns a byte string: hashes it, probes the global string-table bucket, and
+/// returns the existing `TString*` on a `len`+content match; on a miss it allocates
+/// and links a new node through the stock helper at `0x6f9d90` (which copies the
+/// bytes, stores the hash at `+0x08`, buckets by it, bumps `strt.nuse` and may
+/// resize). `global_State G = *(L+0x10)`; string table fields `strt.hash` `G+0x04`,
 /// `strt.nuse` `G+0x08`, `strt.size` `G+0x0c`.
 ///
 /// Two changes over the stock interner. (1) The hash is FNV-1a over the whole
@@ -10660,18 +10909,19 @@ pub fn lua_s_newlstr__6f9d00(l: i32, str: *const u8, len: u32) -> *mut u8 {
     create(l, str, len, opt_hash)
 }
 
-/// `CCubicSpline::EvalFrameAtDistance` — `__thiscall(ecx = this, stack =
-/// distance, outFrame)`. Builds the position+orientation frame at arc-length
-/// `distance`: reparametrizes via the per-segment length table (count
-/// `*(this+0xc) - 3`, scale `*(this+0x4)`, lengths `*(this+0x20)`; folds the
-/// stock forwarding wrapper whose extra table argument the resolver ignores),
-/// writes the position row through `EvalSegmentPos` (called by absolute VA —
-/// its cubic branch evaluates an unreconstructed host basis global), then
-/// computes the forward/right/up rows in the pure kernel from the segment's
-/// four control points (`*(this+0x10)`), the cubic-mode flag (`*(this+0x28)`)
-/// and — in cubic mode — the baked derivative basis at `image base +
-/// 0x705dd8`. Rows land at `out[0..3]` (forward), `out[4..7]` (right, z = 0),
-/// `out[8..11]` (up), `out[12..15]` (position).
+/// `CCubicSpline::EvalFrameAtDistance` — `__thiscall(ecx = this, stack = distance, outFrame)`.
+///
+/// Builds the position+orientation frame at arc-length `distance`:
+/// reparametrizes via the per-segment length table (count `*(this+0xc) - 3`,
+/// scale `*(this+0x4)`, lengths `*(this+0x20)`; folds the stock forwarding
+/// wrapper whose extra table argument the resolver ignores), writes the
+/// position row through `EvalSegmentPos` (called by absolute VA — its cubic
+/// branch evaluates an unreconstructed host basis global), then computes the
+/// forward/right/up rows in the pure kernel from the segment's four control
+/// points (`*(this+0x10)`), the cubic-mode flag (`*(this+0x28)`) and — in
+/// cubic mode — the baked derivative basis at `image base + 0x705dd8`. Rows
+/// land at `out[0..3]` (forward), `out[4..7]` (right, z = 0), `out[8..11]`
+/// (up), `out[12..15]` (position).
 pub fn c_cubic_spline__eval_frame_at_distance__454580(
     this: *mut core::ffi::c_void,
     distance: f32,
@@ -10772,18 +11022,19 @@ pub fn c_cubic_spline__eval_frame_at_distance__454580(
     unsafe { up_ptr.cast::<[f32; 3]>().write_unaligned(up) };
 }
 
-/// `CM2Shared::FindKeyframeInterval` — `__thiscall(ecx = this, stack = time,
-/// desc, track, out)`. Locates the keyframe pair bracketing the query time in
-/// the track's sorted `u32` timestamp array and writes `[lo, hi,
-/// fraction-bits]` into `out`, whose incoming `out[0]` seeds the search near
-/// the previous hit. The key window is the track's per-sequence range pair
-/// (`track+8`, indexed by `desc`) when the range table is present
-/// (`track+4 != 0`), else all `track+0xc` keys; a degenerate window collapses
-/// to `[lo, lo, 0]` without consulting the clock. When the track names a
-/// global sequence (`track[1] != -1`) the query time is re-read from the
-/// shared object's sequence-clock array (`this+0x64`). The bracketing search
-/// and fraction are the pure kernel. Returns `out` (the binary leaves the
-/// out-pointer in EAX on its first return path).
+/// `CM2Shared::FindKeyframeInterval` — `__thiscall(ecx = this, stack = time, desc, track, out)`.
+///
+/// Locates the keyframe pair bracketing the query time in the track's sorted
+/// `u32` timestamp array and writes `[lo, hi, fraction-bits]` into `out`,
+/// whose incoming `out[0]` seeds the search near the previous hit. The key
+/// window is the track's per-sequence range pair (`track+8`, indexed by
+/// `desc`) when the range table is present (`track+4 != 0`), else all
+/// `track+0xc` keys; a degenerate window collapses to `[lo, lo, 0]` without
+/// consulting the clock. When the track names a global sequence
+/// (`track[1] != -1`) the query time is re-read from the shared object's
+/// sequence-clock array (`this+0x64`). The bracketing search and fraction are
+/// the pure kernel. Returns `out` (the binary leaves the out-pointer in EAX on
+/// its first return path).
 pub fn cm2_shared__find_keyframe_interval__713d50(
     this: *mut core::ffi::c_void,
     time: u32,
@@ -10878,25 +11129,26 @@ pub fn cm2_shared__find_keyframe_interval__713d50(
     out
 }
 
-/// `CMapChunk::RasterizeChunkTriangles` — `__fastcall(ecx = chunk, edx =
-/// cell_rect, stack = aabb, stack = unused)`, `ret 8`. Clips a terrain
-/// chunk's heightmap triangles against an AABB and appends the survivors to
-/// the shared per-frame raster batch pools. `cell_rect` is `{min_row,
-/// min_col, max_row, max_col}` over the chunk's cell grid; vertex positions
-/// live in the 17-wide row-interleaved grid at `chunk+0x83c` (stride 0xc),
-/// each cell a 4-triangle fan over 5 vertices (fixed `.rdata` offset/index
-/// tables). A cell whose hole bit (4x4 `.rdata` mask table vs the chunk-data
-/// hole bitmask at `*(chunk+0xf08)+0x3c`) is set is skipped. On the first
-/// surviving triangle one batch slot (32 x 0x20 pool), one 4x4 matrix seeded
-/// identity + the chunk translation at `chunk+0x6c..0x78` (32 x 0x40 pool),
-/// and a worst-case span window in the shared 0xc000-entry u16 buffer are
-/// allocated; pool exhaustion sets bit 0 of the shared overflow word (on
-/// matrix exhaustion the original then seeds through NULL and would fault —
-/// this reimplementation skips the seeding instead). Surviving triangles
-/// append their 3 grid indices to the span window and maintain the slot's
-/// index/triangle counters and min/max emitted index. The per-vertex clip
-/// outcode is the pure kernel. Returns 1 when any triangle survived the
-/// clip, even if pool exhaustion dropped it.
+/// `CMapChunk::RasterizeChunkTriangles`.
+///
+/// `__fastcall(ecx = chunk, edx = cell_rect, stack = aabb, stack = unused)`,
+/// `ret 8`. Clips a terrain chunk's heightmap triangles against an AABB and
+/// appends the survivors to the shared per-frame raster batch pools.
+/// `cell_rect` is `{min_row, min_col, max_row, max_col}` over the chunk's
+/// cell grid; vertex positions live in the 17-wide row-interleaved grid at
+/// `chunk+0x83c` (stride 0xc), each cell a 4-triangle fan over 5 vertices
+/// (fixed `.rdata` offset/index tables). A cell whose hole bit (4x4 `.rdata`
+/// mask table vs the chunk-data hole bitmask at `*(chunk+0xf08)+0x3c`) is set
+/// is skipped. On the first surviving triangle one batch slot (32 x 0x20
+/// pool), one 4x4 matrix seeded identity + the chunk translation at
+/// `chunk+0x6c..0x78` (32 x 0x40 pool), and a worst-case span window in the
+/// shared 0xc000-entry u16 buffer are allocated; pool exhaustion sets bit 0
+/// of the shared overflow word (on matrix exhaustion the original then seeds
+/// through NULL and would fault — this reimplementation skips the seeding
+/// instead). Surviving triangles append their 3 grid indices to the span
+/// window and maintain the slot's index/triangle counters and min/max emitted
+/// index. The per-vertex clip outcode is the pure kernel. Returns 1 when any
+/// triangle survived the clip, even if pool exhaustion dropped it.
 pub fn c_map_chunk__rasterize_chunk_triangles__6ad7e0(
     chunk: *mut u8,
     cell_rect: *mut i32,
@@ -11141,18 +11393,18 @@ pub fn c_map_chunk__rasterize_chunk_triangles__6ad7e0(
     u32::from(emitted_any)
 }
 
-/// `CParticleEmitter::AdvanceTrail` — `__thiscall(ecx = this, stack = advance,
-/// spawn_gate)`. Advances the emitter's trail-segment ring: clamps the advance
-/// against the arc span at `this+0xf8`, retires expired slots (ages `this+0xc`,
-/// tail `this+0x14`, head `this+0x18`), spawns interpolated ribbon segments
-/// into the vertex ring (`this+0x40`, 10 floats per slot) when flag bits 0 and
-/// 2 of `this+0x148` are set and the gate word is bit-pattern zero, ages every
-/// live slot, and rewrites the flag word. All ring/scalar state is injected
-/// into the pure kernel; the spawn interpolation frame the kernel refreshes on
-/// a spawn pass is written back to `this+0xac..0xf0`. The original's nested
-/// helpers (ring-index advance, frame refresh, slot spawn, vector set/add,
-/// CRT floor) are pure math folded into the kernel. A full reimpl ignores
-/// `_original`.
+/// `CParticleEmitter::AdvanceTrail` — `__thiscall(ecx = this, stack = advance, spawn_gate)`.
+///
+/// Advances the emitter's trail-segment ring: clamps the advance against the arc
+/// span at `this+0xf8`, retires expired slots (ages `this+0xc`, tail
+/// `this+0x14`, head `this+0x18`), spawns interpolated ribbon segments into the
+/// vertex ring (`this+0x40`, 10 floats per slot) when flag bits 0 and 2 of
+/// `this+0x148` are set and the gate word is bit-pattern zero, ages every live
+/// slot, and rewrites the flag word. All ring/scalar state is injected into the
+/// pure kernel; the spawn interpolation frame the kernel refreshes on a spawn
+/// pass is written back to `this+0xac..0xf0`. The original's nested helpers
+/// (ring-index advance, frame refresh, slot spawn, vector set/add, CRT floor)
+/// are pure math folded into the kernel. A full reimpl ignores `_original`.
 pub fn c_particle_emitter__advance_trail__7b7e60(this: *mut u8, advance: f32, spawn_gate: f32) {
     if this.is_null() {
         return;
@@ -11315,17 +11567,18 @@ pub fn c_particle_emitter__advance_trail__7b7e60(this: *mut u8, advance: f32, sp
     }
 }
 
-/// `M2Track::SampleByte` — `__fastcall(ecx = this, edx = animCtx, stack =
-/// track, out)`. Discrete (byte) track sampler: locates the bracketing
-/// keyframe pair for the primary timestamp (`animCtx+0x98`/`+0x9c`) via the
-/// stock keyframe search, then copies the lo key's byte from the track's
-/// value array (`track+0x18`, stride 1) into `out` byte `0xc`. When the
-/// kernel deems the secondary sub-track active (the track interpolates,
-/// `animCtx+0x10c` differs from the host zero sentinel, `track[1] == -1`) it
-/// repeats the search for the secondary timestamp (`animCtx+0xc4`/`+0xc8`)
-/// into `out[4..7]` and copies that lo key's byte into `out` byte `0x1c`.
-/// The keyframe search runs the stock code by absolute VA (base verified at
-/// load; client non-`DYNAMICBASE`).
+/// `M2Track::SampleByte` — `__fastcall(ecx = this, edx = animCtx, stack = track, out)`.
+///
+/// Discrete (byte) track sampler: locates the bracketing keyframe pair for
+/// the primary timestamp (`animCtx+0x98`/`+0x9c`) via the stock keyframe
+/// search, then copies the lo key's byte from the track's value array
+/// (`track+0x18`, stride 1) into `out` byte `0xc`. When the kernel deems the
+/// secondary sub-track active (the track interpolates, `animCtx+0x10c`
+/// differs from the host zero sentinel, `track[1] == -1`) it repeats the
+/// search for the secondary timestamp (`animCtx+0xc4`/`+0xc8`) into
+/// `out[4..7]` and copies that lo key's byte into `out` byte `0x1c`. The
+/// keyframe search runs the stock code by absolute VA (base verified at load;
+/// client non-`DYNAMICBASE`).
 pub fn m2_track__sample_byte__71ae90(
     this: *mut core::ffi::c_void,
     anim_ctx: i32,
@@ -11410,18 +11663,19 @@ pub fn m2_track__sample_byte__71ae90(
     }
 }
 
-/// `M2Track::SampleFloatLerp` — `__fastcall(ecx = this, edx = animCtx, stack
-/// = track, out)`. Float track sampler: locates the bracketing keyframe pair
-/// for the primary timestamp (`animCtx+0x98`/`+0x9c`) via the stock keyframe
-/// search, then writes the sample into `out[3]`: the step path
-/// (`track[0] == 0`) copies the lo key's dword verbatim, otherwise the kernel
-/// lerps the two keys (`track+0x18`, stride 4) by the search's fraction
-/// (`out[2]`). When a secondary animation is active (`animCtx+0x10c` differs
-/// from the host zero sentinel and `track[1] == -1`) it repeats the search
-/// for the secondary timestamp (`animCtx+0xc4`/`+0xc8`) into `out[4..7]`,
-/// lerps that pair into `out[7]`, and cross-fades `out[3]` toward it by the
-/// blend factor. The keyframe search runs the stock code by absolute VA
-/// (base verified at load; client non-`DYNAMICBASE`).
+/// `M2Track::SampleFloatLerp` — `__fastcall(ecx = this, edx = animCtx, stack = track, out)`.
+///
+/// Float track sampler: locates the bracketing keyframe pair for the primary
+/// timestamp (`animCtx+0x98`/`+0x9c`) via the stock keyframe search, then
+/// writes the sample into `out[3]`: the step path (`track[0] == 0`) copies the
+/// lo key's dword verbatim, otherwise the kernel lerps the two keys
+/// (`track+0x18`, stride 4) by the search's fraction (`out[2]`). When a
+/// secondary animation is active (`animCtx+0x10c` differs from the host zero
+/// sentinel and `track[1] == -1`) it repeats the search for the secondary
+/// timestamp (`animCtx+0xc4`/`+0xc8`) into `out[4..7]`, lerps that pair into
+/// `out[7]`, and cross-fades `out[3]` toward it by the blend factor. The
+/// keyframe search runs the stock code by absolute VA (base verified at load;
+/// client non-`DYNAMICBASE`).
 pub fn m2_track__sample_float_lerp__71af20(
     this: *mut core::ffi::c_void,
     anim_ctx: i32,
@@ -11552,27 +11806,30 @@ pub fn m2_track__sample_float_lerp__71af20(
     }
 }
 
-/// Engine-clock scale + origin, published once by [`init_engine_clock`] at attach
-/// (before any hook installs). `ms = ((rdtsc * CLOCK_MAGIC) >> CLOCK_SHIFT) +
-/// CLOCK_BIAS`, where `CLOCK_MAGIC = round(1000 * 2^CLOCK_SHIFT / tsc_hz)` is
-/// ms-per-tick as a Q[`CLOCK_SHIFT`] fixed-point reciprocal (the integer encoding of
-/// stock's `f64` `scale` — same ratio, so the multiply is integer, not float) and
-/// `CLOCK_BIAS` anchors the origin to `GetTickCount` at attach. The anchor keeps our
-/// clock comparable with stock `OsGetTimeMs` (identically GetTickCount-based) and
-/// with the ~33 direct `GetTickCount` call sites that never route through here.
+/// Engine-clock scale + origin.
+///
+/// Published once by [`init_engine_clock`] at attach (before any hook installs).
+/// `ms = ((rdtsc * CLOCK_MAGIC) >> CLOCK_SHIFT) + CLOCK_BIAS`, where
+/// `CLOCK_MAGIC = round(1000 * 2^CLOCK_SHIFT / tsc_hz)` is ms-per-tick as a
+/// Q[`CLOCK_SHIFT`] fixed-point reciprocal (the integer encoding of stock's `f64`
+/// `scale` — same ratio, so the multiply is integer, not float) and `CLOCK_BIAS`
+/// anchors the origin to `GetTickCount` at attach. The anchor keeps our clock
+/// comparable with stock `OsGetTimeMs` (identically GetTickCount-based) and with the
+/// ~33 direct `GetTickCount` call sites that never route through here.
 const CLOCK_SHIFT: u32 = 52;
 static CLOCK_MAGIC: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 static CLOCK_BIAS: core::sync::atomic::AtomicI64 = core::sync::atomic::AtomicI64::new(0);
 
-/// Precompute and publish the engine-clock scale + origin from the calibrated TSC
-/// frequency `hz`. Called once (blocking) from `attach_process` **before**
-/// `install_all`, so [`os_get_time_ms__42b790`] never observes a zero magic. The
-/// `Relaxed` stores pair with the `Relaxed` loads in the hook; the publish barrier
-/// is the `DllMain` return + the MinHook install that follows. `hz.max(1)` guards a
-/// degenerate zero calibration. Fixed `CLOCK_SHIFT` keeps `magic` in `u64` for any
-/// realistic `hz` (~1e6..1e12) with ≥32 bits of precision. The origin is anchored to
-/// `GetTickCount` — the shared clock base of stock `OsGetTimeMs` and the direct
-/// GetTickCount readers — so absolute timestamps stay mutually comparable.
+/// Precompute and publish the engine-clock scale + origin from the calibrated TSC frequency `hz`.
+///
+/// Called once (blocking) from `attach_process` **before** `install_all`, so
+/// [`os_get_time_ms__42b790`] never observes a zero magic. The `Relaxed` stores pair
+/// with the `Relaxed` loads in the hook; the publish barrier is the `DllMain` return +
+/// the MinHook install that follows. `hz.max(1)` guards a degenerate zero calibration.
+/// Fixed `CLOCK_SHIFT` keeps `magic` in `u64` for any realistic `hz` (~1e6..1e12) with
+/// ≥32 bits of precision. The origin is anchored to `GetTickCount` — the shared
+/// clock base of stock `OsGetTimeMs` and the direct GetTickCount readers — so
+/// absolute timestamps stay mutually comparable.
 pub(crate) fn init_engine_clock(hz: u64) {
     // kernel32 import; resolves against the xwin SDK import lib on the link path.
     #[link(name = "kernel32")]
@@ -11593,17 +11850,19 @@ pub(crate) fn init_engine_clock(hz: u64) {
     );
 }
 
-/// `OsGetTimeMs` — `__cdecl() -> i64`. The engine monotonic clock. Stock reads a
-/// raw tick source (the `rdtsc` / tick-count-import mode switch at `0x42b750`) and
-/// folds it to milliseconds against live calibration doubles a background
-/// controller thread maintains. We bypass all of it: read `rdtsc` inline (the same
-/// instruction Rosetta emulates for the stock `0x4293d0` branch — no call crossing
-/// to `0x42b750`, no selector branch, no WoW globals) and fold with the fixed-point
-/// scale + `GetTickCount`-anchored origin precomputed once at attach. The fold is
-/// integer only: `((rdtsc * magic) >> CLOCK_SHIFT) + bias` — no x87, no float
-/// convert, no `mulsd`/`addsd`, no `ftol`. `rdtsc * magic <= 2^95 < 2^128` cannot
-/// overflow the `u128`; the shifted result plus `bias` fit `i64`. The 5-byte alias
-/// thunk at `0x42c010` jumps here and is covered by this patch.
+/// `OsGetTimeMs` — `__cdecl() -> i64`.
+///
+/// The engine monotonic clock. Stock reads a raw tick source (the `rdtsc` /
+/// tick-count-import mode switch at `0x42b750`) and folds it to milliseconds against
+/// live calibration doubles a background controller thread maintains. We bypass all
+/// of it: read `rdtsc` inline (the same instruction Rosetta emulates for the stock
+/// `0x4293d0` branch — no call crossing to `0x42b750`, no selector branch, no WoW
+/// globals) and fold with the fixed-point scale + `GetTickCount`-anchored origin
+/// precomputed once at attach. The fold is integer only:
+/// `((rdtsc * magic) >> CLOCK_SHIFT) + bias` — no x87, no float convert, no
+/// `mulsd`/`addsd`, no `ftol`. `rdtsc * magic <= 2^95 < 2^128` cannot overflow the
+/// `u128`; the shifted result plus `bias` fit `i64`. The 5-byte alias thunk at
+/// `0x42c010` jumps here and is covered by this patch.
 pub fn os_get_time_ms__42b790() -> i64 {
     let ticks = wow_shared::tsc::rdtsc();
     let magic = CLOCK_MAGIC.load(core::sync::atomic::Ordering::Relaxed);
@@ -11623,20 +11882,23 @@ fn clock_ticks_to_ms(ticks: u64) -> u64 {
     ((u128::from(ticks) * u128::from(magic)) >> CLOCK_SHIFT) as u64
 }
 
-/// CRT `__ftol` — argument in `ST(0)`, result in `EDX:EAX` (`abi = "x87st0"`;
-/// the generated naked shim spills the x87 argument and forwards it here).
-/// Every compiler-emitted float-to-int cast in the binary funnels through
-/// this helper; the original swaps the FPU control word twice per call to
-/// force truncation. The kernel truncates from the raw bits instead.
+/// CRT `__ftol` — argument in `ST(0)`, result in `EDX:EAX`.
+///
+/// (`abi = "x87st0"`; the generated naked shim spills the x87 argument and
+/// forwards it here). Every compiler-emitted float-to-int cast in the binary
+/// funnels through this helper; the original swaps the FPU control word twice
+/// per call to force truncation. The kernel truncates from the raw bits
+/// instead.
 pub fn ftol__40a2b0(x: f64) -> i64 {
     crate::math::misc::ftol__40a2b0(x)
 }
 
-/// D3DX `MatrixRotationQuaternion` (PSGP default body) — `__stdcall(out,
-/// quat_xyzw)`, reached through the runtime geometry-pipeline dispatch slot,
-/// which no SSE backend ever re-points for this operation. Writes the
-/// row-major rotation expansion of the (assumed normalized) quaternion into
-/// the 16-float `out` (zero translation row, `m[15] = 1`) and returns `out`.
+/// D3DX `MatrixRotationQuaternion` (PSGP default body) — `__stdcall(out, quat_xyzw)`.
+///
+/// Reached through the runtime geometry-pipeline dispatch slot, which no SSE
+/// backend ever re-points for this operation. Writes the row-major rotation
+/// expansion of the (assumed normalized) quaternion into the 16-float `out`
+/// (zero translation row, `m[15] = 1`) and returns `out`.
 pub fn d3dx_matrix_rotation_quaternion__74b6bb(out: *mut f32, quat_xyzw: *const f32) -> *mut f32 {
     if out.is_null() || quat_xyzw.is_null() {
         return out;
@@ -11651,8 +11913,9 @@ pub fn d3dx_matrix_rotation_quaternion__74b6bb(out: *mut f32, quat_xyzw: *const 
     out
 }
 
-/// D3DX `QuaternionSlerp` (PSGP default body) — `__stdcall(out, q1, q2, t)`,
-/// reached through the runtime geometry-pipeline dispatch slot, which no SSE
+/// D3DX `QuaternionSlerp` (PSGP default body) — `__stdcall(out, q1, q2, t)`.
+///
+/// Reached through the runtime geometry-pipeline dispatch slot, which no SSE
 /// backend ever re-points for this operation. Spherical interpolation with the
 /// shortest-arc sign flip and the source's near-parallel lerp fallback; writes
 /// 4 floats to `out` and returns it. Reads complete before the write so the
@@ -11676,18 +11939,18 @@ pub fn d3dx_quaternion_slerp__74d11a(
     out
 }
 
-/// `BuildMeshTrianglePlanes` — `__fastcall(ecx = unused, edx = quads, stack =
-/// pair_lo, pair_hi)`. Appends one 0x34-byte plane record per triangle of
-/// every entry in the global mesh table (matrix pointer, vertex base, 16-bit
-/// index triples, triangle count; stride 0x20) to the growable `quads` array:
-/// the three vertices are transformed by the entry matrix (folded kernel) into
-/// the record at `+0x10`/`+0x1c`/`+0x28`, and the face plane (unit normal plus
-/// offset, pure kernel) fills `+0x0..+0x10`. Array growth and the per-element
-/// constructor run the stock helpers by fixed absolute VA; a host toggle
-/// selects between the reference's two growth/normalize variants. Afterwards
-/// the parallel pairs array embedded at `quads+0x10` (8-byte records) is grown
-/// the same way and back-filled with `(pair_lo, pair_hi)` for the appended
-/// range.
+/// `BuildMeshTrianglePlanes` — `__fastcall(ecx = unused, edx = quads, stack = pair_lo, pair_hi)`.
+///
+/// Appends one 0x34-byte plane record per triangle of every entry in the global
+/// mesh table (matrix pointer, vertex base, 16-bit index triples, triangle
+/// count; stride 0x20) to the growable `quads` array: the three vertices are
+/// transformed by the entry matrix (folded kernel) into the record at
+/// `+0x10`/`+0x1c`/`+0x28`, and the face plane (unit normal plus offset, pure
+/// kernel) fills `+0x0..+0x10`. Array growth and the per-element constructor
+/// run the stock helpers by fixed absolute VA; a host toggle selects between
+/// the reference's two growth/normalize variants. Afterwards the parallel pairs
+/// array embedded at `quads+0x10` (8-byte records) is grown the same way and
+/// back-filled with `(pair_lo, pair_hi)` for the appended range.
 pub fn build_mesh_triangle_planes__671cc0(
     _unused: i32,
     quads: *mut u8,
@@ -11894,8 +12157,9 @@ pub fn build_mesh_triangle_planes__671cc0(
     }
 }
 
-/// `CGGameObjectDisplay_Transport::EvalSplinePosition` — `__thiscall(ecx =
-/// this, stack = out_pos, time_ms)`. Computes the path time
+/// `CGGameObjectDisplay_Transport::EvalSplinePosition`.
+///
+/// `__thiscall(ecx = this, stack = out_pos, time_ms)`. Computes the path time
 /// `(descriptor_tick + time_ms) mod period` (period = the last keyframe's
 /// timestamp; records are 0x1c bytes with the time at +8), advances the segment
 /// cursor at `this+0x28` with wraparound (folded stock helper) until the path
@@ -12037,8 +12301,9 @@ pub fn cg_game_object_display_transport__eval_spline_position__5f6280(
     out_pos
 }
 
-/// `CGObject::UpdateWmoLiquidSubmersion` — `__fastcall(ecx = entity)`. Clears
-/// the liquid bits (`0x120`) at `entity+0x90`, asks the stock map-object
+/// `CGObject::UpdateWmoLiquidSubmersion` — `__fastcall(ecx = entity)`.
+///
+/// Clears the liquid bits (`0x120`) at `entity+0x90`, asks the stock map-object
 /// walker by absolute VA for the containing group and liquid chunk, transforms
 /// the entity origin (`entity+0x24`) into group-local space (pure 4x4 kernel,
 /// matrix at `group+0xd4`), and runs the stock liquid height query. On a hit
@@ -12139,17 +12404,18 @@ pub fn cg_object__update_wmo_liquid_submersion__69dc30(entity: *mut u8) {
     unsafe { normal_p.cast::<[f32; 3]>().write_unaligned(world_normal) };
 }
 
-/// `CGRenderEntity::AccumulateBounds` — `__fastcall(edx = fit, stack =
-/// renderable; ecx carries an unused slot)`. With a renderable, re-reads its
-/// vtable before each feed slot and dispatches `+4`, `+8` (the latter gated on
-/// the strict depth-span kernel `[+0x78] - [+0x68] < threshold`, threshold a
-/// host global), and `+0xc`, each `__thiscall(renderable, fit)`; a set `0x20`
-/// bit in the flag byte at `+8` then marks the fit's dword at `+0x1b0`. With
-/// no renderable, expands two byte-color vectors from the fixed fallback
-/// object (folded stock accessor returning a constant address) scaled by the
-/// host `1/255` constant and feeds them to the stock centroid/moment
-/// accumulators by absolute VA (the moment paired with the fallback's float
-/// block at `+0x168`).
+/// `CGRenderEntity::AccumulateBounds`.
+///
+/// `__fastcall(edx = fit, stack = renderable; ecx carries an unused slot)`.
+/// With a renderable, re-reads its vtable before each feed slot and dispatches
+/// `+4`, `+8` (the latter gated on the strict depth-span kernel
+/// `[+0x78] - [+0x68] < threshold`, threshold a host global), and `+0xc`, each
+/// `__thiscall(renderable, fit)`; a set `0x20` bit in the flag byte at `+8`
+/// then marks the fit's dword at `+0x1b0`. With no renderable, expands two
+/// byte-color vectors from the fixed fallback object (folded stock accessor
+/// returning a constant address) scaled by the host `1/255` constant and feeds
+/// them to the stock centroid/moment accumulators by absolute VA (the moment
+/// paired with the fallback's float block at `+0x168`).
 pub fn cg_render_entity__accumulate_bounds__672a20(
     _unused: i32,
     fit: *mut u8,
@@ -12268,18 +12534,20 @@ pub fn cg_render_entity__accumulate_bounds__672a20(
     }
 }
 
-/// `CM2Model::BuildEmitterTransform` — `__thiscall(ecx = this, stack =
-/// translate, rot_angle, rot_axis, scale_vec, dir)`. Rebuilds the emitter's
-/// 4×4 at `this+0xbc`: identity → translate → axis-angle rotate, then a
-/// billboard step selected by the low two bits of the shared-data flags
-/// (`[[this+0x30]+0x130]+0x10`), then an optional animation-phase lerp toward
-/// a basis built from `dir`, and finally a per-row scale. The matrix pipeline
-/// is the pure kernel pair in `math::m2`; the animation phase comes from two
-/// host queries — the sequence/track timing query and
-/// `CM2Model::GetAnimationInfo` — called by absolute VA between the kernel
-/// stages (the matrix field is written before the call-outs, mirroring the
-/// original's in-place build order). Returns `scale_vec`: the original's
-/// terminal row-scale helper leaves its stack argument in `eax`.
+/// `CM2Model::BuildEmitterTransform`.
+///
+/// `__thiscall(ecx = this, stack = translate, rot_angle, rot_axis, scale_vec,
+/// dir)`. Rebuilds the emitter's 4×4 at `this+0xbc`: identity → translate
+/// → axis-angle rotate, then a billboard step selected by the low two bits
+/// of the shared-data flags (`[[this+0x30]+0x130]+0x10`), then an optional
+/// animation-phase lerp toward a basis built from `dir`, and finally a
+/// per-row scale. The matrix pipeline is the pure kernel pair in `math::m2`;
+/// the animation phase comes from two host queries — the sequence/track
+/// timing query and `CM2Model::GetAnimationInfo` — called by absolute VA
+/// between the kernel stages (the matrix field is written before the
+/// call-outs, mirroring the original's in-place build order). Returns
+/// `scale_vec`: the original's terminal row-scale helper leaves its stack
+/// argument in `eax`.
 pub fn cm2_model__build_emitter_transform__7106c0(
     this: *mut core::ffi::c_void,
     translate: *const f32,
@@ -12393,14 +12661,16 @@ pub fn cm2_model__build_emitter_transform__7106c0(
     scale_vec
 }
 
-/// `CMapChunkGrid::QueryRadius` — `__thiscall(ecx = this, worldPos, radius,
-/// flagsOut, vecsOut, distsOut) -> i32`. Quantizes `worldPos` and `radius` into a
-/// cell rectangle of the 16x16 chunk grid at `this+0x278`, then for every live
-/// object in each cell's 4-entry list walks its 8x8 sub-grid, recording the
-/// nearest hit per bucket into the caller's `flagsOut`/`vecsOut`/`distsOut`
-/// arrays. The rectangle math and per-candidate squared distance are the pure
-/// kernel; the grid/list/sub-grid traversal and the global grid constants are
-/// here. Returns the reference's leftover scalar (`0` for a non-empty row span).
+/// `CMapChunkGrid::QueryRadius`.
+///
+/// `__thiscall(ecx = this, worldPos, radius, flagsOut, vecsOut, distsOut) ->
+/// i32`. Quantizes `worldPos` and `radius` into a cell rectangle of the 16x16
+/// chunk grid at `this+0x278`, then for every live object in each cell's 4-entry
+/// list walks its 8x8 sub-grid, recording the nearest hit per bucket into the
+/// caller's `flagsOut`/`vecsOut`/`distsOut` arrays. The rectangle math and
+/// per-candidate squared distance are the pure kernel; the grid/list/sub-grid
+/// traversal and the global grid constants are here. Returns the reference's
+/// leftover scalar (`0` for a non-empty row span).
 pub fn c_map_chunk_grid__query_radius__68b0d0(
     this: *mut core::ffi::c_void,
     world_pos: *mut f32,
@@ -12808,17 +13078,19 @@ pub fn c_map_chunk__update__6afad0(chunk: i32) {
     }
 }
 
-/// `CMapObj::TraceLineGroups` — `__thiscall(ecx = this, stack = ctx, start,
-/// end, flags, group_skip_mask, hit_state, out_hit_poly, out_facet_dot)`.
-/// Traces a model-local segment against every group of a loaded map object
-/// (loaded gate at `this+0x1d4`, group count at `+0x168`, per-group bounds
-/// array at `+0x130` + 4, stride 0x20). Groups whose mask (`group+0x10`)
-/// intersects `group_skip_mask` are skipped; the rest are AABB-rejected, then
-/// geometry-tested by the stock per-group ray test (host hit-state globals
-/// reset before each test). A hit records the host hit-poly index and, when
-/// `out_facet_dot` is given, the hit triangle's facet dot from the host hit
-/// vertex/index tables (pure kernel); after the loop the dot is normalised by
-/// the facet-normal length. Returns 1 when any group was hit.
+/// `CMapObj::TraceLineGroups`.
+///
+/// `__thiscall(ecx = this, stack = ctx, start, end, flags, group_skip_mask,
+/// hit_state, out_hit_poly, out_facet_dot)`. Traces a model-local segment
+/// against every group of a loaded map object (loaded gate at `this+0x1d4`,
+/// group count at `+0x168`, per-group bounds array at `+0x130` + 4, stride
+/// 0x20). Groups whose mask (`group+0x10`) intersects `group_skip_mask` are
+/// skipped; the rest are AABB-rejected, then geometry-tested by the stock
+/// per-group ray test (host hit-state globals reset before each test). A hit
+/// records the host hit-poly index and, when `out_facet_dot` is given, the
+/// hit triangle's facet dot from the host hit vertex/index tables (pure
+/// kernel); after the loop the dot is normalised by the facet-normal length.
+/// Returns 1 when any group was hit.
 pub fn c_map_obj__trace_line_groups__6a37b0(
     this: *mut u8,
     ctx: *mut u8,
@@ -12999,19 +13271,20 @@ pub fn c_map_obj__trace_line_groups__6a37b0(
     u8::from(any_hit)
 }
 
-/// `CMovement::UpdateSplinePath` — `__thiscall(ecx = this, timeMs, outDelta)
-/// -> u32`. The spline/anim-path solver: when a movement mode is active
+/// `CMovement::UpdateSplinePath` — `__thiscall(ecx = this, timeMs, outDelta) -> u32`.
+///
+/// The spline/anim-path solver: when a movement mode is active
 /// (`flags+0x40 & 3`), advances the spline track at `this+0xa4` to the `timeMs`
-/// timestamp (elapsed at `+0x20`, completion latch bit 0 at `+0x18`), samples
-/// the track into a 4x4 frame (row 0 seeded with the current direction
-/// `this+0x5c`, row 3 receiving the position), derives the facing yaw
-/// (`+0x1c`, wrapped to `[0, 2pi)`), then either the pitch (`+0x20`, when
-/// `flags & 0x200000`) or — when the track requests it (track flag `0x200`) —
-/// a turn-toward-target forward vector (`+0x24..0x30`) built from a one-second
-/// look-ahead sample and the anchored move target. Writes the displacement of
-/// the sampled position against `this+0x44..0x50` into `out_delta` and returns
-/// 1; inactive modes return `flags & 0x200f`; an inactive track (sign bit of
-/// `+0x18`) returns 1 with `out_delta` untouched.
+/// timestamp (elapsed at `+0x20`, completion latch bit 0 at `+0x18`), samples the
+/// track into a 4x4 frame (row 0 seeded with the current direction `this+0x5c`,
+/// row 3 receiving the position), derives the facing yaw (`+0x1c`, wrapped to
+/// `[0, 2pi)`), then either the pitch (`+0x20`, when `flags & 0x200000`) or —
+/// when the track requests it (track flag `0x200`) — a turn-toward-target
+/// forward vector (`+0x24..0x30`) built from a one-second look-ahead sample and
+/// the anchored move target. Writes the displacement of the sampled position
+/// against `this+0x44..0x50` into `out_delta` and returns 1; inactive modes
+/// return `flags & 0x200f`; an inactive track (sign bit of `+0x18`) returns 1
+/// with `out_delta` untouched.
 ///
 /// `time_ms` is a signed integer millisecond timestamp — the source does
 /// integer subtraction and `fild` on the slot, never a float load.
@@ -13259,6 +13532,7 @@ pub fn c_movement__update_spline_path__7c5490(
 }
 
 /// `CParticleEmitter::DrawBatch` — `__thiscall(ecx = this, stack = billboardVec)`.
+///
 /// Prepares the batch geometry and pushes render state through the stock
 /// GfxDevice helpers, copies the device's row-major 4x4 world matrix from
 /// `*(this+0x40)+0x9c`, advances its translation row by `billboardVec` resolved
@@ -13326,14 +13600,15 @@ pub fn c_particle_emitter__draw_batch__70ca50(
     billboard_vec
 }
 
-/// `CWorldBsp::CollectLeafTrianglesInBox` — `__thiscall(ecx = ctx, bspRoot,
-/// leafNode) -> u8`. Gated on the global BSP geometry manager; fetches the leaf
-/// geometry through the stock `GetLeafGeometry` cache (absolute VA), classifies
-/// each leaf vertex with the pure 6-bit outcode kernel, then pushes surviving
-/// triangle ids into the fixed global collision scratch stacks. The outcode is
-/// the pure kernel; the geometry-cache call-out, the leaf-format field walks, and
-/// the global scratch mutation are here. Returns `1` on success, `0` when the BSP
-/// is not loaded or the leaf has no geometry.
+/// `CWorldBsp::CollectLeafTrianglesInBox` — `__thiscall(ecx = ctx, bspRoot, leafNode) -> u8`.
+///
+/// Gated on the global BSP geometry manager; fetches the leaf geometry through
+/// the stock `GetLeafGeometry` cache (absolute VA), classifies each leaf vertex
+/// with the pure 6-bit outcode kernel, then pushes surviving triangle ids into
+/// the fixed global collision scratch stacks. The outcode is the pure kernel; the
+/// geometry-cache call-out, the leaf-format field walks, and the global scratch
+/// mutation are here. Returns `1` on success, `0` when the BSP is not loaded or
+/// the leaf has no geometry.
 pub fn c_world_bsp__collect_leaf_triangles_in_box__6b8c60(
     ctx: *mut core::ffi::c_void,
     bsp_root: *mut u16,
@@ -13487,14 +13762,15 @@ pub fn c_world_bsp__collect_leaf_triangles_in_box__6b8c60(
     1
 }
 
-/// `Cloud_ShadeLayer` — `__fastcall(ecx = layer)`. Colorizes one cloud layer:
-/// picks the active sky color triple by the time window, offsets it by the
-/// light position, projects that direction onto the sky dome and converts the
-/// result to layer texels (both through the stock routines at fixed VAs),
-/// publishes the normalized texel scroll to the host globals, then shades
-/// every cell of the layer's density grid into the packed BGRA output buffer.
-/// Empty cells copy their left neighbour with zero alpha; occupied cells run
-/// the pure per-cell kernel.
+/// `Cloud_ShadeLayer` — `__fastcall(ecx = layer)`.
+///
+/// Colorizes one cloud layer: picks the active sky color triple by the time
+/// window, offsets it by the light position, projects that direction onto the
+/// sky dome and converts the result to layer texels (both through the stock
+/// routines at fixed VAs), publishes the normalized texel scroll to the host
+/// globals, then shades every cell of the layer's density grid into the packed
+/// BGRA output buffer. Empty cells copy their left neighbour with zero alpha;
+/// occupied cells run the pure per-cell kernel.
 pub fn cloud_shade_layer__6cfb00(layer: *mut core::ffi::c_void) {
     if layer.is_null() {
         return;
@@ -13702,9 +13978,10 @@ pub fn cloud_shade_layer__6cfb00(layer: *mut core::ffi::c_void) {
     }
 }
 
-/// Recursive worker for `collide_bsp_node_trace_segment__6bc370`: takes the
-/// segment and clip slab by reference to per-level copies, mirroring the
-/// reference's per-frame stack rebuilds of the clipped records.
+/// Recursive worker for `collide_bsp_node_trace_segment__6bc370`.
+///
+/// Takes the segment and clip slab by reference to per-level copies,
+/// mirroring the reference's per-frame stack rebuilds of the clipped records.
 fn trace_bsp_segment(this: *mut u8, node_index: u32, seg: &[f32; 6], clip: &[f32; 6]) {
     // SAFETY: `this+0x0` is the in-bounds, aligned geometry-tables slot.
     let geometry = unsafe { this.cast::<*mut u8>().read() };
@@ -13844,16 +14121,17 @@ fn trace_bsp_segment(this: *mut u8, node_index: u32, seg: &[f32; 6], clip: &[f32
     }
 }
 
-/// `CollideBspNode_TraceSegment` — `__thiscall(ecx = trace, stack =
-/// node_index, segment, clip)`. Recursively traces a line segment (`segment` =
-/// start then end, 6 floats) through an axis-aligned BSP tree against the
-/// node's clip slab (`clip` = min then max, 6 floats). Interior nodes classify
-/// the segment against the split plane (pure kernel) and descend the matching
-/// child or children with the slab — and, on a straddle, the segment itself —
-/// clipped at the plane; leaves dispatch to the leaf mesh collider and the
-/// per-triangle fallback, both by fixed absolute VA. `trace+0x0` holds the
-/// geometry tables (node array at `+0x4`, triangle-index pool at `+0x8`),
-/// `trace+0x4` the shared collision state.
+/// `CollideBspNode_TraceSegment` — `__thiscall(ecx = trace, stack = node_index, segment, clip)`.
+///
+/// Recursively traces a line segment (`segment` = start then end, 6 floats)
+/// through an axis-aligned BSP tree against the node's clip slab (`clip` = min
+/// then max, 6 floats). Interior nodes classify the segment against the split
+/// plane (pure kernel) and descend the matching child or children with the slab
+/// — and, on a straddle, the segment itself — clipped at the plane; leaves
+/// dispatch to the leaf mesh collider and the per-triangle fallback, both by
+/// fixed absolute VA. `trace+0x0` holds the geometry tables (node array at
+/// `+0x4`, triangle-index pool at `+0x8`), `trace+0x4` the shared collision
+/// state.
 pub fn collide_bsp_node_trace_segment__6bc370(
     this: *mut u8,
     node_index: u32,
@@ -13870,9 +14148,10 @@ pub fn collide_bsp_node_trace_segment__6bc370(
     trace_bsp_segment(this, node_index, &seg, &clip6);
 }
 
-/// `CWorld::IntersectMapObjSegment` — fastcall(ecx = start f32*[3],
-/// edx = end f32*[3]; outFrac f32*, outMapObj i32*, outSubPart i32*,
-/// outMaterial u16*), RET 0x10, bool in AL.
+/// `CWorld::IntersectMapObjSegment`.
+///
+/// fastcall(ecx = start f32*[3], edx = end f32*[3]; outFrac f32*, outMapObj
+/// i32*, outSubPart i32*, outMaterial u16*), RET 0x10, bool in AL.
 ///
 /// Walks the world's tagged map-obj instance list; for each instance whose
 /// bounds the segment crosses it transforms both endpoints into instance-
@@ -14023,14 +14302,15 @@ pub fn c_world__intersect_map_obj_segment__6a8840(
     u8::from(unsafe { out_map_obj.read_unaligned() } != 0)
 }
 
-/// `CMapObj::TraceSegmentAgainstGroup` — thiscall(ecx = this; start f32*[3],
-/// end f32*[3], filterCtx, facetSink, outHitPoint f32*[3], outFrac f32*),
-/// RET 0x18, bool in AL. Transforms both endpoints into group-local space
-/// (OUR TransformPoint hook, matrix at `this+0xd4`), delegates the local
-/// trace to the group BSP walker 0x6a3a40 (stateful — kept a delegate), and
-/// on a hit lerps the WORLD hit point `(end − start) × *outFrac + start`
-/// into `outHitPoint` and returns 1. Miss returns 0 and leaves outHitPoint
-/// untouched.
+/// `CMapObj::TraceSegmentAgainstGroup`.
+///
+/// thiscall(ecx = this; start f32*[3], end f32*[3], filterCtx, facetSink,
+/// outHitPoint f32*[3], outFrac f32*), RET 0x18, bool in AL. Transforms both
+/// endpoints into group-local space (OUR TransformPoint hook, matrix at
+/// `this+0xd4`), delegates the local trace to the group BSP walker 0x6a3a40
+/// (stateful — kept a delegate), and on a hit lerps the WORLD hit point
+/// `(end − start) × *outFrac + start` into `outHitPoint` and returns 1. Miss
+/// returns 0 and leaves outHitPoint untouched.
 pub fn c_map_obj__trace_segment_against_group__6a2600(
     this: *mut u8,
     start: *const f32,
@@ -14087,8 +14367,10 @@ pub fn c_map_obj__trace_segment_against_group__6a2600(
     1
 }
 
-/// `CMapObjGroup::TraceSegment` — thiscall(ecx = group; ctx, seg f32*[6],
-/// inoutDist f32*, facetSink, flags, mask u16), RET 0x18, bool in AL.
+/// `CMapObjGroup::TraceSegment`.
+///
+/// thiscall(ecx = group; ctx, seg f32*[6], inoutDist f32*, facetSink, flags, mask
+/// u16), RET 0x18, bool in AL.
 ///
 /// Builds a ~0x58-byte trace descriptor on the stack (group liquid/geom
 /// pointers, the segment start+end copied twice, the normalized ray
@@ -14216,22 +14498,22 @@ pub fn c_map_obj_group__trace_segment__6b92b0(
     result
 }
 
-/// `CollideLeaf_RayTriangleMesh` — `__thiscall(ecx = state, stack = geometry,
-/// node)`. Collides the traced segment held in the collision state against
-/// the triangle mesh of one tree leaf, returning 1 once a leaf block was
-/// processed (0 when the cache root is unset or the lookup misses). The leaf
-/// block comes from the stock cached lookup, called by fixed absolute VA — it
-/// probes an 8-way cache keyed on the node and loads the block on a miss.
-/// Each leaf vertex gets a 6-bit outcode against the box spanned by the
-/// segment endpoints at `state+0x18`/`state+0x24` (pure kernel); every
-/// not-yet-visited triangle (leaf flag word vs the mask at `state+0x50`, then
-/// the shared per-triangle flag byte at `*(state+4) + id*2`) is pushed onto
-/// the global visited ring, marked, trivially rejected when its three vertex
-/// outcodes share a face bit, and finally intersected with the ray at
+/// `CollideLeaf_RayTriangleMesh` — `__thiscall(ecx = state, stack = geometry, node)`.
+///
+/// Collides the traced segment held in the collision state against the triangle
+/// mesh of one tree leaf, returning 1 once a leaf block was processed (0 when the
+/// cache root is unset or the lookup misses). The leaf block comes from the stock
+/// cached lookup, called by fixed absolute VA — it probes an 8-way cache keyed on
+/// the node and loads the block on a miss. Each leaf vertex gets a 6-bit outcode
+/// against the box spanned by the segment endpoints at `state+0x18`/`state+0x24`
+/// (pure kernel); every not-yet-visited triangle (leaf flag word vs the mask at
+/// `state+0x50`, then the shared per-triangle flag byte at `*(state+4) + id*2`) is
+/// pushed onto the global visited ring, marked, trivially rejected when its three
+/// vertex outcodes share a face bit, and finally intersected with the ray at
 /// `state+0x30` (folded Möller-Trumbore kernel, edge tolerance `0.002`). An
-/// ordered hit with `t_min <= t <= best` updates the best parameter at
-/// `state+0x4c` and the hit-triangle globals, and writes the scaled distance
-/// (clamped to `state+0x14`) through the pointer at `state+0x10`.
+/// ordered hit with `t_min <= t <= best` updates the best parameter at `state+0x4c`
+/// and the hit-triangle globals, and writes the scaled distance (clamped to
+/// `state+0x14`) through the pointer at `state+0x10`.
 pub fn collide_leaf_ray_triangle_mesh__6b88e0(
     this: *mut u8,
     geometry: *mut u8,
@@ -14431,16 +14713,17 @@ pub fn collide_leaf_ray_triangle_mesh__6b88e0(
     1
 }
 
-/// `Doodad_RaycastSegment` — `__fastcall(ecx = chunk, edx = seg_start,
-/// stack = seg_end, io_hit_frac)`. Walks either the global doodad list
-/// (`chunk` null: head/link-base globals, cull mask 1, traced with the raw
-/// segment) or the chunk's own list (head at `chunk+0xf0`, link base at
-/// `chunk+0xe8`, cull mask 5, traced with the model-space segment). Per
-/// doodad with a collision mesh: transforms the segment by the inverse
-/// placement at `doodad+0xd4`, runs the stock bounds pre-test and group
-/// trace by fixed VA, folds an accepted hit into `*io_hit_frac` through the
-/// pure depth-bias kernel, then tags every sub-node whose bounds straddle
-/// the segment (`doodad+0x138` list, link base `doodad+0x130`).
+/// `Doodad_RaycastSegment`.
+///
+/// `__fastcall(ecx = chunk, edx = seg_start, stack = seg_end, io_hit_frac)`. Walks
+/// either the global doodad list (`chunk` null: head/link-base globals, cull mask
+/// 1, traced with the raw segment) or the chunk's own list (head at `chunk+0xf0`,
+/// link base at `chunk+0xe8`, cull mask 5, traced with the model-space segment).
+/// Per doodad with a collision mesh: transforms the segment by the inverse
+/// placement at `doodad+0xd4`, runs the stock bounds pre-test and group trace by
+/// fixed VA, folds an accepted hit into `*io_hit_frac` through the pure depth-bias
+/// kernel, then tags every sub-node whose bounds straddle the segment
+/// (`doodad+0x138` list, link base `doodad+0x130`).
 pub fn doodad_raycast_segment__6b7790(
     chunk: *mut core::ffi::c_void,
     seg_start: *const f32,
@@ -14623,13 +14906,14 @@ pub fn doodad_raycast_segment__6b7790(
     }
 }
 
-/// `MapChunk::QueryWmoGroups` — `__fastcall(ecx = groupList, edx = queryBox,
-/// results, queryFlags) -> i32`. Walks the intrusive WMO-group list, skipping
-/// invisible and already-visited (epoch `0xc89f20`) groups, AABB-tests each group
-/// box against `queryBox`, and appends matches through the stock collector
-/// (absolute VA). The AABB overlap is the pure kernel; the list walk, the epoch
-/// global, and the append call-out are here. Returns `0` on an early visibility
-/// reject, else `1`.
+/// `MapChunk::QueryWmoGroups`.
+///
+/// `__fastcall(ecx = groupList, edx = queryBox, results, queryFlags) -> i32`. Walks
+/// the intrusive WMO-group list, skipping invisible and already-visited (epoch
+/// `0xc89f20`) groups, AABB-tests each group box against `queryBox`, and appends
+/// matches through the stock collector (absolute VA). The AABB overlap is the pure
+/// kernel; the list walk, the epoch global, and the append call-out are here.
+/// Returns `0` on an early visibility reject, else `1`.
 pub fn map_chunk__query_wmo_groups__6abc40(
     group_list: *mut i32,
     query_box: *const f32,
@@ -14724,17 +15008,19 @@ pub fn map_chunk__query_wmo_groups__6abc40(
     1
 }
 
-/// `MapChunk::QueryDoodadSets` — `__fastcall(ecx = doodadSetList, edx = queryBox,
-/// results, queryFlags) -> i32`. Walks the intrusive doodad-set list; for each
-/// visible (`set+0x90` bit 2), not-yet-visited (epoch `0xc89f20`, `set+0x8c`) set,
-/// it asks the stock box-transform callback (`.data` slot `0xc91f54`) to fill a
-/// local out-struct with the transformed AABB, AABB-tests it against `queryBox`
-/// via the shared overlap kernel, and appends matches through the stock collector
-/// (`0x6abfb0`). Same ABI/overlap as the WMO sibling but with the doodad transform
-/// indirection. The 6-compare overlap is the shared x87-free kernel; the transform
-/// callback and the append are the two indirect call-outs (matching SP). The two
-/// pure leaves the stock seeds with (zero a vec3, write an identity matrix) are
-/// inlined as plain stores. Returns 1 (the stock body writes no EAX before `ret 0x8`).
+/// `MapChunk::QueryDoodadSets`.
+///
+/// `__fastcall(ecx = doodadSetList, edx = queryBox, results, queryFlags) -> i32`.
+/// Walks the intrusive doodad-set list; for each visible (`set+0x90` bit 2),
+/// not-yet-visited (epoch `0xc89f20`, `set+0x8c`) set, it asks the stock
+/// box-transform callback (`.data` slot `0xc91f54`) to fill a local out-struct with
+/// the transformed AABB, AABB-tests it against `queryBox` via the shared overlap
+/// kernel, and appends matches through the stock collector (`0x6abfb0`). Same
+/// ABI/overlap as the WMO sibling but with the doodad transform indirection. The
+/// 6-compare overlap is the shared x87-free kernel; the transform callback and the
+/// append are the two indirect call-outs (matching SP). The two pure leaves the
+/// stock seeds with (zero a vec3, write an identity matrix) are inlined as plain
+/// stores. Returns 1 (the stock body writes no EAX before `ret 0x8`).
 #[allow(clippy::similar_names)]
 pub fn map_chunk__query_doodad_sets__6abe60(
     doodad_set_list: *mut i32,
@@ -14865,15 +15151,16 @@ pub fn map_chunk__query_doodad_sets__6abe60(
     1
 }
 
-/// `CWorldBsp::TraverseNode` — `__thiscall(ecx = bsp, stack = node_index, arg1,
-/// arg2)`. Recursively descends an axis-aligned BSP tree (`bsp+0x0` = geometry
-/// container; node array at `[[bsp+0x0]+0x4]`, 16-byte nodes). `arg1` is the
-/// node-local split/clip box (min in `[0..3]`, max in `[3..6]`); `arg2` is the
-/// box being traversed (same layout). Leaf-flagged nodes (flag bit 0x4) collect
-/// triangles overlapping the box; interior nodes classify the box against the
-/// split plane (pure x87-free kernels) and descend the matching child or children
-/// with the split face clamped. Box roles verified instruction-by-instruction
-/// against `0x6bc1c0..0x6bc36b` (the one-sided paths pass `arg1` unchanged; the
+/// `CWorldBsp::TraverseNode` — `__thiscall(ecx = bsp, stack = node_index, arg1, arg2)`.
+///
+/// Recursively descends an axis-aligned BSP tree (`bsp+0x0` = geometry container;
+/// node array at `[[bsp+0x0]+0x4]`, 16-byte nodes). `arg1` is the node-local
+/// split/clip box (min in `[0..3]`, max in `[3..6]`); `arg2` is the box being
+/// traversed (same layout). Leaf-flagged nodes (flag bit 0x4) collect triangles
+/// overlapping the box; interior nodes classify the box against the split plane
+/// (pure x87-free kernels) and descend the matching child or children with the
+/// split face clamped. Box roles verified instruction-by-instruction against
+/// `0x6bc1c0..0x6bc36b` (the one-sided paths pass `arg1` unchanged; the
 /// both-children path clamps a fresh copy of `arg1` per child).
 pub fn c_world_bsp__traverse_node__6bc1c0(
     this: *mut core::ffi::c_void,
@@ -15052,8 +15339,10 @@ pub fn c_world_bsp__traverse_node__6bc1c0(
     }
 }
 
-/// `CWorld::LinkEntityToTiles` — `__thiscall(ecx = this)`, returns `u32`
-/// (0 = linking disabled / no tile touched, 1 = linked into >= 1 tile).
+/// `CWorld::LinkEntityToTiles`.
+///
+/// `__thiscall(ecx = this)`, returns `u32` (0 = linking disabled / no tile touched,
+/// 1 = linked into >= 1 tile).
 ///
 /// Quantizes the entity world-space AABB (fields at `this+0x44/0x48/0x50/0x54`)
 /// into inclusive tile-index loop bounds (pure kernel; field@0x50 -> ix_lo,
@@ -15207,11 +15496,12 @@ pub fn c_world__link_entity_to_tiles__6a8ca0(this: *mut core::ffi::c_void) -> u3
     touched
 }
 
-/// Splices `node` into a tile offset-based intrusive draw-list, reproducing the
-/// stock store order byte-for-byte (0x6a8de3-0x6a8e25). The link slot address is
-/// `*head_base_slot + node` — the node pointer doubles as a byte offset added to
-/// the list base (an offset-based `TSLink`), so the slot is formed by integer
-/// arithmetic (matching the x86 `add esi,ebx`), never `ptr::add`.
+/// Splices `node` into a tile offset-based intrusive draw-list.
+///
+/// Reproducing the stock store order byte-for-byte (0x6a8de3-0x6a8e25). The link
+/// slot address is `*head_base_slot + node` — the node pointer doubles as a byte
+/// offset added to the list base (an offset-based `TSLink`), so the slot is formed
+/// by integer arithmetic (matching the x86 `add esi,ebx`), never `ptr::add`.
 ///
 /// # Safety
 /// `node`, `head_base_slot`, `tail_base_slot` must be the live anchors produced by
@@ -15285,15 +15575,16 @@ unsafe fn splice_link_node__6a8ca0(
     unsafe { tail_base_slot.cast::<*mut u8>().write(slot) };
 }
 
-/// `Object::DrawColoredVector` — `__thiscall(ecx = this, stack = fit)`. Submits
-/// one coloured vector into a bounds-fit accumulator: optionally flushes the
-/// pending child list first (stock `0x6a79c0`, flag bit 0 at `this+0xc`, which
+/// `Object::DrawColoredVector` — `__thiscall(ecx = this, stack = fit)`.
+///
+/// Submits one coloured vector into a bounds-fit accumulator: optionally flushes
+/// the pending child list first (stock `0x6a79c0`, flag bit 0 at `this+0xc`, which
 /// the flush clears), derives the vector direction and position — camera-basis
-/// scaled by the intensity when flag bit 2 is set, else byte-colour expansion
-/// with an optional pull toward the host focus singleton (the pure kernel) —
-/// optionally forwards the singleton's depth range for the selected entry
-/// (stock `0x71c110`), accumulates centroid and moment (`0x71bc70`/`0x71bce0`),
-/// then folds each flagged child into the fit (`0x71bf90`).
+/// scaled by the intensity when flag bit 2 is set, else byte-colour expansion with
+/// an optional pull toward the host focus singleton (the pure kernel) —
+/// optionally forwards the singleton's depth range for the selected entry (stock
+/// `0x71c110`), accumulates centroid and moment (`0x71bc70`/`0x71bce0`), then folds
+/// each flagged child into the fit (`0x71bf90`).
 pub fn object_draw_colored_vector__6a7300(this: *mut u8, fit: *mut u8) {
     if this.is_null() || fit.is_null() {
         return;
@@ -15468,6 +15759,7 @@ pub fn object_draw_colored_vector__6a7300(this: *mut u8, fit: *mut u8) {
 }
 
 /// `Object::DrawDebugBoxRecursive` — `__thiscall(ecx = this, stack = fit)`.
+///
 /// Runs the stock prep walker by absolute VA when bit 0 of the flag byte at
 /// `this+0xc` is set (re-reading the byte after, like the original), then
 /// feeds the fit accumulators: with bit 1 set, two byte-color vectors expanded
@@ -15587,17 +15879,17 @@ pub fn object_draw_debug_box_recursive__6a8050(this: *mut u8, fit: *mut u8) {
     }
 }
 
-/// `Object::DrawDebugBox` — `__thiscall(ecx = this, stack = source)`. Appends a
-/// debug-box node to the owner's base-relative draw list: allocates a node from
-/// the host display heap (stock allocator at VA `0x6a0ba0`), unlinks the slot if
-/// it is still linked (stock `0x6a93e0`), splices it at the list head, and
+/// `Object::DrawDebugBox` — `__thiscall(ecx = this, stack = source)`.
+///
+/// Appends a debug-box node to the owner's base-relative draw list: allocates a
+/// node from the host display heap (stock allocator at VA `0x6a0ba0`), unlinks the
+/// slot if it is still linked (stock `0x6a93e0`), splices it at the list head, and
 /// copies the source's 27-dword payload into the node. When the fade rate at
-/// `source+0xf0` equals the host fade-disabled sentinel that is all; otherwise
-/// the node is distance-faded — culled past `fade_end` (before allocating),
-/// else the direction (renormalized by the stock setter at `0x71b6a0`), the
-/// fade-scaled colour, the enable/mode setters (`0x71b780`/`0x71b620`), and the
-/// trailing primitive state are applied. The fade/direction/colour math is the
-/// pure kernel.
+/// `source+0xf0` equals the host fade-disabled sentinel that is all; otherwise the
+/// node is distance-faded — culled past `fade_end` (before allocating), else the
+/// direction (renormalized by the stock setter at `0x71b6a0`), the fade-scaled
+/// colour, the enable/mode setters (`0x71b780`/`0x71b620`), and the trailing
+/// primitive state are applied. The fade/direction/colour math is the pure kernel.
 pub fn object_draw_debug_box__6a7ac0(this: *mut u8, source: *mut u8) {
     if this.is_null() || source.is_null() {
         return;
@@ -15758,15 +16050,16 @@ pub fn object_draw_debug_box__6a7ac0(this: *mut u8, source: *mut u8) {
     unsafe { tail.cast::<[f32; 3]>().write_unaligned([1.0, 0.0, 0.0]) };
 }
 
-/// `Object::PickChildAtPoint` — `__thiscall(ecx = this, stack = mask, point,
-/// out_type, out_height, out_normal)`. Walks the object's 0x20-byte child
-/// records (base `this+0x130`, count `this+0x168` re-read per iteration since
-/// the query call-out runs in between); a record whose flag word avoids `mask`
-/// and whose box strictly contains `point` (pure kernel) and whose child entry
-/// (`this+0x1f4 + i*4`, enable byte `this+0x1d4`, ready byte `child+0x164` —
-/// folded stock accessors) is live, is validated through the stock liquid
-/// height query by absolute VA with the three out-pointers forwarded verbatim.
-/// The first validated hit returns 1, otherwise 0.
+/// `Object::PickChildAtPoint`.
+///
+/// `__thiscall(ecx = this, stack = mask, point, out_type, out_height, out_normal)`.
+/// Walks the object's 0x20-byte child records (base `this+0x130`, count
+/// `this+0x168` re-read per iteration since the query call-out runs in between); a
+/// record whose flag word avoids `mask` and whose box strictly contains `point`
+/// (pure kernel) and whose child entry (`this+0x1f4 + i*4`, enable byte
+/// `this+0x1d4`, ready byte `child+0x164` — folded stock accessors) is live, is
+/// validated through the stock liquid height query by absolute VA with the three
+/// out-pointers forwarded verbatim. The first validated hit returns 1, otherwise 0.
 pub fn object_pick_child_at_point__6a4e00(
     this: *mut u8,
     mask: u32,
@@ -15845,15 +16138,17 @@ pub fn object_pick_child_at_point__6a4e00(
     0
 }
 
-/// `Object::QueryOverlappingBoxes` — `__thiscall(ecx = this, stack = tag,
-/// query_box, arg, flags)`. Walks the object's 0x20-byte AABB records (base at
-/// `this+0x130`, count at `this+0x168`, re-read every iteration since the
-/// collector may mutate the set) and, for every record whose box overlaps the
-/// caller's 6-float query box inclusively (pure kernel), resolves the child
-/// entry (`this+0x1f4 + i*4`, gated on the enable byte at `this+0x1d4` and the
-/// child's ready byte at `+0x164` — the folded stock accessor) and forwards to
-/// the stock BSP collector at its absolute VA, OR-accumulating its hit flag.
-/// The collector's field mask derives from the flag bits (pure kernel).
+/// `Object::QueryOverlappingBoxes`.
+///
+/// `__thiscall(ecx = this, stack = tag, query_box, arg, flags)`. Walks the object's
+/// 0x20-byte AABB records (base at `this+0x130`, count at `this+0x168`, re-read
+/// every iteration since the collector may mutate the set) and, for every record
+/// whose box overlaps the caller's 6-float query box inclusively (pure kernel),
+/// resolves the child entry (`this+0x1f4 + i*4`, gated on the enable byte at
+/// `this+0x1d4` and the child's ready byte at `+0x164` — the folded stock
+/// accessor) and forwards to the stock BSP collector at its absolute VA,
+/// OR-accumulating its hit flag. The collector's field mask derives from the flag
+/// bits (pure kernel).
 pub fn object_query_overlapping_boxes__6a3b10(
     this: *mut u8,
     tag: i32,
@@ -15926,13 +16221,13 @@ pub fn object_query_overlapping_boxes__6a3b10(
     i32::from(hit)
 }
 
-/// `PerlinNoise3D` — `__thiscall(ecx = grad_out, stack = x, y, z) -> f64`
-/// (`ret 0x18`). Tiled cubic-Hermite gradient noise with analytic gradient:
-/// floors each coordinate (truncate, minus one strictly below zero), hashes
-/// the eight unit-cube corner lattice points through the host's 64-entry
-/// rotate-xor table, and Hermite-blends per-corner value/derivative ramp
-/// lanes. Writes the 3-float gradient through `ecx` and returns the
-/// smoothstep-remapped scalar in `st0`.
+/// `PerlinNoise3D` — `__thiscall(ecx = grad_out, stack = x, y, z) -> f64` (`ret 0x18`).
+///
+/// Tiled cubic-Hermite gradient noise with analytic gradient: floors each
+/// coordinate (truncate, minus one strictly below zero), hashes the eight unit-cube
+/// corner lattice points through the host's 64-entry rotate-xor table, and
+/// Hermite-blends per-corner value/derivative ramp lanes. Writes the 3-float
+/// gradient through `ecx` and returns the smoothstep-remapped scalar in `st0`.
 pub fn perlin_noise3_d__452960(grad_out: *mut f32, x: f64, y: f64, z: f64) -> f64 {
     const PERM: *const [u32; 64] =
         (crate::win::EXPECTED_IMAGE_BASE + 0x40_2700) as *const [u32; 64];
@@ -16013,17 +16308,18 @@ pub fn perlin_noise3_d__452960(grad_out: *mut f32, x: f64, y: f64, z: f64) -> f6
     value
 }
 
-/// CRT `strtod` scan core — `__cdecl(out, str)`, returning `out` in `eax`
-/// (the chaining CRT caller reads the result block through that register, so
-/// the pointer return is load-bearing). Stock callers push three further
-/// stack words — a string length and two zeroed mode words — that the
-/// function never reads; cdecl caller cleanup keeps the two-argument surface
-/// sound. Scans one floating literal from `str`: the stock long-double
-/// scanner fills a 12-byte extended temporary and reports scan flags, then
-/// the stock narrowing helper converts it to a double against the host's
-/// format-descriptor table. Writes `out+0` = result flags (`0x80`
-/// range-high, `0x100` range-low, `0x200` no conversion), `out+4` =
-/// characters consumed, `out+0x10` = the parsed double.
+/// CRT `strtod` scan core.
+///
+/// `__cdecl(out, str)`, returning `out` in `eax` (the chaining CRT caller reads the
+/// result block through that register, so the pointer return is load-bearing).
+/// Stock callers push three further stack words — a string length and two zeroed
+/// mode words — that the function never reads; cdecl caller cleanup keeps the
+/// two-argument surface sound. Scans one floating literal from `str`: the stock
+/// long-double scanner fills a 12-byte extended temporary and reports scan flags,
+/// then the stock narrowing helper converts it to a double against the host's
+/// format-descriptor table. Writes `out+0` = result flags (`0x80` range-high,
+/// `0x100` range-low, `0x200` no conversion), `out+4` = characters consumed,
+/// `out+0x10` = the parsed double.
 pub fn scan_double_token__747560(out: *mut u8, str_ptr: *const u8) -> *mut u8 {
     if out.is_null() || str_ptr.is_null() {
         return out;
@@ -16073,6 +16369,7 @@ pub fn scan_double_token__747560(out: *mut u8, str_ptr: *const u8) -> *mut u8 {
 }
 
 /// `SpatialGrid::PruneRegion` — `__thiscall(ecx = this, stack = region)`.
+///
 /// First drains the grid's pending-relink list (`this+0x18`, next link at
 /// `node+0x68`) into the region accumulator via the stock
 /// `BoundsFit::AddObject`. Then walks the 64x64 cell array (`this+0x1c`) over
@@ -16180,15 +16477,15 @@ pub fn spatial_grid__prune_region__70a0f0(this: *mut u8, region: *mut u8) {
     }
 }
 
-/// `TerrainHeightCache::TraceLOS` — `__thiscall(ecx = this, stack = start,
-/// end, out)`. Walks the cached 160x160 height grid from `start` toward `end`
-/// cell by cell (major-axis line walk; cells from the host scale global and
-/// the grid origin at `this+0x20/+0x24`, both pure kernels). Each step writes
-/// the interpolated sample position to `out` and probes the cached terrain
-/// height via the stock per-cell sampler: terrain above the sample snaps
-/// `out[2]` to the terrain height and reports blocked (1). Leaving the grid
-/// restores `out` to `start`; reaching `end` copies it to `out`; both report
-/// clear (0).
+/// `TerrainHeightCache::TraceLOS` — `__thiscall(ecx = this, stack = start, end, out)`.
+///
+/// Walks the cached 160x160 height grid from `start` toward `end` cell by cell
+/// (major-axis line walk; cells from the host scale global and the grid origin at
+/// `this+0x20/+0x24`, both pure kernels). Each step writes the interpolated sample
+/// position to `out` and probes the cached terrain height via the stock per-cell
+/// sampler: terrain above the sample snaps `out[2]` to the terrain height and
+/// reports blocked (1). Leaving the grid restores `out` to `start`; reaching `end`
+/// copies it to `out`; both report clear (0).
 pub fn terrain_height_cache_trace_los__67cb60(
     this: *mut u8,
     start: *const f32,
@@ -16286,15 +16583,15 @@ pub fn terrain_height_cache_trace_los__67cb60(
     }
 }
 
-/// `Weather_BuildPatterGeometry` — `__stdcall(packet)`. Locks the packet's
-/// vertex buffer (`packet+0x2402c`) through the stock buffer-lock helper,
-/// emits three 24-byte vertices per active splash record (count at
-/// `packet+0x2400c`, 0x18-byte records from `packet+0xc`: position, then UV
-/// at `+0x10`), swapping the diffuse red/blue bytes when the device format
-/// descriptor (queried per vertex, exactly as the original does) flags the
-/// swapped vertex-color order, then unlocks. The lock/unlock/descriptor
-/// helpers run by fixed absolute VA (base verified at load; client
-/// non-`DYNAMICBASE`).
+/// `Weather_BuildPatterGeometry` — `__stdcall(packet)`.
+///
+/// Locks the packet's vertex buffer (`packet+0x2402c`) through the stock
+/// buffer-lock helper, emits three 24-byte vertices per active splash record (count
+/// at `packet+0x2400c`, 0x18-byte records from `packet+0xc`: position, then UV at
+/// `+0x10`), swapping the diffuse red/blue bytes when the device format descriptor
+/// (queried per vertex, exactly as the original does) flags the swapped
+/// vertex-color order, then unlocks. The lock/unlock/descriptor helpers run by
+/// fixed absolute VA (base verified at load; client non-`DYNAMICBASE`).
 pub fn weather_build_patter_geometry__6753c0(packet: *mut core::ffi::c_void) {
     if packet.is_null() {
         return;
@@ -16362,15 +16659,15 @@ pub fn weather_build_patter_geometry__6753c0(packet: *mut core::ffi::c_void) {
     unlock(buffer, 0);
 }
 
-/// `WorldScene::FlushDeferredModels` — `__cdecl()`. Drains the host deferred
-/// scene-node draw list (tagged head global; successor through the per-node
-/// link-offset global): each node is unlinked from its `+0x16c` intrusive
-/// pair, its optional callback (`+0x174`, context `+0x178`) runs with the
-/// node transform `+0xcc`, and its model (`+0x88`) gets that transform
-/// applied. When the host render-gate byte allows, a distance-fade alpha
-/// (pure kernel over the camera/fade-band globals) decides whether the model
-/// is enabled and submitted with that alpha and the stock bounds-accumulate
-/// draw callback.
+/// `WorldScene::FlushDeferredModels` — `__cdecl()`.
+///
+/// Drains the host deferred scene-node draw list (tagged head global; successor
+/// through the per-node link-offset global): each node is unlinked from its
+/// `+0x16c` intrusive pair, its optional callback (`+0x174`, context `+0x178`) runs
+/// with the node transform `+0xcc`, and its model (`+0x88`) gets that transform
+/// applied. When the host render-gate byte allows, a distance-fade alpha (pure
+/// kernel over the camera/fade-band globals) decides whether the model is enabled
+/// and submitted with that alpha and the stock bounds-accumulate draw callback.
 pub fn world_scene__flush_deferred_models__683f80() {
     /// Reads one pointer-sized word of the live scene graph.
     unsafe fn read_word(addr: usize) -> usize {
@@ -16382,9 +16679,10 @@ pub fn world_scene__flush_deferred_models__683f80() {
         // SAFETY: the caller passes an in-bounds, aligned scene-graph slot.
         unsafe { (addr as *mut usize).write(value) }
     }
-    /// Detaches the intrusive link pair at `link` (next at `+0x0`, tagged prev
-    /// at `+0x4`): the predecessor slot is the untagged prev value, or the
-    /// prev link rebased by the successor's back pointer when untagged.
+    /// Detaches the intrusive link pair at `link` (next at `+0x0`, tagged prev at `+0x4`).
+    ///
+    /// The predecessor slot is the untagged prev value, or the prev link rebased by
+    /// the successor's back pointer when untagged.
     unsafe fn unlink_pair(link: usize) {
         // SAFETY: `link` is the in-bounds link pair of a live node.
         let next = unsafe { read_word(link) };
@@ -16559,15 +16857,16 @@ pub fn world_scene__flush_deferred_models__683f80() {
     }
 }
 
-/// `WorldScene::UpdateAndCullNodes` — `__fastcall(ecx = scene)`. Walks the
-/// active scene-node list (head at `scene+0x20`, low-bit-tagged sentinel;
-/// successor read through the list base at `scene+0x18`). A node whose frame
-/// stamp (`+0x164`) lags the host frame counter is re-marked dirty (`+0x94`);
-/// dirty nodes with a model (`+0x88`) or callback (`+0x174`) get a fresh
-/// view-depth key (`+0x78`, pure kernel) and run the stock visibility test.
-/// Visible nodes toggle their model active by squared camera distance (pure
-/// kernel) against the host threshold; occluded nodes are unlinked from their
-/// `+0x16c` intrusive pair and appended to the host deferred-draw list.
+/// `WorldScene::UpdateAndCullNodes` — `__fastcall(ecx = scene)`.
+///
+/// Walks the active scene-node list (head at `scene+0x20`, low-bit-tagged sentinel;
+/// successor read through the list base at `scene+0x18`). A node whose frame stamp
+/// (`+0x164`) lags the host frame counter is re-marked dirty (`+0x94`); dirty nodes
+/// with a model (`+0x88`) or callback (`+0x174`) get a fresh view-depth key
+/// (`+0x78`, pure kernel) and run the stock visibility test. Visible nodes toggle
+/// their model active by squared camera distance (pure kernel) against the host
+/// threshold; occluded nodes are unlinked from their `+0x16c` intrusive pair and
+/// appended to the host deferred-draw list.
 pub fn world_scene__update_and_cull_nodes__683700(scene: *mut u8) {
     if scene.is_null() {
         return;
@@ -16583,9 +16882,10 @@ pub fn world_scene__update_and_cull_nodes__683700(scene: *mut u8) {
         // SAFETY: the caller passes an in-bounds, aligned scene-graph slot.
         unsafe { (addr as *mut usize).write(value) }
     }
-    /// Detaches the intrusive link pair at `link` (next at `+0x0`, tagged prev
-    /// at `+0x4`): the predecessor slot is the untagged prev value, or the
-    /// prev link rebased by the successor's back pointer when untagged.
+    /// Detaches the intrusive link pair at `link` (next at `+0x0`, tagged prev at `+0x4`).
+    ///
+    /// The predecessor slot is the untagged prev value, or the prev link rebased by
+    /// the successor's back pointer when untagged.
     unsafe fn unlink_pair(link: usize) {
         // SAFETY: `link` is the in-bounds link pair of a live node.
         let next = unsafe { read_word(link) };
@@ -16778,13 +17078,14 @@ pub fn world_scene__update_and_cull_nodes__683700(scene: *mut u8) {
     }
 }
 
-/// `World_SampleSurfaceHeight` — `__fastcall(ecx = pos, edx = out_height,
-/// stack = max_drop)`. Samples the highest world surface under `pos` within
-/// `±max_drop`: resolves the terrain chunk under the position through the
-/// host 64x64 tile grid (cell math in the pure kernel), samples terrain and
-/// liquid heights, then casts a vertical segment against doodads, chunk
-/// geometry, and the model scene via the stock raycasters. Writes the nearest
-/// surface Z to `out_height`; returns 1 on any hit, 0 otherwise.
+/// `World_SampleSurfaceHeight` — `__fastcall(ecx = pos, edx = out_height, stack = max_drop)`.
+///
+/// Samples the highest world surface under `pos` within `±max_drop`: resolves the
+/// terrain chunk under the position through the host 64x64 tile grid (cell math in
+/// the pure kernel), samples terrain and liquid heights, then casts a vertical
+/// segment against doodads, chunk geometry, and the model scene via the stock
+/// raycasters. Writes the nearest surface Z to `out_height`; returns 1 on any hit,
+/// 0 otherwise.
 pub fn world_sample_surface_height__6b7070(
     pos: *const f32,
     out_height: *mut f32,
@@ -16938,6 +17239,7 @@ pub fn world_sample_surface_height__6b7070(
 }
 
 /// `luaK_addk` — `__fastcall(ecx = fs, edx = key, stack = v)`, `ret 4`.
+///
 /// Interns one constant in the function state: looks `key` up in the dedup
 /// table at `fs+4` (stock lookup at `+0x2fa7a0`); a number hit (tag 3)
 /// returns its stored index truncated toward zero. Otherwise it appends the
@@ -17116,12 +17418,12 @@ pub fn lua_k_addk__700ad0(fs: *mut u8, key: *mut i32, v: *const i32) -> i32 {
     nk
 }
 
-/// `luaO_str2d` — `__fastcall(ecx = s, edx = result)`. String-to-number
-/// coercion: parses through the CRT `strtod`, rejects when
-/// nothing was consumed, then requires only locale whitespace
-/// (`crt_isspace_byte`) before the terminating NUL. On success stores the
-/// parsed double through `result` and returns 1; otherwise returns 0 with
-/// `result` untouched.
+/// `luaO_str2d` — `__fastcall(ecx = s, edx = result)`.
+///
+/// String-to-number coercion: parses through the CRT `strtod`, rejects when nothing
+/// was consumed, then requires only locale whitespace (`crt_isspace_byte`) before
+/// the terminating NUL. On success stores the parsed double through `result` and
+/// returns 1; otherwise returns 0 with `result` untouched.
 pub fn lua_o_str2d__6f5900(s: *const u8, result: *mut f64) -> i32 {
     if s.is_null() || result.is_null() {
         return 0;
@@ -17154,13 +17456,15 @@ pub fn lua_o_str2d__6f5900(s: *const u8, result: *mut f64) -> i32 {
     }
 }
 
-/// `string.gsub` literal fast path: when the pattern is a non-empty literal with
-/// no magic characters, the replacement is a plain string with no `%` escape, and
-/// no replacement-limit argument is supplied, rebuild the result with a
-/// single-pass substring replace and push `(result, count)` — skipping the
-/// recursive pattern matcher the original runs at every source position. Every
-/// other shape (a magic pattern, an escaped/non-string replacement, or an
-/// explicit limit) runs the stock implementation unchanged.
+/// `string.gsub` literal fast path.
+///
+/// When the pattern is a non-empty literal with no magic characters, the
+/// replacement is a plain string with no `%` escape, and no replacement-limit
+/// argument is supplied, rebuild the result with a single-pass substring replace
+/// and push `(result, count)` — skipping the recursive pattern matcher the
+/// original runs at every source position. Every other shape (a magic pattern, an
+/// escaped/non-string replacement, or an explicit limit) runs the stock
+/// implementation unchanged.
 pub fn str_gsub__7fd0e0(l: i32) -> i32 {
     const CHECKLSTRING_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x2f_4be0;
     const TYPE_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x2f_3400;
@@ -17218,13 +17522,15 @@ pub fn str_gsub__7fd0e0(l: i32) -> i32 {
     original(l)
 }
 
-/// `string.gfind` iterator fast path: the closure body the factory installs runs
-/// the recursive matcher at every position on each `for` step. When the captured
-/// pattern is a non-empty literal with no magic character, advance to the next
-/// occurrence with a single substring search, store the new position back into
-/// the position upvalue, and push the matched substring — a literal pattern has
-/// no captures, so the whole match is the single result. A magic/empty pattern or
-/// an out-of-range saved position runs the stock iterator unchanged.
+/// `string.gfind` iterator fast path.
+///
+/// The closure body the factory installs runs the recursive matcher at every
+/// position on each `for` step. When the captured pattern is a non-empty literal
+/// with no magic character, advance to the next occurrence with a single substring
+/// search, store the new position back into the position upvalue, and push the
+/// matched substring — a literal pattern has no captures, so the whole match is
+/// the single result. A magic/empty pattern or an out-of-range saved position runs
+/// the stock iterator unchanged.
 pub fn str_gfind_aux__7fcff0(l: i32) -> i32 {
     const TOSTRING_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x2f_3690;
     const STRLEN_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x2f_36e0;
@@ -17297,9 +17603,11 @@ pub fn str_gfind_aux__7fcff0(l: i32) -> i32 {
     original(l)
 }
 
-/// Classifies one byte as whitespace in the host CRT locale: the simple-locale
-/// path (state word `<= 1`) tests bit `0x8` of the byte's classification-table
-/// entry directly; multibyte locales defer to the stock ctype query.
+/// Classifies one byte as whitespace in the host CRT locale.
+///
+/// The simple-locale path (state word `<= 1`) tests bit `0x8` of the byte's
+/// classification-table entry directly; multibyte locales defer to the stock ctype
+/// query.
 fn crt_isspace_byte(c: u8) -> bool {
     const LOCALE_STATE: *const i32 = (crate::win::EXPECTED_IMAGE_BASE + 0x43_1710) as *const i32;
     // SAFETY: fixed, initialized `.data` locale-state dword in the live image.
@@ -17329,8 +17637,9 @@ fn crt_isspace_byte(c: u8) -> bool {
     entry & 8 != 0
 }
 
-/// Stores the CRT range-error code (`0x22`) through the per-thread errno slot
-/// returned by the stock errno getter.
+/// Stores the CRT range-error code (`0x22`) through the per-thread errno slot.
+///
+/// Returned by the stock errno getter.
 fn set_crt_range_errno() {
     const ERRNO_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x1_04e6;
     // SAFETY: a fixed `.text` entry in the live host image (base verified at
@@ -17345,16 +17654,16 @@ fn set_crt_range_errno() {
     unsafe { slot.write(0x22) };
 }
 
-/// CRT `strtod` — `__cdecl(str, end_out)`, double returned in `st0`. Skips
-/// leading whitespace in the host locale (`crt_isspace_byte`), scans one
-/// floating literal through the scan core at `+0x347560` (called by absolute
-/// VA so it dispatches through whatever is installed), then resolves the
-/// outcome: the parsed value; no conversion (zero, `*end_out` rewound to
-/// `str`); range high (`±HUGE_VAL` from the host `.data` constant, sign from
-/// the first scanned character, errno `0x22`); or range low (zero, errno
-/// `0x22`). `*end_out` — when non-null — receives the first unconsumed
-/// character. The stock string-length probe fed an argument the scan core
-/// never reads, so it is dropped.
+/// CRT `strtod` — `__cdecl(str, end_out)`, double returned in `st0`.
+///
+/// Skips leading whitespace in the host locale (`crt_isspace_byte`), scans one
+/// floating literal through the scan core at `+0x347560` (called by absolute VA so
+/// it dispatches through whatever is installed), then resolves the outcome: the
+/// parsed value; no conversion (zero, `*end_out` rewound to `str`); range high
+/// (`±HUGE_VAL` from the host `.data` constant, sign from the first scanned
+/// character, errno `0x22`); or range low (zero, errno `0x22`). `*end_out` — when
+/// non-null — receives the first unconsumed character. The stock string-length
+/// probe fed an argument the scan core never reads, so it is dropped.
 pub fn strtod__741e39(str_ptr: *const u8, end_out: *mut *const u8) -> f64 {
     if str_ptr.is_null() {
         return 0.0;
@@ -17426,10 +17735,11 @@ pub fn strtod__741e39(str_ptr: *const u8, end_out: *mut *const u8) -> f64 {
 // bone/texture matrices, and recurses into attached child models.
 // ===========================================================================
 
-/// Recursive subtree liveness probe (the reimpl of 0x7b5f60): `true` if this
-/// node's `+0x64` field is nonzero, otherwise if any node in the child array
-/// at `+0x80` (`+0x7c` entries, pointer stride) is live. Depth-first with the
-/// original's short-circuit on the first live node.
+/// Recursive subtree liveness probe (the reimpl of 0x7b5f60).
+///
+/// `true` if this node's `+0x64` field is nonzero, otherwise if any node in the
+/// child array at `+0x80` (`+0x7c` entries, pointer stride) is live. Depth-first
+/// with the original's short-circuit on the first live node.
 ///
 /// SAFETY: `node` is a live node of the emitter tree (the engine guarantees a
 /// non-null root and accurate child counts — the original dereferences both
@@ -17461,8 +17771,9 @@ fn anim_blend_sentinel() -> f32 {
     unsafe { SENTINEL.read() }
 }
 
-/// Little-endian field reads/writes over a live engine struct. Callers
-/// guarantee `base + off` is in-bounds of the addressed allocation and
+/// Little-endian field reads/writes over a live engine struct.
+///
+/// Callers guarantee `base + off` is in-bounds of the addressed allocation and
 /// naturally aligned for the accessed width.
 unsafe fn anim_u32(base: *const u8, off: usize) -> u32 {
     // SAFETY: `base + off` is in-bounds per the caller's contract.
@@ -17594,10 +17905,11 @@ unsafe fn anim_write16(dst: *mut f32, v: &[f32; 16]) {
     }
 }
 
-/// The cross-fade eligibility gate shared by every track family: the clock
-/// owner's blend weight differs from the `.rdata` zero sentinel (unordered —
-/// NaN — counts as different) and the track's second global-sequence short
-/// is `-1`.
+/// The cross-fade eligibility gate shared by every track family.
+///
+/// The clock owner's blend weight differs from the `.rdata` zero sentinel
+/// (unordered — NaN — counts as different) and the track's second
+/// global-sequence short is `-1`.
 ///
 /// SAFETY: `owner` is a live animation context (`+0x10c` in-bounds);
 /// `track + 2` is in-bounds.
@@ -17609,11 +17921,12 @@ unsafe fn anim_crossfade_active(owner: *const u8, track: *const u8) -> bool {
     anim_blend_sentinel() != weight && gseq == -1
 }
 
-/// One vec3 keyframe-track sample into its 12-dword state block
-/// (`[0..3]` search triple, `[3..6]` value, `[6..9]` secondary triple,
-/// `[9..12]` secondary value): primary interval search plus step copy or
-/// per-lane lerp, then the secondary cross-fade sample and blend when the
-/// owner's weight is live and the track opts in.
+/// One vec3 keyframe-track sample into its 12-dword state block.
+///
+/// (`[0..3]` search triple, `[3..6]` value, `[6..9]` secondary triple, `[9..12]`
+/// secondary value): primary interval search plus step copy or per-lane lerp, then
+/// the secondary cross-fade sample and blend when the owner's weight is live and
+/// the track opts in.
 ///
 /// SAFETY: `this` is the live model instance, `owner` its clock-owning
 /// animation context, `track` a live `M2Track` with a populated value
@@ -17700,8 +18013,10 @@ unsafe fn anim_track_vec3(
     }
 }
 
-/// One scalar `f32` track sample into its 8-dword state block (`[0..3]`
-/// search, `[3]` value, `[4..7]` secondary search, `[7]` secondary value).
+/// One scalar `f32` track sample into its 8-dword state block.
+///
+/// (`[0..3]` search, `[3]` value, `[4..7]` secondary search, `[7]` secondary
+/// value).
 ///
 /// SAFETY: contract as [`anim_track_vec3`] with an 8-dword block.
 unsafe fn anim_track_f32(
@@ -17773,9 +18088,9 @@ unsafe fn anim_track_f32(
     }
 }
 
-/// One fixed-point `i16` track sample into its 8-dword state block (layout
-/// as [`anim_track_f32`]); endpoints are sign-extended and scaled by
-/// 1/32767 before any subtract.
+/// One fixed-point `i16` track sample into its 8-dword state block (layout as [`anim_track_f32`]).
+///
+/// Endpoints are sign-extended and scaled by 1/32767 before any subtract.
 ///
 /// SAFETY: contract as [`anim_track_f32`] with a word-stride value array.
 unsafe fn anim_track_fixed16(
@@ -17847,10 +18162,11 @@ unsafe fn anim_track_fixed16(
     }
 }
 
-/// One discrete track sample (byte or word element) into its 8-dword state
-/// block: the lo-key element is stored on both the step and lerp paths
-/// (discrete values never blend); the lerp path additionally samples the
-/// secondary element when the cross-fade gate is open.
+/// One discrete track sample (byte or word element) into its 8-dword state block.
+///
+/// The lo-key element is stored on both the step and lerp paths (discrete values
+/// never blend); the lerp path additionally samples the secondary element when the
+/// cross-fade gate is open.
 ///
 /// SAFETY: contract as [`anim_track_f32`] with an `ELEM`-stride value array
 /// and element slots at `block[3]`/`block[7]`.
@@ -17910,10 +18226,12 @@ unsafe fn anim_track_discrete<const ELEM: usize>(
     }
 }
 
-/// Sample one spline key family (`0x24`-byte vec3 keys: value, in-tangent,
-/// out-tangent) by the track's interpolation mode. Mode 0 copies the lo
-/// value verbatim; 1 lerps; 2/3 evaluate the Bezier/Hermite bases; any other
-/// mode leaves the value slot untouched (stale), as in the original.
+/// Sample one spline key family.
+///
+/// (`0x24`-byte vec3 keys: value, in-tangent, out-tangent) by the track's
+/// interpolation mode. Mode 0 copies the lo value verbatim; 1 lerps; 2/3 evaluate
+/// the Bezier/Hermite bases; any other mode leaves the value slot untouched
+/// (stale), as in the original.
 ///
 /// SAFETY: `values + idx*0x24` is in-bounds for both search indices;
 /// `block` spans the 12-dword spline state block.
@@ -17972,9 +18290,10 @@ unsafe fn anim_spline_eval_vec3(values: *const u8, interp: i16, search: *mut u32
     }
 }
 
-/// One vec3 spline-track sample into its 12-dword state block (layout as
-/// [`anim_track_vec3`], keys `0x24` bytes): primary search + mode dispatch,
-/// then the secondary cross-fade sample and per-lane blend.
+/// One vec3 spline-track sample into its 12-dword state block.
+///
+/// (layout as [`anim_track_vec3`], keys `0x24` bytes): primary search + mode
+/// dispatch, then the secondary cross-fade sample and per-lane blend.
 ///
 /// SAFETY: contract as [`anim_track_vec3`] with spline keys.
 unsafe fn anim_track_spline_vec3(
@@ -18028,9 +18347,11 @@ unsafe fn anim_track_spline_vec3(
     }
 }
 
-/// Evaluate one scalar spline key pair (`0xc`-byte keys: value, in-tangent,
-/// out-tangent) by interpolation mode, returning the slot value to store
-/// (or `None` for an unknown mode, which leaves the slot stale).
+/// Evaluate one scalar spline key pair.
+///
+/// (`0xc`-byte keys: value, in-tangent, out-tangent) by interpolation mode,
+/// returning the slot value to store (or `None` for an unknown mode, which leaves
+/// the slot stale).
 ///
 /// SAFETY: `values + idx*0xc` is in-bounds for both search indices.
 unsafe fn anim_spline_eval_f32(values: *const u8, interp: i16, search: *const u32) -> Option<f32> {
@@ -18078,8 +18399,9 @@ unsafe fn anim_spline_eval_f32(values: *const u8, interp: i16, search: *const u3
     }
 }
 
-/// One scalar spline-track sample into its 8-dword state block (layout as
-/// [`anim_track_f32`], keys `0xc` bytes).
+/// One scalar spline-track sample into its 8-dword state block.
+///
+/// (layout as [`anim_track_f32`], keys `0xc` bytes).
 ///
 /// SAFETY: contract as [`anim_track_f32`] with spline keys.
 unsafe fn anim_track_spline_f32(
@@ -18134,16 +18456,17 @@ unsafe fn anim_track_spline_f32(
     }
 }
 
-/// `CM2Shared::AnimateBones` — `__thiscall(ecx = this, stack = (parentMatrix,
-/// scale, translate, alpha))`, `ret 0x10`. The full per-frame animation
-/// update: combines the caller transform into the instance, advances the
-/// global-sequence clocks, multiplies the model matrix, then samples every
-/// animated track family (bones with billboard rebuilds, colors,
-/// transparencies, raw shorts, texture transforms, lights, camera splines,
-/// ribbons, particle emitters, attachment visibility) and recurses into
-/// attached child instances. Runs once per frame stamp; cross-frame state
-/// (sequence clocks, warm-start search seeds, cross-fade retirement) lives
-/// in the per-element state blocks and is mutated in place.
+/// `CM2Shared::AnimateBones`.
+///
+/// `__thiscall(ecx = this, stack = (parentMatrix, scale, translate, alpha))`,
+/// `ret 0x10`. The full per-frame animation update: combines the caller transform
+/// into the instance, advances the global-sequence clocks, multiplies the model
+/// matrix, then samples every animated track family (bones with billboard rebuilds,
+/// colors, transparencies, raw shorts, texture transforms, lights, camera splines,
+/// ribbons, particle emitters, attachment visibility) and recurses into attached
+/// child instances. Runs once per frame stamp; cross-frame state (sequence clocks,
+/// warm-start search seeds, cross-fade retirement) lives in the per-element state
+/// blocks and is mutated in place.
 pub fn cm2_shared__animate_bones__714260(
     this: *mut core::ffi::c_void,
     parent_matrix: *mut f32,
@@ -19299,21 +19622,23 @@ pub fn cm2_shared__animate_bones__714260(
 
 thread_local! {
     /// Reused inflate state for the `Storm__DecompressBlock` zlib fast path.
+    ///
     /// Boxed because `DecompressorOxide` is ~11 KB of Huffman tables; one per
     /// thread because MPQ sectors may be decompressed off more than one thread.
     static INFLATE_STATE: core::cell::RefCell<Box<miniz_oxide::inflate::core::DecompressorOxide>> =
         core::cell::RefCell::new(Box::new(miniz_oxide::inflate::core::DecompressorOxide::new()));
 }
 
-/// `Storm::DecompressBlock` (SCompDecompress) — `__stdcall(out, *inoutOutSize,
-/// in, inSize, extra) -> 1/0`. The MPQ per-sector codec dispatcher; `in[0]` is a
-/// compression-method bitmask. Fast-paths the pure-zlib sector (`mask == 0x02`)
-/// through the reused miniz_oxide decompressor, eliminating the stock per-sector
-/// `inflateInit_`/`inflateEnd` + pool-allocator churn, and defers every other
-/// shape (raw passthrough, PKWARE/ADPCM/stacked masks, validation failures, any
-/// inflate error) to the stock original, which stays byte-for-byte authoritative.
-/// DEFLATE output is unique, so a successful fast path equals stock; an
-/// unexpected reject falls back rather than guessing.
+/// `Storm::DecompressBlock` (SCompDecompress).
+///
+/// `__stdcall(out, *inoutOutSize, in, inSize, extra) -> 1/0`. The MPQ per-sector
+/// codec dispatcher; `in[0]` is a compression-method bitmask. Fast-paths the
+/// pure-zlib sector (`mask == 0x02`) through the reused miniz_oxide decompressor,
+/// eliminating the stock per-sector `inflateInit_`/`inflateEnd` + pool-allocator
+/// churn, and defers every other shape (raw passthrough, PKWARE/ADPCM/stacked
+/// masks, validation failures, any inflate error) to the stock original, which
+/// stays byte-for-byte authoritative. DEFLATE output is unique, so a successful
+/// fast path equals stock; an unexpected reject falls back rather than guessing.
 pub fn storm__decompress_block(
     out: *mut u8,
     inout_out_size: *mut u32,
@@ -19362,9 +19687,10 @@ pub fn storm__decompress_block(
     original(out, inout_out_size, input, in_size, extra)
 }
 
-/// Un-hooked Storm archive helpers the `StormArchive__FindFileEntry` replay
-/// calls directly by VA (ABIs pinned per callee; none are manifest
-/// entries, so a by-VA transmute is the standing recipe).
+/// Un-hooked Storm archive helpers the `StormArchive__FindFileEntry` replay calls directly by VA.
+///
+/// (ABIs pinned per callee; none are manifest entries, so a by-VA transmute is the
+/// standing recipe).
 ///
 /// - `0x650780` revalidate-and-ref: `__fastcall(handle) -> handle | 0`. Under
 ///   the archive-list critical section, walks the open-archive list from its
@@ -19383,13 +19709,15 @@ const STORM_ARCHIVE_RELEASE_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x25_0
 #[cfg(not(wow_turbo_diff))]
 const STORM_SET_LAST_ERROR_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x24_e850;
 
-/// Open-archive object: block-table base pointer offset and record stride
+/// Open-archive object: block-table base pointer offset and record stride.
+///
 /// (`blockEntry = [archive+0x290] + index * 0x2c`, per the stock slot-to-entry
 /// helper at 0x653140).
 const STORM_BLOCK_TABLE_OFFSET: u32 = 0x290;
 const STORM_BLOCK_ENTRY_STRIDE: u32 = 0x2c;
 
 /// The filename-resolution memo behind [`storm_archive__find_file_entry__6549a0`].
+///
 /// A plain `Mutex` (not per-thread state): lookups come from at least the main
 /// thread and the async streaming loader, and the whole point is sharing
 /// answers between them. Lock discipline — the mutex is only ever held across
@@ -19402,10 +19730,11 @@ fn storm_filecache() -> &'static std::sync::Mutex<crate::storm::filecache::FileC
     CACHE.get_or_init(|| std::sync::Mutex::new(crate::storm::filecache::FileCache::new()))
 }
 
-/// Copy the NUL-terminated lookup name into `buf`, byte-by-byte so no read
-/// ever passes the terminator. Returns the length, or `None` when no NUL
-/// appears within the cacheable maximum (such names are legal — just
-/// uncacheable, and the caller delegates).
+/// Copy the NUL-terminated lookup name into `buf`.
+///
+/// Byte-by-byte so no read ever passes the terminator. Returns the length, or
+/// `None` when no NUL appears within the cacheable maximum (such names are legal
+/// — just uncacheable, and the caller delegates).
 fn read_lookup_name(
     filename: *const u8,
     buf: &mut [u8; crate::storm::filecache::NAME_CAP],
@@ -19428,12 +19757,13 @@ fn read_lookup_name(
     }
 }
 
-/// Replay a cached scoped-positive: revalidate-and-ref both handles the caller
-/// receives (found first, then the requested archive; on a second-handle
-/// failure the first ref is released again), then write the three outs exactly
-/// as the stock success epilogue would. Returns `None` — fall through to a
-/// real miss — if any handle has left the open-archive list or the block table
-/// looks torn down.
+/// Replay a cached scoped-positive.
+///
+/// Revalidate-and-ref both handles the caller receives (found first, then the
+/// requested archive; on a second-handle failure the first ref is released again),
+/// then write the three outs exactly as the stock success epilogue would. Returns
+/// `None` — fall through to a real miss — if any handle has left the
+/// open-archive list or the block table looks torn down.
 #[cfg(not(wow_turbo_diff))]
 fn storm_replay_positive(
     requested: u32,
@@ -19482,10 +19812,11 @@ fn storm_replay_positive(
     Some(1)
 }
 
-/// Record the original's answer under the exact-key policy: scoped positives
-/// (return 1, all three outs delivered, found-in equal to the requested
-/// archive — the invariant the replay reconstructs) and global negatives
-/// (return 0 on an `archive == 0` query). Anything else — pseudo-name
+/// Record the original's answer under the exact-key policy.
+///
+/// Scoped positives (return 1, all three outs delivered, found-in equal to the
+/// requested archive — the invariant the replay reconstructs) and global
+/// negatives (return 0 on an `archive == 0` query). Anything else — pseudo-name
 /// resolutions (2), deleted entries (3), odd shapes — is left for stock every
 /// time.
 fn storm_record_result(
@@ -19543,11 +19874,13 @@ fn storm_record_result(
         .insert(key, hit);
 }
 
-/// `StormArchive::FindFileEntry` — `__fastcall(ecx = archive, edx = filename,
-/// searchScope, *outArchive, *outFoundIn, *outBlockEntry, *outResolvedName)`.
-/// MPQ filename -> hash/block-table resolution; every archive file open
-/// funnels here, and a chain-container query fans out per sub-archive through
-/// this same VA (so sub-queries re-enter this hook and memoize individually).
+/// `StormArchive::FindFileEntry`.
+///
+/// `__fastcall(ecx = archive, edx = filename, searchScope, *outArchive,
+/// *outFoundIn, *outBlockEntry, *outResolvedName)`. MPQ filename ->
+/// hash/block-table resolution; every archive file open funnels here, and a
+/// chain-container query fans out per sub-archive through this same VA (so
+/// sub-queries re-enter this hook and memoize individually).
 ///
 /// The reimpl is a memo in front of the stock body (weirdperformance parity,
 /// with the locking its version lacks): a cached scoped-positive replays the
@@ -19922,8 +20255,9 @@ fn gc_traverse_proto(s: &mut GcParSink, p: usize) {
     }
 }
 
-/// Stock `valismarked`: strings are marked as a side effect; only the
-/// reachable bit decides.
+/// Stock `valismarked`.
+///
+/// Strings are marked as a side effect; only the reachable bit decides.
 fn gc_val_is_marked(tv: usize) -> bool {
     // SAFETY: `tv` is a live TObject; tag at `+0x0`, referent at `+0x8`.
     let tt = unsafe { *(tv as *const i32) };
@@ -19985,8 +20319,9 @@ fn gc_clear_keys(tables: &[usize]) {
     }
 }
 
-/// Shared node walk for the weak clears: test the TObject at
-/// `node + probe_off`, remove the entry when its referent died.
+/// Shared node walk for the weak clears.
+///
+/// Test the TObject at `node + probe_off`, remove the entry when its referent died.
 fn gc_clear_nodes(t: usize, probe_off: usize) {
     // SAFETY: node part pointer at `+0x10`, count `1 << lsizenode`.
     let node = unsafe { *((t + 0x10) as *const usize) };
@@ -20014,8 +20349,9 @@ fn gc_clear_nodes(t: usize, probe_off: usize) {
 struct GcParShared {
     /// Overflow/steal queue of claimed-but-untraversed objects.
     injector: std::sync::Mutex<Vec<usize>>,
-    /// Claimed thread (tag 8) objects; only the coordinator consumes these
-    /// (stock `traversestack` has realloc side effects).
+    /// Claimed thread (tag 8) objects.
+    ///
+    /// Only the coordinator consumes these (stock `traversestack` has realloc side effects).
     thread_q: std::sync::Mutex<Vec<usize>>,
     /// Weak tables discovered during traversal, per mode.
     wk: std::sync::Mutex<Vec<usize>>,
@@ -20029,8 +20365,10 @@ struct GcParShared {
     done: core::sync::atomic::AtomicBool,
     /// The collect's `global_State`, published before each epoch.
     g: core::sync::atomic::AtomicUsize,
-    /// Job selector for an epoch: 0 = mark propagation, 1 = string-table
-    /// sweep (workers grab bucket ranges via `bucket_cursor`).
+    /// Job selector for an epoch.
+    ///
+    /// 0 = mark propagation, 1 = string-table sweep (workers grab bucket ranges via
+    /// `bucket_cursor`).
     job: core::sync::atomic::AtomicU8,
     /// String-table bucket array for a sweep job.
     strt_hash: core::sync::atomic::AtomicUsize,
@@ -20038,8 +20376,9 @@ struct GcParShared {
     strt_size: core::sync::atomic::AtomicUsize,
     /// Next unclaimed bucket for a sweep job.
     bucket_cursor: core::sync::atomic::AtomicUsize,
-    /// Published chunk-span slice (`ptr`, valid for the job's duration — the
-    /// coordinator holds the index borrow until the job completes).
+    /// Published chunk-span slice (`ptr`, valid for the job's duration).
+    ///
+    /// The coordinator holds the index borrow until the job completes.
     spans_ptr: core::sync::atomic::AtomicUsize,
     /// Published chunk-span slice length.
     spans_len: core::sync::atomic::AtomicUsize,
@@ -20072,9 +20411,9 @@ struct GcParSink<'a> {
 }
 
 impl GcParSink<'_> {
-    /// Stock `reallymarkobject`: locked bit-0 claim; the winner owns the
-    /// traversal. Threads go to the coordinator's queue, everything else
-    /// stays local.
+    /// Stock `reallymarkobject`: locked bit-0 claim; the winner owns the traversal.
+    ///
+    /// Threads go to the coordinator's queue, everything else stays local.
     fn mark(&mut self, o: usize) {
         if gc_marked(o) & 0x11 != 0 {
             return;
@@ -20121,8 +20460,10 @@ impl GcParSink<'_> {
     }
 }
 
-/// Drain a stock-filled GCState shim: threads to the coordinator queue,
-/// everything else into `local`. Stock already claimed these objects.
+/// Drain a stock-filled GCState shim.
+///
+/// Threads to the coordinator queue, everything else into `local`. Stock already claimed these
+/// objects.
 fn gc_par_drain_shim(shim: &mut [usize; 5], shared: &GcParShared, local: &mut Vec<usize>) {
     let mut o = shim[0];
     shim[0] = 0;
@@ -20524,9 +20865,10 @@ fn gc_chunk_index_refresh(g: usize, idx: &mut GcChunkIndex) -> bool {
     true
 }
 
-/// O(log chunks) pool free: binary-search the owning chunk, push its
-/// freelist — byte-identical to the stock free's writes. Returns false for
-/// pointers no chunk owns (oversize blocks; caller delegates to stock).
+/// O(log chunks) pool free.
+///
+/// Binary-search the owning chunk, push its freelist — byte-identical to the stock free's writes.
+/// Returns false for pointers no chunk owns (oversize blocks; caller delegates to stock).
 fn gc_pool_free_fast(idx: &GcChunkIndex, ptr: usize) -> bool {
     let Some(chunk) = crate::math::lua_gc::chunk_owning(&idx.spans, ptr) else {
         return false;
@@ -20550,8 +20892,9 @@ fn gc_smem_free(block: u32) {
     smem_free(block, FILE_VA, 0x137, 0);
 }
 
-/// `SmallBlockPool__Realloc` — `__fastcall(ecx = L, edx = block)` + new size
-/// on the stack, block pointer out.
+/// `SmallBlockPool__Realloc` — `__fastcall(ecx = L, edx = block)` + new size on the stack.
+///
+/// Block pointer out.
 ///
 /// Full reimpl of the client's six-class small-object pool entry point with
 /// the owning-chunk lookup done through the sorted span index instead of the
@@ -20953,9 +21296,10 @@ const PQ_VIEW: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x8f_5b68) as *co
 const PQ_BASIS_AA: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x8f_5b30) as *const f32;
 /// Precomputed corner basis used by the `&0x2000` static path (`0xcf5b34`).
 const PQ_BASIS_STATIC: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x8f_5b34) as *const f32;
-/// Global `CGxDevice` singleton pointer (`0xc0ed38`); `GetFormatDesc` returns
-/// `device + 0x23c`, whose `+0x1c` (= `device + 0x258`) is the vertex-color byte
-/// order (`== 1` ⇒ ARGB swap).
+/// Global `CGxDevice` singleton pointer (`0xc0ed38`).
+///
+/// `GetFormatDesc` returns `device + 0x23c`, whose `+0x1c` (= `device + 0x258`) is the vertex-color
+/// byte order (`== 1` ⇒ ARGB swap).
 const PQ_DEVICE: *const *const u8 =
     (crate::win::EXPECTED_IMAGE_BASE + 0x80_ed38) as *const *const u8;
 /// Minimum squared screen-space velocity for a motion-streak quad (`0x80c744`).
@@ -20963,11 +21307,12 @@ const PQ_MOTION_MIN_LEN2: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x40_c
 /// Magic-bias constant (`512.0`, `0x8029cc`) for the fade-index bit-trick.
 const PQ_BIAS: f32 = 512.0;
 
-/// Write one particle vertex into the `GxVertexCursor` and advance all four
-/// streams. The cursor is 9 dwords: `[0..3]` stream pointers (position, normal,
-/// color, uv), `[4..7]` matching byte strides, `[8]` emitted-vertex count. Each
-/// stream pointer advances by its stride and the count increments by one — the
-/// original's per-vertex `[k] += [k+4]` (`k = 0..3`) plus `[8] += 1`.
+/// Write one particle vertex into the `GxVertexCursor` and advance all four streams.
+///
+/// The cursor is 9 dwords: `[0..3]` stream pointers (position, normal, color, uv), `[4..7]`
+/// matching byte strides, `[8]` emitted-vertex count. Each stream pointer advances by its stride
+/// and the count increments by one — the original's per-vertex `[k] += [k+4]` (`k = 0..3`) plus
+/// `[8] += 1`.
 ///
 /// SAFETY: `cur` is a live `GxVertexCursor`; each stream pointer addresses enough
 /// writable storage for one more vertex (the caller sized the buffers).
@@ -21015,8 +21360,9 @@ unsafe fn pq_emit(cur: *mut u8, pos: &[f32; 3], normal: &[u32; 3], color: u32, u
     }
 }
 
-/// Read the f32 `n` elements (signed) from `base` — for the corner/uv/basis
-/// tables, whose precomputed-basis reads index negative offsets.
+/// Read the f32 `n` elements (signed) from `base`.
+///
+/// For the corner/uv/basis tables, whose precomputed-basis reads index negative offsets.
 ///
 /// SAFETY: `base.offset(n)` is an in-bounds, aligned, initialized f32.
 unsafe fn pq_rdf(base: *const f32, n: isize) -> f32 {
@@ -21026,8 +21372,10 @@ unsafe fn pq_rdf(base: *const f32, n: isize) -> f32 {
     unsafe { p.read() }
 }
 
-/// `CParticleEmitter::BuildParticleQuad` — `__thiscall(ecx = this, stack =
-/// (particle, vertexStream))`, returns 1 (quad written) or 0 (fade-LOD culled).
+/// `CParticleEmitter::BuildParticleQuad`.
+///
+/// `__thiscall(ecx = this, stack = (particle, vertexStream))`, returns 1 (quad written) or 0
+/// (fade-LOD culled).
 ///
 /// Builds one particle's billboard quad (4 verts: position / constant normal /
 /// packed color / uv) into the `GxVertexCursor` and advances it. Applies a
@@ -21297,27 +21645,32 @@ pub fn c_particle_emitter__build_particle_quad__7b2a50(
     1
 }
 
-/// Live-particle count for the current emitter draw (`0xcf5b60`), set by
-/// `CParticleEmitter::Render` to `min(0x4000 / vertsPerQuad, this+0x64)`.
+/// Live-particle count for the current emitter draw (`0xcf5b60`).
+///
+/// Set by `CParticleEmitter::Render` to `min(0x4000 / vertsPerQuad, this+0x64)`.
 const PQ_LIVE_COUNT: *const u32 = (crate::win::EXPECTED_IMAGE_BASE + 0x8f_5b60) as *const u32;
-/// Depth-sort view rows for the view-space Z dot (`0xcf5b70/80/90`, `+0xa0`
-/// constant), written per frame by the render setup.
+/// Depth-sort view rows for the view-space Z dot (`0xcf5b70/80/90`, `+0xa0` constant).
+///
+/// Written per frame by the render setup.
 const PQ_VIEW_R0: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x8f_5b70) as *const f32;
 const PQ_VIEW_R1: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x8f_5b80) as *const f32;
 const PQ_VIEW_R2: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x8f_5b90) as *const f32;
 const PQ_VIEW_R3: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x8f_5ba0) as *const f32;
-/// Depth-sort scratch heap: control block (`0xcf58c8`), data-base pointer field
-/// (`+0xc` = `0xcf58d4`), element count (`+0x1c` = `0xcf58e4`). Each element is
-/// 8 bytes: `{ viewZ: f32, particle_ptr: u32 }`. The vector grows via the stock
-/// grow helper; the base pointer is re-read live because a grow may relocate it.
+/// Depth-sort scratch heap.
+///
+/// Control block (`0xcf58c8`), data-base pointer field (`+0xc` = `0xcf58d4`), element count
+/// (`+0x1c` = `0xcf58e4`). Each element is 8 bytes: `{ viewZ: f32, particle_ptr: u32 }`. The vector
+/// grows via the stock grow helper; the base pointer is re-read live because a grow may relocate
+/// it.
 const PQ_HEAP_CTRL: *mut u8 = (crate::win::EXPECTED_IMAGE_BASE + 0x8f_58c8) as *mut u8;
 const PQ_HEAP_DATA: *const *mut u8 =
     (crate::win::EXPECTED_IMAGE_BASE + 0x8f_58d4) as *const *mut u8;
 const PQ_HEAP_COUNT: *mut u32 = (crate::win::EXPECTED_IMAGE_BASE + 0x8f_58e4) as *mut u32;
 
-/// Resolve a live particle record pointer: `(*(this+0x5c))[idx] << shift + base`,
-/// where `(shift, base)` is `(5, this+0x3c)` or `(6, this+0x4c)` selected by
-/// `this+0x28` (the per-record stride class).
+/// Resolve a live particle record pointer.
+///
+/// `(*(this+0x5c))[idx] << shift + base`, where `(shift, base)` is `(5, this+0x3c)` or
+/// `(6, this+0x4c)` selected by `this+0x28` (the per-record stride class).
 ///
 /// SAFETY: `this+0x5c` is the in-bounds index-array pointer and `idx` is within
 /// the live-particle range the caller iterates.
@@ -21369,10 +21722,11 @@ unsafe fn pq_heap_set(idx: usize, z: f32, ptr: u32) {
     unsafe { anim_put_u32(base, idx * 8 + 4, ptr) };
 }
 
-/// Reserve one slot at the end of the depth-sort vector (the stock
-/// `FUN_007b63a0(ctrl, null, 1)` fast path). Bumps the count; only the rare
-/// capacity-exhausted case calls the stock grow helper (`FUN_007bff20`), so the
-/// steady-state path is call-free.
+/// Reserve one slot at the end of the depth-sort vector.
+///
+/// The stock `FUN_007b63a0(ctrl, null, 1)` fast path. Bumps the count; only the rare
+/// capacity-exhausted case calls the stock grow helper (`FUN_007bff20`), so the steady-state path
+/// is call-free.
 ///
 /// SAFETY: `PQ_HEAP_CTRL` is the live vector control block.
 unsafe fn pq_heap_reserve_one() {
@@ -21407,12 +21761,12 @@ unsafe fn pq_heap_reserve_one() {
     unsafe { anim_put_u32(ctrl, 0x1c, count + 1) };
 }
 
-/// `CParticleEmitter::RenderParticles` — `__thiscall(ecx = this, stack =
-/// vertexStream)`. Per-emitter draw driver: emits each live particle's quad into
-/// the `GxVertexCursor` via [`c_particle_emitter__build_particle_quad__7b2a50`]
-/// (called by name so LLVM inlines the whole per-particle path). With sort flag
-/// `0x10` clear, emits in array order; with it set, builds a binary max-heap on
-/// each particle's view-space Z and emits far-to-near. Finally stores the
+/// `CParticleEmitter::RenderParticles` — `__thiscall(ecx = this, stack = vertexStream)`.
+///
+/// Per-emitter draw driver: emits each live particle's quad into the `GxVertexCursor` via
+/// [`c_particle_emitter__build_particle_quad__7b2a50`] (called by name so LLVM inlines the whole
+/// per-particle path). With sort flag `0x10` clear, emits in array order; with it set, builds a
+/// binary max-heap on each particle's view-space Z and emits far-to-near. Finally stores the
 /// emitted-quad count (`vertexStream[8] / *(this+0x9c)`) at `this+0x1c`.
 pub fn c_particle_emitter__render_particles__7b3a10(
     this: *mut core::ffi::c_void,
@@ -21757,10 +22111,10 @@ pub fn c_world__query_liquid_at_point__69b6d0(
     0
 }
 
-/// Reads a strided f32 height: `*(base + vidx*8 + extra_off)`. The stock indexes
-/// `[ecx + eax*8 + off]` (0x69b80d) with `eax = vidx = cy + 9*cx` and `ecx` the
-/// vertex base — an 8-byte stride per vertex in a 9-wide grid, plus the fixed
-/// cell-corner offset.
+/// Reads a strided f32 height: `*(base + vidx*8 + extra_off)`.
+///
+/// The stock indexes `[ecx + eax*8 + off]` (0x69b80d) with `eax = vidx = cy + 9*cx` and `ecx` the
+/// vertex base — an 8-byte stride per vertex in a 9-wide grid, plus the fixed cell-corner offset.
 ///
 /// # Safety
 /// `base + vidx*8 + extra_off` must address an initialized, 4-byte-aligned f32
@@ -21774,6 +22128,7 @@ unsafe fn read_strided_f32(base: *const u8, vidx: usize, extra_off: usize) -> f3
 }
 
 /// Kind-1 (box-corner) / kind-2 (cylinder) radius arms of QueryLiquidAtPoint.
+///
 /// Dispatched on `*(face+0x14)` AFTER the bilinear gate; both compute a
 /// squared-distance vs squared-radius test against a per-kind center sub-struct
 /// (`*(face+0x18)`) and, on success, write a per-kind contact vector to
@@ -21925,23 +22280,21 @@ unsafe fn query_liquid_kind_arm(
     }
 }
 
-/// `CParticleEmitter::Update` — `__thiscall(ecx = this, [esp+4] = dt:f32,
-/// [esp+8] = already_init:i32)`. Per-frame emitter step driver. Early-outs when
-/// `dt <= 0.0` (NaN `dt` RUNS the body, matching stock's even-parity unordered
-/// `fcomp`). Fires the optional pre-update virtual (vtbl slot 0) when the flag
-/// gate at `this+0x1ac` is set; on the first frame (`already_init == 0`) seeds
-/// positions via `0x7b5550`. Then walks the live-particle index array
-/// (`this+0x5c`, count `this+0x64`), advancing each particle's age, culling the
-/// expired (lifespan compare) and setting its fade byte (fade-threshold
-/// compare), delegating physics to the hooked `0x7b2680` (default) or the
-/// not-yet-reversed `0x7b28e0` (aligned), running the child-emitter inner step
-/// (the second `0x7b5550` position eval) for survivors, and recycling the dead
-/// through the slot-3 cull virtual plus a swap-remove against the index array.
-/// Finally steps each child sub-emitter via `0x7b5880` (which tail-calls back
-/// into this hook — mutual recursion is re-entry-safe). Impure: mutates the
-/// particle list in place and dispatches through live vtables, so no kernel
-/// owns the loop; only the entry guard plus the two inline float compares are
-/// host-tested in `math::particle`.
+/// `CParticleEmitter::Update`.
+///
+/// `__thiscall(ecx = this, [esp+4] = dt:f32, [esp+8] = already_init:i32)`. Per-frame emitter step
+/// driver. Early-outs when `dt <= 0.0` (NaN `dt` RUNS the body, matching stock's even-parity
+/// unordered `fcomp`). Fires the optional pre-update virtual (vtbl slot 0) when the flag gate at
+/// `this+0x1ac` is set; on the first frame (`already_init == 0`) seeds positions via `0x7b5550`.
+/// Then walks the live-particle index array (`this+0x5c`, count `this+0x64`), advancing each
+/// particle's age, culling the expired (lifespan compare) and setting its fade byte (fade-threshold
+/// compare), delegating physics to the hooked `0x7b2680` (default) or the not-yet-reversed
+/// `0x7b28e0` (aligned), running the child-emitter inner step (the second `0x7b5550` position eval)
+/// for survivors, and recycling the dead through the slot-3 cull virtual plus a swap-remove against
+/// the index array. Finally steps each child sub-emitter via `0x7b5880` (which tail-calls back into
+/// this hook — mutual recursion is re-entry-safe). Impure: mutates the particle list in place and
+/// dispatches through live vtables, so no kernel owns the loop; only the entry guard plus the two
+/// inline float compares are host-tested in `math::particle`.
 ///
 /// Param order follows the `thiscall` stack layout the codegen forwards
 /// (`arg0 = ecx = this`, `arg1 = [esp+4] = dt`, `arg2 = [esp+8] = already_init`),
@@ -22121,10 +22474,11 @@ pub fn c_particle_emitter__update__7b5a10(
     }
 }
 
-/// `CParticleEmitter::UpdateFixedStep` — `__thiscall(this, dt: f32,
-/// spawn_arg: i32)`, `RET 0x8`, void. Fixed-timestep catch-up driver around
-/// our [`c_particle_emitter__update__7b5a10`] hook, called DIRECTLY — the
-/// stock catch-up arm crossed the detour up to 256 times per invocation.
+/// `CParticleEmitter::UpdateFixedStep`.
+///
+/// `__thiscall(this, dt: f32, spawn_arg: i32)`, `RET 0x8`, void. Fixed-timestep catch-up driver
+/// around our [`c_particle_emitter__update__7b5a10`] hook, called DIRECTLY — the stock catch-up
+/// arm crossed the detour up to 256 times per invocation.
 ///
 /// Statement-faithful shape: eps-floors `dt` (strictly-less compare, NaN
 /// keeps its value — `TEST AH,0x5; JP` @0x7b5896); when the `+0xb0` reset
@@ -22242,14 +22596,13 @@ pub fn c_particle_emitter__update_fixed_step__7b5880(
     c_particle_emitter__update__7b5a10(this, tail_dt, spawn_arg);
 }
 
-/// One particle spawn of `CParticleEmitter::EmitParticles` (shared by all
-/// three arms): pops the free list (`+0x70`/`+0x78`), pushes the active
-/// list (`+0x5c`/`+0x64`), sets the record's alive byte (`+0xd`) and
-/// dispatches the per-particle birth virtual — `[vtbl+8]` for the
-/// 0x20-stride array at `+0x3c`, `[vtbl+4]` for the 0x40-stride array at
-/// `+0x4c` (selected by `+0x28`), vtable re-read per spawn. The birth
-/// virtuals are LIVE-VTABLE calls and stay indirect (wave-6 D precedent);
-/// `arg2` is the raw second dword — 0 in the burst arm, the dt bits
+/// One particle spawn of `CParticleEmitter::EmitParticles` (shared by all three arms).
+///
+/// Pops the free list (`+0x70`/`+0x78`), pushes the active list (`+0x5c`/`+0x64`), sets the
+/// record's alive byte (`+0xd`) and dispatches the per-particle birth virtual — `[vtbl+8]` for
+/// the 0x20-stride array at `+0x3c`, `[vtbl+4]` for the 0x40-stride array at `+0x4c` (selected by
+/// `+0x28`), vtable re-read per spawn. The birth virtuals are LIVE-VTABLE calls and stay indirect
+/// (wave-6 D precedent); `arg2` is the raw second dword — 0 in the burst arm, the dt bits
 /// elsewhere.
 fn emit_spawn_one__7b5550(this: *mut u8, arg2: u32, ctx: *mut u8) {
     // SAFETY: the free-list count at +0x78 (non-zero, checked by callers).
@@ -22301,10 +22654,11 @@ fn emit_spawn_one__7b5550(this: *mut u8, arg2: u32, ctx: *mut u8) {
     birth(this, rec, arg2, ctx);
 }
 
-/// `CParticleEmitter::EmitParticles` — `__thiscall(ecx = emitter, stack =
-/// [dt f32, ctx])`, `RET 0x8`, void. `ctx` is the caller's placement block
-/// (`&emitter[0x1fc]` at both of our call sites); `ctx+0x30` is its
-/// position triple.
+/// `CParticleEmitter::EmitParticles`.
+///
+/// `__thiscall(ecx = emitter, stack = [dt f32, ctx])`, `RET 0x8`, void. `ctx` is the caller's
+/// placement block (`&emitter[0x1fc]` at both of our call sites); `ctx+0x30` is its position
+/// triple.
 ///
 /// Statement-faithful notes (0x7b5550–0x7b587d):
 /// - Fade scalar: `one − (camDist − fadeBase) × fadeScale` computed WIDE;
@@ -22456,15 +22810,15 @@ pub fn c_particle_emitter__emit_particles__7b5550(this: *mut u8, dt: f32, ctx: *
     unsafe { this.wrapping_add(8).cast::<f32>().write_unaligned(settled) };
 }
 
-/// `CParticleEmitter::Render` — `__thiscall(ecx = emitter, stack =
-/// [parentMatrix f32*16 | null])`, `RET 0x4`, void. The per-emitter render
-/// driver: composes the local/billboard/view matrices into the global
-/// constant block `0xcf5b68`, resolves the texture, sizes and locks the
-/// dynamic vertex stream, emits quads through
-/// [`c_particle_emitter__render_particles__7b3a10`] — OUR hook, called
-/// directly — then applies the preset batch, the mode-6/0xc index-buffer
-/// path and the draw call. All ~15 CGxDevice/GxBuf callees stay delegates
-/// (protos per the rain-drops/billboard precedents + fresh body pins).
+/// `CParticleEmitter::Render`.
+///
+/// `__thiscall(ecx = emitter, stack = [parentMatrix f32*16 | null])`, `RET 0x4`, void. The
+/// per-emitter render driver: composes the local/billboard/view matrices into the global constant
+/// block `0xcf5b68`, resolves the texture, sizes and locks the dynamic vertex stream, emits quads
+/// through [`c_particle_emitter__render_particles__7b3a10`] — OUR hook, called directly — then
+/// applies the preset batch, the mode-6/0xc index-buffer path and the draw call. All ~15
+/// CGxDevice/GxBuf callees stay delegates (protos per the rain-drops/billboard precedents + fresh
+/// body pins).
 ///
 /// Statement-faithful notes (0x7b3d20–0x7b44d7):
 /// - Entry: identity-seeded GetCurrentMatrix fetch, identity world push;
@@ -22829,13 +23183,13 @@ pub fn c_particle_emitter__render__7b3d20(this: *mut u8, parent_matrix: *const f
     set_world(cur.as_ptr());
 }
 
-/// `Node::DistributeScaledBudget` — `__fastcall(ecx = node)`, plain `RET`,
-/// void. Sizes the node's parallel array from `__ftol(+0xac × +0xa8 × K)`
-/// (K = the live f32 global 0x81d868, re-read for every product; kernel
-/// [`crate::math::particle::distribute_budget_count__7b1dd0`]) through the
-/// delegated `ParallelArray::Resize`, then walks the child pointers at
-/// `+0x80` (count `+0x7c`, re-read every iteration) resizing each to its
-/// own product × budget (32-bit wrap) clamped UNSIGNED to 0x1000.
+/// `Node::DistributeScaledBudget` — `__fastcall(ecx = node)`, plain `RET`, void.
+///
+/// Sizes the node's parallel array from `__ftol(+0xac × +0xa8 × K)` (K = the live f32 global
+/// 0x81d868, re-read for every product; kernel
+/// [`crate::math::particle::distribute_budget_count__7b1dd0`]) through the delegated
+/// `ParallelArray::Resize`, then walks the child pointers at `+0x80` (count `+0x7c`, re-read every
+/// iteration) resizing each to its own product × budget (32-bit wrap) clamped UNSIGNED to 0x1000.
 pub fn node__distribute_scaled_budget__7b1dd0(node: *mut u8) {
     if node.is_null() {
         return;
@@ -22889,16 +23243,15 @@ pub fn node__distribute_scaled_budget__7b1dd0(node: *mut u8) {
     }
 }
 
-/// `CObjectPlacement::SetRelativeTransform` — `__thiscall(ecx = this,
-/// stack = [xform f32*16, pos u32*3, parent f32*16 | null])`, `RET 0xC`,
-/// void. Stores the relative position (`+0x23c`, three dword copies) and
-/// the relative transform (`+0x1fc`, 16 dword copies): the raw `xform` when
-/// `parent` is null or flag `0x100` is set in `+0x1ac`, else
-/// `xform × inverse(parent)` — [`c44_matrix__invert_with_scale__7bd820`] is
-/// OUR hook (direct call, scale 1.0); the multiply (0x7bc6a0) stays a
-/// delegate. The uniform scale (`+0x264`) is `|xform row0|` (kernel
-/// [`crate::math::particle::set_relative_transform_scale__7b5160`], one
-/// narrowing at the FSTP).
+/// `CObjectPlacement::SetRelativeTransform`.
+///
+/// `__thiscall(ecx = this, stack = [xform f32*16, pos u32*3, parent f32*16 | null])`, `RET 0xC`,
+/// void. Stores the relative position (`+0x23c`, three dword copies) and the relative transform
+/// (`+0x1fc`, 16 dword copies): the raw `xform` when `parent` is null or flag `0x100` is set in
+/// `+0x1ac`, else `xform × inverse(parent)` — [`c44_matrix__invert_with_scale__7bd820`] is OUR
+/// hook (direct call, scale 1.0); the multiply (0x7bc6a0) stays a delegate. The uniform scale
+/// (`+0x264`) is `|xform row0|` (kernel
+/// [`crate::math::particle::set_relative_transform_scale__7b5160`], one narrowing at the FSTP).
 pub fn c_object_placement__set_relative_transform__7b5160(
     this: *mut u8,
     xform: *const f32,
@@ -22956,12 +23309,12 @@ pub fn c_object_placement__set_relative_transform__7b5160(
     };
 }
 
-/// `CParticleEmitter::UpdateWithSubsteps` — `__thiscall(this, dt: f32, p2:
-/// *const f32, p3: *const f32, p4)`, `RET 0x10`, void. The per-frame emitter
-/// driver: camera-distance global, transform snapshot, relative-transform
-/// pass over self + children, the |dt| gate, the two flag arms, then the
-/// fixed-step catch-up — [`c_particle_emitter__update_fixed_step__7b5880`],
-/// our hook, called DIRECTLY with spawn dword 0.
+/// `CParticleEmitter::UpdateWithSubsteps`.
+///
+/// `__thiscall(this, dt: f32, p2: *const f32, p3: *const f32, p4)`, `RET 0x10`, void. The per-frame
+/// emitter driver: camera-distance global, transform snapshot, relative-transform pass over self +
+/// children, the |dt| gate, the two flag arms, then the fixed-step catch-up —
+/// [`c_particle_emitter__update_fixed_step__7b5880`], our hook, called DIRECTLY with spawn dword 0.
 ///
 /// Faithful shape notes (0x7b5230–0x7b54cd): the camera delta reads
 /// `p2+0x30..0x38 − p3[0..2]` with per-component narrows and writes
@@ -23181,16 +23534,15 @@ pub fn c_particle_emitter__update_with_substeps__7b5230(
     }
 }
 
-/// Inner child-emitter step for one surviving particle inside
-/// `CParticleEmitter::Update`'s per-particle loop: snapshots/swaps the particle
-/// transform into each child's `this+0x22c` slot, optionally seeds child color
-/// (`flag bit10` -> `+0x258`, from the particle's POST-physics velocity) and the
-/// saved position (`flag bit12` -> `+0x248`, from the PRE-physics particle
-/// position `pre_pos`), runs the per-particle position eval (`0x7b5550`, the
-/// SECOND call site), then restores the saved transform. Walks `parent+0x7c`
-/// children at `parent+0x80`. Impure-driver helper; kept out of the kernel
-/// module because it is all in-place pointer mutation plus a transmute_va
-/// call-out.
+/// Inner child-emitter step for one surviving particle.
+///
+/// Inside `CParticleEmitter::Update`'s per-particle loop: snapshots/swaps the particle transform
+/// into each child's `this+0x22c` slot, optionally seeds child color (`flag bit10` -> `+0x258`,
+/// from the particle's POST-physics velocity) and the saved position (`flag bit12` -> `+0x248`,
+/// from the PRE-physics particle position `pre_pos`), runs the per-particle position eval
+/// (`0x7b5550`, the SECOND call site), then restores the saved transform. Walks `parent+0x7c`
+/// children at `parent+0x80`. Impure-driver helper; kept out of the kernel module because it is all
+/// in-place pointer mutation plus a transmute_va call-out.
 #[allow(
     clippy::multiple_unsafe_ops_per_block,
     clippy::undocumented_unsafe_blocks
@@ -23259,8 +23611,10 @@ fn update_child_emitters_7b5a10(
     }
 }
 
-/// `GxLight::ApplySceneLighting` — `__thiscall(ecx = this scene/light manager,
-/// stack: camera_pos: *const f32, apply_fog: i32)`, `ret 0x8` (void).
+/// `GxLight::ApplySceneLighting`.
+///
+/// `__thiscall(ecx = this scene/light manager, stack: camera_pos: *const f32, apply_fog: i32)`,
+/// `ret 0x8` (void).
 ///
 /// Faithful reimplementation of the per-frame fixed-function light upload. Builds
 /// a 0x6c-byte local light-state (the stock `[ebp-0x6c]` frame block), seeds it
@@ -23792,8 +24146,9 @@ pub extern "thiscall" fn weather_draw_rain_drops__675ac0(this: *mut core::ffi::c
 // table (it mutates `this` scratch + per-instance hit slots).
 // ===========================================================================
 
-/// `0x80c5c8` — the ~1e-5 degeneracy epsilon (segment-length early-out), exact
-/// bits, matching the kernels' `TRACE_EPS`.
+/// `0x80c5c8` — the ~1e-5 degeneracy epsilon (segment-length early-out).
+///
+/// Exact bits, matching the kernels' `TRACE_EPS`.
 const TRACE_SEG_EPS: f32 = f32::from_bits(0x3727_c5ac);
 /// Storm allocator file tag `0x8731d4`; free tag `s_delete[]_0x82e204`.
 const TRACE_ALLOC_FILE: *const u8 = (crate::win::EXPECTED_IMAGE_BASE + 0x47_31d4) as *const u8;
@@ -23809,8 +24164,9 @@ fn trace_smem_alloc(size: u32, line: u32) -> *mut u8 {
     f(size, TRACE_ALLOC_FILE, line, 0)
 }
 
-/// `SMemFree(ptr, file, -1, 0)`, `__stdcall` (0x646430). No-op on null (stock
-/// guards each free site with `TEST EAX; JZ`).
+/// `SMemFree(ptr, file, -1, 0)`, `__stdcall` (0x646430).
+///
+/// No-op on null (stock guards each free site with `TEST EAX; JZ`).
 fn trace_smem_free(ptr: *mut u8) {
     if ptr.is_null() {
         return;
@@ -23822,15 +24178,17 @@ fn trace_smem_free(ptr: *mut u8) {
     f(ptr, TRACE_FREE_FILE, -1, 0);
 }
 
-/// The running best hit across the narrow-phase passes: the winning candidate
-/// record pointer (`this+0x134 + idx*0x10`) and its hit distance.
+/// The running best hit across the narrow-phase passes.
+///
+/// The winning candidate record pointer (`this+0x134 + idx*0x10`) and its hit distance.
 struct TraceBest {
     hit: *mut u8,
     t: f32,
 }
 
-/// Read an unaligned `f32` / `[f32; 3]` / `[f32; 16]` from loaded M2 geometry,
-/// which is only 2-byte aligned in general (the family-wide house idiom).
+/// Read an unaligned `f32` / `[f32; 3]` / `[f32; 16]` from loaded M2 geometry.
+///
+/// Loaded M2 geometry is only 2-byte aligned in general (the family-wide house idiom).
 #[allow(clippy::multiple_unsafe_ops_per_block)]
 unsafe fn trace_f32u(p: *const u8, off: usize) -> f32 {
     // SAFETY: caller guarantees `p + off` is a readable `f32` of a live geometry
@@ -23848,8 +24206,9 @@ unsafe fn trace_mat16u(p: *const u8) -> [f32; 16] {
     unsafe { p.cast::<[f32; 16]>().read_unaligned() }
 }
 
-/// Clear one instance's hit-result slot (stock `*[inst+0x414] = 0; [inst+0x414]
-/// = 0`). Guards the embedded pointer against null (stock assumes it valid).
+/// Clear one instance's hit-result slot (stock `*[inst+0x414] = 0; [inst+0x414] = 0`).
+///
+/// Guards the embedded pointer against null (stock assumes it valid).
 #[allow(clippy::multiple_unsafe_ops_per_block)]
 unsafe fn trace_clear_hit_slot(inst: *mut u8) {
     // SAFETY: `inst` is a live scene instance; `inst+0x414` holds a (possibly
@@ -23864,8 +24223,9 @@ unsafe fn trace_clear_hit_slot(inst: *mut u8) {
     }
 }
 
-/// Clear every instance's hit slot and reset `this+0x12c` — the two degenerate
-/// early-outs (`*end_local < eps`, `seg_len < eps`).
+/// Clear every instance's hit slot and reset `this+0x12c`.
+///
+/// The two degenerate early-outs (`*end_local < eps`, `seg_len < eps`).
 #[allow(clippy::multiple_unsafe_ops_per_block)]
 unsafe fn trace_clear_all(this: *mut u8) {
     // SAFETY: `this+0x130` is the scene's instance-list head; each node's
@@ -23880,10 +24240,10 @@ unsafe fn trace_clear_all(this: *mut u8) {
     }
 }
 
-/// Grow the candidate record (`this+0x134`, 0x10-byte records) and index
-/// (`this+0x138`, u32) buffers to hold `count` instances (stock
-/// 0x708ac3..0x708b68). Frees the old buffers and reallocates at the next
-/// power-of-two capacity; never shrinks.
+/// Grow the candidate record (`this+0x134`, 0x10-byte records) and index (`this+0x138`, u32).
+///
+/// Both are grown to hold `count` instances (stock 0x708ac3..0x708b68). Frees the old buffers and
+/// reallocates at the next power-of-two capacity; never shrinks.
 #[allow(clippy::multiple_unsafe_ops_per_block)]
 unsafe fn trace_grow_candidate_bufs(this: *mut u8, count: u32) {
     // SAFETY: `this+0x134`/`+0x138` hold the (possibly null) `SMemAlloc` record
@@ -23919,8 +24279,9 @@ unsafe fn trace_grow_candidate_bufs(this: *mut u8, count: u32) {
     }
 }
 
-/// Grow the per-vertex ray-frame scratch buffer (`this+0x140`, 0xc-byte entries,
-/// capacity dword at base-4) to `need` vertices (stock 0x70967c / 0x709104).
+/// Grow the per-vertex ray-frame scratch buffer (`this+0x140`, 0xc-byte entries).
+///
+/// The capacity dword is at base-4; it grows to `need` vertices (stock 0x70967c / 0x709104).
 /// Returns the (zeroed) entry base, or null if the allocation failed.
 #[allow(clippy::multiple_unsafe_ops_per_block)]
 unsafe fn trace_grow_vertex_scratch(this: *mut u8, need: u32, line: u32) -> *mut u8 {
@@ -23960,8 +24321,9 @@ unsafe fn trace_grow_vertex_scratch(this: *mut u8, need: u32, line: u32) -> *mut
     }
 }
 
-/// The shared narrow-phase accept (stock 0x70960c.. / 0x70992b..): on pass ≥ 1 a
-/// new batch (`record[3] != best[3]`) or a missing best wins unconditionally;
+/// The shared narrow-phase accept (stock 0x70960c.. / 0x70992b..).
+///
+/// On pass ≥ 1 a new batch (`record[3] != best[3]`) or a missing best wins unconditionally;
 /// otherwise the nearer `t` wins (`!(t > best.t)`, NaN-faithful).
 #[allow(clippy::multiple_unsafe_ops_per_block)]
 unsafe fn trace_accept(record: *mut u8, t: f32, pass: u32, best: &mut TraceBest) {
@@ -23977,10 +24339,11 @@ unsafe fn trace_accept(record: *mut u8, t: f32, pass: u32, best: &mut TraceBest)
     }
 }
 
-/// Narrow phase for a type-3 (collision-mesh) instance (stock 0x70967c..0x70967a):
-/// project every collision vertex (`shared+0xf8`, stride 0xc) through the model
-/// matrix into the ray frame, then test each `u16` index triple
-/// (`shared+0xf0`, count `shared+0xec`) with the projected barycentric hit.
+/// Narrow phase for a type-3 (collision-mesh) instance (stock 0x70967c..0x70967a).
+///
+/// Project every collision vertex (`shared+0xf8`, stride 0xc) through the model matrix into the ray
+/// frame, then test each `u16` index triple (`shared+0xf0`, count `shared+0xec`) with the projected
+/// barycentric hit.
 #[allow(clippy::multiple_unsafe_ops_per_block)]
 unsafe fn trace_collision_mesh(
     this: *mut u8,
@@ -24043,10 +24406,11 @@ unsafe fn trace_collision_mesh(
     }
 }
 
-/// Narrow phase for a skinned-submesh instance (stock 0x709005..0x709673): walk
-/// the geoset batches (`[shared+0x50]+0x24`, stride 0x18), gate each on
-/// flags/visibility/alpha, bone-blend + transform + project its vertices, then
-/// test the geoset's triangle range with the projected barycentric hit.
+/// Narrow phase for a skinned-submesh instance (stock 0x709005..0x709673).
+///
+/// Walk the geoset batches (`[shared+0x50]+0x24`, stride 0x18), gate each on
+/// flags/visibility/alpha, bone-blend + transform + project its vertices, then test the geoset's
+/// triangle range with the projected barycentric hit.
 #[allow(clippy::multiple_unsafe_ops_per_block)]
 unsafe fn trace_skinned_submesh(
     this: *mut u8,
@@ -24191,10 +24555,11 @@ unsafe fn trace_skinned_submesh(
     }
 }
 
-/// `CM2Scene::TraceLine` — `__thiscall(ecx = this, p_scene, start_local,
-/// end_local, p_max_dist)`, `ret 0x10`. `p_scene`/`start_local` are the ray
-/// origin/end; `end_local` is the in/out hit fraction (in: max search fraction;
-/// out: `(1/seg_len)·t` on a hit); `p_max_dist` non-null enables the second pass.
+/// `CM2Scene::TraceLine`.
+///
+/// `__thiscall(ecx = this, p_scene, start_local, end_local, p_max_dist)`, `ret 0x10`.
+/// `p_scene`/`start_local` are the ray origin/end; `end_local` is the in/out hit fraction (in: max
+/// search fraction; out: `(1/seg_len)·t` on a hit); `p_max_dist` non-null enables the second pass.
 /// Returns the hit instance's id (`*(record[0]+0x41c)`) or 0.
 #[allow(clippy::multiple_unsafe_ops_per_block)]
 pub fn cm2_scene__trace_line__7089c0(
@@ -24422,16 +24787,16 @@ pub fn cm2_scene__trace_line__7089c0(
     clippy::multiple_unsafe_ops_per_block,
     clippy::undocumented_unsafe_blocks
 )]
-/// `CM2Model::AdvanceEventTracks` -- `__thiscall(ecx = this, delta)`, `ret 0x4`,
-/// void. Per-frame event-track advance for one M2 instance and (recursively) its
-/// child models. On the one-time lazy-init call (`this+0x10 == 0`) it `SMemAlloc`s
-/// a `0x50` control block, fills opcode-9 deferred-update fields, links it, and
-/// returns early WITHOUT advancing tracks. Otherwise it advances the model clock
-/// (`this+0x88 += delta`), walks the sequence-chain (`this+0x80`, next via
-/// `state+0x114`), resolves each track's keyframe window, fires the stateful
-/// edge / per-segment callbacks (`0x70a280` / `0x70a400`) for crossed segments,
-/// and recurses over the child-model list (`this+0x1dc`, next `child+0x1e4`)
-/// forwarding the UNCHANGED `delta`. Impure driver: no diff table.
+/// `CM2Model::AdvanceEventTracks` -- `__thiscall(ecx = this, delta)`, `ret 0x4`, void.
+///
+/// Per-frame event-track advance for one M2 instance and (recursively) its child models. On the
+/// one-time lazy-init call (`this+0x10 == 0`) it `SMemAlloc`s a `0x50` control block, fills
+/// opcode-9 deferred-update fields, links it, and returns early WITHOUT advancing tracks. Otherwise
+/// it advances the model clock (`this+0x88 += delta`), walks the sequence-chain (`this+0x80`, next
+/// via `state+0x114`), resolves each track's keyframe window, fires the stateful edge / per-segment
+/// callbacks (`0x70a280` / `0x70a400`) for crossed segments, and recurses over the child-model list
+/// (`this+0x1dc`, next `child+0x1e4`) forwarding the UNCHANGED `delta`. Impure driver: no diff
+/// table.
 ///
 /// Verified against the stock body at 0x719370..0x71992d: thiscall (`mov esi,ecx`;
 /// `[esi+0x10]` field access), one stack dword `[ebp+0x8]`, both ret sites
@@ -24550,11 +24915,11 @@ pub fn cm2_model__advance_event_tracks__719370(this: *mut core::ffi::c_void, del
     }
 }
 
-/// One iteration of `AdvanceEventTracks`' outer sequence-chain loop
-/// (0x71941e..0x7198bc): resolves the [lo, hi) keyframe window for `seq_idx`,
-/// optionally fires the edge-event callback (`0x70a280`), then sweeps every
-/// event-track record (count at `hdr+0x114`, stride `0x2c`). All offsets and the
-/// two mirror sweep directions match the stock body.
+/// One iteration of `AdvanceEventTracks`' outer sequence-chain loop (0x71941e..0x7198bc).
+///
+/// Resolves the [lo, hi) keyframe window for `seq_idx`, optionally fires the edge-event callback
+/// (`0x70a280`), then sweeps every event-track record (count at `hdr+0x114`, stride `0x2c`). All
+/// offsets and the two mirror sweep directions match the stock body.
 #[allow(
     clippy::multiple_unsafe_ops_per_block,
     clippy::undocumented_unsafe_blocks
@@ -24722,14 +25087,14 @@ fn advance_event_track_seq(inst: *mut u8, hdr: *const u8, seq_idx: u32, delta: u
     }
 }
 
-/// One event track's segment sweep (forward then reverse mirror loops,
-/// 0x7195e1..0x71989c). Resolves the per-sequence [first, last) segment range,
-/// the owner-bone match, the wrapped `base`, then for each crossed segment
-/// evaluates the bone transform (`0x714000` + two `C44Matrix::TransformPoint`
-/// by-name), folds the interpolation weight via `ftol__40a2b0` (sites C-fwd
-/// 0x719724 / C-rev 0x719844), and fires the 9-arg per-segment callback
-/// (`0x70a400`, ret 0x24). The forward arm increments the segment cursor and
-/// uses `window_hi - acc`; the reverse arm decrements and uses `acc - window_hi`.
+/// One event track's segment sweep (forward then reverse mirror loops, 0x7195e1..0x71989c).
+///
+/// Resolves the per-sequence [first, last) segment range, the owner-bone match, the wrapped `base`,
+/// then for each crossed segment evaluates the bone transform (`0x714000` + two
+/// `C44Matrix::TransformPoint` by-name), folds the interpolation weight via `ftol__40a2b0` (sites
+/// C-fwd 0x719724 / C-rev 0x719844), and fires the 9-arg per-segment callback (`0x70a400`,
+/// ret 0x24). The forward arm increments the segment cursor and uses `window_hi - acc`; the reverse
+/// arm decrements and uses `acc - window_hi`.
 #[allow(
     clippy::too_many_arguments,
     clippy::multiple_unsafe_ops_per_block,
@@ -24886,14 +25251,13 @@ fn sweep_event_track(
     }
 }
 
-/// Fire one crossed event-track segment (0x7196df..0x71976d forward,
-/// 0x7197ff..0x71988d reverse). Bone-matrix update (`0x714000`), two
-/// `C44Matrix::TransformPoint` by-name transforms (the second chains the first's
-/// transformed point), the x87-free interpolation-weight fold
-/// (`ftol(|[state+0xb4]| * dt)`, replacing `fld`/`fabs`/`fimul`/`__ftol`), and the
-/// 9-arg per-segment callback `0x70a400` (`ret 0x24`). `dt` is the signed
-/// per-segment delta already computed by the caller (`window_hi - acc` forward /
-/// `acc - window_hi` reverse).
+/// Fire one crossed event-track segment (0x7196df..0x71976d forward, 0x7197ff..0x71988d reverse).
+///
+/// Bone-matrix update (`0x714000`), two `C44Matrix::TransformPoint` by-name transforms (the second
+/// chains the first's transformed point), the x87-free interpolation-weight fold
+/// (`ftol(|[state+0xb4]| * dt)`, replacing `fld`/`fabs`/`fimul`/`__ftol`), and the 9-arg
+/// per-segment callback `0x70a400` (`ret 0x24`). `dt` is the signed per-segment delta already
+/// computed by the caller (`window_hi - acc` forward / `acc - window_hi` reverse).
 #[allow(
     clippy::multiple_unsafe_ops_per_block,
     clippy::undocumented_unsafe_blocks
@@ -24989,20 +25353,19 @@ fn fire_segment(
     );
 }
 
-/// `CGxBatch::UpdateFogState` — `__thiscall(ecx = this)`, no stack args, `ret`
-/// (void). Recomputes and commits fog + clip-plane render state for one batch:
-/// resolves the enable/mode descriptor (`this+0x3348`), change-detects three
-/// cached state cohorts vs their shadow copies, and on a miss re-submits the
-/// fog-enable / fog-mode / clip-plane device render states. Modes are dispatched
-/// off `this+0x3330`: mode 1 packs the device fog gradient color (the one pure
-/// kernel `crate::math::gx::fog_pack_color_argb__70baf0`), modes 2..4 store
-/// fixed color dwords, others fall to the default no-color path. The clip-plane
-/// arm transforms the plane by the already-hooked `C44Matrix::TransformVector4`
-/// (by name) and negates it in place when the device depth convention selects a
-/// flipped sign. Three already-hooked callees (`PackFogGradientBlock`,
-/// `ApplySceneLighting`, `TransformVector4`) plus the pure pack/`Ftol` kernels
-/// are reached by name so LLVM inlines their SSE bodies; the remaining device
-/// render-state shims stay transmuted leaf call-outs.
+/// `CGxBatch::UpdateFogState` — `__thiscall(ecx = this)`, no stack args, `ret` (void).
+///
+/// Recomputes and commits fog + clip-plane render state for one batch: resolves the enable/mode
+/// descriptor (`this+0x3348`), change-detects three cached state cohorts vs their shadow copies,
+/// and on a miss re-submits the fog-enable / fog-mode / clip-plane device render states. Modes are
+/// dispatched off `this+0x3330`: mode 1 packs the device fog gradient color (the one pure kernel
+/// `crate::math::gx::fog_pack_color_argb__70baf0`), modes 2..4 store fixed color dwords, others
+/// fall to the default no-color path. The clip-plane arm transforms the plane by the already-hooked
+/// `C44Matrix::TransformVector4` (by name) and negates it in place when the device depth convention
+/// selects a flipped sign. Three already-hooked callees (`PackFogGradientBlock`,
+/// `ApplySceneLighting`, `TransformVector4`) plus the pure pack/`Ftol` kernels are reached by name
+/// so LLVM inlines their SSE bodies; the remaining device render-state shims stay transmuted leaf
+/// call-outs.
 //
 // Dense RE'd render-state driver: the change-detection cohorts, per-entry copy
 // loop, and mode dispatch transcribe the stock body directly; one-unsafe-op-per
@@ -25338,12 +25701,12 @@ pub fn c_gx_batch__update_fog_state__70baf0(this: *mut u8) {
     }
 }
 
-/// `CParticleEmitter::ApplyRenderState` (`0x70c190`) — pushes the current
-/// emitter batch's blend / alpha-test / cull / fog render state and the
-/// resolved diffuse+emissive color to the device's `GxApi` state setters, but
-/// only for the sub-states whose `this+0x3300..+0x334c` snapshot changed since
-/// the previous batch, then either commits the color via the scalar/vector
-/// setters or stages it into one of two batch slots.
+/// `CParticleEmitter::ApplyRenderState` (`0x70c190`).
+///
+/// Pushes the current emitter batch's blend / alpha-test / cull / fog render state and the resolved
+/// diffuse+emissive color to the device's `GxApi` state setters, but only for the sub-states whose
+/// `this+0x3300..+0x334c` snapshot changed since the previous batch, then either commits the color
+/// via the scalar/vector setters or stages it into one of two batch slots.
 ///
 /// Dense impure driver: the per-state dirty diffs, the blend-mode table lookup
 /// and the per-channel clamp/quantize/pack are a direct transcription of the
@@ -25681,11 +26044,12 @@ fn write_u32(base: *mut u8, off: usize, v: u32) {
     unsafe { base.add(off).cast::<u32>().write(v) };
 }
 
-/// `World::QueryObjectBoxes` — `__fastcall(ecx = this, edx = tag, stack = flags)`,
-/// returns `bool`, callee-cleans 4 bytes (`ret 0x4`). `this` is the queried
-/// object whose local AABB (6 contiguous f32 at `this+0`) seeds the query; `tag`
-/// (arg1, EDX, an opaque `i32`) and `flags` (arg2, stack, an opaque `u32`) are
-/// pass-through scalars forwarded UNMODIFIED into the per-node collector.
+/// `World::QueryObjectBoxes` — `__fastcall(ecx = this, edx = tag, stack = flags)`.
+///
+/// Returns `bool`, callee-cleans 4 bytes (`ret 0x4`). `this` is the queried object whose local AABB
+/// (6 contiguous f32 at `this+0`) seeds the query; `tag` (arg1, EDX, an opaque `i32`) and `flags`
+/// (arg2, stack, an opaque `u32`) are pass-through scalars forwarded UNMODIFIED into the per-node
+/// collector.
 ///
 /// Walks the global tagged-pointer object list rooted at `*(0xca7da4)`, linking
 /// via `*(0xca7d9c)[node + 4]` (the node pointer doubles as a byte offset into
@@ -27228,9 +27592,10 @@ pub fn c_world__collect_tile_geometry__6aadc0(
     1 // 0x6ab4d4: mov al,1; ret 0x10
 }
 
-/// Emits the green debug-draw for a visible collected triangle. `elem` is the
-/// freshly-built 0x34-byte vertex record. Delegates entirely to the stock
-/// vis-color + submit calls (not math). (0x6ab38a..0x6ab3ac)
+/// Emits the green debug-draw for a visible collected triangle.
+///
+/// `elem` is the freshly-built 0x34-byte vertex record. Delegates entirely to the stock vis-color +
+/// submit calls (not math). (0x6ab38a..0x6ab3ac)
 #[allow(clippy::undocumented_unsafe_blocks)]
 fn collect_tile_debug_draw_emit__6aadc0(elem: *mut f32, color: u32) {
     if elem.is_null() {
@@ -27251,6 +27616,7 @@ fn collect_tile_debug_draw_emit__6aadc0(elem: *mut f32, color: u32) {
 }
 
 /// Emits the red debug-draw for a culled (trivially rejected) quad triangle.
+///
 /// Rebuilds the three world vertices, seeds a stack vis element, builds its
 /// plane via the stock `C4Plane::FromTriangle`, and submits. (0x6ab043..0x6ab19c)
 #[allow(
@@ -27372,8 +27738,9 @@ unsafe fn bdl_u32_range<'a>(p: *const u8, off: usize, n: usize) -> &'a [u32] {
     unsafe { core::slice::from_raw_parts(q.cast::<u32>(), n) }
 }
 
-/// Highest power of two `<= need`, minimum 1 — the default-granularity rule the
-/// compaction grow path computes inline (0x7087ee..0x70881c).
+/// Highest power of two `<= need`, minimum 1.
+///
+/// The default-granularity rule the compaction grow path computes inline (0x7087ee..0x70881c).
 #[inline]
 fn bdl_pow2_floor(need: u32) -> u32 {
     let mut e = need;
@@ -27385,10 +27752,11 @@ fn bdl_pow2_floor(need: u32) -> u32 {
     if e < 1 { 1 } else { e }
 }
 
-/// Grow the 64-stride record array `ctl` (`{cap@0,count@4,data@8,gran@0xc}`,
-/// 0x40-byte records) by one if needed, then return the new record slot
-/// `(count<<6)+data` and post-increment the count. (0x707bae..0x707bf2.) The
-/// caller fail-returns when the slot is null (the stock `je` overflow guard).
+/// Grow the 64-stride record array `ctl` (`{cap@0,count@4,data@8,gran@0xc}`, 0x40-byte records).
+///
+/// Grows by one if needed, then returns the new record slot `(count<<6)+data` and post-increments
+/// the count. (0x707bae..0x707bf2.) The caller fail-returns when the slot is null (the stock `je`
+/// overflow guard).
 #[allow(
     clippy::multiple_unsafe_ops_per_block,
     clippy::undocumented_unsafe_blocks
@@ -27419,8 +27787,9 @@ unsafe fn bdl_record_reserve(ctl: *mut u8) -> *mut u8 {
     (data as usize).wrapping_add((count2 as usize) << 6) as *mut u8
 }
 
-/// 64-stride record reserve via the `reserve(1, 1)` helper (0x70da00) instead of
-/// the inline grow — the cross-fade duplicate-record path (0x707fc3..0x707fdb).
+/// 64-stride record reserve via the `reserve(1, 1)` helper (0x70da00) instead of the inline grow.
+///
+/// The cross-fade duplicate-record path (0x707fc3..0x707fdb).
 #[allow(
     clippy::multiple_unsafe_ops_per_block,
     clippy::undocumented_unsafe_blocks
@@ -27435,10 +27804,11 @@ unsafe fn bdl_record_reserve1(ctl: *mut u8) -> *mut u8 {
     (data as usize).wrapping_add((count as usize) << 6) as *mut u8
 }
 
-/// Append `value` to a 4-stride index array `ctl` (`{cap@0,count@4,data@8,
-/// gran@0xc}`, 4-byte elements), growing via the inline default-granularity path
-/// (0x4292e0/0x429320/0x429340) when `count+1 > cap`. Store-then-bump, skipping
-/// the store on a null data slot (the stock `je`). (e.g. 0x707dd5..0x707f7a.)
+/// Append `value` to a 4-stride index array `ctl` (`{cap@0,count@4,data@8,gran@0xc}`).
+///
+/// The elements are 4 bytes; the array grows via the inline default-granularity path
+/// (0x4292e0/0x429320/0x429340) when `count+1 > cap`. Store-then-bump, skipping the store on a null
+/// data slot (the stock `je`). (e.g. 0x707dd5..0x707f7a.)
 #[allow(
     clippy::multiple_unsafe_ops_per_block,
     clippy::undocumented_unsafe_blocks
@@ -27473,8 +27843,9 @@ unsafe fn bdl_index_push(ctl: *mut u8, value: u32) {
     unsafe { bdl_wr32(ctl, 4, count2.wrapping_add(1)) };
 }
 
-/// Append `value` to a 4-stride index array via the `reserve(1, 1)` helper
-/// (0x4291f0) instead of the inline grow. (e.g. 0x70804f..0x70806f.)
+/// Append `value` to a 4-stride index array via the `reserve(1, 1)` helper (0x4291f0).
+///
+/// Used instead of the inline grow. (e.g. 0x70804f..0x70806f.)
 #[allow(
     clippy::multiple_unsafe_ops_per_block,
     clippy::undocumented_unsafe_blocks
@@ -27493,9 +27864,11 @@ unsafe fn bdl_index_push_reserve1(ctl: *mut u8, value: u32) {
     unsafe { bdl_wr32(ctl, 4, count.wrapping_add(1)) };
 }
 
-/// Grow a 4-stride index array `ctl` to hold at least `need` elements using the
-/// power-of-two default-granularity rule (0x7087ee..0x708835): when `gran==0`,
-/// gran = 0x40 for `need>=0x40` (persisted) else `pow2_floor(need)`. No append.
+/// Grow a 4-stride index array `ctl` to hold at least `need` elements.
+///
+/// Uses the power-of-two default-granularity rule (0x7087ee..0x708835): when
+/// `gran==0`, gran = 0x40 for `need>=0x40` (persisted) else `pow2_floor(need)`.
+/// No append.
 #[allow(
     clippy::multiple_unsafe_ops_per_block,
     clippy::undocumented_unsafe_blocks
@@ -27523,7 +27896,8 @@ unsafe fn bdl_index_grow_pow2(ctl: *mut u8, need: u32) {
     fs(ctl, newcap);
 }
 
-/// Append `value` to a 4-stride index array via the power-of-two grow path
+/// Append `value` to a 4-stride index array via the power-of-two grow path.
+///
 /// (compaction single-record reflow, 0x7087d9..0x708844).
 #[allow(
     clippy::multiple_unsafe_ops_per_block,
@@ -27542,8 +27916,9 @@ unsafe fn bdl_index_push_pow2(ctl: *mut u8, value: u32) {
     unsafe { bdl_wr32(ctl, 4, count2.wrapping_add(1)) };
 }
 
-/// `CGxDevice::GetCurrentMatrix` (0x58b0b0): `__thiscall(ecx = 4x4 out)` loads the
-/// current matrix in place.
+/// `CGxDevice::GetCurrentMatrix` (0x58b0b0).
+///
+/// `__thiscall(ecx = 4x4 out)` loads the current matrix in place.
 #[inline]
 fn bdl_get_current_matrix(out: *mut u8) {
     const GETMATRIX_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x18_b0b0;
@@ -27552,9 +27927,10 @@ fn bdl_get_current_matrix(out: *mut u8) {
     f(out);
 }
 
-/// `D3DXMatrixInverse` PSGP thunk (0x74ad38 -> `jmp [0x876544]`): `__stdcall(pOut,
-/// pDeterminant, pM)`. The stock site computes the inverse view matrix
-/// `this+0xdc` from `this+0x9c` with a NULL determinant. (0x707752.)
+/// `D3DXMatrixInverse` PSGP thunk (0x74ad38 -> `jmp [0x876544]`).
+///
+/// `__stdcall(pOut, pDeterminant, pM)`. The stock site computes the inverse view
+/// matrix `this+0xdc` from `this+0x9c` with a NULL determinant. (0x707752.)
 #[inline]
 fn bdl_matrix_inverse(out: *mut f32, det: *const f32, m: *const f32) {
     // The thunk is an indirect `jmp [0x876544]` whose callee-pop the static
@@ -27571,8 +27947,9 @@ fn bdl_matrix_inverse(out: *mut f32, det: *const f32, m: *const f32) {
     let _ = f(out, det, m);
 }
 
-/// `CWorldView::*` object-visible predicate (0x710450): `__thiscall(ecx = node,
-/// 0, 0) -> bool`. The two stack zeroes match the stock callsites.
+/// `CWorldView::*` object-visible predicate (0x710450).
+///
+/// `__thiscall(ecx = node, 0, 0) -> bool`. The two stack zeroes match the stock callsites.
 #[inline]
 fn bdl_object_visible(node: *const u8) -> u32 {
     const VISIBLE_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x31_0450;
@@ -27591,8 +27968,9 @@ fn bdl_refresh_node_bounds(node: *const u8) {
     f(node);
 }
 
-/// `CWorldView::ResolveTextureSlot` (0x70b040): `__thiscall(ecx = this, handle)
-/// -> handle`. (0x707d0a.)
+/// `CWorldView::ResolveTextureSlot` (0x70b040).
+///
+/// `__thiscall(ecx = this, handle) -> handle`. (0x707d0a.)
 #[inline]
 fn bdl_resolve_texture_slot(this: *const u8, handle: u32) -> u32 {
     const RESOLVETEX_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x30_b040;
@@ -27602,12 +27980,13 @@ fn bdl_resolve_texture_slot(this: *const u8, handle: u32) -> u32 {
     f(this, handle)
 }
 
-/// `CWorldView::ComputeSortHash` (0x70a600) reimplemented inline: gather the
-/// fixed record/node/substate term ranges in stock order and fold them through
-/// the host-tested kernel (`h = h*0x13 + term`, seeded with the `node[0x30]`
-/// value). The stock body ignores `ecx`, so this takes only the record. Bit-exact
-/// to the original, so the dedup buckets identically — and it inlines into the
-/// dedup loop instead of calling out.
+/// `CWorldView::ComputeSortHash` (0x70a600) reimplemented inline.
+///
+/// Gather the fixed record/node/substate term ranges in stock order and fold
+/// them through the host-tested kernel (`h = h*0x13 + term`, seeded with the
+/// `node[0x30]` value). The stock body ignores `ecx`, so this takes only the
+/// record. Bit-exact to the original, so the dedup buckets identically — and it
+/// inlines into the dedup loop instead of calling out.
 #[allow(
     clippy::multiple_unsafe_ops_per_block,
     clippy::undocumented_unsafe_blocks
@@ -27635,17 +28014,20 @@ fn bdl_compute_sort_hash(record: *const u8) -> u32 {
     h
 }
 
-/// Texture-equality probe (0x70a710): the dedup comparator — our own
-/// `RenderBatch__CompareSortKey` hook, called directly (no detour). (0x708710.)
+/// Texture-equality probe (0x70a710).
+///
+/// The dedup comparator — our own `RenderBatch__CompareSortKey` hook, called
+/// directly (no detour). (0x708710.)
 #[inline]
 fn bdl_draw_list_equal(a: u32, b: u32, this: *const u8) -> i32 {
     render_batch__compare_sort_key__70a710(a as i32, b as i32, this.cast_mut())
 }
 
-/// Opaque-bucket heap sort with our own `CWorldView__CompareDrawListOpaque`
-/// hook (0x70ae10) as the comparator, called directly through the shared
-/// kernel — routing through the guest VA would detour back into the same
-/// Rust fn once per comparison.
+/// Opaque-bucket heap sort with our own `CWorldView__CompareDrawListOpaque` hook (0x70ae10).
+///
+/// Used as the comparator, called directly through the shared kernel — routing
+/// through the guest VA would detour back into the same Rust fn once per
+/// comparison.
 fn bdl_sort_opaque(data: *mut u32, count: u32, base: *mut u8) {
     if data.is_null() || count <= 1 {
         return;
@@ -27658,21 +28040,23 @@ fn bdl_sort_opaque(data: *mut u32, count: u32, base: *mut u8) {
     });
 }
 
-/// Texture-batch comparator (0x70aa00): `__fastcall(ecx = a, edx = b, this)
-/// -> i32`, also address-taken for the bucket-0 heap sort. (0x70878a.) Calls our
-/// own hook directly — routing through the guest VA would detour straight back
-/// into the same Rust fn, once per comparison.
+/// Texture-batch comparator (0x70aa00).
+///
+/// `__fastcall(ecx = a, edx = b, this) -> i32`, also address-taken for the
+/// bucket-0 heap sort. (0x70878a.) Calls our own hook directly — routing through
+/// the guest VA would detour straight back into the same Rust fn, once per
+/// comparison.
 #[inline]
 fn bdl_cmp_by_tex(a: u32, b: u32, this: *const u8) -> i32 {
     c_world_view__compare_draw_list_by_texture__70aa00(a, b, this)
 }
 
-/// Bucket-0 (texture-major) heap sort with our own
-/// `CWorldView__CompareDrawListByTexture` hook (0x70aa00) as the comparator,
-/// called directly through the shared kernel. The stock call site passes the
-/// comparator's guest VA to `HeapSortUInt32`, which would make an indirect call
-/// into translated guest code once per comparison — the single hottest
-/// indirect branch in the frame.
+/// Bucket-0 (texture-major) heap sort with our own `CWorldView__CompareDrawListByTexture` hook.
+///
+/// The hook (0x70aa00) is used as the comparator, called directly through the
+/// shared kernel. The stock call site passes the comparator's guest VA to
+/// `HeapSortUInt32`, which would make an indirect call into translated guest
+/// code once per comparison — the single hottest indirect branch in the frame.
 fn bdl_sort_by_tex(data: *mut u32, count: u32, base: *mut u8) {
     if data.is_null() || count <= 1 {
         return;
@@ -27683,9 +28067,10 @@ fn bdl_sort_by_tex(data: *mut u32, count: u32, base: *mut u8) {
     crate::math::misc::heap_sort_u_int32__71f860(slice, |a, b| bdl_cmp_by_tex(a, b, base));
 }
 
-/// `CM2Shared::AnimateBones` (hooked) with the stock identity transform: parent =
-/// the view camera matrix `this+0x9c`, scale = (1,1,1), translate = (0,0,0),
-/// alpha = 1.0. (0x70777c / 0x7077ea.)
+/// `CM2Shared::AnimateBones` (hooked) with the stock identity transform.
+///
+/// Parent = the view camera matrix `this+0x9c`, scale = (1,1,1), translate =
+/// (0,0,0), alpha = 1.0. (0x70777c / 0x7077ea.)
 #[allow(
     clippy::multiple_unsafe_ops_per_block,
     clippy::undocumented_unsafe_blocks
@@ -27702,9 +28087,11 @@ fn bdl_animate_bones_identity(base: *mut u8, node: *const u8) {
     );
 }
 
-/// The per-list animation phase (0x707757..0x707843): bone animation over the
-/// visible-list head `this+0x20` (camera-relative double-hop walk gated by
-/// `[view+4]&4`, else the plain single-hop walk), then a particle update pass.
+/// The per-list animation phase (0x707757..0x707843).
+///
+/// Bone animation over the visible-list head `this+0x20` (camera-relative
+/// double-hop walk gated by `[view+4]&4`, else the plain single-hop walk), then
+/// a particle update pass.
 #[allow(
     clippy::multiple_unsafe_ops_per_block,
     clippy::undocumented_unsafe_blocks
@@ -27752,8 +28139,9 @@ fn bdl_anim_phase(base: *mut u8) {
     }
 }
 
-/// Node-bounds refresh phase (0x707845..0x707868): pop each node off `this+0x20`,
-/// clear its `+0x44/+0x48` links, and refresh its bounds.
+/// Node-bounds refresh phase (0x707845..0x707868).
+///
+/// Pop each node off `this+0x20`, clear its `+0x44/+0x48` links, and refresh its bounds.
 #[allow(
     clippy::multiple_unsafe_ops_per_block,
     clippy::undocumented_unsafe_blocks
@@ -27772,10 +28160,12 @@ fn bdl_refresh_phase(base: *mut u8) {
     }
 }
 
-/// Texture-dedup + bucket heap-sorts (0x70868b..0x7088f9): dedup the bucket-0
-/// records through the 251-entry open-addressing scratch (`0xcefff8`), heap-sort
-/// bucket-0 by texture, run-merge equal-texture runs (single-record runs spill to
-/// the `this+0x4c` bucket), then heap-sort the three remaining buckets.
+/// Texture-dedup + bucket heap-sorts (0x70868b..0x7088f9).
+///
+/// Dedup the bucket-0 records through the 251-entry open-addressing scratch
+/// (`0xcefff8`), heap-sort bucket-0 by texture, run-merge equal-texture runs
+/// (single-record runs spill to the `this+0x4c` bucket), then heap-sort the
+/// three remaining buckets.
 #[allow(
     clippy::multiple_unsafe_ops_per_block,
     clippy::undocumented_unsafe_blocks,
@@ -27885,8 +28275,10 @@ fn bdl_finalize(base: *mut u8) {
     bdl_sort_opaque(r_data, r_cnt, base);
 }
 
-/// `CWorldView::BuildDrawList` (0x707680) — `__thiscall(this, *const C3Vector)
-/// -> i32`. Per-frame draw-list builder; see the block comment above the helpers.
+/// `CWorldView::BuildDrawList` (0x707680).
+///
+/// `__thiscall(this, *const C3Vector) -> i32`. Per-frame draw-list builder; see
+/// the block comment above the helpers.
 #[allow(
     clippy::multiple_unsafe_ops_per_block,
     clippy::undocumented_unsafe_blocks,
@@ -28004,9 +28396,11 @@ pub fn c_world_view__build_draw_list__707680(
     1
 }
 
-/// Process one visible spatial node (0x7078bb..0x70837d): the per-batch geometry
-/// classification inner loop, then the cloud/particle fill and the sky fill.
-/// Returns `None` when a record reserve yields a null slot (the stock fail-`ret`).
+/// Process one visible spatial node (0x7078bb..0x70837d).
+///
+/// The per-batch geometry classification inner loop, then the cloud/particle
+/// fill and the sky fill. Returns `None` when a record reserve yields a null
+/// slot (the stock fail-`ret`).
 #[allow(
     clippy::multiple_unsafe_ops_per_block,
     clippy::undocumented_unsafe_blocks,
@@ -28351,8 +28745,9 @@ fn bdl_process_spatial_node(base: *mut u8, node: *const u8, draw_idx: &mut u32) 
     Some(())
 }
 
-/// Process one visible child view (0x7083dc..0x708674): the facing test, then the
-/// ribbon/cloud fill over the child's `[0x13c]` entries.
+/// Process one visible child view (0x7083dc..0x708674).
+///
+/// The facing test, then the ribbon/cloud fill over the child's `[0x13c]` entries.
 #[allow(
     clippy::multiple_unsafe_ops_per_block,
     clippy::undocumented_unsafe_blocks,
@@ -28442,6 +28837,7 @@ fn bdl_process_child_view(base: *mut u8, child: *const u8, draw_idx: &mut u32) -
 }
 
 /// `C44Matrix::Adjugate` — `__thiscall(ecx = this 4×4 src, stack = out)`.
+///
 /// Writes the 4×4 adjugate (transpose of the cofactor matrix) of the receiver
 /// into `out`. The receiver is read-only.
 pub fn c44_matrix__adjugate__7bd390(this: *const f32, out: *mut f32) -> *mut f32 {
@@ -28477,11 +28873,13 @@ pub fn c_aa_box__contains_point__637350(this: *const f32, point: *const f32) -> 
     crate::math::aabb::c_aa_box__contains_point__637350(bx, p)
 }
 
-/// `Collision::BuildSweepPrism` — `__thiscall(this, center, height, outPlanes,
-/// outVerts, outEdgeTable)`. Lays down the 9 swept-prism clip planes via the
-/// hooked `BuildPrismPlanes`, emits the 9 corner vertices (27 contiguous `f32`)
-/// into `outVerts`, then writes the fixed 32-entry edge/index table. The sweep
-/// radius lives at `this + 0xb0`. Mirrors the stock's lack of any null checks.
+/// `Collision::BuildSweepPrism`.
+///
+/// `__thiscall(this, center, height, outPlanes, outVerts, outEdgeTable)`. Lays
+/// down the 9 swept-prism clip planes via the hooked `BuildPrismPlanes`, emits
+/// the 9 corner vertices (27 contiguous `f32`) into `outVerts`, then writes the
+/// fixed 32-entry edge/index table. The sweep radius lives at `this + 0xb0`.
+/// Mirrors the stock's lack of any null checks.
 pub fn collision_build_sweep_prism__631be0(
     this: *mut u8,
     center: *const f32,
@@ -28521,14 +28919,15 @@ pub fn collision_build_sweep_prism__631be0(
     out_edge_table
 }
 
-/// `Orientation::SetPosition` (`__thiscall`, `0x7adcd0`): conditionally stores a
-/// new position into the object and flags it dirty. The object holds a `C3Vector`
-/// at `this+0x1c` (x/y/z as three contiguous f32) and a dirty-flags byte at
-/// `this+0xd`. If the incoming position differs from the stored one on any
-/// component (NaN-inclusive; see the kernel), all three floats are overwritten as
-/// raw 32-bit copies (mirroring stock's `MOV` dword stores, exact bit pattern
-/// preserved) and bit `0x8` is OR-ed into the flags byte; if no component differs,
-/// nothing is written at all.
+/// `Orientation::SetPosition` (`__thiscall`, `0x7adcd0`).
+///
+/// Conditionally stores a new position into the object and flags it dirty. The
+/// object holds a `C3Vector` at `this+0x1c` (x/y/z as three contiguous f32) and
+/// a dirty-flags byte at `this+0xd`. If the incoming position differs from the
+/// stored one on any component (NaN-inclusive; see the kernel), all three floats
+/// are overwritten as raw 32-bit copies (mirroring stock's `MOV` dword stores,
+/// exact bit pattern preserved) and bit `0x8` is OR-ed into the flags byte; if no
+/// component differs, nothing is written at all.
 pub fn orientation__set_position__7adcd0(this: *mut u8, pos: *const f32) {
     if this.is_null() || pos.is_null() {
         return;
@@ -28564,8 +28963,9 @@ pub fn math__pow_x87(base: f64, exp: f64) -> f64 {
     crate::math::misc::math__pow_x87(base, exp)
 }
 
-/// `C44Matrix::Determinant` — `__fastcall(ecx = this)`, returns the 4×4
-/// determinant in `ST(0)`. `this` is a `C44Matrix` (16 contiguous f32).
+/// `C44Matrix::Determinant` — `__fastcall(ecx = this)`, returns the 4×4 determinant in `ST(0)`.
+///
+/// `this` is a `C44Matrix` (16 contiguous f32).
 pub fn c44_matrix__determinant__7bcf90(this: *const f32) -> f32 {
     if this.is_null() {
         return 0.0;
@@ -28578,6 +28978,7 @@ pub fn c44_matrix__determinant__7bcf90(this: *const f32) -> f32 {
 }
 
 /// `C44Matrix::InverseScaledByDet` — `__thiscall(ecx = src, out, determinant)`.
+///
 /// Writes `out = adjugate(src) · (1/determinant)` and returns `out`.
 pub fn c44_matrix__inverse_scaled_by_det__7bd6c0(
     this: *const f32,
@@ -28597,9 +28998,10 @@ pub fn c44_matrix__inverse_scaled_by_det__7bd6c0(
     out
 }
 
-/// `CMapObjGroup::BoxIntersectsNodeBox` — `__thiscall(ecx = this, stack = box,
-/// nodeIndex, useFilter)`, returns 1 when the query box overlaps the BSP node's
-/// box, else 0.
+/// `CMapObjGroup::BoxIntersectsNodeBox`.
+///
+/// `__thiscall(ecx = this, stack = box, nodeIndex, useFilter)`, returns 1 when
+/// the query box overlaps the BSP node's box, else 0.
 ///
 /// When `use_filter` is set the group's enable byte at `this+0x1d4` must be
 /// non-zero and the per-node filter `FUN_006a42b0(this, node_index)` must pass,
@@ -28665,6 +29067,7 @@ pub fn c_map_obj_group__box_intersects_node_box__6a4830(
 }
 
 /// `CAaBox::Union` — `__fastcall(ecx = out, edx = a, stack = b)`, returns `out`.
+///
 /// Component-wise merge of two axis-aligned boxes: `out.min = min(a.min, b.min)`,
 /// `out.max = max(a.max, b.max)`. Each box is six contiguous f32 (`min.xyz` at
 /// +0/+4/+8, `max.xyz` at +0xc/+0x10/+0x14).
@@ -28685,16 +29088,18 @@ pub fn c_aa_box__union__6373b0(out: *mut f32, a: *const f32, b: *const f32) -> *
     out
 }
 
-/// `NormalizeAngleToPi` — `__stdcall(angle: f32) -> f32` (result in ST0). Pure
-/// scalar; wraps the angle into `(-PI, PI]`. No pointers, no state, no callees.
+/// `NormalizeAngleToPi` — `__stdcall(angle: f32) -> f32` (result in ST0).
+///
+/// Pure scalar; wraps the angle into `(-PI, PI]`. No pointers, no state, no callees.
 pub fn normalize_angle_to_pi__6084f0(angle: f32) -> f32 {
     crate::math::misc::normalize_angle_to_pi__6084f0(angle)
 }
 
-/// `CGxDevice::SetViewport` — `__thiscall(ecx = this, stack = 6 viewport floats)`,
-/// returns void. Dedup-latch: if any incoming float differs from the cached rect
-/// at `this+0xf38` (NaN counts as a change), store all six and raise the dirty
-/// flag at `this+0xf34`. No callees.
+/// `CGxDevice::SetViewport` — `__thiscall(ecx = this, stack = 6 viewport floats)`, returns void.
+///
+/// Dedup-latch: if any incoming float differs from the cached rect at
+/// `this+0xf38` (NaN counts as a change), store all six and raise the dirty flag
+/// at `this+0xf34`. No callees.
 #[allow(clippy::too_many_arguments)]
 pub fn c_gx_device__set_viewport__592530(
     this: *mut core::ffi::c_void,
@@ -28727,6 +29132,7 @@ pub fn c_gx_device__set_viewport__592530(
 }
 
 /// `C4Quaternion::FromMatrix33` — `__thiscall(ecx = this, stack = m)`, void.
+///
 /// Shoemake trace / largest-diagonal conversion of a 3x3 row-major rotation
 /// matrix `m` (nine contiguous f32, `m[r][c]` at `(r*3+c)*4`) into the unit
 /// quaternion `this` (`x`@+0, `y`@+4, `z`@+8, `w`@+0xc). No return value; `this`
@@ -28745,11 +29151,11 @@ pub fn c4_quaternion__from_matrix33__7c0190(this: *mut f32, m: *const f32) {
     unsafe { this.cast::<[f32; 4]>().write_unaligned(q) };
 }
 
-/// `C44Matrix::ScaleRotation3x3` — `__thiscall(ecx = this 4x4 matrix, stack =
-/// s)`, returns void. In place, scales the upper-left 3x3 basis (indices
-/// 0,1,2 / 4,5,6 / 8,9,10 of the 4-float-stride matrix) by the scalar `s`; the
-/// translation column (3,7,11) and homogeneous fourth row (12..=15) are left
-/// untouched.
+/// `C44Matrix::ScaleRotation3x3` — `__thiscall(ecx = this 4x4 matrix, stack = s)`, returns void.
+///
+/// In place, scales the upper-left 3x3 basis (indices 0,1,2 / 4,5,6 / 8,9,10 of
+/// the 4-float-stride matrix) by the scalar `s`; the translation column (3,7,11)
+/// and homogeneous fourth row (12..=15) are left untouched.
 pub fn c44_matrix__scale_rotation3x3__7bdd00(this: *mut f32, s: f32) {
     if this.is_null() {
         return;
@@ -28766,11 +29172,12 @@ pub fn c44_matrix__scale_rotation3x3__7bdd00(this: *mut f32, s: f32) {
     unsafe { this.cast::<[f32; 16]>().write_unaligned(m) };
 }
 
-/// `C33Matrix::SetTransposed` — `__thiscall(ecx = this, stack = srcMatrix3x3)`,
-/// void. Transposes the caller-supplied row-major 3x3 (`src`) into a stack
-/// scratch, then forwards to the setter `FUN_007c0190(this, &transposed)`. `this`
-/// is opaque here (never dereferenced by the stock body — it is threaded through
-/// to `0x7c0190`, which owns the destination matrix), so it is passed through
+/// `C33Matrix::SetTransposed` — `__thiscall(ecx = this, stack = srcMatrix3x3)`, void.
+///
+/// Transposes the caller-supplied row-major 3x3 (`src`) into a stack scratch,
+/// then forwards to the setter `FUN_007c0190(this, &transposed)`. `this` is
+/// opaque here (never dereferenced by the stock body — it is threaded through to
+/// `0x7c0190`, which owns the destination matrix), so it is passed through
 /// verbatim.
 pub fn c33_matrix__set_transposed__7c0120(this: *mut u8, src: *const f32) {
     if src.is_null() {
@@ -28786,8 +29193,9 @@ pub fn c33_matrix__set_transposed__7c0120(this: *mut u8, src: *const f32) {
     c4_quaternion__from_matrix33__7c0190(this.cast::<f32>(), transposed.as_ptr());
 }
 
-/// `ScaleStoredVec3ByFactor` — `__thiscall(ecx = this, stack = scale, out)`,
-/// returns the out pointer (the stock leaves it in EAX untouched). Scales a
+/// `ScaleStoredVec3ByFactor` — `__thiscall(ecx = this, stack = scale, out)`.
+///
+/// Returns the out pointer (the stock leaves it in EAX untouched). Scales a
 /// cached base vector by an external factor times an internal magnitude and
 /// writes it to a caller-supplied out-vec3:
 /// `out = scale * this[+0x84] * vec3(this[+0x5c..+0x64])`. Pure per-lane FMUL,
@@ -28819,7 +29227,8 @@ pub fn scale_stored_vec3_by_factor__7c4ed0(
     out
 }
 
-/// `Geometry::ReducePlanarPointsToRepresentative` —
+/// `Geometry::ReducePlanarPointsToRepresentative`.
+///
 /// `__fastcall(ecx = pts, edx = count, stack = out)`, returns `1` on success or
 /// `0` on reject. Validates that the `count` (1..=4) input points — a stride-0x10
 /// array of C3Vectors (`x,y,z` at +0/+4/+8, `+0xc` unused) — all lie on the fixed
@@ -28865,14 +29274,16 @@ pub fn geometry__reduce_planar_points_to_representative__636610(
     }
 }
 
-/// `BuildOrthoProjMatrix` — `void __thiscall(ecx = out, stack = left, right,
-/// bottom, top, zNear, zFar)`. Builds an off-center orthographic 4×4 row-major
-/// float matrix into `*out` (see `math::matrix44::build_ortho_proj_matrix__5c3d90`).
-/// The diagonal scale constant `k = _DAT_00801628` is read live from the host
-/// image so the reimpl stays bit-faithful across builds. On a degenerate range
-/// (equal `left`/`right` or `bottom`/`top`, or `!(zNear < zFar)`, matching the
-/// x87 NaN polarity) the stock raises Storm error 0x57 and does NOT touch the
-/// matrix — reproduced here by delegating to `Storm_SetLastError(0x57)`.
+/// `BuildOrthoProjMatrix`.
+///
+/// `void __thiscall(ecx = out, stack = left, right, bottom, top, zNear, zFar)`.
+/// Builds an off-center orthographic 4×4 row-major float matrix into `*out` (see
+/// `math::matrix44::build_ortho_proj_matrix__5c3d90`). The diagonal scale
+/// constant `k = _DAT_00801628` is read live from the host image so the reimpl
+/// stays bit-faithful across builds. On a degenerate range (equal `left`/`right`
+/// or `bottom`/`top`, or `!(zNear < zFar)`, matching the x87 NaN polarity) the
+/// stock raises Storm error 0x57 and does NOT touch the matrix — reproduced here
+/// by delegating to `Storm_SetLastError(0x57)`.
 pub fn build_ortho_proj_matrix__5c3d90(
     out: *mut f32,
     left: f32,
@@ -28911,11 +29322,13 @@ pub fn build_ortho_proj_matrix__5c3d90(
     unsafe { out.cast::<[f32; 16]>().write_unaligned(mat) };
 }
 
-/// `GxSetViewport` — `__stdcall(x0,x1,y0,y1,minZ,maxZ) -> void`. Validates/clamps
-/// the normalized viewport box against the device depth-range globals and
-/// forwards to `CGxDevice::SetViewport` (our own hook, called directly) on the
-/// global device singleton; on a bad box raises STORM_ERROR_INVALID_PARAMETER
-/// (0x57) via the stock Storm helper, delegated by VA.
+/// `GxSetViewport` — `__stdcall(x0,x1,y0,y1,minZ,maxZ) -> void`.
+///
+/// Validates/clamps the normalized viewport box against the device depth-range
+/// globals and forwards to `CGxDevice::SetViewport` (our own hook, called
+/// directly) on the global device singleton; on a bad box raises
+/// STORM_ERROR_INVALID_PARAMETER (0x57) via the stock Storm helper, delegated by
+/// VA.
 #[allow(clippy::too_many_arguments)]
 pub fn gx_set_viewport__58af60(x0: f32, x1: f32, y0: f32, y1: f32, min_z: f32, max_z: f32) {
     const BASE: usize = crate::win::EXPECTED_IMAGE_BASE;
@@ -28941,9 +29354,11 @@ pub fn gx_set_viewport__58af60(x0: f32, x1: f32, y0: f32, y1: f32, min_z: f32, m
     }
 }
 
-/// `ColorTrack::SampleARGB` — `__fastcall(ecx = out: *mut u32, edx = time: i32,
-/// stack = color_track)`, returns `out`. Samples an animated colour track at the
-/// current animation `time` and writes an opaque ARGB8888 to `*out`.
+/// `ColorTrack::SampleARGB`.
+///
+/// `__fastcall(ecx = out: *mut u32, edx = time: i32, stack = color_track)`,
+/// returns `out`. Samples an animated colour track at the current animation
+/// `time` and writes an opaque ARGB8888 to `*out`.
 ///
 /// The keyframe-interval search (`0x6d63e0`) is our own hook —
 /// [`angle_table__find_wrapped_interval_fraction__6d63e0`], called directly.
@@ -29001,10 +29416,12 @@ pub fn color_track__sample_argb__6d62e0(
     out
 }
 
-/// `AngleTable::FindWrappedIntervalFraction` — `__fastcall(ecx = query, edx =
-/// count, stack = table, outFrac, outIdx, outNext) -> void`, RET 0x10. Scans a
-/// cyclic keyframe-time table (period 0xb40) for the segment containing
-/// `query` and writes the interpolation fraction plus the bracketing indices.
+/// `AngleTable::FindWrappedIntervalFraction`.
+///
+/// `__fastcall(ecx = query, edx = count, stack = table, outFrac, outIdx, outNext) -> void`,
+/// RET 0x10. Scans a cyclic keyframe-time table (period 0xb40) for the segment
+/// containing `query` and writes the interpolation fraction plus the bracketing
+/// indices.
 ///
 /// Statement-faithful to 0x6d63e0–0x6d6472: the three out-slots are zeroed
 /// first in stock store order (`outNext`, `outFrac`, `outIdx`); the scan
@@ -29065,12 +29482,13 @@ pub fn angle_table__find_wrapped_interval_fraction__6d63e0(
     }
 }
 
-/// `RenderBatch::CompareSortKey` (VA 0x70a710) — `__fastcall(ecx = idx_a,
-/// edx = idx_b, stack = mgr) -> i32`, RET 0x4. The render-queue draw-batch
-/// sort comparator (a qsort/sort predicate, also reached by VA from
-/// `bdl_draw_list_equal` above): resolves the two 0x40-stride elements at
-/// `*(mgr+0x34) + idx*0x40` (record pointer at `E+4`) and walks a strict key
-/// cascade, first unequal key deciding -1/+1, all-equal returning 0:
+/// `RenderBatch::CompareSortKey` (VA 0x70a710).
+///
+/// `__fastcall(ecx = idx_a, edx = idx_b, stack = mgr) -> i32`, RET 0x4. The
+/// render-queue draw-batch sort comparator (a qsort/sort predicate, also reached
+/// by VA from `bdl_draw_list_equal` above): resolves the two 0x40-stride
+/// elements at `*(mgr+0x34) + idx*0x40` (record pointer at `E+4`) and walks a
+/// strict key cascade, first unequal key deciding -1/+1, all-equal returning 0:
 ///
 /// 1. u32 `rec+0x30` (record order key — a pointer value compared unsigned);
 /// 2. u32 `E+0x1c` (element secondary key — the ELEMENT, not the record);
@@ -29094,8 +29512,9 @@ pub fn angle_table__find_wrapped_interval_fraction__6d63e0(
 /// comparator only runs over live queue elements, the same liveness assumption
 /// stock makes.
 pub fn render_batch__compare_sort_key__70a710(idx_a: i32, idx_b: i32, mgr: *mut u8) -> i32 {
-    /// Read a pointer field at `p + off` (unaligned-tolerant, like every
-    /// game-struct read in this module).
+    /// Read a pointer field at `p + off`.
+    ///
+    /// Unaligned-tolerant, like every game-struct read in this module.
     #[inline]
     unsafe fn rdp(p: *const u8, off: usize) -> *const u8 {
         // SAFETY: caller guarantees `p + off` is an in-bounds pointer field.
@@ -29249,10 +29668,12 @@ pub fn render_batch__compare_sort_key__70a710(idx_a: i32, idx_b: i32, mgr: *mut 
     unsafe { crate::math::gx::lex_cmp(pa, pb, 12) }
 }
 
-/// `World_RasterizeTraceLineCells` — `__fastcall(ecx = p1: *const f32 {x0,y0},
-/// edx = p2: *const f32 {x1,y1}, stack = desc: *const i32 {start major, start
-/// perp, end major, end perp})`, `RET 0x4`, void. DDA-rasterizes the 2D segment
-/// `p1 -> p2` into the GLOBAL grid-cell pair list (the walk itself lives in
+/// `World_RasterizeTraceLineCells`.
+///
+/// `__fastcall(ecx = p1: *const f32 {x0,y0}, edx = p2: *const f32 {x1,y1},
+/// stack = desc: *const i32 {start major, start perp, end major, end perp})`,
+/// `RET 0x4`, void. DDA-rasterizes the 2D segment `p1 -> p2` into the GLOBAL
+/// grid-cell pair list (the walk itself lives in
 /// `math::world::world_rasterize_trace_line_cells__69c780`): each emitted
 /// `(perp, major)` i32 pair is appended at the list base held in `DAT_00c962c8`
 /// through the global write cursor `DAT_00c89f40`. The cursor counts DWORDS,
@@ -29489,18 +29910,20 @@ pub fn rasterizer_emit_sloped_line_dda__69c600(p0: *const f32, p1: *const f32, s
     );
 }
 
-/// `PolyClip::ClipToScreenRect` — `__stdcall(verts_xyzw: *const f32, count:
-/// u32, out_poly: *mut *mut f32, out_count: *mut u32)`, void, `RET 0x10` (no
-/// ECX at entry). Sutherland–Hodgman clip of a packed homogeneous `(x, y, w)`
-/// polygon (input stride 0x10, component `[2]`/z skipped) against the
-/// constant 4-plane screen-rect table at VA 0xc7d0d8, ping-ponging the two
-/// static polygon buffers at 0xcbe138/0xcbe1f8. Pointer identity: `*out_poly`
-/// receives the GAME's winning static-buffer VA (or null with
-/// `*out_count = 0` when fully clipped) — results are valid only until the
-/// next call, exactly like stock. The distance/class scratch
-/// (0xcbe0f0/0xcbe0b0) and both buffers are written with NO capacity check,
-/// reproducing stock's missing bounds check on `count`. One-time init: flag
-/// bit0 at 0xcbe2cc gates zeroing the 0x60-dword buffer region at 0xcbe138.
+/// `PolyClip::ClipToScreenRect`.
+///
+/// `__stdcall(verts_xyzw: *const f32, count: u32, out_poly: *mut *mut f32,
+/// out_count: *mut u32)`, void, `RET 0x10` (no ECX at entry).
+/// Sutherland–Hodgman clip of a packed homogeneous `(x, y, w)` polygon (input
+/// stride 0x10, component `[2]`/z skipped) against the constant 4-plane
+/// screen-rect table at VA 0xc7d0d8, ping-ponging the two static polygon
+/// buffers at 0xcbe138/0xcbe1f8. Pointer identity: `*out_poly` receives the
+/// GAME's winning static-buffer VA (or null with `*out_count = 0` when fully
+/// clipped) — results are valid only until the next call, exactly like stock.
+/// The distance/class scratch (0xcbe0f0/0xcbe0b0) and both buffers are written
+/// with NO capacity check, reproducing stock's missing bounds check on `count`.
+/// One-time init: flag bit0 at 0xcbe2cc gates zeroing the 0x60-dword buffer
+/// region at 0xcbe138.
 /// Stock's init also registers the exit-time cleanup thunk 0x6b4d00 via
 /// `crt_atexit` (0x409aef) — deliberately SKIPPED here: it only re-zeroes
 /// these same static buffers while the process exits (cosmetic, no
@@ -29556,22 +29979,23 @@ pub fn poly_clip__clip_to_screen_rect__6b4a80(
     }
 }
 
-/// `CGRenderEntity::UpdateTransform` — `__fastcall(ecx = entity, edx = xform,
-/// stack = extentMinMax, centerOffset, force)`, void (`RET 0xc`). Pushes a new
-/// world `C44Matrix` into a scene render-entity: position (+0x24) from the
-/// matrix translation (floats 12..14), uniform scale (+0x30) = `|row0|`
-/// (sqrt), rotation (+0x34) via the hooked `C33Matrix::SetTransposed`
-/// (rescaled by `1/scale` first when the scale is not ~1), the transformed
-/// AABB corners (+0x44/+0x50) with midpoint*0.5 (+0x5c) and bounding radius
-/// (+0x68), and the world center (+0xa8) = `TransformPoint(centerOffset)`.
-/// A degenerate extent (any `min > max` strictly, or NaN) collapses all three
-/// box points to the new position with radius 0. When the position moved at
-/// least the squared threshold (unordered/NaN counts as moved — stock's
-/// `TEST AH,5; JP` feeding a `SETZ` inversion) or `force` is set, the object's
-/// liquid/color state is republished via the delegated `0x69e280`
-/// (side-effecting; fired on exactly the stock condition). `C3Vector::Set`
-/// (0x4549a0) and `C33Matrix::Set` (0x5f8d20) are trivial store packs,
-/// inlined here as locals.
+/// `CGRenderEntity::UpdateTransform`.
+///
+/// `__fastcall(ecx = entity, edx = xform, stack = extentMinMax, centerOffset,
+/// force)`, void (`RET 0xc`). Pushes a new world `C44Matrix` into a scene
+/// render-entity: position (+0x24) from the matrix translation (floats 12..14),
+/// uniform scale (+0x30) = `|row0|` (sqrt), rotation (+0x34) via the hooked
+/// `C33Matrix::SetTransposed` (rescaled by `1/scale` first when the scale is not
+/// ~1), the transformed AABB corners (+0x44/+0x50) with midpoint*0.5 (+0x5c) and
+/// bounding radius (+0x68), and the world center (+0xa8) =
+/// `TransformPoint(centerOffset)`. A degenerate extent (any `min > max`
+/// strictly, or NaN) collapses all three box points to the new position with
+/// radius 0. When the position moved at least the squared threshold
+/// (unordered/NaN counts as moved — stock's `TEST AH,5; JP` feeding a `SETZ`
+/// inversion) or `force` is set, the object's liquid/color state is republished
+/// via the delegated `0x69e280` (side-effecting; fired on exactly the stock
+/// condition). `C3Vector::Set` (0x4549a0) and `C33Matrix::Set` (0x5f8d20) are
+/// trivial store packs, inlined here as locals.
 pub fn cg_render_entity__update_transform__6717d0(
     entity: *mut u8,
     xform: *const f32,
@@ -29740,17 +30164,18 @@ pub fn cg_render_entity__update_transform__6717d0(
     }
 }
 
-/// `CGxDeviceD3d::IXformSetProjection` — `__thiscall(ecx = this, stack = proj)`,
-/// void; vtbl slot 28 of the `CGxDeviceD3d` vtable. Stashes `proj` into the
-/// device's base shadow (delegated `0x5925e0`, a 16-dword copy into the
-/// `this+0xf50` region), converts the engine's GL-convention projection to D3D
-/// convention (eps-guarded w-normalize + perspective/ortho depth-range remap +
-/// conditional `diag(0.2,0.2,0.2,1)` right-multiply — the pure kernel in
-/// `math::gx`), uploads the result via the `IDirect3DDevice9::SetTransform`
-/// virtual at `[[this+0x38a8]+0xb0]` with `D3DTS_PROJECTION = 3`, and mirrors
-/// the uploaded matrix to `this+0xf90`. The caps dword at `this+0x269c`
-/// (bit 0x100) gates the 0.2-scale step; the eps guard constant
-/// `_DAT_008029d4` is read live from the host image.
+/// `CGxDeviceD3d::IXformSetProjection` — `__thiscall(ecx = this, stack = proj)`, void.
+///
+/// Vtbl slot 28 of the `CGxDeviceD3d` vtable. Stashes `proj` into the device's
+/// base shadow (delegated `0x5925e0`, a 16-dword copy into the `this+0xf50`
+/// region), converts the engine's GL-convention projection to D3D convention
+/// (eps-guarded w-normalize + perspective/ortho depth-range remap + conditional
+/// `diag(0.2,0.2,0.2,1)` right-multiply — the pure kernel in `math::gx`), uploads
+/// the result via the `IDirect3DDevice9::SetTransform` virtual at
+/// `[[this+0x38a8]+0xb0]` with `D3DTS_PROJECTION = 3`, and mirrors the uploaded
+/// matrix to `this+0xf90`. The caps dword at `this+0x269c` (bit 0x100) gates the
+/// 0.2-scale step; the eps guard constant `_DAT_008029d4` is read live from the
+/// host image.
 pub fn c_gx_device_d3d__i_xform_set_projection__5a11d0(this: *mut u8, proj: *const f32) {
     if this.is_null() || proj.is_null() {
         return;
@@ -29818,15 +30243,17 @@ pub fn c_gx_device_d3d__i_xform_set_projection__5a11d0(this: *mut u8, proj: *con
     // (game structs are 2-byte aligned).
     unsafe { mirror.cast::<[f32; 16]>().write_unaligned(out) };
 }
-/// `CParticleEmitter::SpawnParticle` (0x7b8890) — `__thiscall(ecx = this,
-/// [esp+4] = out particle record, [esp+8] = dt, [esp+0xc] = 4x4 world matrix)`,
-/// `RET 0xc`, void. Initialises one spawned particle: a random age
-/// (`out[7] = (rand − 1)·dt`, low byte of `out+0xc` zeroed), a sign-centered
-/// planar spawn offset (`out[0..2]`, z literal +0.0), a velocity from either
-/// the fsin/fcos emission cone (mode word `this+0x188` == 0) or the directed
-/// normalise toward `(0, 0, targetZ)` (unguarded divide — NaN/inf on a zero
-/// vector, reproduced), then the optional world transform (skipped on flag
-/// 0x100), the flag-0x20000 fixup and the flag-0x400 random velocity kick.
+/// `CParticleEmitter::SpawnParticle` (0x7b8890).
+///
+/// `__thiscall(ecx = this, [esp+4] = out particle record, [esp+8] = dt,
+/// [esp+0xc] = 4x4 world matrix)`, `RET 0xc`, void. Initialises one spawned
+/// particle: a random age (`out[7] = (rand − 1)·dt`, low byte of `out+0xc`
+/// zeroed), a sign-centered planar spawn offset (`out[0..2]`, z literal +0.0), a
+/// velocity from either the fsin/fcos emission cone (mode word `this+0x188` == 0)
+/// or the directed normalise toward `(0, 0, targetZ)` (unguarded divide —
+/// NaN/inf on a zero vector, reproduced), then the optional world transform
+/// (skipped on flag 0x100), the flag-0x20000 fixup and the flag-0x400 random
+/// velocity kick.
 ///
 /// Delegated by VA (stateful / unhooked):
 ///
@@ -30067,6 +30494,7 @@ pub fn c_particle_emitter__spawn_particle__7b8890(
     }
 }
 /// `CMap::LoadWdl` — `__cdecl()`, zero args (RET 0; ECX/EDX scratch).
+///
 /// Load-time loader for `World\Maps\<map>\<map>.wdl`, the low-detail terrain
 /// heightmap: formats the path from the two map-name globals, opens the
 /// stream, reads MVER + the 64x64 MAOF tile-offset table into `0xc9a350`,
@@ -30115,8 +30543,10 @@ pub fn c_map__load_wdl__6944a0() {
     const VEC4_SET_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0xb_1df0;
     const CLOSE_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x24_8730;
 
-    /// One f32 store at stock's exact target address (which is the null-based
-    /// crash address when the pool alloc failed — see the doc above).
+    /// One f32 store at stock's exact target address.
+    ///
+    /// That address is the null-based crash address when the pool alloc failed —
+    /// see the doc above.
     fn store_f32(addr: usize, v: f32) {
         // SAFETY: stock performs this exact store: in-bounds on a live
         // CMapAreaLow, and on the null-alloc path it faults exactly like
@@ -30321,13 +30751,14 @@ pub fn c_map__load_wdl__6944a0() {
     close_stream(stream);
 }
 
-/// `CM2Shadow::ProjectCollisionQuads` — `__thiscall(ecx = this, bounds, matrix,
-/// out)`, `ret 0xc`, void. Projects the model's collision mesh
-/// (`*(*(this+0x30)+0x130)`: +0xf0 u16 index triples stride 6, +0xf4 vert
-/// count, +0xf8 verts stride 0xc, +0xfc tri count, +0x100 face normals stride
-/// 0xc) into shadow space and appends one plane-tagged 0x34-byte `QuadElement`
-/// per non-culled triangle to the `out` `TSGrowableArray` header
-/// `[capacity, count, data, granularity]`. Transcribed phases:
+/// `CM2Shadow::ProjectCollisionQuads`.
+///
+/// `__thiscall(ecx = this, bounds, matrix, out)`, `ret 0xc`, void. Projects the
+/// model's collision mesh (`*(*(this+0x30)+0x130)`: +0xf0 u16 index triples
+/// stride 6, +0xf4 vert count, +0xf8 verts stride 0xc, +0xfc tri count, +0x100
+/// face normals stride 0xc) into shadow space and appends one plane-tagged
+/// 0x34-byte `QuadElement` per non-culled triangle to the `out` `TSGrowableArray`
+/// header `[capacity, count, data, granularity]`. Transcribed phases:
 /// (0) lazy slot init `Object::ReleaseSlot30(this, 0)` when `*(this+0x10)==0`;
 /// (1) lazy `SMemAlloc` of two `this` scratch buffers — transformed verts at
 /// `this+0x3e4` (header dword = count, stored pointer = alloc+4, rows
@@ -30641,16 +31072,17 @@ pub fn cm2_shadow__project_collision_quads__7137c0(
         }
     }
 }
-/// `CMapObj::ComputePortalNdcRect` — `__thiscall(ecx = this, stack = portal:
-/// *const u16, outEntry: *mut u8, phantom u32)`, void, `RET 0xc`. WMO
-/// portal-cull helper: transforms the portal's world verts
-/// (`*(this+0x134) + portal[0]*0xc`, stride 0xc) by the view-proj matrix at
-/// 0xcbe2d8 into the 12-vec4 static scratch 0xcbe4c0, homogeneous-clips the
-/// polygon, and writes the NDC cull result into `outEntry`: `+0` u16 flags
-/// (`|= 1` = fully clipped), rect f32 `+4` minY / `+8` minX / `+0xc` maxY /
-/// `+0x10` maxX. If the camera (0xca7edc) lies on the portal plane
-/// (|N·cam + d| <= `_DAT_008029d0`, ordered; NaN skips) and inside the
-/// polygon's dominant-axis 2D projection, the rect is forced to full screen
+/// `CMapObj::ComputePortalNdcRect`.
+///
+/// `__thiscall(ecx = this, stack = portal: *const u16, outEntry: *mut u8,
+/// phantom u32)`, void, `RET 0xc`. WMO portal-cull helper: transforms the
+/// portal's world verts (`*(this+0x134) + portal[0]*0xc`, stride 0xc) by the
+/// view-proj matrix at 0xcbe2d8 into the 12-vec4 static scratch 0xcbe4c0,
+/// homogeneous-clips the polygon, and writes the NDC cull result into
+/// `outEntry`: `+0` u16 flags (`|= 1` = fully clipped), rect f32 `+4` minY /
+/// `+8` minX / `+0xc` maxY / `+0x10` maxX. If the camera (0xca7edc) lies on the
+/// portal plane (|N·cam + d| <= `_DAT_008029d0`, ordered; NaN skips) and inside
+/// the polygon's dominant-axis 2D projection, the rect is forced to full screen
 /// (-1, -1, 1, 1) with flags left 0.
 ///
 /// The third stack dword is a phantom: the body never reads it, but every
@@ -30878,28 +31310,28 @@ pub fn c_map_obj__compute_portal_ndc_rect__6b46f0(
     // SAFETY: `out_entry`+4 is the caller-owned 4-f32 NDC rect.
     unsafe { rect_ptr.write_unaligned(rect) };
 }
-/// `CMapChunk::BuildVerticesAndBounds` — `__thiscall(ecx = chunk)`, void, no
-/// stack args. Rebuilds the chunk's 145 local-space terrain vertices (a 9×9
-/// outer grid interleaved with 8×8 half-cell inner rows, 17-vertex row pairs)
-/// into the inline buffer at `this+0x83c`: x/y generated from the map-grid
-/// indices at `+0x8c` (col) / `+0x90` (row) and the four grid globals, z
-/// bit-copied from the MCVT height stream `*(this+0xf14)`. Accumulates the
-/// AABB into `+0x44` (min) / `+0x50` (max), translates it by the world origin
-/// at `+0x6c`, then writes the center (`+0x5c`), the bounding radius (`+0x68`,
-/// accepted ≤1-ULP class) and the cached 6-float box (`+0x94`). The per-vertex
-/// min (stock CALLs `0x699250`, already hooked) runs inside the math kernel
-/// through that callee's reimplemented kernel — the direct-call form (call the
-/// reimpl by name; the trampoline forwards) rather than routing the patched
-/// VA. The per-vertex max (stock CALLs
-/// `0x6b11f0`) is transcribed inline in the kernel with stock's polarity (the
-/// vertex wins equal AND unordered lanes, per `0x6b11f0`; the
+/// `CMapChunk::BuildVerticesAndBounds` — `__thiscall(ecx = chunk)`, void, no stack args.
+///
+/// Rebuilds the chunk's 145 local-space terrain vertices (a 9×9 outer grid
+/// interleaved with 8×8 half-cell inner rows, 17-vertex row pairs) into the
+/// inline buffer at `this+0x83c`: x/y generated from the map-grid indices at
+/// `+0x8c` (col) / `+0x90` (row) and the four grid globals, z bit-copied from the
+/// MCVT height stream `*(this+0xf14)`. Accumulates the AABB into `+0x44` (min) /
+/// `+0x50` (max), translates it by the world origin at `+0x6c`, then writes the
+/// center (`+0x5c`), the bounding radius (`+0x68`, accepted ≤1-ULP class) and the
+/// cached 6-float box (`+0x94`). The per-vertex min (stock CALLs `0x699250`,
+/// already hooked) runs inside the math kernel through that callee's
+/// reimplemented kernel — the direct-call form (call the reimpl by name; the
+/// trampoline forwards) rather than routing the patched VA. The per-vertex max
+/// (stock CALLs `0x6b11f0`) is transcribed inline in the kernel with stock's
+/// polarity (the vertex wins equal AND unordered lanes, per `0x6b11f0`; the
 /// shared `vector::c3_vector__max_in_place__6b11f0` kernel originally had the
-/// opposite polarity — since fixed to match). The radius' sqrt
-/// helper `0x741760` is an x87 ST0-in/ST0-out CRT thunk with no expressible
-/// extern ABI (not delegatable); the kernel substitutes `f64::sqrt`, whose
-/// argument — a sum of squares — is always ≥ 0, so the thunk's error path is
-/// unreachable. Stock dereferences the height pointer with NO null guard;
-/// mirrored exactly (a null MCVT pointer faults here just as in stock).
+/// opposite polarity — since fixed to match). The radius' sqrt helper `0x741760`
+/// is an x87 ST0-in/ST0-out CRT thunk with no expressible extern ABI (not
+/// delegatable); the kernel substitutes `f64::sqrt`, whose argument — a sum of
+/// squares — is always ≥ 0, so the thunk's error path is unreachable. Stock
+/// dereferences the height pointer with NO null guard; mirrored exactly (a null
+/// MCVT pointer faults here just as in stock).
 pub fn c_map_chunk__build_vertices_and_bounds__6b0e50(this: *mut u8) {
     if this.is_null() {
         return;
@@ -30979,6 +31411,7 @@ pub fn c_map_chunk__build_vertices_and_bounds__6b0e50(this: *mut u8) {
 }
 
 /// Unaligned guest-memory loads/stores for `c_gx_string__emit_line_quads__5ccbe0`.
+///
 /// The emitter reads/writes WoW's packed heap structs through addresses computed
 /// with the stock 32-bit wrapping arithmetic, so every access is by integer
 /// address, unaligned-tolerant, and re-read at exactly the points stock re-reads.
@@ -30991,42 +31424,56 @@ unsafe fn elq_rd_u8(addr: usize) -> u8 {
     // SAFETY: per the fn contract, `addr` is readable guest memory.
     unsafe { (addr as *const u8).read_unaligned() }
 }
+/// Unaligned guest-memory read of a `u32` at `addr`.
+///
 /// # Safety
 /// See [`elq_rd_u8`].
 unsafe fn elq_rd_u32(addr: usize) -> u32 {
     // SAFETY: per the fn contract, `addr` is readable guest memory.
     unsafe { (addr as *const u32).read_unaligned() }
 }
+/// Unaligned guest-memory read of an `i32` at `addr`.
+///
 /// # Safety
 /// See [`elq_rd_u8`].
 unsafe fn elq_rd_i32(addr: usize) -> i32 {
     // SAFETY: per the fn contract, `addr` is readable guest memory.
     unsafe { (addr as *const i32).read_unaligned() }
 }
+/// Unaligned guest-memory read of an `f32` at `addr`.
+///
 /// # Safety
 /// See [`elq_rd_u8`].
 unsafe fn elq_rd_f32(addr: usize) -> f32 {
     // SAFETY: per the fn contract, `addr` is readable guest memory.
     unsafe { (addr as *const f32).read_unaligned() }
 }
+/// Unaligned guest-memory write of a `u8` at `addr`.
+///
 /// # Safety
 /// See [`elq_rd_u8`].
 unsafe fn elq_wr_u8(addr: usize, v: u8) {
     // SAFETY: per the fn contract, `addr` is writable guest memory.
     unsafe { (addr as *mut u8).write_unaligned(v) }
 }
+/// Unaligned guest-memory write of a `u32` at `addr`.
+///
 /// # Safety
 /// See [`elq_rd_u8`].
 unsafe fn elq_wr_u32(addr: usize, v: u32) {
     // SAFETY: per the fn contract, `addr` is writable guest memory.
     unsafe { (addr as *mut u32).write_unaligned(v) }
 }
+/// Unaligned guest-memory write of an `i32` at `addr`.
+///
 /// # Safety
 /// See [`elq_rd_u8`].
 unsafe fn elq_wr_i32(addr: usize, v: i32) {
     // SAFETY: per the fn contract, `addr` is writable guest memory.
     unsafe { (addr as *mut i32).write_unaligned(v) }
 }
+/// Unaligned guest-memory write of an `f32` at `addr`.
+///
 /// # Safety
 /// See [`elq_rd_u8`].
 unsafe fn elq_wr_f32(addr: usize, v: f32) {
@@ -31034,10 +31481,12 @@ unsafe fn elq_wr_f32(addr: usize, v: f32) {
     unsafe { (addr as *mut f32).write_unaligned(v) }
 }
 
-/// `CGxString::EmitLineQuads` — `__thiscall(ecx = this, stack = text, byteCount,
-/// inoutColor, penPos, outPageMask, linkState)`, `RET 0x18` (VA 0x5ccbe0).
-/// Prototyped void, but the binary's loop-bottom exit leaves the ADVANCED text
-/// pointer in EAX (`mov eax,[ebp+8]` @0x5cd280) — reproduced as the return.
+/// `CGxString::EmitLineQuads`.
+///
+/// `__thiscall(ecx = this, stack = text, byteCount, inoutColor, penPos,
+/// outPageMask, linkState)`, `RET 0x18` (VA 0x5ccbe0). Prototyped void, but the
+/// binary's loop-bottom exit leaves the ADVANCED text pointer in EAX
+/// (`mov eax,[ebp+8]` @0x5cd280) — reproduced as the return.
 ///
 /// Whole-function port of the per-line UI text-quad emitter (the #1 main-thread
 /// x87 hotspot in busy scenes): walks one already-line-fitted UTF-8 run token by
@@ -31745,10 +32194,12 @@ pub fn c_gx_string__emit_line_quads__5ccbe0(
     cur_text as *const u8
 }
 
-/// `World_ComputeVertexOutcode` — `__thiscall(ECX = out[0x1c], float* v) -> u32`
-/// (EAX carries the outcode the stock body leaves there). Writes six f32 slab
-/// distances plus the packed sign-bit outcode at `out+0x18`. Pure leaf, zero
-/// callees; lanes are moved as raw bits so copy lanes preserve NaN payloads.
+/// `World_ComputeVertexOutcode`.
+///
+/// `__thiscall(ECX = out[0x1c], float* v) -> u32` (EAX carries the outcode the
+/// stock body leaves there). Writes six f32 slab distances plus the packed
+/// sign-bit outcode at `out+0x18`. Pure leaf, zero callees; lanes are moved as
+/// raw bits so copy lanes preserve NaN payloads.
 pub fn world_compute_vertex_outcode__686d20(out: *mut u32, v: *const u32) -> u32 {
     if out.is_null() || v.is_null() {
         return 0;
@@ -31763,11 +32214,12 @@ pub fn world_compute_vertex_outcode__686d20(out: *mut u32, v: *const u32) -> u32
     region[6]
 }
 
-/// `Minimap__ProjectBlipDelta` — `__thiscall(ECX = out[2 f32], 8 stack f32)`
-/// returning the out pointer in EAX (the stock body's `MOV EAX,ECX` survives
-/// to RET). Maps a tracked object's world-XY delta from the minimap center
-/// into the blip's 2-float local offset; arg 3 (`ctr_z`) is dead in the stock
-/// body. Pure leaf, zero callees.
+/// `Minimap__ProjectBlipDelta`.
+///
+/// `__thiscall(ECX = out[2 f32], 8 stack f32)` returning the out pointer in EAX
+/// (the stock body's `MOV EAX,ECX` survives to RET). Maps a tracked object's
+/// world-XY delta from the minimap center into the blip's 2-float local offset;
+/// arg 3 (`ctr_z`) is dead in the stock body. Pure leaf, zero callees.
 #[allow(clippy::too_many_arguments)]
 pub fn minimap__project_blip_delta__4eaa30(
     out: *mut f32,
@@ -31792,14 +32244,16 @@ pub fn minimap__project_blip_delta__4eaa30(
     out
 }
 
-/// `CGObject_C__UpdateSelectionCircleTransform` — `__thiscall(ECX = this,
-/// float dt)`, RET 0x4, void. Per-frame selection-circle update: exponential
-/// lerp of the anchor at `this+0x104` toward the ground point from vtable
-/// slot `+0x20` (skipped when `ground.z < threshold` OR NaN — the stock
-/// `TEST AH,1` folds unordered into the skip), then rebuilds the circle
-/// model's emitter transform. `pow(K, dt)` goes through `libm` (retiring the
-/// x87 `_CIpow` this callsite induced). The three vtable slots are
-/// polymorphic — called through the LIVE vtable, never a static VA.
+/// `CGObject_C__UpdateSelectionCircleTransform`.
+///
+/// `__thiscall(ECX = this, float dt)`, RET 0x4, void. Per-frame
+/// selection-circle update: exponential lerp of the anchor at `this+0x104`
+/// toward the ground point from vtable slot `+0x20` (skipped when
+/// `ground.z < threshold` OR NaN — the stock `TEST AH,1` folds unordered into
+/// the skip), then rebuilds the circle model's emitter transform. `pow(K, dt)`
+/// goes through `libm` (retiring the x87 `_CIpow` this callsite induced). The
+/// three vtable slots are polymorphic — called through the LIVE vtable, never a
+/// static VA.
 ///
 /// NOTE (corrects the wave-3 brief): the facing vfunc `+0x44` takes NO stack
 /// args — the three pointers pushed before it are BuildEmitterTransform's
@@ -31927,16 +32381,17 @@ pub fn cg_object_c__update_selection_circle_transform__614cd0(
     );
 }
 
-/// `Collision_SweepVolumeAgainstWorldPlanes` — `__thiscall(ECX = ctx,
-/// planeSet, dir, dist f32, outFaceFlags, outHits, outHitCount, outDist,
-/// originOverride|null)`, RET 0x20, EAX = 0/1. Per-frame swept-volume vs
-/// world-geometry driver: seeds the prism/clip planes, optionally
-/// liquid-adjusts the volume height, builds the sweep prism, gathers world
-/// triangles, sweeps the box faces, then clips+sweeps up to 5 front-facing
-/// prism faces, band-folding the nearest contacts into `outHits`. All
-/// FNSTSW-bit compare polarities live in the `math::collision` sweep kernels;
-/// the heavy sub-queries are delegated (three of them land in already-native
-/// hooks via their patched VAs).
+/// `Collision_SweepVolumeAgainstWorldPlanes`.
+///
+/// `__thiscall(ECX = ctx, planeSet, dir, dist f32, outFaceFlags, outHits,
+/// outHitCount, outDist, originOverride|null)`, RET 0x20, EAX = 0/1. Per-frame
+/// swept-volume vs world-geometry driver: seeds the prism/clip planes,
+/// optionally liquid-adjusts the volume height, builds the sweep prism, gathers
+/// world triangles, sweeps the box faces, then clips+sweeps up to 5
+/// front-facing prism faces, band-folding the nearest contacts into `outHits`.
+/// All FNSTSW-bit compare polarities live in the `math::collision` sweep
+/// kernels; the heavy sub-queries are delegated (three of them land in
+/// already-native hooks via their patched VAs).
 #[allow(clippy::too_many_arguments)]
 pub fn collision_sweep_volume_against_world_planes__632ba0(
     ctx: *mut core::ffi::c_void,
@@ -31965,12 +32420,15 @@ pub fn collision_sweep_volume_against_world_planes__632ba0(
     const BAND: *const f32 = (BASE + 0x40_dfec) as *const f32;
     /// Liquid height scale (.data 0x8012cc).
     const LIQUID_SCALE: *const f32 = (BASE + 0x40_12cc) as *const f32;
-    /// The liquid-surface plane-set global (&DAT_00c4e564) the flag path
-    /// compares `planeSet` against BY ADDRESS.
+    /// The liquid-surface plane-set global (&DAT_00c4e564).
+    ///
+    /// The flag path compares `planeSet` against it BY ADDRESS.
     const LIQUID_PLANE_SET: usize = BASE + 0x84_e564;
-    /// Stock delegate (VA).  BuildSweepPrism / BuildQuadFaceClipPlanes /
-    /// SweepPolygonAgainstFaces / SweepBoxFaces / GatherWorldTriangles are
-    /// our own hooks and are called directly as Rust fns below (no detour).
+    /// Stock delegate (VA).
+    ///
+    /// BuildSweepPrism / BuildQuadFaceClipPlanes / SweepPolygonAgainstFaces /
+    /// SweepBoxFaces / GatherWorldTriangles are our own hooks and are called
+    /// directly as Rust fns below (no detour).
     const DOWNWARD_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x23_2a30;
 
     if ctx.is_null()
@@ -32198,6 +32656,7 @@ pub fn collision_sweep_volume_against_world_planes__632ba0(
 }
 
 /// `SkyDome__ComputeVertexColors` — `__thiscall(ECX = dome)`, bare RET, void.
+///
 /// Rebuilds the dome's per-vertex ARGB array (`*(dome+0x14)`): zenith vertex,
 /// 4 azimuthal band rings + the horizon ring (`dome+0x24` vertices each) and
 /// one final fog vertex. Per channel the stock does `u8 → FILD →
@@ -32218,8 +32677,9 @@ pub fn sky_dome__compute_vertex_colors__6d0f50(dome: *mut core::ffi::c_void) {
     const FLASH_FLAG: *const u8 = (BASE + 0x8e_99f8) as *const u8;
     const FLASH_COLOR: *const u32 = (BASE + 0x8e_99f0) as *const u32;
     const FLASH_T: *const f32 = (BASE + 0x8e_99d0) as *const f32;
-    /// Band colors: [0]=zenith, [1..=4]=rings, [5]=fog/horizon. MUTABLE — the
-    /// lightning flash blends into these globals in place.
+    /// Band colors: [0]=zenith, [1..=4]=rings, [5]=fog/horizon.
+    ///
+    /// MUTABLE — the lightning flash blends into these globals in place.
     const BANDS: *mut u32 = (BASE + 0x8e_9c14) as *mut u32;
     const ROUND_BIAS: *const f32 = (BASE + 0x46_f2c8) as *const f32;
     const FLASH_K: *const f32 = (BASE + 0x3f_fe58) as *const f32;
@@ -32430,15 +32890,16 @@ pub fn sky_dome__compute_vertex_colors__6d0f50(dome: *mut core::ffi::c_void) {
     unsafe { vp.write_unaligned(final_color) };
 }
 
-/// `CMap__UpdateMapObjs` — `__fastcall(ECX = enableFlaggedPass)`, bare RET,
-/// void. Per-frame WMO streaming + visibility driver over the global def
-/// list (head @0xca7da4, next via base @0xca7d9c): near-box culls each def
-/// (readiness spin + bounds init on pass), walks its group list culling and
-/// loading groups (tight-box gates the load kick; lights/doodads created per
-/// flag bits), and optionally re-inserts flagged defs overlapping the far
-/// box into the depth bucket. Every AABB compare CULLS on NaN (kernels in
-/// math/world.rs); `GreaterEqualAll` runs as native Rust; all nine stateful
-/// callees are delegated by VA.
+/// `CMap__UpdateMapObjs` — `__fastcall(ECX = enableFlaggedPass)`, bare RET, void.
+///
+/// Per-frame WMO streaming + visibility driver over the global def list (head
+/// @0xca7da4, next via base @0xca7d9c): near-box culls each def (readiness spin +
+/// bounds init on pass), walks its group list culling and loading groups
+/// (tight-box gates the load kick; lights/doodads created per flag bits), and
+/// optionally re-inserts flagged defs overlapping the far box into the depth
+/// bucket. Every AABB compare CULLS on NaN (kernels in math/world.rs);
+/// `GreaterEqualAll` runs as native Rust; all nine stateful callees are
+/// delegated by VA.
 pub fn c_map__update_map_objs__698720(enable_flagged_pass: u32) {
     const BASE: usize = crate::win::EXPECTED_IMAGE_BASE;
     const DEF_LIST_HEAD: *const u32 = (BASE + 0x8a_7da4) as *const u32;
@@ -32635,14 +33096,14 @@ pub fn c_map__update_map_objs__698720(enable_flagged_pass: u32) {
     }
 }
 
-/// `CObjectWrapper__GetPosition` — `__thiscall(ECX = this, stack = float*
-/// out)`, RET 0x4. One-line getter: `obj = *this`, then copy the
-/// C3Vector at `obj+0x8/0xc/0x10` into `out`. Stock shuttles the 12 bytes
-/// through the x87 stack (three FLD/FSTP pairs — the entire profile cost);
-/// ported as raw dword copies, which are bit-preserving (incl. NaN
-/// payloads) where FLD/FSTP m32 would quietize a signaling NaN. No
-/// arithmetic, no callees. Returns `out` in EAX: the stock `MOV
-/// EAX,[EBP+8]` survives to RET (abi-audit-proven — a caller may consume
+/// `CObjectWrapper__GetPosition` — `__thiscall(ECX = this, stack = float* out)`, RET 0x4.
+///
+/// One-line getter: `obj = *this`, then copy the C3Vector at `obj+0x8/0xc/0x10`
+/// into `out`. Stock shuttles the 12 bytes through the x87 stack (three
+/// FLD/FSTP pairs — the entire profile cost); ported as raw dword copies, which
+/// are bit-preserving (incl. NaN payloads) where FLD/FSTP m32 would quietize a
+/// signaling NaN. No arithmetic, no callees. Returns `out` in EAX: the stock
+/// `MOV EAX,[EBP+8]` survives to RET (abi-audit-proven — a caller may consume
 /// it), same class as `Minimap__ProjectBlipDelta`.
 pub fn c_object_wrapper__get_position__6d6a90(
     this: *mut core::ffi::c_void,
@@ -32668,16 +33129,17 @@ pub fn c_object_wrapper__get_position__6d6a90(
     out
 }
 
-/// `CGxAabb16__TestFloatBox` — `__stdcall(short* aabb16)`, RET 0x4. NOT
-/// __thiscall: ECX is only ever loaded as the *callee's* this. Widens the
-/// packed 6×i16 box (min.xyz, max.xyz) to a float `{min, max}` box (kernel
-/// in `math/aabb.rs`), then answers "is this box visible in the active
-/// frustum?". Stock delegates that to `IsBoxVisibleInActiveFrustum`
-/// 0x682f40 — a 4-instruction wrapper that picks the active frustum
-/// (`0xc7d308 + idx*0xfc`, idx at `0xc7cfe0`) and returns the logical NOT
-/// of `Frustum__CullBox` 0x686940, which is OUR hook — so the wrapper is
-/// inlined here and the whole path runs native. Stock's return is AL-only
-/// (`SETNZ AL` over stale callee EAX bits) => `u8`.
+/// `CGxAabb16__TestFloatBox` — `__stdcall(short* aabb16)`, RET 0x4.
+///
+/// NOT __thiscall: ECX is only ever loaded as the *callee's* this. Widens the
+/// packed 6×i16 box (min.xyz, max.xyz) to a float `{min, max}` box (kernel in
+/// `math/aabb.rs`), then answers "is this box visible in the active frustum?".
+/// Stock delegates that to `IsBoxVisibleInActiveFrustum` 0x682f40 — a
+/// 4-instruction wrapper that picks the active frustum (`0xc7d308 + idx*0xfc`,
+/// idx at `0xc7cfe0`) and returns the logical NOT of `Frustum__CullBox`
+/// 0x686940, which is OUR hook — so the wrapper is inlined here and the whole
+/// path runs native. Stock's return is AL-only (`SETNZ AL` over stale callee
+/// EAX bits) => `u8`.
 pub fn c_gx_aabb16__test_float_box__6b4d10(aabb16: *const i16) -> u8 {
     /// Active-frustum index (`DAT_00c7cfe0`, live `.data` u32).
     const FRUSTUM_INDEX: *const u32 = (crate::win::EXPECTED_IMAGE_BASE + 0x87_cfe0) as *const u32;
@@ -32698,21 +33160,22 @@ pub fn c_gx_aabb16__test_float_box__6b4d10(aabb16: *const i16) -> u8 {
     u8::from(frustum__cull_box__686940(frustum, bbox.as_ptr()) == 0)
 }
 
-/// `Collision_SweepBoxFaces` — `__thiscall(ECX = this collision object,
-/// 11 stack args)`, RET 0x2c, void (EAX at RET is stale callee residue).
-/// Narrowphase swept-prism driver: for each of the 4 side faces (records at
-/// `prismVerts+0x50`, stride 0x10 = `[nx,ny,nz,d]`) it back-face culls via
-/// `dot(normal, prismPlanes.xyz)` vs the 0x7ffd74 threshold (NaN =>
-/// process), builds the face's edge clip planes and sweeps the clipped
-/// polygon for the nearest hit — both callees are OUR hooks, called
-/// directly — then folds the hit into the caller's running contact set:
-/// reset / append per the ±eps band (0x80dfec) and the strict new-best
-/// swap into slot 0. The per-face edge index rows are 3 BYTES wide
-/// (`edgeVertBase+0x14+3·i`); the hitDist scratch is seeded from `maxDist`
-/// each face (stock reuses the spent edgeVertBase stack slot for it).
-/// `*(this+0x30)` is the world face-set pair whose two dwords stock
-/// forwards as the trailing sweep args its callee never reads (ret 0x20
-/// pops them unread) — we read them faithfully but null-guard the pointer.
+/// `Collision_SweepBoxFaces`.
+///
+/// `__thiscall(ECX = this collision object, 11 stack args)`, RET 0x2c, void
+/// (EAX at RET is stale callee residue). Narrowphase swept-prism driver: for
+/// each of the 4 side faces (records at `prismVerts+0x50`, stride 0x10 =
+/// `[nx,ny,nz,d]`) it back-face culls via `dot(normal, prismPlanes.xyz)` vs the
+/// 0x7ffd74 threshold (NaN => process), builds the face's edge clip planes and
+/// sweeps the clipped polygon for the nearest hit — both callees are OUR hooks,
+/// called directly — then folds the hit into the caller's running contact set:
+/// reset / append per the ±eps band (0x80dfec) and the strict new-best swap
+/// into slot 0. The per-face edge index rows are 3 BYTES wide
+/// (`edgeVertBase+0x14+3·i`); the hitDist scratch is seeded from `maxDist` each
+/// face (stock reuses the spent edgeVertBase stack slot for it).
+/// `*(this+0x30)` is the world face-set pair whose two dwords stock forwards as
+/// the trailing sweep args its callee never reads (ret 0x20 pops them unread) —
+/// we read them faithfully but null-guard the pointer.
 #[allow(clippy::too_many_arguments)]
 pub fn collision_sweep_box_faces__632280(
     this: *mut core::ffi::c_void,
@@ -32875,18 +33338,19 @@ pub fn collision_sweep_box_faces__632280(
     }
 }
 
-/// `Collision_GatherWorldTriangles` — `__thiscall(ECX = this CMovement,
-/// stack = sweepX/Y/Z f32)`, RET 0xc, u32 (1 = early-out or gathered, 0 =
-/// nothing gathered). Per-query collision broadphase: world transform +
-/// sweep rotation when attached, asymmetric capsule AABB around the swept
-/// position, frame-coherence early-out against the cache box 0xc4e5a0,
-/// inflate-by-1/6 + union + filtered gather into the global triangle
-/// lists, optional secondary-list winding flip (flags bit 0x200000), cache
-/// writeback, then the hot per-triangle transform into the object's local
-/// frame. The EXACT ordering of the shared-global writes (lists, cache
-/// box) is load-bearing — the parent SweepVolume driver consumes them
-/// immediately after; do not reorder. Stock's list-reset call 0x61e9c0 is
-/// a bare `RET` (`EmptyStub`) and is omitted here.
+/// `Collision_GatherWorldTriangles`.
+///
+/// `__thiscall(ECX = this CMovement, stack = sweepX/Y/Z f32)`, RET 0xc, u32
+/// (1 = early-out or gathered, 0 = nothing gathered). Per-query collision
+/// broadphase: world transform + sweep rotation when attached, asymmetric
+/// capsule AABB around the swept position, frame-coherence early-out against
+/// the cache box 0xc4e5a0, inflate-by-1/6 + union + filtered gather into the
+/// global triangle lists, optional secondary-list winding flip (flags bit
+/// 0x200000), cache writeback, then the hot per-triangle transform into the
+/// object's local frame. The EXACT ordering of the shared-global writes (lists,
+/// cache box) is load-bearing — the parent SweepVolume driver consumes them
+/// immediately after; do not reorder. Stock's list-reset call 0x61e9c0 is a
+/// bare `RET` (`EmptyStub`) and is omitted here.
 pub fn collision_gather_world_triangles__631e70(
     this: *mut core::ffi::c_void,
     sweep_x: f32,
@@ -32905,8 +33369,10 @@ pub fn collision_gather_world_triangles__631e70(
     const LIST2_KEY: *mut u32 = (BASE + 0x84_e564) as *mut u32;
     const LIST2_COUNT: *const u32 = (BASE + 0x84_e568) as *const u32;
     const LIST2_BASE: *const *mut u8 = (BASE + 0x84_e56c) as *const *mut u8;
-    /// Stock delegates (VAs): the attachment world-transform builder and
-    /// the stateful spatial gather (unbounded tree walk stays guest code).
+    /// Stock delegates (VAs).
+    ///
+    /// The attachment world-transform builder and the stateful spatial gather
+    /// (unbounded tree walk stays guest code).
     const BUILD_TRANSFORM_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x23_0ac0;
     const QUERY_FLAGS_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x23_15f0;
     const COLLECT_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x27_21b0;
@@ -33095,15 +33561,16 @@ pub fn collision_gather_world_triangles__631e70(
     1
 }
 
-/// `CMovement__ComputeGroundNormal` — `__stdcall(float* outNormal, float*
-/// planes, u32 planeCount)`, RET 0xc, returns `outNormal` in EAX. NOT
-/// __thiscall despite the name: there is no register `this`. Averages the
-/// normals of every global contact record (list 0xc4e530/0xc4e534, stride
-/// 0x34) whose surface faces upward (`normal.z > thr` OR NaN — JNP
-/// polarity) AND whose contact polygon survives the caller's plane set
-/// (`Collision_ClipPolygonAgainstPlanes` 0x631870, delegated), then
-/// normalizes the f32-accumulated sum (mixed-precision kernel, unguarded
-/// divisions like stock). Falls back to world-up `(0,0,1)`.
+/// `CMovement__ComputeGroundNormal`.
+///
+/// `__stdcall(float* outNormal, float* planes, u32 planeCount)`, RET 0xc,
+/// returns `outNormal` in EAX. NOT __thiscall despite the name: there is no
+/// register `this`. Averages the normals of every global contact record (list
+/// 0xc4e530/0xc4e534, stride 0x34) whose surface faces upward
+/// (`normal.z > thr` OR NaN — JNP polarity) AND whose contact polygon survives
+/// the caller's plane set (`Collision_ClipPolygonAgainstPlanes` 0x631870,
+/// delegated), then normalizes the f32-accumulated sum (mixed-precision kernel,
+/// unguarded divisions like stock). Falls back to world-up `(0,0,1)`.
 ///
 /// NB: the wave-3 brief read args 2/3 as "(capsule, castDist)" — WRONG.
 /// Our own `ComputeBoxGroundNormal` driver calls this fn with
@@ -33127,8 +33594,9 @@ pub fn c_movement__compute_ground_normal__637140(
     const LIST_BASE: *const *mut u8 = (BASE + 0x84_e534) as *const *mut u8;
     /// Upward-facing threshold (`_DAT_0080e028`, fixed `.data` f32).
     const FACING_THR: *const f32 = (BASE + 0x40_e028) as *const f32;
-    /// Stock delegate (VA): the polygon-vs-planes clip. `__fastcall(ecx =
-    /// planes, edx = planeCount, stack = descriptor)`.
+    /// Stock delegate (VA): the polygon-vs-planes clip.
+    ///
+    /// `__fastcall(ecx = planes, edx = planeCount, stack = descriptor)`.
     const CLIP_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x23_1870;
 
     if out_normal.is_null() {
@@ -33204,16 +33672,17 @@ pub fn c_movement__compute_ground_normal__637140(
     out_normal
 }
 
-/// `CMapObjGroupNode__QueryChildrenOverlap` — `__thiscall(ECX = this node,
-/// stack = [ctx, obbPts, arg3, flags])`, RET 0x10, bool in AL (OR of the
-/// per-child dispatch results; upper EAX bytes are stale). Builds the
-/// query AABB from the 8 OBB corners at `obbPts+0x60` via our
-/// `CAaBox__FromPoints` hook, then walks the child array (`*this+0x130`,
-/// stride 0x20, count `this+0x168` re-read every iteration like stock —
-/// the dispatch may grow it): any child whose stored bbox overlaps the
-/// query (NaN lane => skip) is fetched (`CMapObj__GetLoadedGroup`,
-/// delegated) and dispatched to `CMapObjGroup__QueryBspSegmentIntersect`
-/// (delegated — stateful, likely recursive) with the folded mask.
+/// `CMapObjGroupNode__QueryChildrenOverlap`.
+///
+/// `__thiscall(ECX = this node, stack = [ctx, obbPts, arg3, flags])`, RET 0x10,
+/// bool in AL (OR of the per-child dispatch results; upper EAX bytes are
+/// stale). Builds the query AABB from the 8 OBB corners at `obbPts+0x60` via
+/// our `CAaBox__FromPoints` hook, then walks the child array (`*this+0x130`,
+/// stride 0x20, count `this+0x168` re-read every iteration like stock — the
+/// dispatch may grow it): any child whose stored bbox overlaps the query (NaN
+/// lane => skip) is fetched (`CMapObj__GetLoadedGroup`, delegated) and
+/// dispatched to `CMapObjGroup__QueryBspSegmentIntersect` (delegated —
+/// stateful, likely recursive) with the folded mask.
 pub fn c_map_obj_group_node__query_children_overlap__6a3dc0(
     this: *mut core::ffi::c_void,
     ctx: u32,
@@ -33298,18 +33767,19 @@ pub fn c_map_obj_group_node__query_children_overlap__6a3dc0(
     acc
 }
 
-/// `Minimap__UnitBlipEnumCallback` — `__thiscall(ECX = minimap ctx, stack
-/// = [guidLo, guidHi])`, RET 0x8, always returns 1 (enumeration-continue).
-/// Per-tracked-object functor: player early-out, object lookup, range
-/// cull (`range² < dist²` ordered => exit; **NaN continues** — the FCOMPP
-/// `TEST AH,0x5; JNP` leaves PF=1 on unordered, correcting the wave-4
-/// errata), eligibility gates per object type (9 unit / 0x19 pet-family /
-/// 0x21 gameobject), indoor zone/group gate, then appends an 0x18-byte
-/// blip record (guid, projected XY via OUR `ProjectBlipDelta` kernel,
-/// other-zone flag) to the per-category growable array at 0xbc82b0.
-/// The two AL-only tracker predicates are delegated as `u8`; the two
-/// polymorphic vfuncs (+0x14 GetPosition, zoom vfunc +0x1c returning
-/// ST0) go through the LIVE vtable.
+/// `Minimap__UnitBlipEnumCallback`.
+///
+/// `__thiscall(ECX = minimap ctx, stack = [guidLo, guidHi])`, RET 0x8, always
+/// returns 1 (enumeration-continue). Per-tracked-object functor: player
+/// early-out, object lookup, range cull (`range² < dist²` ordered => exit;
+/// **NaN continues** — the FCOMPP `TEST AH,0x5; JNP` leaves PF=1 on unordered,
+/// correcting the wave-4 errata), eligibility gates per object type (9 unit /
+/// 0x19 pet-family / 0x21 gameobject), indoor zone/group gate, then appends an
+/// 0x18-byte blip record (guid, projected XY via OUR `ProjectBlipDelta` kernel,
+/// other-zone flag) to the per-category growable array at 0xbc82b0. The two
+/// AL-only tracker predicates are delegated as `u8`; the two polymorphic vfuncs
+/// (+0x14 GetPosition, zoom vfunc +0x1c returning ST0) go through the LIVE
+/// vtable.
 #[allow(clippy::too_many_lines)]
 pub fn minimap__unit_blip_enum_callback__4eaa90(
     this: *mut core::ffi::c_void,
@@ -33328,8 +33798,7 @@ pub fn minimap__unit_blip_enum_callback__4eaa90(
     const REALLOC_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x0e_fa00;
     /// `.data` token the lookup receives in EDX (stock `MOV EDX,0x84c668`).
     const OBJ_PTR_TOKEN: u32 = (B + 0x44_c668) as u32;
-    /// Per-category blip arrays (`DAT_00bc82b0`, stride 0x10:
-    /// [capacity, count, data, chunkSize]).
+    /// Per-category blip arrays (`DAT_00bc82b0`, stride 0x10: [capacity, count, data, chunkSize]).
     const BLIP_ARRAYS: usize = B + 0x7c_82b0;
 
     if this.is_null() {
@@ -33643,16 +34112,16 @@ pub fn minimap__unit_blip_enum_callback__4eaa90(
     1
 }
 
-/// `CWorldObjList__UpdateVisibility` — `__thiscall(ECX = this list)`,
-/// bare RET, void. Per-frame visibility traversal over the tagged
-/// intrusive object list (`cur = this[2]`; payload at `cur+4`; the next
-/// handle is read from `base + cur + 4`; odd/null handle = end). Per
-/// flagged object: frame-stamp refresh, plane-depth sort key into
-/// `+0x78`, frustum sphere cull (stock's 0x682ef0 wrapper INLINED —
-/// active-frustum select plus our native `CWorldFrustum__TestSphere`),
-/// height-bucket test (our hook, direct), then either the visible-list
-/// head splice or the culled/near notification. The list surgery mirrors
-/// stock statement for statement; do not restructure it.
+/// `CWorldObjList__UpdateVisibility` — `__thiscall(ECX = this list)`, bare RET, void.
+///
+/// Per-frame visibility traversal over the tagged intrusive object list
+/// (`cur = this[2]`; payload at `cur+4`; the next handle is read from
+/// `base + cur + 4`; odd/null handle = end). Per flagged object: frame-stamp
+/// refresh, plane-depth sort key into `+0x78`, frustum sphere cull (stock's
+/// 0x682ef0 wrapper INLINED — active-frustum select plus our native
+/// `CWorldFrustum__TestSphere`), height-bucket test (our hook, direct), then
+/// either the visible-list head splice or the culled/near notification. The
+/// list surgery mirrors stock statement for statement; do not restructure it.
 pub fn c_world_obj_list__update_visibility__6838f0(this: *mut core::ffi::c_void) {
     const B: usize = crate::win::EXPECTED_IMAGE_BASE;
     /// Camera depth plane `[nx,ny,nz,d]` (`DAT_00c7bcb0..bc`).
@@ -33672,8 +34141,10 @@ pub fn c_world_obj_list__update_visibility__6838f0(this: *mut core::ffi::c_void)
     /// Active-frustum index / array base (same globals as 0x682f40).
     const FRUSTUM_INDEX: *const u32 = (B + 0x87_cfe0) as *const u32;
     const FRUSTUM_BASE: usize = B + 0x87_d308;
-    /// Stock delegates (VAs): the doubly-linked unlink helper and the
-    /// culled/near render-handle notifier.
+    /// Stock delegates (VAs).
+    ///
+    /// The doubly-linked unlink helper and the culled/near render-handle
+    /// notifier.
     const RESOLVE_NEXT_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x28_76b0;
     const SET_LINKED_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x31_0b90;
 
@@ -33858,17 +34329,18 @@ pub fn c_world_obj_list__update_visibility__6838f0(this: *mut core::ffi::c_void)
     }
 }
 
-/// Bit-faithful body of stock `TSLink__Unlink` 0x687260. The same
-/// sequence appears three ways inside `WorldScene__CullAndBucketNodes`
+/// Bit-faithful body of stock `TSLink__Unlink` 0x687260.
+///
+/// The same sequence appears three ways inside `WorldScene__CullAndBucketNodes`
 /// 0x6834e0 — stock's inlined copy (0x6835b0-0x6835e1), the
-/// `TSLink__ResolveLinkPtr(link, -1)` + fix-up run (0x683626-0x683641),
-/// and two direct `CALL 0x687260` sites — and all three collapse here
-/// (the arithmetic was cross-checked instruction-by-instruction against
-/// each). `link[0]` = next node ptr; `link[1]` = prev encoding: odd or
-/// null tags a direct slot (`prev & !1`), otherwise the predecessor's
-/// forward slot is `link + (prev − *(next+4))` in plain integer
-/// arithmetic (offset-based TSLink — never `ptr::add`). No-op when
-/// `link[0]` is 0; every deref stock trusts stays unguarded.
+/// `TSLink__ResolveLinkPtr(link, -1)` + fix-up run (0x683626-0x683641), and two
+/// direct `CALL 0x687260` sites — and all three collapse here (the arithmetic
+/// was cross-checked instruction-by-instruction against each). `link[0]` = next
+/// node ptr; `link[1]` = prev encoding: odd or null tags a direct slot
+/// (`prev & !1`), otherwise the predecessor's forward slot is
+/// `link + (prev − *(next+4))` in plain integer arithmetic (offset-based
+/// TSLink — never `ptr::add`). No-op when `link[0]` is 0; every deref stock
+/// trusts stays unguarded.
 fn ts_link_unlink(link: *mut u32) {
     // SAFETY: caller passes the live 8-byte TSLink pair; next-field dword.
     let next = unsafe { link.read_unaligned() };
@@ -33899,21 +34371,21 @@ fn ts_link_unlink(link: *mut u32) {
     unsafe { p_prev.write_unaligned(0) };
 }
 
-/// `WorldScene__CullAndBucketNodes` — `__fastcall(ECX = container,
-/// EDX = cull context)`, bare RET, void. Per-frame scene-node
-/// cull-and-bucket pass: walks the container handle-list (head at
-/// `container+0xbc`; next handle at `[container+0xb4] + handle + 4`;
-/// odd/null handle = end; node = `*(handle+4)`), and per unskipped node
-/// writes the plane-depth key into `+0x78` (REUSES the 0x6838f0 kernel —
-/// same 0xc7bcb0 plane globals, same fold), then frustum-culls (stock's
-/// `IsSphereCulled` 0x682ef0 wrapper INLINED — sphere copy +
-/// active-frustum select over our native `TestSphere`) and height-bucket
-/// tests (our hook, direct; flags=0, culled iff nonzero). Survivors are
-/// spliced into the global VISIBLE bucket (`link = *0xc7cb08 + node`,
-/// head 0xc7cb0c), culled nodes into the DEFERRED bucket (`link =
-/// *0xc7cb44 + node` — `TSList__GetLinkAddress` 0x687a00 inlined — head
-/// 0xc7cb48) plus a squared-distance LOD notify through the delegated
-/// `LinkedListNode__SetLinked`. The splice write order mirrors stock
+/// `WorldScene__CullAndBucketNodes`.
+///
+/// `__fastcall(ECX = container, EDX = cull context)`, bare RET, void. Per-frame
+/// scene-node cull-and-bucket pass: walks the container handle-list (head at
+/// `container+0xbc`; next handle at `[container+0xb4] + handle + 4`; odd/null
+/// handle = end; node = `*(handle+4)`), and per unskipped node writes the
+/// plane-depth key into `+0x78` (REUSES the 0x6838f0 kernel — same 0xc7bcb0
+/// plane globals, same fold), then frustum-culls (stock's `IsSphereCulled`
+/// 0x682ef0 wrapper INLINED — sphere copy + active-frustum select over our
+/// native `TestSphere`) and height-bucket tests (our hook, direct; flags=0,
+/// culled iff nonzero). Survivors are spliced into the global VISIBLE bucket
+/// (`link = *0xc7cb08 + node`, head 0xc7cb0c), culled nodes into the DEFERRED
+/// bucket (`link = *0xc7cb44 + node` — `TSList__GetLinkAddress` 0x687a00
+/// inlined — head 0xc7cb48) plus a squared-distance LOD notify through the
+/// delegated `LinkedListNode__SetLinked`. The splice write order mirrors stock
 /// statement for statement; do not restructure it.
 pub fn world_scene__cull_and_bucket_nodes__6834e0(
     container: *mut core::ffi::c_void,
@@ -33930,11 +34402,12 @@ pub fn world_scene__cull_and_bucket_nodes__6834e0(
     const VIS_LINK_OFF: *const u32 = (B + 0x87_cb08) as *const u32;
     /// Visible-bucket head link pointer (`DAT_00c7cb0c`).
     const VIS_HEAD: *mut *mut u32 = (B + 0x87_cb0c) as *mut *mut u32;
-    /// Deferred-bucket link offset within a node (`DAT_00c7cb44` — the
-    /// `this` stock hands to `TSList__GetLinkAddress` 0x687a00, whose
-    /// nonzero-arg path is just `*this + node`, inlined here; its
-    /// zero-arg branch is unreachable — the node was already
-    /// dereferenced by the skip gate).
+    /// Deferred-bucket link offset within a node.
+    ///
+    /// (`DAT_00c7cb44` — the `this` stock hands to `TSList__GetLinkAddress`
+    /// 0x687a00, whose nonzero-arg path is just `*this + node`, inlined here;
+    /// its zero-arg branch is unreachable — the node was already dereferenced
+    /// by the skip gate).
     const DEF_LINK_OFF: *const u32 = (B + 0x87_cb44) as *const u32;
     /// Deferred-bucket head link pointer (`DAT_00c7cb48`).
     const DEF_HEAD: *mut *mut u32 = (B + 0x87_cb48) as *mut *mut u32;
@@ -34110,11 +34583,12 @@ pub fn world_scene__cull_and_bucket_nodes__6834e0(
     }
 }
 
-/// `SceneTransientMgr::TickAndReap` — no args, plain `RET`, void. The
-/// per-frame transient-scene manager tick: reinstalls the caps-selected
-/// dispatch function pointers (INTEGER stores of stock VAs — never calls),
-/// then walks the global tagged handle-list ageing two levels of lifetime
-/// timers by the frame delta and destroying/unlinking expired entries.
+/// `SceneTransientMgr::TickAndReap` — no args, plain `RET`, void.
+///
+/// The per-frame transient-scene manager tick: reinstalls the caps-selected
+/// dispatch function pointers (INTEGER stores of stock VAs — never calls), then
+/// walks the global tagged handle-list ageing two levels of lifetime timers by
+/// the frame delta and destroying/unlinking expired entries.
 ///
 /// Statement-faithful shape (0x6b3890–0x6b3b0b):
 /// - Dispatch init stores land in stock order — note `0xca80c4` is a BYTE
@@ -34350,10 +34824,11 @@ pub fn scene_transient_mgr__tick_and_reap__6b3890() {
     }
 }
 
-/// `CGObject_C::UpdateSelectionCircleAndVisuals` — `__thiscall(this, dt:
-/// f32)`, `RET 0x4`, void; `dt` is never read (stock never touches
-/// `[ebp+8]`). Vtable slot shared by six CGObject_C subclasses, also called
-/// directly from OnFrameUpdate. Four stages, statement-faithful to
+/// `CGObject_C::UpdateSelectionCircleAndVisuals`.
+///
+/// `__thiscall(this, dt: f32)`, `RET 0x4`, void; `dt` is never read (stock
+/// never touches `[ebp+8]`). Vtable slot shared by six CGObject_C subclasses,
+/// also called directly from OnFrameUpdate. Four stages, statement-faithful to
 /// 0x614a90–0x614cc9:
 /// - Selection gate: descriptor guid vs the selection globals
 ///   `0xb4e2d8/dc`, GetActivePlayer (0x468550, delegate) must differ, CVar
@@ -34590,15 +35065,16 @@ pub fn cg_object_c__update_selection_circle_and_visuals__614a90(
     }
 }
 
-/// `DayNight_BlendNearbyLights` — `__fastcall(ecx = outParams: *mut u8,
-/// edx = useWaterSet: i32)`, plain `RET`, void. Distance-blends every
-/// in-range light zone into `outParams`: scans the light table keeping
-/// in-range lights in a 1-based binary MAX-heap keyed on camera distance
-/// (backing storage = a stack DynArray8 — ctor/PushN/PopBack/dtor are
-/// DELEGATED allocator calls, the sift arithmetic is stock-inline and
-/// ported native), then pops farthest-first, sampling and storm-blending
-/// each light's parameter set and lerping it into `outParams` so the
-/// nearest light paints last.
+/// `DayNight_BlendNearbyLights`.
+///
+/// `__fastcall(ecx = outParams: *mut u8, edx = useWaterSet: i32)`, plain `RET`,
+/// void. Distance-blends every in-range light zone into `outParams`: scans the
+/// light table keeping in-range lights in a 1-based binary MAX-heap keyed on
+/// camera distance (backing storage = a stack DynArray8 — ctor/PushN/PopBack/dtor
+/// are DELEGATED allocator calls, the sift arithmetic is stock-inline and ported
+/// native), then pops farthest-first, sampling and storm-blending each light's
+/// parameter set and lerping it into `outParams` so the nearest light paints
+/// last.
 ///
 /// Statement-faithful notes (0x6d2d00–0x6d3063):
 /// - CObjectWrapper::GetPosition (0x6d6a90) is OUR hook — direct call; the
@@ -34899,13 +35375,15 @@ pub fn day_night_blend_nearby_lights__6d2d00(out_params: *mut u8, use_water_set:
     arr_dtor(arr.as_mut_ptr());
 }
 
-/// `CWorld::CollectGeometryInBox` — `__fastcall(ecx = box: *mut f32, edx =
-/// resultArray: *mut u32, stack = [queryFlags, outHitFlags])`, `RET 0x8`,
-/// bool in AL. The AABB collision-geometry gather driver: bumps the two
-/// query counters, resets the 0x34-stride result vector, runs the
-/// scene-node collector, then double-loops the covered terrain chunks
-/// through [`c_world__collect_tile_geometry__6aadc0`] — OUR hook, called
-/// directly (stock crossed the detour once per covered chunk).
+/// `CWorld::CollectGeometryInBox`.
+///
+/// `__fastcall(ecx = box: *mut f32, edx = resultArray: *mut u32, stack =
+/// [queryFlags, outHitFlags])`, `RET 0x8`, bool in AL. The AABB
+/// collision-geometry gather driver: bumps the two query counters, resets the
+/// 0x34-stride result vector, runs the scene-node collector, then double-loops
+/// the covered terrain chunks through
+/// [`c_world__collect_tile_geometry__6aadc0`] — OUR hook, called directly
+/// (stock crossed the detour once per covered chunk).
 ///
 /// Statement-faithful notes (0x6aa8b0–0x6aa9f):
 /// - The per-entry clear loop calls the bare-RET stub 0x6741d0 and has no
@@ -35026,13 +35504,15 @@ pub fn c_world__collect_geometry_in_box__6aa8b0(
     acc
 }
 
-/// `CWorld::CollectGeometryFromNodes` — `__fastcall(ecx = box: *mut f32,
-/// edx = resultArray: *mut u32, stack = [queryFlags, outHitFlags])`,
-/// `RET 0x8`, bool in AL. CollectGeometryInBox's scene-node sibling: walks
-/// the tagged map-obj instance list (head `0xca7da4`, links through the
-/// `0xca7d9c` container) and per overlapping instance transforms the
-/// recentered query box to instance-local space and runs the geometry
-/// gathers — the same list/offsets as [`c_world__intersect_map_obj_segment__6a8840`].
+/// `CWorld::CollectGeometryFromNodes`.
+///
+/// `__fastcall(ecx = box: *mut f32, edx = resultArray: *mut u32, stack =
+/// [queryFlags, outHitFlags])`, `RET 0x8`, bool in AL. CollectGeometryInBox's
+/// scene-node sibling: walks the tagged map-obj instance list (head `0xca7da4`,
+/// links through the `0xca7d9c` container) and per overlapping instance
+/// transforms the recentered query box to instance-local space and runs the
+/// geometry gathers — the same list/offsets as
+/// [`c_world__intersect_map_obj_segment__6a8840`].
 ///
 /// Statement-faithful notes (0x6aaab0–0x6aadba):
 /// - Entry: the out AABB is zeroed once (`Vec3::SetAll` ×2, inlined store
@@ -35295,11 +35775,13 @@ pub fn c_world__collect_geometry_from_nodes__6aaab0(
     }
 }
 
-/// `CGPlayer_C::OnFrameUpdate` — `__thiscall(ecx = player, stack =
-/// [param dword])`, `RET 0x4`, void. The per-frame player update driver:
-/// frame clock, detail fade + nameplate, target-highlight blink, subsystem
-/// fan-out, attachment walk, the facing snap/turn arms driving the CM2
-/// head/upper-body twist, and the idle/turn animation-state tail.
+/// `CGPlayer_C::OnFrameUpdate`.
+///
+/// `__thiscall(ecx = player, stack = [param dword])`, `RET 0x4`, void. The
+/// per-frame player update driver: frame clock, detail fade + nameplate,
+/// target-highlight blink, subsystem fan-out, attachment walk, the facing
+/// snap/turn arms driving the CM2 head/upper-body twist, and the idle/turn
+/// animation-state tail.
 ///
 /// Statement-faithful notes (0x607ed0–0x6084ea):
 /// - Clock: [`os_get_time_ms__42b790`] — OUR hook (stock crossed the
@@ -35895,8 +36377,9 @@ pub fn cg_player_c__on_frame_update__607ed0(this: *mut u8, param: u32) {
     refresh_anim(this, -1);
 }
 
-/// `CGUnit_C::UpdateFacingInterpolation` — `__fastcall(ecx = unit)`, plain
-/// `RET`, void. Per-frame facing interpolation for units.
+/// `CGUnit_C::UpdateFacingInterpolation` — `__fastcall(ecx = unit)`, plain `RET`, void.
+///
+/// Per-frame facing interpolation for units.
 ///
 /// Active-player arm (descriptor guid == `0xc4da98/9c`): snaps the
 /// orientation to the target field and syncs the two turn bits in
@@ -36204,11 +36687,13 @@ pub fn cg_unit_c__update_facing_interpolation__600cd0(unit: *mut core::ffi::c_vo
     unsafe { base.wrapping_add(0xc98).cast::<f32>().write_unaligned(v) };
 }
 
-/// `CMovement::BuildSweptBoundsAndQueryWorld` — `__thiscall(this, stepDist:
-/// f32, timeRemaining: i32, dirX, dirY, dirZ)`, `RET 0x14`, u32 hit-bool.
-/// Builds the swept-volume world AABB for one movement substep in the
-/// globals `0xc4e5a0..b4`, queries the world through the stock Filtered
-/// collector, and pulls the returned planes into the context local frame.
+/// `CMovement::BuildSweptBoundsAndQueryWorld`.
+///
+/// `__thiscall(this, stepDist: f32, timeRemaining: i32, dirX, dirY, dirZ)`,
+/// `RET 0x14`, u32 hit-bool. Builds the swept-volume world AABB for one
+/// movement substep in the globals `0xc4e5a0..b4`, queries the world through
+/// the stock Filtered collector, and pulls the returned planes into the context
+/// local frame.
 ///
 /// Direct calls into our hooks: TransformVertexInPlace, CAaBox::Union (×3),
 /// C3Vector Add/Subtract/AddInPlace/Negate/IsValid, InvertWithScale — the
@@ -36570,13 +37055,14 @@ pub fn c_movement__build_swept_bounds_and_query_world__633840(
     1
 }
 
-/// `CMovement::StepGroundMove` — `__thiscall(this, timestampMs: i32,
-/// timeMs: u32, dist: f32, dir2d: *const f32)`, `RET 0x10`, u32
-/// ms-consumed (= `timeMs` on every exit except the no-geometry 0). The
-/// grounded walking slide-step: ≤6 iterations of sweep → advance →
-/// classify → step-up probe → slope-climb/wall-pushout redirect →
-/// renormalize → re-sweep, then the ground-stick tail and the hover-float
-/// adjustment.
+/// `CMovement::StepGroundMove`.
+///
+/// `__thiscall(this, timestampMs: i32, timeMs: u32, dist: f32,
+/// dir2d: *const f32)`, `RET 0x10`, u32 ms-consumed (= `timeMs` on every exit
+/// except the no-geometry 0). The grounded walking slide-step: ≤6 iterations of
+/// sweep → advance → classify → step-up probe → slope-climb/wall-pushout
+/// redirect → renormalize → re-sweep, then the ground-stick tail and the
+/// hover-float adjustment.
 ///
 /// Direct calls into our hooks: Collision_SweepVolumeAgainstWorldPlanes
 /// (SIX call sites — the hot path), ComputeSlopeClimbDelta (both arms),
@@ -37235,12 +37721,13 @@ pub fn c_movement__step_ground_move__6367b0(
     time_ms
 }
 
-/// `CMovement::StepMovement` — `__thiscall(this, timeMs: i32, deltaMs:
-/// u32, moveDelta: *const f32)`, `RET 0xC`, u32 ms-consumed. The
-/// movement-cluster capstone: derives direction + speed from the desired
-/// displacement, then substeps while the move/fall flags (`+0x40 &
-/// 0x200f`) hold — each substep builds the swept bounds through OUR
-/// [`c_movement__build_swept_bounds_and_query_world__633840`], and
+/// `CMovement::StepMovement`.
+///
+/// `__thiscall(this, timeMs: i32, deltaMs: u32, moveDelta: *const f32)`,
+/// `RET 0xC`, u32 ms-consumed. The movement-cluster capstone: derives direction +
+/// speed from the desired displacement, then substeps while the move/fall
+/// flags (`+0x40 & 0x200f`) hold — each substep builds the swept bounds through
+/// OUR [`c_movement__build_swept_bounds_and_query_world__633840`], and
 /// dispatches OUR [`c_movement__step_ground_move__6367b0`], the free-move
 /// delegate, or the fall stepper. Tail: OUR
 /// [`c_movement__compute_box_ground_normal__6332a0`] + the anchored-point
@@ -37461,13 +37948,14 @@ pub fn c_movement__step_movement__634040(
     consumed
 }
 
-/// `CMovement::StepMovementWithOffset` — `__thiscall(this, timeMs: i32,
-/// deltaMs: u32, offset: *const f32)`, `RET 0xC`, u32 (the tail call's
-/// EAX flows to the caller). Delta-prep front end: `d = (anchor(+0x44) +
-/// offset) − pos(+0x10)` (kernel `step_offset_delta__616cb0`, z-lane
-/// narrow pinned), the Z-flatten gate (zeroed unless riding a platform
-/// with `+0x18 & 4` clear and `& 0x200` set, or swimming/flying via
-/// flags 0x200800), then a DIRECT call into our
+/// `CMovement::StepMovementWithOffset`.
+///
+/// `__thiscall(this, timeMs: i32, deltaMs: u32, offset: *const f32)`, `RET 0xC`,
+/// u32 (the tail call's EAX flows to the caller). Delta-prep front end:
+/// `d = (anchor(+0x44) + offset) − pos(+0x10)` (kernel
+/// `step_offset_delta__616cb0`, z-lane narrow pinned), the Z-flatten gate
+/// (zeroed unless riding a platform with `+0x18 & 4` clear and `& 0x200` set, or
+/// swimming/flying via flags 0x200800), then a DIRECT call into our
 /// [`c_movement__step_movement__634040`].
 pub fn c_movement__step_movement_with_offset__616cb0(
     this: *mut core::ffi::c_void,
@@ -37506,8 +37994,9 @@ pub fn c_movement__step_movement_with_offset__616cb0(
     c_movement__step_movement__634040(this, time_ms, delta_ms, d.as_ptr())
 }
 
-/// Reads the backend `IDirect3DDevice9` interface pointer (`device+0x38a8`)
-/// and its vtable. `None` when either is null (stock would fault there).
+/// Reads the backend `IDirect3DDevice9` interface pointer (`device+0x38a8`) and its vtable.
+///
+/// `None` when either is null (stock would fault there).
 #[inline]
 fn gx_backend_device(device: *mut u8) -> Option<(*mut u8, *const u8)> {
     let dev_slot = device.wrapping_add(0x38a8);
@@ -37524,10 +38013,11 @@ fn gx_backend_device(device: *mut u8) -> Option<(*mut u8, *const u8)> {
     Some((dev, vtbl))
 }
 
-/// Invokes a `(this, u32, u32)` COM method on the backend device by vtable
-/// byte offset (`LightEnable` at `+0xd4`, `SetTexture` at `+0x104`, ...). COM
-/// methods are stdcall with `this` as the first stack arg; the HRESULT is
-/// ignored, exactly like every stock call site.
+/// Invokes a `(this, u32, u32)` COM method on the backend device by vtable byte offset.
+///
+/// (`LightEnable` at `+0xd4`, `SetTexture` at `+0x104`, ...). COM methods are
+/// stdcall with `this` as the first stack arg; the HRESULT is ignored, exactly
+/// like every stock call site.
 #[inline]
 fn gx_backend_call_u32x2(device: *mut u8, vtbl_off: usize, a: u32, b: u32) {
     let Some((dev, vtbl)) = gx_backend_device(device) else {
@@ -37542,13 +38032,14 @@ fn gx_backend_call_u32x2(device: *mut u8, vtbl_off: usize, a: u32, b: u32) {
     method(dev, a, b);
 }
 
-/// `CGxDeviceD3d::SetDeviceStateCached` (0x5a2570) with its shadow-cache
-/// early-out inlined at the call site: on a hit (the shadow dword at
-/// `device + slot*4 + 0x3a6c` already equals `value`) the stock body would do
-/// nothing but still cost a full call — skip it entirely. Only a real state
-/// change delegates to the stock body (jump-table dispatch into the backend +
-/// shadow update). Counter-measured on a busy scene: ~88% of the 2.5–3M
-/// calls/s through this seam were such hits.
+/// `CGxDeviceD3d::SetDeviceStateCached` (0x5a2570) with its shadow-cache early-out inlined.
+///
+/// At the call site: on a hit (the shadow dword at `device + slot*4 + 0x3a6c`
+/// already equals `value`) the stock body would do nothing but still cost a
+/// full call — skip it entirely. Only a real state change delegates to the
+/// stock body (jump-table dispatch into the backend + shadow update).
+/// Counter-measured on a busy scene: ~88% of the 2.5–3M calls/s through this
+/// seam were such hits.
 #[inline]
 fn gx_set_device_state_checked(device: *mut u8, slot: u32, value: u32) {
     let shadow_addr = (device as usize)
@@ -37570,12 +38061,13 @@ fn gx_set_device_state_checked(device: *mut u8, slot: u32, value: u32) {
     set_state(device, slot, value);
 }
 
-/// `CM2Scene::SetWireframeAttenuationState` — `__fastcall(ecx = device)`
-/// (community name; `this` is the `CGxDeviceD3d`). Sets the render-state pair
-/// `0x52`/`0x53` both to 1 or both to 0 from flag bit `0x10` at
-/// `device+0x27d8`. Counter-measured on a busy scene, this pair alone was
-/// ~27% of all redundant Layer-B sets (~587k calls/s), now early-outed
-/// inline.
+/// `CM2Scene::SetWireframeAttenuationState`.
+///
+/// `__fastcall(ecx = device)` (community name; `this` is the `CGxDeviceD3d`).
+/// Sets the render-state pair `0x52`/`0x53` both to 1 or both to 0 from flag
+/// bit `0x10` at `device+0x27d8`. Counter-measured on a busy scene, this pair
+/// alone was ~27% of all redundant Layer-B sets (~587k calls/s), now
+/// early-outed inline.
 pub fn cm2_scene__set_wireframe_attenuation_state__5a1e30(device: *mut u8) {
     if device.is_null() {
         return;
@@ -37587,10 +38079,11 @@ pub fn cm2_scene__set_wireframe_attenuation_state__5a1e30(device: *mut u8) {
     gx_set_device_state_checked(device, 0x53, on);
 }
 
-/// One 0x54-byte light record of the device's 4-slot light array
-/// (`device + 0x2548 + i*0x54` anchors the ENABLE dword; params live below,
-/// the dirty word above). Field offsets are relative to that anchor, exactly
-/// as the stock body's `esi`-relative loads.
+/// One 0x54-byte light record of the device's 4-slot light array.
+///
+/// (`device + 0x2548 + i*0x54` anchors the ENABLE dword; params live below, the
+/// dirty word above). Field offsets are relative to that anchor, exactly as the
+/// stock body's `esi`-relative loads.
 #[derive(Clone, Copy)]
 struct GxLightRec(*mut u8);
 
@@ -37601,8 +38094,10 @@ impl GxLightRec {
     }
 }
 
-/// `CM2Scene::ApplyLightingState` — `__fastcall(ecx = device)` (community
-/// name; `this` is the `CGxDeviceD3d`). Applies the scene lighting mode:
+/// `CM2Scene::ApplyLightingState`.
+///
+/// `__fastcall(ecx = device)` (community name; `this` is the `CGxDeviceD3d`).
+/// Applies the scene lighting mode:
 ///
 /// * shader path off (`devState+0x150 == 0`):
 ///   * fixed-function lighting usable (no wireframe bit `0x10`, valid
@@ -37758,6 +38253,7 @@ pub fn cm2_scene__apply_lighting_state__5a1b60(device: *mut u8) {
 }
 
 /// `FUN_005a2dd0` — `__thiscall(ecx = device, stack = stage, wrapMode)`.
+///
 /// Pushes the per-stage sampler wrap pair (`stage+0x42`, `stage+0x4a`) from
 /// the two host LUTs at `0x80a25c`/`0x80a274`, gated on the stage bound and
 /// the per-stage enabled byte. Transcribed inline (checked sets) for the
@@ -37783,8 +38279,10 @@ fn gx_apply_stage_wrap_states(device: *mut u8, stage: u32, wrap_mode: u32) {
     gx_set_device_state_checked(device, stage.wrapping_add(0x4a), lut(0x0080_a274));
 }
 
-/// `CGxDevice::ApplyTextureStageState` — `__thiscall(ecx = device, stack =
-/// stage, texture)`, `ret 8`. Applies one fixed-function texture stage:
+/// `CGxDevice::ApplyTextureStageState`.
+///
+/// `__thiscall(ecx = device, stack = stage, texture)`, `ret 8`. Applies one
+/// fixed-function texture stage:
 ///
 /// * null texture: backend `SetTexture(stage, 0)`; if the stage was enabled,
 ///   clear the enabled byte (`device+0x3bfc+stage`) and force the sampler

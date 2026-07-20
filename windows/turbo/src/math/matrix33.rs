@@ -86,6 +86,7 @@ mod tests_c33_matrix__determinant__7bc040 {
 }
 
 /// Builds a 3x3 rotation matrix (Rodrigues) of `angle` radians about `axis`.
+///
 /// When `normalize` is true the axis is normalized first. Returns row-major 9 floats.
 pub fn c33_matrix__from_axis_angle__7be490(
     axis: &[f32; 3],
@@ -173,7 +174,8 @@ mod tests_c33_matrix__from_axis_angle__7be490 {
     }
 }
 
-/// Builds a 3x3 rotation-about-Z matrix from `angle`:
+/// Builds a 3x3 rotation-about-Z matrix from `angle`.
+///
 /// `[[cos,sin,0],[-sin,cos,0],[0,0,1]]` (row-major).
 pub fn c33_matrix__from_rotation_z__7be5b0(angle: f32) -> [f32; 9] {
     let (s, c) = crate::math::trig::sin_cos(angle);
@@ -311,8 +313,9 @@ mod tests_c33_matrix__scale_by_scalar__672d80 {
     }
 }
 
-/// Scales each row of a 3x3 matrix in place by the matching component of a 3-vector:
-/// row `i` (3 consecutive floats) is multiplied by `scale[i]`. Returns row-major 9 floats.
+/// Scales each row of a 3x3 matrix in place by the matching component of a 3-vector.
+///
+/// Row `i` (3 consecutive floats) is multiplied by `scale[i]`. Returns row-major 9 floats.
 pub fn c33_matrix__scale_rows__7be6d0(m: &[f32; 9], scale: &[f32; 3]) -> [f32; 9] {
     let mut out = [0.0f32; 9];
     for r in 0..3 {
@@ -346,11 +349,12 @@ mod tests_c33_matrix__scale_rows__7be6d0 {
     }
 }
 
-/// `C33Matrix::FromEulerAngles` — stack args in order `(angle_z, angle_y,
-/// angle_x)`. Builds the per-axis rotations `Z(z)`, `Y(y)`, `X(x)`, forms the
-/// product `Z · Y · X`, and stores its transpose — exactly the construction the
-/// 1.12 client emits (two 3x3 multiplies then a column-major copy). The first
-/// stack arg drives the Z rotation, the third drives X.
+/// `C33Matrix::FromEulerAngles` — stack args in order `(angle_z, angle_y, angle_x)`.
+///
+/// Builds the per-axis rotations `Z(z)`, `Y(y)`, `X(x)`, forms the product
+/// `Z · Y · X`, and stores its transpose — exactly the construction the 1.12
+/// client emits (two 3x3 multiplies then a column-major copy). The first stack
+/// arg drives the Z rotation, the third drives X.
 pub fn c33_matrix__from_euler_angles__7bf4b0(angle_z: f32, angle_y: f32, angle_x: f32) -> [f32; 9] {
     let (sz, cz) = crate::math::trig::sin_cos(angle_z);
     let (sy, cy) = crate::math::trig::sin_cos(angle_y);
@@ -789,11 +793,13 @@ mod tests_c33_matrix__from_euler_zxy__7bf330 {
     }
 }
 
-/// `C33Matrix::SetTransposed` — the pure transpose the x87 body performs before
-/// it forwards to the setter `FUN_007c0190`. Reads `m` as a row-major 3x3
-/// (`m[3*r + c]`) and returns its transpose `t[3*r + c] = m[3*c + r]`. This is a
-/// straight memory shuffle — no arithmetic, hence no float compares and no NaN
-/// polarity to reproduce (any NaN lane is copied through bit-for-bit).
+/// `C33Matrix::SetTransposed`.
+///
+/// The pure transpose the x87 body performs before it forwards to the setter
+/// `FUN_007c0190`. Reads `m` as a row-major 3x3 (`m[3*r + c]`) and returns its
+/// transpose `t[3*r + c] = m[3*c + r]`. This is a straight memory shuffle — no
+/// arithmetic, hence no float compares and no NaN polarity to reproduce (any NaN
+/// lane is copied through bit-for-bit).
 pub fn c33_matrix__set_transposed__7c0120(m: &[f32; 9]) -> [f32; 9] {
     [
         m[0], m[3], m[6], // row 0 = source column 0

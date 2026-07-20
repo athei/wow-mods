@@ -1,5 +1,6 @@
-//! Hardcoded `WoW` 1.12 client function-pointer addresses, each paired with the
-//! prologue bytes it is expected to carry.
+//! Hardcoded `WoW` 1.12 client function-pointer addresses.
+//!
+//! Each is paired with the prologue bytes it is expected to carry.
 //!
 //! All values are in-process VAs as observed by the running client, lifted
 //! verbatim from the reference C++ implementation at

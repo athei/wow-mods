@@ -17,10 +17,11 @@ use core::ffi::c_void;
 const LOG_TARGET: &str = "wow_turbo";
 const DLL_PROCESS_ATTACH: u32 = 1;
 
-/// The 1.12 client is non-`DYNAMICBASE` and always loads here. The reimpls read
-/// fixed host globals by absolute address (no per-call base lookup), so this is
-/// verified once at load before any hook is installed; a mismatch refuses to
-/// patch rather than reading the wrong addresses.
+/// The 1.12 client is non-`DYNAMICBASE` and always loads here.
+///
+/// The reimpls read fixed host globals by absolute address (no per-call base
+/// lookup), so this is verified once at load before any hook is installed; a
+/// mismatch refuses to patch rather than reading the wrong addresses.
 const EXPECTED_IMAGE_BASE: usize = 0x0040_0000;
 
 #[unsafe(export_name = "DllMain")]

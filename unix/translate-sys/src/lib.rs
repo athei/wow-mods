@@ -12,9 +12,10 @@ use core::ffi::c_char;
 
 #[link(name = "wow_translate_sys", kind = "static")]
 unsafe extern "C" {
-    /// Synchronous **batch** translate. Blocks the calling thread on the Swift
-    /// task via `DispatchSemaphore` until the whole batch completes (or the
-    /// Swift-side deadline elapses).
+    /// Synchronous **batch** translate.
+    ///
+    /// Blocks the calling thread on the Swift task via `DispatchSemaphore`
+    /// until the whole batch completes (or the Swift-side deadline elapses).
     ///
     /// All `count` texts share one `(src_lang, tgt_lang)` pair (non-NUL UTF-8
     /// BCP-47 tags). Inputs are packed: `in_lens` is `[u32; count]` of per-item

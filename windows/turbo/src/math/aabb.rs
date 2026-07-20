@@ -9,13 +9,15 @@
     clippy::too_many_arguments
 )]
 
-/// AABB overlap half-test: returns `true` iff `box_min` is less than *or equal
-/// to* `query_max` on all three axes (the `min <= max` half of an AABB-vs-AABB
-/// test). The original compares each axis with `comiss` and only rejects on
-/// *greater* or *unordered* — `TEST AH,0x41; JP` continues on both `C0` (less)
-/// and `C3` (equal) — so touching boxes (`box_min == query_max`, ubiquitous with
-/// grid-aligned terrain cells) count as overlapping. A NaN axis returns `false`.
-/// (The symbol name says "LessThan", but the comparison is inclusive.)
+/// AABB overlap half-test.
+///
+/// Returns `true` iff `box_min` is less than *or equal to* `query_max` on all
+/// three axes (the `min <= max` half of an AABB-vs-AABB test). The original
+/// compares each axis with `comiss` and only rejects on *greater* or
+/// *unordered* — `TEST AH,0x41; JP` continues on both `C0` (less) and `C3`
+/// (equal) — so touching boxes (`box_min == query_max`, ubiquitous with
+/// grid-aligned terrain cells) count as overlapping. A NaN axis returns
+/// `false`. (The symbol name says "LessThan", but the comparison is inclusive.)
 pub fn aabb__min_less_than_max__6acb40(box_min: &[f32; 3], query_max: &[f32; 3]) -> bool {
     box_min[0] <= query_max[0] && box_min[1] <= query_max[1] && box_min[2] <= query_max[2]
 }
@@ -67,7 +69,8 @@ mod tests_aabb__min_less_than_max__6acb40 {
     }
 }
 
-/// Computes the axis-aligned bounding box over `count` `C3Vector` points
+/// Computes the axis-aligned bounding box over `count` `C3Vector` points.
+///
 /// (stride 3 floats) in `points`. Returns `[minX,minY,minZ,maxX,maxY,maxZ]`.
 /// With `count == 0` the box is all zeros (matching the original).
 pub fn c_aa_box__from_points__7c1450(points: &[f32], count: u32) -> [f32; 6] {
@@ -168,8 +171,9 @@ mod tests_c_aa_box__from_points__7c1450 {
     }
 }
 
-/// Segment-vs-AABB intersection (slab clip). `box6` is
-/// `[minX,minY,minZ,maxX,maxY,maxZ]`. Returns 1 on hit, 0 on miss.
+/// Segment-vs-AABB intersection (slab clip).
+///
+/// `box6` is `[minX,minY,minZ,maxX,maxY,maxZ]`. Returns 1 on hit, 0 on miss.
 ///
 /// Per axis, when the segment start lies strictly outside a slab plane the
 /// segment is rejected if the end lies strictly outside too, otherwise the
@@ -318,18 +322,21 @@ mod tests_c_aa_box__intersect_segment__6dc5a0 {
         assert_eq!(hit(&UNIT, &[1.000_01, 0.0, 0.0], &[1.000_01, 0.0, 0.0]), 0);
     }
 
-    /// A NaN start coordinate routes to the inside arm (ordered-strict outside
-    /// tests are both false), so the axis is ignored and the segment can still
-    /// hit on the others — the stock behaviour.
+    /// A NaN start coordinate routes to the inside arm.
+    ///
+    /// (ordered-strict outside tests are both false), so the axis is ignored
+    /// and the segment can still hit on the others — the stock behaviour.
     #[test]
     fn nan_start_routes_inside() {
         // X is NaN → ignored; Y/Z inside → start-inside hit.
         assert_eq!(hit(&UNIT, &[f32::NAN, 0.0, 0.0], &[-5.0, 0.0, 0.0]), 1);
     }
 
-    /// A NaN box bound likewise counts as inside on that axis: the X-axis
-    /// test is suppressed, so a start inside the other slabs is an immediate
-    /// hit — but a segment whose hit point still exits another face misses.
+    /// A NaN box bound likewise counts as inside on that axis.
+    ///
+    /// The X-axis test is suppressed, so a start inside the other slabs is an
+    /// immediate hit — but a segment whose hit point still exits another face
+    /// misses.
     #[test]
     fn nan_bound_counts_inside() {
         let b = [f32::NAN, -1.0, -1.0, 1.0, 1.0, 1.0];
@@ -339,8 +346,10 @@ mod tests_c_aa_box__intersect_segment__6dc5a0 {
         assert_eq!(hit(&b, &[2.0, 0.9, 0.0], &[0.5, -3.0, 0.0]), 0);
     }
 
-    /// The best-`t` rejection is a sign-bit test: a negative-NaN entry
-    /// parameter rejects, a positive NaN does not flip an otherwise-valid hit.
+    /// The best-`t` rejection is a sign-bit test.
+    ///
+    /// A negative-NaN entry parameter rejects, a positive NaN does not flip an
+    /// otherwise-valid hit.
     #[test]
     fn negative_nan_t_rejects() {
         // end = negative-NaN on X with start outside → t = NaN with sign bit set.
@@ -348,8 +357,10 @@ mod tests_c_aa_box__intersect_segment__6dc5a0 {
         assert_eq!(hit(&UNIT, &[-5.0, 0.0, 0.0], &[neg_nan, 0.0, 0.0]), 0);
     }
 
-    /// Inverted box (min > max): a segment passing through still resolves, a
-    /// short one misses — the near-plane rules fall out unchanged.
+    /// Inverted box (min > max).
+    ///
+    /// A segment passing through still resolves, a short one misses — the
+    /// near-plane rules fall out unchanged.
     #[test]
     fn inverted_box() {
         let inv = [2.0, -1.0, -1.0, -2.0, 1.0, 1.0];
@@ -364,10 +375,12 @@ mod tests_c_aa_box__intersect_segment__6dc5a0 {
     }
 }
 
-/// Accumulates a 3x3-matrix box transform: for each component `i` and base
-/// `j`, adds the smaller of `col_j[i]*mat[j]` and `col_j[i]*mat[j+3]` into the
-/// running min and the larger into the running max (separating-axis box
-/// transform). `dst_in` is the running box `[minX,minY,minZ,maxX,maxY,maxZ]`.
+/// Accumulates a 3x3-matrix box transform.
+///
+/// For each component `i` and base `j`, adds the smaller of `col_j[i]*mat[j]`
+/// and `col_j[i]*mat[j+3]` into the running min and the larger into the running
+/// max (separating-axis box transform). `dst_in` is the running box
+/// `[minX,minY,minZ,maxX,maxY,maxZ]`.
 pub fn c_aa_box__transform_by3x3__6dc470(
     col0: &[f32; 3],
     col1: &[f32; 3],
@@ -578,10 +591,11 @@ mod tests_c_aa_box__contains_point__637350 {
     }
 }
 
-/// `CMapObjGroup::BoxIntersectsNodeBox` overlap predicate — the pure AABB-vs-AABB
-/// half of the BSP node-box test. `query` and `node` are each a six-float
-/// `[minX,minY,minZ,maxX,maxY,maxZ]`. Returns `true` iff the two boxes overlap on
-/// every axis.
+/// `CMapObjGroup::BoxIntersectsNodeBox` overlap predicate.
+///
+/// The pure AABB-vs-AABB half of the BSP node-box test. `query` and `node` are
+/// each a six-float `[minX,minY,minZ,maxX,maxY,maxZ]`. Returns `true` iff the
+/// two boxes overlap on every axis.
 ///
 /// Bit-faithful to the x87 original's mixed compare senses. The `query.min <=
 /// node.max` half (`FLD query[i]; FCOMP node.max[i]; TEST AH,0x41; JP fail`):
@@ -669,8 +683,9 @@ mod tests_c_map_obj_group__box_intersects_node_box__6a4830 {
     }
 }
 
-/// `CAaBox::Union` — component-wise merge of two axis-aligned boxes into a
-/// destination box: `out.min[i] = min(a.min[i], b.min[i])` and `out.max[i] =
+/// `CAaBox::Union` — component-wise merge of two axis-aligned boxes into a destination box.
+///
+/// `out.min[i] = min(a.min[i], b.min[i])` and `out.max[i] =
 /// max(a.max[i], b.max[i])` over a six-float `[minX,minY,minZ,maxX,maxY,maxZ]`.
 /// Used to grow/accumulate bounds (BSP/quadtree node bounds, batched-object world
 /// bounds); its 2.2% x87 share is call frequency, not per-call work.
@@ -755,12 +770,13 @@ mod tests_c_aa_box__union__6373b0 {
     }
 }
 
-/// Widen a packed 6×`i16` AABB (`min.xyz` at words 0..2, `max.xyz` at words
-/// 3..5) into the contiguous float `{min, max}` box `Frustum__CullBox`
-/// consumes. Every `i16` is exactly representable in `f32`, so the stock
-/// MOVSX→FILD→FSTP lanes are a lossless int→float convert — this is the
-/// whole 0.27% profile block of `CGxAabb16__TestFloatBox` 0x6b4d10
-/// (death-by-x87-latency on six trivial casts, not real computation).
+/// Widen a packed 6×`i16` AABB (`min.xyz` at words 0..2, `max.xyz` at words 3..5).
+///
+/// into the contiguous float `{min, max}` box `Frustum__CullBox` consumes.
+/// Every `i16` is exactly representable in `f32`, so the stock MOVSX→FILD→FSTP
+/// lanes are a lossless int→float convert — this is the whole 0.27% profile
+/// block of `CGxAabb16__TestFloatBox` 0x6b4d10 (death-by-x87-latency on six
+/// trivial casts, not real computation).
 pub fn c_gx_aabb16__widen_box__6b4d10(words: &[i16; 6]) -> [f32; 6] {
     [
         f32::from(words[0]),
@@ -802,8 +818,9 @@ mod tests_c_gx_aabb16__widen_box__6b4d10 {
     }
 }
 
-/// Child-vs-query AABB overlap of `CMapObjGroupNode__QueryChildrenOverlap`
-/// 0x6a3dc0 (block 0x6a3e30): six FLD/FCOMP gates. The min-side compares
+/// Child-vs-query AABB overlap of `CMapObjGroupNode__QueryChildrenOverlap` 0x6a3dc0.
+///
+/// (block 0x6a3e30): six FLD/FCOMP gates. The min-side compares
 /// (`TEST AH,0x41; JP`) continue on *less or equal*; the max-side compares
 /// (`TEST AH,0x1; JNZ`) continue on *greater or equal* — touching boxes
 /// overlap, and ANY unordered lane (NaN in a child bbox) skips the child.
@@ -822,10 +839,11 @@ pub fn query_children_overlap__6a3dc0(
         && child_max[2] >= query[2]
 }
 
-/// Dispatch-mask fold of 0x6a3dc0 (blocks 0x6a3dcd..0x6a3dfa): seeds 0xEE
-/// (0xC6 when flag 0x10), then clears bit 0x20/0x24-mask on flag 0x20,
-/// bit 0x02 when flag 0x40 is ABSENT, bit 0x40 when flag 0x4000 is absent.
-/// Forwarded to the BSP query as the low 16 bits of a dword push.
+/// Dispatch-mask fold of 0x6a3dc0 (blocks 0x6a3dcd..0x6a3dfa).
+///
+/// Seeds 0xEE (0xC6 when flag 0x10), then clears bit 0x20/0x24-mask on flag
+/// 0x20, bit 0x02 when flag 0x40 is ABSENT, bit 0x40 when flag 0x4000 is
+/// absent. Forwarded to the BSP query as the low 16 bits of a dword push.
 pub fn query_children_flags__6a3dc0(flags: u32) -> u32 {
     let mut m: u32 = if flags & 0x10 != 0 { 0xc6 } else { 0xee };
     if flags & 0x20 != 0 {

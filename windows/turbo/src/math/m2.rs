@@ -105,7 +105,8 @@ mod tests_m2_batch_sort_compare__70a060 {
     }
 }
 
-/// Axis-aligned bounding-box centre and radius from its min/max corners:
+/// Axis-aligned bounding-box centre and radius from its min/max corners.
+///
 /// `centre = (min + max) * half` per axis, with the bound radius passed through
 /// unchanged into the 4th lane. `half` is the source's literal `0.5`.
 pub fn cm2_shared__get_bounds_center__713680(
@@ -153,12 +154,14 @@ mod tests_cm2_shared__get_bounds_center__713680 {
     }
 }
 
-/// Derives the per-sequence bound fields of the animation-info struct from the
-/// model's bound-radius vector `bound_vec` (this+0xbc..0xc8), the sequence
-/// entry's move-speed scalar `move_speed` (entry+0xc) and its 6-float bound box
-/// `box6` (entry+0x24.., min then max). Returns `(speed_scaled, center)` where
-/// `speed_scaled = |bound_vec| * move_speed` and `center = (min+max)*0.5`. The
-/// box radius (entry+0x3c) is a verbatim field copy handled in the adapter.
+/// Derives the per-sequence bound fields of the animation-info struct.
+///
+/// From the model's bound-radius vector `bound_vec` (this+0xbc..0xc8), the
+/// sequence entry's move-speed scalar `move_speed` (entry+0xc) and its 6-float
+/// bound box `box6` (entry+0x24.., min then max). Returns
+/// `(speed_scaled, center)` where `speed_scaled = |bound_vec| * move_speed` and
+/// `center = (min+max)*0.5`. The box radius (entry+0x3c) is a verbatim field
+/// copy handled in the adapter.
 pub fn cm2_model__get_animation_info__711a20(
     bound_vec: &[f32; 3],
     move_speed: f32,
@@ -211,12 +214,13 @@ mod tests_cm2_model__get_animation_info__711a20 {
     }
 }
 
-/// Index of an attachment record within its 0x30-byte-stride table from the
-/// resolved `attach_index` (the M2 attachment-lookup result). Byte offset of the
-/// record is `attach_index * 0x30`; this returns that byte offset so the adapter
-/// can address the record without an indexed range-loop. Kept as a pure helper
-/// so the stride is unit-tested on the host (the world-position transforms
-/// themselves are stock `C44Matrix::TransformPoint` call-outs).
+/// Index of an attachment record within its 0x30-byte-stride table.
+///
+/// From the resolved `attach_index` (the M2 attachment-lookup result). Byte
+/// offset of the record is `attach_index * 0x30`; this returns that byte offset
+/// so the adapter can address the record without an indexed range-loop. Kept as
+/// a pure helper so the stride is unit-tested on the host (the world-position
+/// transforms themselves are stock `C44Matrix::TransformPoint` call-outs).
 pub fn cm2_model__get_attachment_world_pos__712d50(attach_index: u32) -> usize {
     attach_index as usize * 0x30
 }
@@ -233,10 +237,11 @@ mod tests_cm2_model__get_attachment_world_pos__712d50 {
     }
 }
 
-/// Linearly interpolates two 4-component key values (quaternion components)
-/// `lo` and `hi` by factor `t`, per lane `lo + (hi - lo) * t`. When `step` is
-/// true (the source's interpolation-type-0 path) the `lo` key is copied
-/// verbatim and `t` is ignored.
+/// Linearly interpolates two 4-component key values (quaternion components) `lo` and `hi`.
+///
+/// By factor `t`, per lane `lo + (hi - lo) * t`. When `step` is true (the
+/// source's interpolation-type-0 path) the `lo` key is copied verbatim and `t`
+/// is ignored.
 pub fn cm2_shared__sample_quat_track__713ea0(
     lo: &[f32; 4],
     hi: &[f32; 4],
@@ -289,9 +294,10 @@ mod tests_cm2_shared__sample_quat_track__713ea0 {
     }
 }
 
-/// Merges a supplied animated vec3 `value` with the track's existing `cur`
-/// value per axis under `mask`: for each axis bit set in `mask` the existing
-/// `cur` lane is kept, otherwise the supplied `value` lane is used
+/// Merges a supplied animated vec3 `value` with the track's existing `cur` value per axis.
+///
+/// Under `mask`: for each axis bit set in `mask` the existing `cur` lane is
+/// kept, otherwise the supplied `value` lane is used
 /// (bit0 = X, bit1 = Y, bit2 = Z).
 pub fn cm2_set_animated_vec3_masked__7ac250(
     cur: &[f32; 3],
@@ -327,8 +333,9 @@ mod tests_cm2_set_animated_vec3_masked__7ac250 {
     }
 }
 
-/// Locates the keyframe pair bracketing `time` in a sorted `u32` timestamp
-/// array and the interpolation fraction between them.
+/// Locates the keyframe pair bracketing `time` in a sorted `u32` timestamp array.
+///
+/// And the interpolation fraction between them.
 ///
 /// `range` is the resolved `(first, last)` key-slot window for the active
 /// sequence and `seed` the caller's previous lo index: the search scans
@@ -430,8 +437,10 @@ pub unsafe fn cm2_shared__find_keyframe_interval__713d50(
 
 #[cfg(test)]
 mod tests_cm2_shared__find_keyframe_interval__713d50 {
-    /// Adapts the raw-pointer kernel to the slice-based test cases: every test
-    /// passes a `&[u32]`, while the kernel reads through a `*const u32` + count.
+    /// Adapts the raw-pointer kernel to the slice-based test cases.
+    ///
+    /// Every test passes a `&[u32]`, while the kernel reads through a
+    /// `*const u32` + count.
     fn find(time: u32, range: (u32, u32), ts: &[u32], seed: u32) -> (u32, u32, f32) {
         // SAFETY: `ts.as_ptr()` is valid for `ts.len()` contiguous reads.
         unsafe {
@@ -544,11 +553,12 @@ mod tests_cm2_shared__find_keyframe_interval__713d50 {
     }
 }
 
-/// Whether a sampled track should also evaluate its secondary sub-track for
-/// cross-fading: the track interpolates (`interp_type != 0`), the blend weight
-/// differs from the host zero sentinel (an unordered compare also takes the
-/// active path, so a `NaN` blend qualifies), and the secondary
-/// global-sequence slot is the track-time marker (`-1`).
+/// Whether a sampled track should also evaluate its secondary sub-track for cross-fading.
+///
+/// The track interpolates (`interp_type != 0`), the blend weight differs from
+/// the host zero sentinel (an unordered compare also takes the active path, so
+/// a `NaN` blend qualifies), and the secondary global-sequence slot is the
+/// track-time marker (`-1`).
 pub fn m2_track__sample_byte__71ae90(
     interp_type: i16,
     sentinel: f32,
@@ -584,10 +594,11 @@ mod tests_m2_track__sample_byte__71ae90 {
     }
 }
 
-/// Linear keyframe interpolation: `(v1 - v0) * t + v0`, each step rounded to
-/// `f32` (the original's single-precision x87 sequence). The secondary
-/// sub-track cross-fade is the same operation applied as
-/// `(primary, secondary, blend)`.
+/// Linear keyframe interpolation.
+///
+/// `(v1 - v0) * t + v0`, each step rounded to `f32` (the original's
+/// single-precision x87 sequence). The secondary sub-track cross-fade is the
+/// same operation applied as `(primary, secondary, blend)`.
 pub fn m2_track__sample_float_lerp__71af20(v0: f32, v1: f32, t: f32) -> f32 {
     (v1 - v0) * t + v0
 }
@@ -624,8 +635,10 @@ mod tests_m2_track__sample_float_lerp__71af20 {
     }
 }
 
-/// Stage 1 of the per-emitter billboard transform: identity →
-/// translate → axis-angle rotate, then the billboard-mode row rebuild.
+/// Stage 1 of the per-emitter billboard transform.
+///
+/// Identity → translate → axis-angle rotate, then the billboard-mode row
+/// rebuild.
 ///
 /// Returns `(matrix, basis_seed)`: `matrix` is the working 4×4 after
 /// the mode-dependent step and `basis_seed` the post-rotate copy the
@@ -693,8 +706,9 @@ pub fn cm2_model__build_emitter_transform__7106c0(
     (m, basis_seed)
 }
 
-/// Stage 2 of the per-emitter billboard transform: the optional
-/// animation-phase basis lerp, then the per-row scale.
+/// Stage 2 of the per-emitter billboard transform.
+///
+/// The optional animation-phase basis lerp, then the per-row scale.
 ///
 /// `anim` carries `[flags, elapsed, duration_bits, start, end]` from
 /// the host animation queries (`None` when the model is uninitialized
@@ -1062,7 +1076,9 @@ mod tests_cm2_model__build_emitter_transform__7106c0 {
     }
 }
 
-/// Fixed-point track value: sign-extended `i16` scaled by the 1/32767
+/// Fixed-point track value.
+///
+/// Sign-extended `i16` scaled by the 1/32767
 /// constant (bits `0x3800_0100`). Lerp and cross-fade endpoints are each
 /// scaled before the subtract, so the scale must stay a standalone step.
 pub fn m2_fixed16_to_f32__714260(raw: i16) -> f32 {
@@ -1090,7 +1106,8 @@ mod tests_m2_fixed16_to_f32__714260 {
     }
 }
 
-/// The product-then-truncate step of the keyframe-clock fold:
+/// The product-then-truncate step of the keyframe-clock fold.
+///
 /// `ftol(f32(delta * rate))`, keeping only the low 32 result bits (the
 /// original reads just `eax` of the `__ftol` `edx:eax` pair).
 ///
@@ -1213,7 +1230,9 @@ mod tests_m2_seq_time__714260 {
     }
 }
 
-/// Cross-fade weight: the smoothstep `((3 - 2f) * f * f) * max_w` of
+/// Cross-fade weight.
+///
+/// The smoothstep `((3 - 2f) * f * f) * max_w` of
 /// `f = (remaining * rate)` rounded to `f32`, with the clamp arms written as
 /// the original's `0.0 * max_w` / `1.0 * max_w` products (a non-finite
 /// `max_w` poisons even the clamped arms). The comparisons keep the x87
@@ -1268,8 +1287,9 @@ mod tests_m2_crossfade_weight__714260 {
     }
 }
 
-/// Hermite spline basis sample over `[f32; 3]` spline keys (value, in-tangent,
-/// out-tangent). Coefficients and per-lane summation orders follow the
+/// Hermite spline basis sample over `[f32; 3]` spline keys (value, in-tangent, out-tangent).
+///
+/// Coefficients and per-lane summation orders follow the
 /// original's x87 schedule: lane 0 groups `(h11*hi_in + h00*lo_v)` first,
 /// lanes 1-2 group `(h11*hi_in + h10*lo_out)` first.
 pub fn m2_spline_hermite_vec3__714260(
@@ -1292,9 +1312,10 @@ pub fn m2_spline_hermite_vec3__714260(
     ]
 }
 
-/// Bezier spline basis sample over `[f32; 3]` spline keys; the tangents are
-/// the two interior control points. Per-lane summation orders follow the
-/// original's x87 schedule (lane 0 differs from lanes 1-2).
+/// Bezier spline basis sample over `[f32; 3]` spline keys.
+///
+/// The tangents are the two interior control points. Per-lane summation orders
+/// follow the original's x87 schedule (lane 0 differs from lanes 1-2).
 pub fn m2_spline_bezier_vec3__714260(
     t: f32,
     lo_v: &[f32; 3],
@@ -1314,9 +1335,10 @@ pub fn m2_spline_bezier_vec3__714260(
     ]
 }
 
-/// Scalar Hermite spline sample (the camera roll track); its summation order
-/// differs from every vector lane: `(h10*lo_out + h11*hi_in + h00*lo_v) +
-/// h01*hi_v`.
+/// Scalar Hermite spline sample (the camera roll track).
+///
+/// Its summation order differs from every vector lane:
+/// `(h10*lo_out + h11*hi_in + h00*lo_v) + h01*hi_v`.
 pub fn m2_spline_hermite_f32__714260(t: f32, lo_v: f32, lo_out: f32, hi_v: f32, hi_in: f32) -> f32 {
     let t2 = t * t;
     let t3 = t2 * t;
@@ -1327,8 +1349,9 @@ pub fn m2_spline_hermite_f32__714260(t: f32, lo_v: f32, lo_out: f32, hi_v: f32, 
     (h10 * lo_out + h11 * hi_in + h00 * lo_v) + h01 * hi_v
 }
 
-/// Scalar Bezier spline sample (the camera roll track); summation order
-/// `(b*lo_out + c*hi_in + a*lo_v) + t3*hi_v`.
+/// Scalar Bezier spline sample (the camera roll track).
+///
+/// Summation order `(b*lo_out + c*hi_in + a*lo_v) + t3*hi_v`.
 pub fn m2_spline_bezier_f32__714260(t: f32, lo_v: f32, lo_out: f32, hi_v: f32, hi_in: f32) -> f32 {
     let t2 = t * t;
     let t3 = t2 * t;
@@ -1350,9 +1373,10 @@ mod tests_m2_spline__714260 {
     const HI_V: [f32; 3] = [5.0, 6.0, 7.0];
     const HI_IN: [f32; 3] = [-1.0, 0.125, 2.0];
 
-    /// The basis arithmetic at t = 0 must reproduce the endpoint through the
-    /// full expression, not a shortcut: every coefficient evaluates exactly
-    /// (h00 = 1, rest 0), so the endpoint is bit-exact anyway.
+    /// The basis arithmetic at t = 0 must reproduce the endpoint through the full expression.
+    ///
+    /// Not a shortcut: every coefficient evaluates exactly (h00 = 1, rest 0),
+    /// so the endpoint is bit-exact anyway.
     #[test]
     fn hermite_endpoints() {
         let v0 = hm3(0.0, &LO_V, &LO_OUT, &HI_V, &HI_IN);
@@ -1373,8 +1397,10 @@ mod tests_m2_spline__714260 {
         }
     }
 
-    /// Scalar and lane evaluations agree in value (groupings differ by
-    /// design, so compare against each lane's own expression, not across).
+    /// Scalar and lane evaluations agree in value.
+    ///
+    /// (Groupings differ by design, so compare against each lane's own
+    /// expression, not across.)
     #[test]
     fn hermite_midpoint_known_bits() {
         let t = 0.5f32;
@@ -1425,38 +1451,45 @@ mod tests_m2_spline__714260 {
 // helpers, consts and the test module carry the `__718960` suffix because two
 // functions share this module (no bare names that could collide).
 
-/// The `0.001` milliseconds-to-seconds scale at `.data 0x801360`, kept as the
-/// exact source dword `0x3a83126f` (slightly below true `1e-3`) so the lifetime
-/// `dt` matches the stock `fild; fmul` bit-for-bit. NEVER recompute as
-/// `1.0 / 1000.0`.
+/// The `0.001` milliseconds-to-seconds scale at `.data 0x801360`.
+///
+/// Kept as the exact source dword `0x3a83126f` (slightly below true `1e-3`) so
+/// the lifetime `dt` matches the stock `fild; fmul` bit-for-bit. NEVER
+/// recompute as `1.0 / 1000.0`.
 pub const MS_TO_SECONDS_BITS__718960: u32 = 0x3a83_126f;
 
 /// `PI` at `.rdata 0x81203c` (`0x40490fdb`).
 pub const PI_BITS__718960: u32 = 0x4049_0fdb;
 
-/// `0.5` at `.rdata 0x7ffa24` (`0x3f000000`); the half that scales `PI` into the
-/// emitter-spin rotate angle.
+/// `0.5` at `.rdata 0x7ffa24` (`0x3f000000`).
+///
+/// The half that scales `PI` into the emitter-spin rotate angle.
 pub const HALF_BITS__718960: u32 = 0x3f00_0000;
 
-/// Elapsed-milliseconds accumulator (`this+0x88`, an `i64` widened from the
-/// `u32` low dword with the high dword forced `0`) converted to seconds via the
-/// exact `0x3a83126f` scale. Mirrors `fild qword [ebp-0x20]; fmul [0x801360]`
-/// (extended-precision multiply, narrowed on store): widen to `i64`, take the
-/// product in `f64`, then narrow to `f32`.
+/// Elapsed-milliseconds accumulator (`this+0x88`) converted to seconds.
+///
+/// The accumulator is an `i64` widened from the `u32` low dword with the high
+/// dword forced `0`, converted via the exact `0x3a83126f` scale. Mirrors
+/// `fild qword [ebp-0x20]; fmul [0x801360]` (extended-precision multiply,
+/// narrowed on store): widen to `i64`, take the product in `f64`, then narrow
+/// to `f32`.
 #[inline]
 pub fn ms_to_seconds__718960(elapsed_ms: u32) -> f32 {
     let scale = f32::from_bits(MS_TO_SECONDS_BITS__718960);
     ((i64::from(elapsed_ms) as f64) * f64::from(scale)) as f32
 }
 
-/// The emitter-spin rotate angle `PI * 0.5`, computed from the two exact source
-/// dwords in `f32` (matches `fld [0x81203c]; fmul [0x7ffa24]`).
+/// The emitter-spin rotate angle `PI * 0.5`.
+///
+/// Computed from the two exact source dwords in `f32` (matches
+/// `fld [0x81203c]; fmul [0x7ffa24]`).
 #[inline]
 pub fn half_pi_spin__718960() -> f32 {
     f32::from_bits(PI_BITS__718960) * f32::from_bits(HALF_BITS__718960)
 }
 
-/// The single `FNSTSW` polarity gate at `0x718edc-0x718ef6`:
+/// The single `FNSTSW` polarity gate at `0x718edc-0x718ef6`.
+///
 /// `fld [life]; fcomp 0.0f; fnstsw ax; test ah,0x41; jne -> flag=0`.
 /// `FCOMP` sets `C3` (ah bit6 `0x40`) on equal and `C0` (ah bit0 `0x01`) on
 /// less/unordered, so `(ah & 0x41) == 0` (the `jne` is NOT taken) only when
@@ -1468,11 +1501,13 @@ pub fn emitter_life_gt_zero__718960(life: f32) -> i32 {
     i32::from(life > 0.0f32)
 }
 
-/// The negate-then-3x3 transform at `0x718a7e-0x718ae7`: negate the bone-anchor
-/// vec3, then fold it through the model rotation 3x3 (base `[this+0x2c]+0xdc`)
-/// in the stock's COLUMN-SWAPPED operand order. The matrix `m` is the 12 floats
-/// at columns `{0x0,0x4,0x8, 0x10,0x14,0x18, 0x20,0x24,0x28}` relative to that
-/// base (passed as a flat `[f32; 12]` in ascending offset order). The per-lane
+/// The negate-then-3x3 transform at `0x718a7e-0x718ae7`.
+///
+/// Negate the bone-anchor vec3, then fold it through the model rotation 3x3
+/// (base `[this+0x2c]+0xdc`) in the stock's COLUMN-SWAPPED operand order. The
+/// matrix `m` is the 12 floats at columns
+/// `{0x0,0x4,0x8, 0x10,0x14,0x18, 0x20,0x24,0x28}` relative to that base
+/// (passed as a flat `[f32; 12]` in ascending offset order). The per-lane
 /// `fadd` grouping is preserved exactly (it is NOT the natural row-major order
 /// and is distinct from `c44_matrix__transform_point__7bca80`):
 /// - out0 = `(nz*m[0x20] + ny*m[0x10]) + nx*m[0x0]`
@@ -1480,7 +1515,8 @@ pub fn emitter_life_gt_zero__718960(life: f32) -> i32 {
 /// - out2 = `(nx*m[0x8] + nz*m[0x28]) + ny*m[0x18]`
 ///
 /// where `(nx,ny,nz) = (-v[0], -v[1], -v[2])`. `m` index list (ascending):
-/// `[m00,m01,m02, m10,m11,m12, m20,m21,m22]` == offsets `0x0,0x4,0x8, 0x10,0x14,0x18, 0x20,0x24,0x28`.
+/// `[m00,m01,m02, m10,m11,m12, m20,m21,m22]` == offsets
+/// `0x0,0x4,0x8, 0x10,0x14,0x18, 0x20,0x24,0x28`.
 #[inline]
 pub fn negate_then_transform3x3__718960(v: &[f32; 3], m: &[f32; 9]) -> [f32; 3] {
     let nx = -v[0];
@@ -1494,13 +1530,14 @@ pub fn negate_then_transform3x3__718960(v: &[f32; 3], m: &[f32; 9]) -> [f32; 3] 
     [out0, out1, out2]
 }
 
-/// The bone-path spawn-translation fold at `0x718d6d-0x718dd0`: given the bone
-/// 4x4 `lc` (row-major, 16 floats copied from `[this+0x94]+(idx<<6)`), the
-/// emitter local offset triple `o = (node+0x8, node+0xc, node+0x10)`, and the
-/// existing translation row `(lc[12], lc[13], lc[14])`, returns the updated
-/// translation row. Lane 0 groups `(lc[4]*o[1] + lc[0]*o[0])` FIRST (columns
-/// `0xc, 0x8`), lanes 1-2 group `(lc[k]*o[0] + lc[k+8]*o[2])` first (columns
-/// `0x8, 0x10`):
+/// The bone-path spawn-translation fold at `0x718d6d-0x718dd0`.
+///
+/// Given the bone 4x4 `lc` (row-major, 16 floats copied from
+/// `[this+0x94]+(idx<<6)`), the emitter local offset triple
+/// `o = (node+0x8, node+0xc, node+0x10)`, and the existing translation row
+/// `(lc[12], lc[13], lc[14])`, returns the updated translation row. Lane 0
+/// groups `(lc[4]*o[1] + lc[0]*o[0])` FIRST (columns `0xc, 0x8`), lanes 1-2
+/// group `(lc[k]*o[0] + lc[k+8]*o[2])` first (columns `0x8, 0x10`):
 /// - t0 = `((lc[4]*o[1] + lc[0]*o[0]) + lc[8]*o[2]) + lc[12]`
 /// - t1 = `((lc[1]*o[0] + lc[9]*o[2]) + lc[5]*o[1]) + lc[13]`
 /// - t2 = `((lc[2]*o[0] + lc[10]*o[2]) + lc[6]*o[1]) + lc[14]`
@@ -1514,10 +1551,12 @@ pub fn emitter_spawn_translate_bone__718960(lc: &[f32; 16], o: &[f32; 3]) -> [f3
     [t0, t1, t2]
 }
 
-/// The attachment-path spawn-translation fold at `0x7190a9-0x71910c`. Identical
-/// inputs/outputs to `emitter_spawn_translate_bone__718960` EXCEPT lane 0 groups
-/// in the SAME `(0x8, 0x10, 0xc)` order as lanes 1-2 (the bone path's lane 0 is
-/// the only one that differs), so all three lanes share one grouping here:
+/// The attachment-path spawn-translation fold at `0x7190a9-0x71910c`.
+///
+/// Identical inputs/outputs to `emitter_spawn_translate_bone__718960` EXCEPT
+/// lane 0 groups in the SAME `(0x8, 0x10, 0xc)` order as lanes 1-2 (the bone
+/// path's lane 0 is the only one that differs), so all three lanes share one
+/// grouping here:
 /// - t0 = `((lc[0]*o[0] + lc[8]*o[2]) + lc[4]*o[1]) + lc[12]`
 /// - t1 = `((lc[1]*o[0] + lc[9]*o[2]) + lc[5]*o[1]) + lc[13]`
 /// - t2 = `((lc[2]*o[0] + lc[10]*o[2]) + lc[6]*o[1]) + lc[14]`
@@ -1645,18 +1684,21 @@ mod tests_cm2_model__update_particles_and_children__718960 {
 // owns all pointer/struct traversal, allocation and candidate bookkeeping.
 // ---------------------------------------------------------------------------
 
-/// `_DAT_0080c5c8` — the ~1e-5 degeneracy epsilon (segment-length and triangle
-/// signed-area reject). Kept as exact source bits.
+/// `_DAT_0080c5c8` — the ~1e-5 degeneracy epsilon.
+///
+/// (Segment-length and triangle signed-area reject.) Kept as exact source bits.
 const TRACE_EPS: f32 = f32::from_bits(0x3727_c5ac);
 
 /// `_DAT_008026c8` — the 1/255 byte→weight scale for the skin blend, exact bits.
 const WEIGHT_SCALE: f32 = f32::from_bits(0x3b80_8081);
 
-/// Broad-phase bounding-sphere reject (stock 0x708d4c..0x708e88). Given the
-/// model's world-space bounding-sphere `center`, the ray `origin`/normalized
-/// `dir`, the first matrix column `scale_col = (m00, m01, m02)` of `inst+0xfc`,
-/// the local sphere `radius`, and the ray length `seg_len`, returns the clamped
-/// `[t_enter, t_exit]` candidate span on a hit, or `None`.
+/// Broad-phase bounding-sphere reject (stock 0x708d4c..0x708e88).
+///
+/// Given the model's world-space bounding-sphere `center`, the ray
+/// `origin`/normalized `dir`, the first matrix column
+/// `scale_col = (m00, m01, m02)` of `inst+0xfc`, the local sphere `radius`, and
+/// the ray length `seg_len`, returns the clamped `[t_enter, t_exit]` candidate
+/// span on a hit, or `None`.
 ///
 /// `radius_sq = ((m00² + m01²) + m02²)·radius·radius` scales the local radius by
 /// the matrix's x-axis length. The proj/perp grouping and the four rejects are
@@ -1698,11 +1740,12 @@ pub fn cm2_scene__sphere_reject__7089c0(
     Some([rec_t_enter, t_exit])
 }
 
-/// Project a world-space vertex into the ray frame (stock 0x709760.. collision /
-/// 0x709445.. skinned). Returns `[perp_x, perp_y, along]` where
-/// `along = dot(v, dir) - d_dot_o` (signed ray distance) and
-/// `perp_{x,y} = v_{x,y} - dir_{x,y}·along`. The two stock paths sum the dot in
-/// different orders, selected by `skinned`:
+/// Project a world-space vertex into the ray frame.
+///
+/// (Stock 0x709760.. collision / 0x709445.. skinned.) Returns
+/// `[perp_x, perp_y, along]` where `along = dot(v, dir) - d_dot_o` (signed ray
+/// distance) and `perp_{x,y} = v_{x,y} - dir_{x,y}·along`. The two stock paths
+/// sum the dot in different orders, selected by `skinned`:
 /// - collision (`skinned = false`): `(v_z·dir_z + v_x·dir_x) + v_y·dir_y`
 /// - skinned   (`skinned = true`):  `(v_x·dir_x + v_y·dir_y) + v_z·dir_z`
 pub fn cm2_scene__project_vertex__7089c0(
@@ -1722,11 +1765,13 @@ pub fn cm2_scene__project_vertex__7089c0(
     [perp_x, perp_y, along]
 }
 
-/// Inner projected 2-D barycentric triangle hit (stock 0x70983e../0x70951f..,
-/// identical in both narrow-phase paths). `p0`/`p1`/`p2` are the projected
-/// scratch entries `[perp_x, perp_y, along]` for the triangle's three vertices
-/// and `origin_xy = (o_x, o_y)` is the ray origin's x/y. Returns the hit
-/// distance `t` (the `along`-interpolated depth) on a hit, else `None`.
+/// Inner projected 2-D barycentric triangle hit.
+///
+/// (Stock 0x70983e../0x70951f.., identical in both narrow-phase paths.)
+/// `p0`/`p1`/`p2` are the projected scratch entries `[perp_x, perp_y, along]`
+/// for the triangle's three vertices and `origin_xy = (o_x, o_y)` is the ray
+/// origin's x/y. Returns the hit distance `t` (the `along`-interpolated depth)
+/// on a hit, else `None`.
 ///
 /// `det` is the signed area in the perp plane (reject `|det| < eps`); the three
 /// barycentric weights are point-in-triangle of the origin, each rejected on
@@ -1763,12 +1808,14 @@ pub fn cm2_scene__tri_barycentric_hit__7089c0(
     Some(t)
 }
 
-/// Bone-weight skin blend (stock 0x7091fb..0x7093a6). Accumulates the per-vertex
-/// blended 4×4 `C44Matrix` from up to four `(weight, bone)` influences. `weights`
-/// are the four raw weight bytes (`vert+0xc..0xf`); `mats[k]` is the bone matrix
-/// for influence `k` (`bone_base + bone_k·0x40`). Influence 0 is always applied;
-/// influences 1..3 stop at the first zero weight (so `mats[k]` for a zero-weight
-/// slot is never read — the driver may pass any placeholder there).
+/// Bone-weight skin blend (stock 0x7091fb..0x7093a6).
+///
+/// Accumulates the per-vertex blended 4×4 `C44Matrix` from up to four
+/// `(weight, bone)` influences. `weights` are the four raw weight bytes
+/// (`vert+0xc..0xf`); `mats[k]` is the bone matrix for influence `k`
+/// (`bone_base + bone_k·0x40`). Influence 0 is always applied; influences 1..3
+/// stop at the first zero weight (so `mats[k]` for a zero-weight slot is never
+/// read — the driver may pass any placeholder there).
 ///
 /// Each weight is `(byte as i32 as f32)·(1/255)`; the matrix's translation column
 /// (`acc[3]`, `[7]`, `[11]`) stays `0` and `acc[15]` stays `1.0`, matching the
@@ -1797,6 +1844,7 @@ pub fn cm2_scene__skin_blend__7089c0(weights: &[u8; 4], mats: &[[f32; 16]; 4]) -
 }
 
 /// Skinned normal rotate for the pass≥1 narrow phase (stock 0x7093c8..0x709423).
+///
 /// Rotates the vertex normal `n = (vert+0x14, +0x18, +0x1c)` by the blended
 /// matrix's 3×3 part and returns the world delta added to the transformed
 /// position. Each lane groups as `(blend[r+4]·n1 + blend[r+8]·n2) + blend[r]·n0`.
@@ -2065,8 +2113,9 @@ mod tests_cm2_scene__trace_line__7089c0 {
 // for the arithmetic.
 // ---------------------------------------------------------------------------
 
-/// 6-bit Cohen–Sutherland AABB outcode for one transformed collision vertex
-/// (`CM2Shadow::ProjectCollisionQuads`, per-vertex block 0x7138d1–0x713944).
+/// 6-bit Cohen–Sutherland AABB outcode for one transformed collision vertex.
+///
+/// (`CM2Shadow::ProjectCollisionQuads`, per-vertex block 0x7138d1–0x713944.)
 ///
 /// `bounds` is `[minX, minY, minZ, maxX, maxY, maxZ]`. Bit layout: `x < minX`
 /// = 1, `x > maxX` = 2, `y < minY` = 4, `y > maxY` = 8, `z < minZ` = 0x10,
@@ -2097,8 +2146,9 @@ pub fn cm2_shadow__outcode6__7137c0(v: &[f32; 3], bounds: &[f32; 6]) -> u32 {
     oc
 }
 
-/// Row-normalizes the 3×3 shadow basis in place (0x71399e–0x713a45): for each
-/// row, `mag² = SquaredMagnitude(row)` (the hooked 0x4549f0 kernel), then
+/// Row-normalizes the 3×3 shadow basis in place (0x71399e–0x713a45).
+///
+/// For each row, `mag² = SquaredMagnitude(row)` (the hooked 0x4549f0 kernel), then
 /// `FSQRT`/`FABS`/`FCOMP eps` — the row is scaled by `k / sqrt(mag²)` unless
 /// the compare orders `|sqrt| < eps`. The `TEST AH,0x5` / `JNP` polarity means
 /// the normalize arm runs on GREATER-OR-EQUAL **and on unordered**: a NaN
@@ -2121,7 +2171,9 @@ pub fn cm2_shadow__normalize_basis3__7137c0(basis: &mut [f32; 9], k: f32, eps: f
     }
 }
 
-/// Per-triangle plane build (0x713bc6–0x713c3d): transforms the face normal by
+/// Per-triangle plane build (0x713bc6–0x713c3d).
+///
+/// Transforms the face normal by
 /// the row-normalized basis as three COLUMN dots (`N'[c] = basis[6+c]·nz +
 /// basis[3+c]·ny + basis[c]·nx`, i.e. `basisᵀ·n`), then the plane offset
 /// `d = -((v0z·N'z + v0y·N'y) + N'x·v0x)` (`FCHS` before the store). Stock
@@ -2152,9 +2204,11 @@ pub fn cm2_shadow__quad_plane__7137c0(
     (np, d)
 }
 
-/// `TSGrowableArray` capacity round-up (0x674500), inlined into the
-/// ProjectCollisionQuads grow protocol: rounds `value` up to the next multiple
-/// of `alignment` (unchanged when already aligned). The stock `DIV` faults on
+/// `TSGrowableArray` capacity round-up (0x674500).
+///
+/// Inlined into the ProjectCollisionQuads grow protocol: rounds `value` up to
+/// the next multiple of `alignment` (unchanged when already aligned). The stock
+/// `DIV` faults on
 /// `alignment == 0`; the caller protocol guarantees non-zero (`out[3]` is used
 /// only when non-zero, and ComputeGranularity returns ≥ 1). The round-up add
 /// wraps like the stock `ADD`.

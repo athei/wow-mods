@@ -1,5 +1,4 @@
-/// One-shot logger init shared by every cdylib here (the PE mods and the unix
-/// `.so`).
+/// One-shot logger init shared by every cdylib here (the PE mods and the unix `.so`).
 ///
 /// Each cdylib has its own copy of the `log` / `env_logger` statics, so each
 /// calls this from its own entry point (`DllMain` on PE, the `InitLogger`

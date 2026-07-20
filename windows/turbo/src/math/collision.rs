@@ -9,11 +9,12 @@
     clippy::too_many_arguments
 )]
 
-/// `CWorldBsp::AabbTriangleOverlap` separating-axis test along the three
-/// coordinate axes. `aabb` is `[min_x, min_y, min_z, max_x, max_y, max_z]`;
-/// `v0`/`v1`/`v2` are the triangle vertices. Returns `1` if a separating axis
-/// is found (the box and triangle are disjoint), `0` if no coordinate axis
-/// separates them (potential overlap).
+/// `CWorldBsp::AabbTriangleOverlap` separating-axis test along the three coordinate axes.
+///
+/// `aabb` is `[min_x, min_y, min_z, max_x, max_y, max_z]`; `v0`/`v1`/`v2` are
+/// the triangle vertices. Returns `1` if a separating axis is found (the box
+/// and triangle are disjoint), `0` if no coordinate axis separates them
+/// (potential overlap).
 ///
 /// Mirrors the reference's sign-bit arithmetic exactly: per axis it looks at
 /// the sign bit of `(max - vert)` and of `(vert - min)` for each vertex, and a
@@ -935,9 +936,10 @@ mod tests_collide_line_triangle__7c27d0 {
     }
 }
 
-/// Builds the 9 clip-plane equations (`Ax+By+Cz+D`, 36 contiguous `f32`)
-/// bounding the swept-collision prism around `center` with horizontal
-/// `radius` and vertical `height`.
+/// Builds the 9 clip-plane equations (`Ax+By+Cz+D`, 36 contiguous `f32`).
+///
+/// Bounds the swept-collision prism around `center` with horizontal `radius`
+/// and vertical `height`.
 ///
 /// Plane layout (4 floats each `[A, B, C, D]`): four axis-aligned side
 /// planes (-X/+X/+Y/-Y), one top cap (+Z), then four angled side planes
@@ -1086,8 +1088,9 @@ mod tests_collision_build_prism_planes__631440 {
     }
 }
 
-/// Builds the 5 clip planes (4 swept-edge side planes + 1 cap plane) of a quad
-/// face swept along `face_offset`.
+/// Builds the 5 clip planes (4 swept-edge side planes + 1 cap plane).
+///
+/// The face is a quad swept along `face_offset`.
 ///
 /// `verts` are the quad's 4 corner positions in ring order. For each ring edge
 /// `i` the swept side plane is the triangle plane through `A`, `B`, `A+offset`
@@ -1154,9 +1157,9 @@ pub fn collision_build_quad_face_clip_planes__632f80(
     Some(planes)
 }
 
-/// Builds a normalized plane `[Nx,Ny,Nz,D]` from a triangle, matching
-/// `C4Plane__FromTriangle`: normal = `(p1-p0) x (p2-p0)`, scaled by `1.0/|n|`,
-/// `D = -dot(N, p0)`.
+/// Builds a normalized plane `[Nx,Ny,Nz,D]` from a triangle, matching `C4Plane__FromTriangle`.
+///
+/// normal = `(p1-p0) x (p2-p0)`, scaled by `1.0/|n|`, `D = -dot(N, p0)`.
 fn plane_from_triangle(p0: &[f32; 3], p1: &[f32; 3], p2: &[f32; 3]) -> [f32; 4] {
     let nx = (p1[1] - p0[1]) * (p2[2] - p0[2]) - (p1[2] - p0[2]) * (p2[1] - p0[1]);
     let ny = (p1[2] - p0[2]) * (p2[0] - p0[0]) - (p2[2] - p0[2]) * (p1[0] - p0[0]);
@@ -1363,8 +1366,10 @@ mod tests_collision_ray_plane_intersect_time__6329e0 {
     }
 }
 
-/// One axis of the squared-threshold variant (`dir` 0): directional outside
-/// gap, far-wall gap, and the boundary-proximity latch against `r2`.
+/// One axis of the squared-threshold variant (`dir` 0).
+///
+/// Directional outside gap, far-wall gap, and the boundary-proximity latch
+/// against `r2`.
 ///
 /// Strict compares route an unordered (NaN) coordinate to the inside arm with
 /// no gap contribution; min/max ties and unordered operands resolve to `g_hi`,
@@ -1385,9 +1390,10 @@ fn sphere_axis_terms_sq(s: f32, lo: f32, hi: f32, r2: f32) -> (f32, f32, bool) {
     }
 }
 
-/// One axis of the linear-threshold variant (`dir` 1): directional outside gap
-/// and the proximity latch against the *linear* radius (distinct from the
-/// squared form when `radius` is negative).
+/// One axis of the linear-threshold variant (`dir` 1).
+///
+/// Directional outside gap and the proximity latch against the *linear* radius
+/// (distinct from the squared form when `radius` is negative).
 fn sphere_axis_terms_lin(s: f32, lo: f32, hi: f32, radius: f32) -> (f32, bool) {
     if s < lo {
         let d = s - lo;
@@ -1400,8 +1406,9 @@ fn sphere_axis_terms_lin(s: f32, lo: f32, hi: f32, radius: f32) -> (f32, bool) {
     }
 }
 
-/// One axis of the contain-test variant (`dir` 2): directional outside gap and
-/// the far-wall gap.
+/// One axis of the contain-test variant (`dir` 2).
+///
+/// Directional outside gap and the far-wall gap.
 fn sphere_axis_out_far(s: f32, lo: f32, hi: f32) -> (f32, f32) {
     let d_lo = s - lo;
     let g_lo = d_lo * d_lo;
@@ -1418,8 +1425,9 @@ fn sphere_axis_out_far(s: f32, lo: f32, hi: f32) -> (f32, f32) {
     (out, far)
 }
 
-/// One axis of the plain overlap variant (`dir` 3): the directional outside
-/// gap (the closest-point-on-box term).
+/// One axis of the plain overlap variant (`dir` 3).
+///
+/// The directional outside gap (the closest-point-on-box term).
 fn sphere_axis_out(s: f32, lo: f32, hi: f32) -> f32 {
     if s < lo {
         let d = s - lo;
@@ -1432,11 +1440,13 @@ fn sphere_axis_out(s: f32, lo: f32, hi: f32) -> f32 {
     }
 }
 
-/// Tests whether a sphere (center `sphere[0..2]` in the XY plane, radius
-/// `sphere[3]`) reaches into a neighboring grid cell along one of four
-/// directions (`dir` 0..=3). The cell is given by its two opposite corners,
-/// `cell_min` and `cell_max` (only the X/Y components are consulted). Returns
-/// `true` (the original's nonzero low byte) when the sphere overlaps that edge.
+/// Tests whether a sphere reaches into a neighboring grid cell along one of four directions.
+///
+/// The sphere is center `sphere[0..2]` in the XY plane, radius `sphere[3]`;
+/// the four directions are `dir` 0..=3. The cell is given by its two opposite
+/// corners, `cell_min` and `cell_max` (only the X/Y components are consulted).
+/// Returns `true` (the original's nonzero low byte) when the sphere overlaps
+/// that edge.
 ///
 /// Per axis let `g_lo = (s-lo)²`, `g_hi = (s-hi)²`, `out` the directional
 /// (closest-point) term and `far = max(g_lo, g_hi)`; with `r2 = radius²`:
@@ -1603,8 +1613,9 @@ mod tests_sphere_test_cell_direction__7c2040 {
         assert!(!f(&MIN, &MAX, &outside, 3));
     }
 
-    /// `dir` 0 latches an inside axis at the squared boundary `near == r2`
-    /// (non-strict, matching the stock `setae`): center `(0.25, 0.5)` with
+    /// `dir` 0 latches an inside axis at the squared boundary `near == r2`.
+    ///
+    /// Non-strict, matching the stock `setae`: center `(0.25, 0.5)` with
     /// `r = 0.25` has `near = 0.0625 == r2` and must report a hit.
     #[test]
     fn dir0_inside_boundary_is_inclusive() {
@@ -1612,9 +1623,11 @@ mod tests_sphere_test_cell_direction__7c2040 {
         assert!(f(&MIN, &MAX, &s, 0));
     }
 
-    /// A NaN center coordinate routes to the inside arm (ordered-strict
-    /// outside-tests are both false), so `dir` 3 can still hit on the other
-    /// axis — the stock behaviour, where a NaN axis contributes no gap.
+    /// A NaN center coordinate routes to the inside arm.
+    ///
+    /// Ordered-strict outside-tests are both false, so `dir` 3 can still hit
+    /// on the other axis — the stock behaviour, where a NaN axis contributes
+    /// no gap.
     #[test]
     fn nan_center_routes_inside() {
         let s = [f32::NAN, 1.05, 0.0, 0.1];
@@ -1627,10 +1640,10 @@ mod tests_sphere_test_cell_direction__7c2040 {
         assert!(!f(&MIN, &MAX, &s, 2));
     }
 
-    /// A negative radius separates the linear (`dir` 1) and squared (`dir` 0)
-    /// proximity thresholds: inside with wall distance 0.3, `r = -0.5` ⇒ the
-    /// linear latch `0.3 <= -0.5` fails but the squared latch `0.09 <= 0.25`
-    /// holds.
+    /// A negative radius separates the linear (`dir` 1) and squared (`dir` 0) proximity thresholds.
+    ///
+    /// Inside with wall distance 0.3, `r = -0.5` ⇒ the linear latch
+    /// `0.3 <= -0.5` fails but the squared latch `0.09 <= 0.25` holds.
     #[test]
     fn negative_radius_linear_vs_squared_latch() {
         // dir 1 (linear): no axis outside and no wall within -0.5 → no latch.
@@ -1934,9 +1947,10 @@ mod tests_sq_dist_point_triangle_edges__6dc900 {
     }
 }
 
-/// Builds the four clip planes bounding one swept-prism triangle face: three
-/// extruded edge planes plus one cap plane (16 contiguous floats, `[nx, ny, nz,
-/// d]` each).
+/// Builds the four clip planes bounding one swept-prism triangle face.
+///
+/// Three extruded edge planes plus one cap plane (16 contiguous floats,
+/// `[nx, ny, nz, d]` each).
 ///
 /// `tri` are the face's three vertices (already de-indexed). For each ring edge
 /// `i` (A = `tri[i]`, B = `tri[(i+1)%3]`, opposite = `tri[(i+2)%3]`) the swept
@@ -2075,8 +2089,7 @@ mod tests_collision_build_face_edge_planes__632460 {
     }
 }
 
-/// Sutherland-Hodgman clip of a convex polygon (max 15 vertices) by one plane, in
-/// place.
+/// Sutherland-Hodgman clip of a convex polygon (max 15 vertices) by one plane, in place.
 ///
 /// `verts` holds up to 15 vertices contiguously (3 floats each, 45 total); `tags`
 /// holds one classification float per vertex (15 total). `count` is the live
@@ -2146,8 +2159,9 @@ pub fn collision_clip_polygon_by_plane__6318c0(
     if out > 2 { out } else { 0 }
 }
 
-/// Interpolated plane crossing between `p` (prev) and `c` (cur): `t = d_prev /
-/// (d_cur - d_prev)`, `x = p - (c - p) * t`.
+/// Interpolated plane crossing between `p` (prev) and `c` (cur).
+///
+/// `t = d_prev / (d_cur - d_prev)`, `x = p - (c - p) * t`.
 fn clip_crossing(p: &[f32], c: &[f32], d_prev: f32, d_cur: f32) -> [f32; 3] {
     let t = d_prev / (d_cur - d_prev);
     [
@@ -2504,8 +2518,7 @@ mod tests_collision_ray_polygon_sweep_distance__632830 {
     }
 }
 
-/// Sweeps a clipped polygon against a set of world faces, recording the closest
-/// hit.
+/// Sweeps a clipped polygon against a set of world faces, recording the closest hit.
 ///
 /// `faces` packs each candidate face as 13 floats: the face plane `[nx, ny, nz,
 /// d]` (its normal feeds the front-face test) then a 9-float (3-vertex) polygon.
@@ -2679,9 +2692,10 @@ mod tests_collision_sweep_polygon_against_faces__632700 {
     }
 }
 
-/// Builds one collision-plane record from a transformed triangle: the unit
-/// face normal `n = normalize((q1 - q0) x (q2 - q0))` and the plane constant
-/// `d = -dot(n, q0)`, returned as `[n_x, n_y, n_z, d]`.
+/// Builds one collision-plane record from a transformed triangle.
+///
+/// The unit face normal `n = normalize((q1 - q0) x (q2 - q0))` and the plane
+/// constant `d = -dot(n, q0)`, returned as `[n_x, n_y, n_z, d]`.
 ///
 /// `target_len` is the host's normalize constant (the length the precise
 /// normalizer scales to); `precise` selects between the reference's two
@@ -2815,26 +2829,30 @@ mod tests_build_mesh_triangle_planes__671cc0 {
     }
 }
 
-/// One interior-node step of `CollideBspNode_TraceSegment`: how a segment
-/// relates to an axis-aligned split plane, and (for a straddle) where it
-/// crosses.
+/// One interior-node step of `CollideBspNode_TraceSegment`.
+///
+/// How a segment relates to an axis-aligned split plane, and (for a straddle)
+/// where it crosses.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum BspTraceStep {
     /// The segment misses the node's clip slab on the split axis — stop.
     Reject,
-    /// An endpoint sits inside the plane band: descend the high child with
-    /// the full segment (slab min raised to the split), then the low child
-    /// (slab max lowered to the split).
+    /// An endpoint sits inside the plane band.
+    ///
+    /// Descend the high child with the full segment (slab min raised to the
+    /// split), then the low child (slab max lowered to the split).
     Band,
     /// Both endpoints are above the band: descend only the high child.
     HighOnly,
     /// Both endpoints are below the band: descend only the low child.
     LowOnly,
-    /// The segment straddles the plane entering from the high side: the high
-    /// child takes `[p0, mid]`, then the low child takes `[mid, p1]`.
+    /// The segment straddles the plane entering from the high side.
+    ///
+    /// The high child takes `[p0, mid]`, then the low child takes `[mid, p1]`.
     SplitHighFirst { mid: [f32; 3] },
-    /// The segment straddles the plane entering from the low side: the low
-    /// child takes `[p0, mid]`, then the high child takes `[mid, p1]`.
+    /// The segment straddles the plane entering from the low side.
+    ///
+    /// The low child takes `[p0, mid]`, then the high child takes `[mid, p1]`.
     SplitLowFirst { mid: [f32; 3] },
 }
 
@@ -3004,8 +3022,10 @@ mod tests_collide_bsp_node_trace_segment__6bc370 {
     }
 }
 
-/// `CollideLeaf_RayTriangleMesh` vertex-outcode kernel: the 6-bit AABB outcode
-/// of vertex `v` against the box spanned by segment endpoints `a` and `b`.
+/// `CollideLeaf_RayTriangleMesh` vertex-outcode kernel.
+///
+/// The 6-bit AABB outcode of vertex `v` against the box spanned by segment
+/// endpoints `a` and `b`.
 ///
 /// Per axis the low/high bounds are picked with a single ordered `>` test — an
 /// unordered (NaN) endpoint pair keeps `(a, b)` unswapped, exactly like the
@@ -3103,8 +3123,9 @@ mod tests_collide_leaf_ray_triangle_mesh__6b88e0 {
     }
 }
 
-/// `Collision::BuildSweepPrism` vertex builder — the 9 swept-prism corner
-/// vertices (`[x, y, z]` x9 = 27 contiguous `f32`).
+/// `Collision::BuildSweepPrism` vertex builder.
+///
+/// The 9 swept-prism corner vertices (`[x, y, z]` x9 = 27 contiguous `f32`).
 ///
 /// Vertex 0 is `center` verbatim. The lower ring (vertices 1-4) sits at
 /// `center.z + radius * K` and the upper ring (vertices 5-8) at
@@ -3179,9 +3200,11 @@ pub fn collision_build_sweep_prism_verts__631be0(
 mod tests_collision_build_sweep_prism__631be0 {
     use super::collision_build_sweep_prism_verts__631be0 as f;
 
-    /// Independent oracle: builds the 9 vertices from an explicit table of
-    /// per-vertex `(sign_x, sign_y, z)` selectors rather than the kernel's
-    /// hand-unrolled layout, so a transposed component or wrong sign diverges.
+    /// Independent oracle.
+    ///
+    /// Builds the 9 vertices from an explicit table of per-vertex
+    /// `(sign_x, sign_y, z)` selectors rather than the kernel's hand-unrolled
+    /// layout, so a transposed component or wrong sign diverges.
     fn oracle(center: &[f32; 3], height: f32, radius: f32) -> [f32; 27] {
         const K: f32 = 1.849_398_970_603_942_9;
         let [cx, cy, cz] = *center;
@@ -3244,9 +3267,10 @@ mod tests_collision_build_sweep_prism__631be0 {
         }
     }
 }
-/// `PolyClip::ClipToScreenRect` 3-way band classifier: class `1` (inside)
-/// when `d > band_hi`, class `2` (outside) when `d < band_lo`, else class `0`
-/// (on-plane: kept, never a crossing endpoint).
+/// `PolyClip::ClipToScreenRect` 3-way band classifier.
+///
+/// Class `1` (inside) when `d > band_hi`, class `2` (outside) when
+/// `d < band_lo`, else class `0` (on-plane: kept, never a crossing endpoint).
 ///
 /// Both stock compares are strict `FCOMP`s that route the unordered result to
 /// class 0: the first (`TEST AH,0x41; JNZ`) accepts class 1 only for an
@@ -3265,42 +3289,45 @@ pub fn poly_clip_classify__6b4a80(d: f32, band_hi: f32, band_lo: f32) -> u32 {
     }
 }
 
-/// `PolyClip::ClipToScreenRect` plane distance: the homogeneous dot of one
-/// packed `(x, y, w)` polygon vertex with one 3-coefficient clip plane, in
-/// the stock x87 op order `(w*c2 + x*c0) + y*c1` (with `w` as the third dot
-/// component). The x87 keeps the sum at extended precision and narrows once
-/// at the f32 store — tracked here in `f64` (products of two f32 are exact)
-/// with the same single narrowing.
+/// `PolyClip::ClipToScreenRect` plane distance.
+///
+/// The homogeneous dot of one packed `(x, y, w)` polygon vertex with one
+/// 3-coefficient clip plane, in the stock x87 op order `(w*c2 + x*c0) + y*c1`
+/// (with `w` as the third dot component). The x87 keeps the sum at extended
+/// precision and narrows once at the f32 store — tracked here in `f64`
+/// (products of two f32 are exact) with the same single narrowing.
 pub fn poly_clip_plane_distance__6b4a80(v: &[f32; 3], plane: &[f32; 3]) -> f32 {
     let d = (f64::from(v[2]) * f64::from(plane[2]) + f64::from(v[0]) * f64::from(plane[0]))
         + f64::from(v[1]) * f64::from(plane[1]);
     super::f64_to_f32(d)
 }
 
-/// `PolyClip::ClipToScreenRect` edge-crossing parameter
-/// `t = d_i / (d_i - d_next)` (FSUB + FDIVR) over the two stored f32 plane
-/// distances. Stock keeps `t` un-narrowed on the x87 stack across all three
-/// lerped components — mirrored by returning `f64`. The driver only forms a
-/// crossing for opposite non-zero classes, so the denominator is nonzero in
-/// practice; a degenerate equal pair divides to ±inf/NaN exactly like stock
-/// (no added guard).
+/// `PolyClip::ClipToScreenRect` edge-crossing parameter `t = d_i / (d_i - d_next)`.
+///
+/// (FSUB + FDIVR) over the two stored f32 plane distances. Stock keeps `t`
+/// un-narrowed on the x87 stack across all three lerped components — mirrored
+/// by returning `f64`. The driver only forms a crossing for opposite non-zero
+/// classes, so the denominator is nonzero in practice; a degenerate equal pair
+/// divides to ±inf/NaN exactly like stock (no added guard).
 pub fn poly_clip_crossing_t__6b4a80(d_i: f32, d_next: f32) -> f64 {
     f64::from(d_i) / (f64::from(d_i) - f64::from(d_next))
 }
 
-/// One component of the `PolyClip::ClipToScreenRect` homogeneous crossing
-/// lerp `out = (v_next - v_i) * t + v_i` (FSUB/FMUL/FADD chain), narrowed
-/// once at the f32 store.
+/// One component of the `PolyClip::ClipToScreenRect` homogeneous crossing lerp.
+///
+/// `out = (v_next - v_i) * t + v_i` (FSUB/FMUL/FADD chain), narrowed once at
+/// the f32 store.
 pub fn poly_clip_lerp_component__6b4a80(v_i: f32, v_next: f32, t: f64) -> f32 {
     super::f64_to_f32((f64::from(v_next) - f64::from(v_i)) * t + f64::from(v_i))
 }
 
-/// The scratch regions [`poly_clip_to_screen_rect__6b4a80`] writes: the two
-/// ping-pong polygon buffers (packed 3 f32 per vertex) and the per-vertex
-/// plane-distance / class arrays (both also written at index `[count]` for
-/// the wrap sentinel). The live adapter points these at the game's fixed
-/// static globals (0xcbe138 / 0xcbe1f8 / 0xcbe0f0 / 0xcbe0b0); host tests use
-/// local arrays. Like stock, NO region is capacity-checked.
+/// The scratch regions [`poly_clip_to_screen_rect__6b4a80`] writes.
+///
+/// The two ping-pong polygon buffers (packed 3 f32 per vertex) and the
+/// per-vertex plane-distance / class arrays (both also written at index
+/// `[count]` for the wrap sentinel). The live adapter points these at the
+/// game's fixed static globals (0xcbe138 / 0xcbe1f8 / 0xcbe0f0 / 0xcbe0b0);
+/// host tests use local arrays. Like stock, NO region is capacity-checked.
 pub struct PolyClipScratch {
     pub buf_a: *mut f32,
     pub buf_b: *mut f32,
@@ -3308,8 +3335,9 @@ pub struct PolyClipScratch {
     pub class: *mut u32,
 }
 
-/// Raw 3-dword vertex copy between the packed (stride-0xc) polygon buffers —
-/// per-component interleaved read-then-write dword copies in stock's exact
+/// Raw 3-dword vertex copy between the packed (stride-0xc) polygon buffers.
+///
+/// Per-component interleaved read-then-write dword copies in stock's exact
 /// order, bit-exact (NaN payloads preserved).
 ///
 /// # Safety
@@ -3327,21 +3355,22 @@ unsafe fn poly_clip_copy_vertex(src: *const f32, i: usize, dst: *mut f32, j: usi
     }
 }
 
-/// `PolyClip::ClipToScreenRect` (0x6b4a80) Sutherland–Hodgman driver: stages
-/// the caller's stride-0x10 `(x, y, _, w)` vertices into ping buffer A as
-/// packed `(x, y, w)` triples (raw dword copies; component `[2]`/z skipped),
-/// then clips against the four `planes` rows (stride 4 f32, coefficients at
-/// `[0..3]`, `[3]` unused padding), ping-ponging A→B→A→B→A. Per plane it
-/// stores every source vertex's f32 plane distance and 3-way class (wrap
-/// sentinel copied to slot `[src_count]` — a self-copy of slot 0 when the
-/// count is 0), then emits class-0/1 vertices verbatim and a lerped crossing
-/// point for every edge `i → (i+1) % src_count` (integer modulo) whose next
-/// class is non-zero and differs from `class[i]`. A crossing is never tested
-/// from a class-0 vertex, faithfully reproducing stock's asymmetry (an
-/// outside→on-plane or on-plane→outside edge emits no intersection).
-/// `*out_count` is rewritten after every surviving plane, exactly like
-/// stock; a surviving polygon writes its final buffer's own address to
-/// `*out_poly` (pointer identity — always buffer A, the plane-3
+/// `PolyClip::ClipToScreenRect` (0x6b4a80) Sutherland–Hodgman driver.
+///
+/// Stages the caller's stride-0x10 `(x, y, _, w)` vertices into ping buffer A
+/// as packed `(x, y, w)` triples (raw dword copies; component `[2]`/z
+/// skipped), then clips against the four `planes` rows (stride 4 f32,
+/// coefficients at `[0..3]`, `[3]` unused padding), ping-ponging A→B→A→B→A.
+/// Per plane it stores every source vertex's f32 plane distance and 3-way
+/// class (wrap sentinel copied to slot `[src_count]` — a self-copy of slot 0
+/// when the count is 0), then emits class-0/1 vertices verbatim and a lerped
+/// crossing point for every edge `i → (i+1) % src_count` (integer modulo)
+/// whose next class is non-zero and differs from `class[i]`. A crossing is
+/// never tested from a class-0 vertex, faithfully reproducing stock's
+/// asymmetry (an outside→on-plane or on-plane→outside edge emits no
+/// intersection). `*out_count` is rewritten after every surviving plane,
+/// exactly like stock; a surviving polygon writes its final buffer's own
+/// address to `*out_poly` (pointer identity — always buffer A, the plane-3
 /// destination), a fully-clipped or empty one writes `*out_poly = 0` then
 /// `*out_count = 0`.
 ///
@@ -3530,8 +3559,10 @@ mod tests_poly_clip_to_screen_rect__6b4a80 {
     const HI: f32 = 1.0e-5;
     const LO: f32 = -1.0e-5;
 
-    /// A `w`-scaled unit screen rect (`x+w`, `w-x`, `y+w`, `w-y`): row stride
-    /// 4 with the unused padding float, mirroring the game table layout.
+    /// A `w`-scaled unit screen rect (`x+w`, `w-x`, `y+w`, `w-y`).
+    ///
+    /// Row stride 4 with the unused padding float, mirroring the game table
+    /// layout.
     #[rustfmt::skip]
     const PLANES: [f32; 16] = [
          1.0,  0.0, 1.0, 0.0,
@@ -3540,11 +3571,12 @@ mod tests_poly_clip_to_screen_rect__6b4a80 {
          0.0, -1.0, 1.0, 0.0,
     ];
 
-    /// Drives the raw driver over local scratch arrays and returns the
-    /// clipped polygon, or `None` when fully clipped away. Asserts the stock
-    /// pointer contract: a surviving polygon is handed back as ping buffer
-    /// A's own address (the plane-3 destination), a clipped-away one as
-    /// null + count 0.
+    /// Drives the raw driver over local scratch arrays and returns the clipped polygon.
+    ///
+    /// Returns `None` when fully clipped away. Asserts the stock pointer
+    /// contract: a surviving polygon is handed back as ping buffer A's own
+    /// address (the plane-3 destination), a clipped-away one as null +
+    /// count 0.
     fn clip(verts: &[[f32; 4]]) -> Option<Vec<[f32; 3]>> {
         let mut buf_a = [0.0_f32; 96];
         let mut buf_b = [0.0_f32; 96];
@@ -3588,10 +3620,11 @@ mod tests_poly_clip_to_screen_rect__6b4a80 {
         )
     }
 
-    /// Independent Sutherland–Hodgman oracle: `Vec`-based, one plane at a
-    /// time, with its own inline f64 math in the same op order — none of the
-    /// driver's ping-pong buffers, wrap sentinel or raw-pointer index
-    /// arithmetic.
+    /// Independent Sutherland–Hodgman oracle.
+    ///
+    /// `Vec`-based, one plane at a time, with its own inline f64 math in the
+    /// same op order — none of the driver's ping-pong buffers, wrap sentinel
+    /// or raw-pointer index arithmetic.
     fn oracle(verts: &[[f32; 4]]) -> Option<Vec<[f32; 3]>> {
         let mut cur: Vec<[f32; 3]> = verts.iter().map(|v| [v[0], v[1], v[3]]).collect();
         for p in 0..4 {
@@ -3840,38 +3873,45 @@ mod tests_poly_clip_to_screen_rect__6b4a80 {
     }
 }
 
-/// One recorded-hit disposition for the swept-volume driver's per-face fold
-/// (`Collision_SweepVolumeAgainstWorldPlanes` @0x632ba0).
+/// One recorded-hit disposition for the swept-volume driver's per-face fold.
+///
+/// `Collision_SweepVolumeAgainstWorldPlanes` @0x632ba0.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SweepHitAction {
-    /// `best − band > t` strictly ordered: t is decisively nearer — the hit
-    /// list restarts with this face at index 0.
+    /// `best − band > t` strictly ordered.
+    ///
+    /// t is decisively nearer — the hit list restarts with this face at
+    /// index 0.
     ReplaceFirst,
-    /// Within the band (`best + band > t` strictly ordered): append at the
-    /// current count.
+    /// Within the band (`best + band > t` strictly ordered).
+    ///
+    /// Append at the current count.
     Append,
     /// Too far (or any unordered compare): record nothing.
     Ignore,
 }
 
-/// Early-out predicate (0x632ba9): `|dist| < eps` ordered. The stock
-/// `TEST AH,0x5; JP` CONTINUES on unordered, so a NaN dist proceeds into the
-/// query — `<` reproduces that (false on NaN).
+/// Early-out predicate (0x632ba9): `|dist| < eps` ordered.
+///
+/// The stock `TEST AH,0x5; JP` CONTINUES on unordered, so a NaN dist proceeds
+/// into the query — `<` reproduces that (false on NaN).
 pub fn sweep_volume_early_out__632ba0(dist: f32, eps: f32) -> bool {
     dist.abs() < eps
 }
 
-/// Motion-length clamp (0x632cb7): use `dist` only when strictly greater than
-/// the floor; equal, less, and NaN (stock `TEST AH,0x41; JNZ`) take the floor.
+/// Motion-length clamp (0x632cb7): use `dist` only when strictly greater than the floor.
+///
+/// Equal, less, and NaN (stock `TEST AH,0x41; JNZ`) take the floor.
 pub fn sweep_volume_motion_scale__632ba0(dist: f32, floor: f32) -> f32 {
     if dist > floor { dist } else { floor }
 }
 
-/// Front-face gate (0x632dc0): the prism face is swept iff
-/// `motion·normal > thr` OR the compare is unordered — the stock
-/// `TEST AH,0x41; JNP skip` skips on `<` and `==` (odd parity) and processes
-/// on `>` and NaN (even parity). The dot folds in the exact x87 order
-/// `(mz·pz + my·py) + mx·px` at extended precision (f64 here).
+/// Front-face gate (0x632dc0).
+///
+/// The prism face is swept iff `motion·normal > thr` OR the compare is
+/// unordered — the stock `TEST AH,0x41; JNP skip` skips on `<` and `==` (odd
+/// parity) and processes on `>` and NaN (even parity). The dot folds in the
+/// exact x87 order `(mz·pz + my·py) + mx·px` at extended precision (f64 here).
 pub fn sweep_face_is_front__632ba0(plane: &[f32; 4], motion: &[f32; 3], thr: f32) -> bool {
     let dot = f64::from(motion[2]) * f64::from(plane[2])
         + f64::from(motion[1]) * f64::from(plane[1])
@@ -3879,11 +3919,13 @@ pub fn sweep_face_is_front__632ba0(plane: &[f32; 4], motion: &[f32; 3], thr: f32
     !(dot <= f64::from(thr))
 }
 
-/// Band fold for one face hit (0x632e44/0x632e7c): both compares are
-/// `TEST AH,0x41; JNZ` — the strict ordered `>` falls through, everything
-/// else (including NaN t) takes the other arm; a NaN t therefore reaches the
-/// Append check and fails it into `Ignore`. `best ± band` are f32
-/// single-rounded exactly like the stock FSUB/FADD-then-FCOMP.
+/// Band fold for one face hit (0x632e44/0x632e7c).
+///
+/// Both compares are `TEST AH,0x41; JNZ` — the strict ordered `>` falls
+/// through, everything else (including NaN t) takes the other arm; a NaN t
+/// therefore reaches the Append check and fails it into `Ignore`.
+/// `best ± band` are f32 single-rounded exactly like the stock
+/// FSUB/FADD-then-FCOMP.
 pub fn sweep_hit_action__632ba0(best: f32, t: f32, band: f32) -> SweepHitAction {
     if best - band > t {
         SweepHitAction::ReplaceFirst
@@ -3894,16 +3936,18 @@ pub fn sweep_hit_action__632ba0(best: f32, t: f32, band: f32) -> SweepHitAction 
     }
 }
 
-/// Nearest-hit update gate (0x632eb6): strictly `t < best` ordered — equal
-/// and NaN skip (`TEST AH,0x5; JP` is even-parity on both).
+/// Nearest-hit update gate (0x632eb6): strictly `t < best` ordered.
+///
+/// Equal and NaN skip (`TEST AH,0x5; JP` is even-parity on both).
 pub fn sweep_hit_improves__632ba0(best: f32, t: f32) -> bool {
     t < best
 }
 
-/// Final out-dist select (0x632f3a): `best` when `best >= band` (the stock
-/// even-parity `JP` on zero flag bits), else the no-hit default. (NaN best
-/// would take `best` in stock; unreachable — best only updates on ordered
-/// strict improvements from a non-NaN start.)
+/// Final out-dist select (0x632f3a).
+///
+/// `best` when `best >= band` (the stock even-parity `JP` on zero flag bits),
+/// else the no-hit default. (NaN best would take `best` in stock; unreachable
+/// — best only updates on ordered strict improvements from a non-NaN start.)
 pub fn sweep_best_to_out_dist__632ba0(best: f32, band: f32, default: f32) -> f32 {
     if best >= band { best } else { default }
 }
@@ -3958,8 +4002,7 @@ mod tests_sweep_volume__632ba0 {
         assert_eq!(sweep_face_is_front__632ba0(&p, &mv, 0.0), want > 0.0);
     }
 
-    /// Band fold: decisive replace, in-band append (both boundaries), too-far
-    /// and NaN ignore.
+    /// Band fold: decisive replace, in-band append (both boundaries), too-far and NaN ignore.
     #[test]
     fn hit_action_bands() {
         let (best, band) = (10.0f32, 1.0f32);
@@ -4009,42 +4052,46 @@ mod tests_sweep_volume__632ba0 {
     }
 }
 
-/// Back-face gate of `Collision_SweepBoxFaces` 0x632280: fold
-/// `dot(face_normal, sweep_dir)` in the stock FADDP order — `z·dz + x·dx`
-/// first, then `+ y·dy` — at f64 (x87-extended emulation; each f32·f32
-/// product is exact in f64), and PROCESS the face iff `dot > threshold`
-/// **or the compare is unordered**: stock `FCOMP; TEST AH,0x41; JNP`
-/// (0x6322f7) skips only on ordered `<=`, so a NaN dot falls through to
-/// processing. Port as `!(dot <= thr)` — never "normalize" to `>`.
+/// Back-face gate of `Collision_SweepBoxFaces` 0x632280.
+///
+/// Fold `dot(face_normal, sweep_dir)` in the stock FADDP order — `z·dz + x·dx`
+/// first, then `+ y·dy` — at f64 (x87-extended emulation; each f32·f32 product
+/// is exact in f64), and PROCESS the face iff `dot > threshold` **or the
+/// compare is unordered**: stock `FCOMP; TEST AH,0x41; JNP` (0x6322f7) skips
+/// only on ordered `<=`, so a NaN dot falls through to processing. Port as
+/// `!(dot <= thr)` — never "normalize" to `>`.
 pub fn sweep_box_face_is_front__632280(normal: &[f32; 3], dir: &[f32; 3], thr: f32) -> bool {
     let dot = (f64::from(normal[2]) * f64::from(dir[2]) + f64::from(normal[0]) * f64::from(dir[0]))
         + f64::from(normal[1]) * f64::from(dir[1]);
     !(dot <= f64::from(thr))
 }
 
-/// Lower contact band of 0x632280: RESET (overwrite contact slot 0,
-/// `*outContactCount = 1`) iff `*bestDist − eps > hitDist` strictly,
-/// ordered. Stock `FSUB; FCOMP; TEST AH,0x41; JNZ` (0x632368) branches to
-/// the append-band check on `<=`, `==` **and unordered** — a NaN hitDist
-/// (or bestDist) never takes the reset arm. The subtraction runs at f64
-/// (extended emulation).
+/// Lower contact band of 0x632280.
+///
+/// RESET (overwrite contact slot 0, `*outContactCount = 1`) iff
+/// `*bestDist − eps > hitDist` strictly, ordered. Stock
+/// `FSUB; FCOMP; TEST AH,0x41; JNZ` (0x632368) branches to the append-band
+/// check on `<=`, `==` **and unordered** — a NaN hitDist (or bestDist) never
+/// takes the reset arm. The subtraction runs at f64 (extended emulation).
 pub fn sweep_box_band_reset__632280(best: f32, eps: f32, hit: f32) -> bool {
     f64::from(best) - f64::from(eps) > f64::from(hit)
 }
 
-/// Upper contact band of 0x632280: APPEND the tied contact iff
-/// `hitDist < *bestDist + eps` strictly, ordered. Stock `FADD; FCOMP;
-/// TEST AH,0x41; JNZ` (0x6323a1) skips the append on `>=` and unordered
-/// alike — NaN never appends. The addition runs at f64.
+/// Upper contact band of 0x632280.
+///
+/// APPEND the tied contact iff `hitDist < *bestDist + eps` strictly, ordered.
+/// Stock `FADD; FCOMP; TEST AH,0x41; JNZ` (0x6323a1) skips the append on `>=`
+/// and unordered alike — NaN never appends. The addition runs at f64.
 pub fn sweep_box_band_append__632280(best: f32, eps: f32, hit: f32) -> bool {
     f64::from(hit) < f64::from(best) + f64::from(eps)
 }
 
-/// New-best gate of 0x632280: update `*bestDist` (and swap the winning
-/// contact into slot 0) iff `hitDist < *bestDist` strictly. Stock
-/// `FLD; FCOMP; TEST AH,0x5; JP` (0x6323d0) skips on ordered `>=` and on
-/// unordered — equality and NaN both keep the old best. Two m32 loads, no
-/// arithmetic => exact f32 compare.
+/// New-best gate of 0x632280.
+///
+/// Update `*bestDist` (and swap the winning contact into slot 0) iff
+/// `hitDist < *bestDist` strictly. Stock `FLD; FCOMP; TEST AH,0x5; JP`
+/// (0x6323d0) skips on ordered `>=` and on unordered — equality and NaN both
+/// keep the old best. Two m32 loads, no arithmetic => exact f32 compare.
 pub fn sweep_box_new_best__632280(hit: f32, best: f32) -> bool {
     hit < best
 }
@@ -4128,11 +4175,12 @@ mod tests_sweep_box_faces__632280 {
     }
 }
 
-/// Sweep-vector rotation of `Collision_GatherWorldTriangles` 0x631e70
-/// (block 0x631f2b): row-vector × the world transform's 3×3. Per lane `c`
-/// the stock FADDP fold is `(m[c+8]·sz + m[c+4]·sy) + m[c]·sx`, carried at
-/// f64 (x87-extended emulation; each f32·f32 product is exact in f64) and
-/// narrowed by that lane's FSTP m32.
+/// Sweep-vector rotation of `Collision_GatherWorldTriangles` 0x631e70 (block 0x631f2b).
+///
+/// Row-vector × the world transform's 3×3. Per lane `c` the stock FADDP fold
+/// is `(m[c+8]·sz + m[c+4]·sy) + m[c]·sx`, carried at f64 (x87-extended
+/// emulation; each f32·f32 product is exact in f64) and narrowed by that
+/// lane's FSTP m32.
 pub fn gather_rotate_sweep__631e70(m: &[f32; 16], s: &[f32; 3]) -> [f32; 3] {
     let (sx, sy, sz) = (f64::from(s[0]), f64::from(s[1]), f64::from(s[2]));
     let lane = |c: usize| -> f32 {
@@ -4143,8 +4191,10 @@ pub fn gather_rotate_sweep__631e70(m: &[f32; 16], s: &[f32; 3]) -> [f32; 3] {
     [lane(0), lane(1), lane(2)]
 }
 
-/// Swept-position fold of 0x631e70 (block 0x631f95): `pos + sweep`, one
-/// extended FADD + FSTP m32 per lane => f64 add, narrowed per lane.
+/// Swept-position fold of 0x631e70 (block 0x631f95).
+///
+/// `pos + sweep`, one extended FADD + FSTP m32 per lane => f64 add, narrowed
+/// per lane.
 pub fn gather_swept_pos__631e70(pos: &[f32; 3], s: &[f32; 3]) -> [f32; 3] {
     [
         super::f64_to_f32(f64::from(pos[0]) + f64::from(s[0])),
@@ -4153,10 +4203,11 @@ pub fn gather_swept_pos__631e70(pos: &[f32; 3], s: &[f32; 3]) -> [f32; 3] {
     ]
 }
 
-/// Capsule query AABB of 0x631e70 (block 0x631fbd):
-/// `[px−r, py−r, pz, px+r, py+r, pz+h]` — the z span is `[z, z+height]`,
-/// NOT symmetric (min.z is a raw copy of the swept z). One extended
-/// FSUB/FADD + FSTP m32 per arithmetic lane.
+/// Capsule query AABB of 0x631e70 (block 0x631fbd).
+///
+/// `[px−r, py−r, pz, px+r, py+r, pz+h]` — the z span is `[z, z+height]`, NOT
+/// symmetric (min.z is a raw copy of the swept z). One extended FSUB/FADD +
+/// FSTP m32 per arithmetic lane.
 pub fn gather_capsule_aabb__631e70(p: &[f32; 3], radius: f32, height: f32) -> [f32; 6] {
     let r = f64::from(radius);
     [
@@ -4169,10 +4220,11 @@ pub fn gather_capsule_aabb__631e70(p: &[f32; 3], radius: f32, height: f32) -> [f
     ]
 }
 
-/// Triangle-normal rotation by the inverted world transform's 3×3
-/// (0x631e70 block 0x6321cd). Per lane `c` the fold order DIFFERS from the
-/// sweep rotation: `(inv[c]·nx + inv[c+8]·nz) + inv[c+4]·ny` — x first,
-/// then z, then y. f64 fold, per-lane FSTP m32 narrow.
+/// Triangle-normal rotation by the inverted world transform's 3×3 (0x631e70 block 0x6321cd).
+///
+/// Per lane `c` the fold order DIFFERS from the sweep rotation:
+/// `(inv[c]·nx + inv[c+8]·nz) + inv[c+4]·ny` — x first, then z, then y. f64
+/// fold, per-lane FSTP m32 narrow.
 pub fn gather_rotate_normal__631e70(inv: &[f32; 16], n: &[f32; 3]) -> [f32; 3] {
     let (nx, ny, nz) = (f64::from(n[0]), f64::from(n[1]), f64::from(n[2]));
     let lane = |c: usize| -> f32 {
@@ -4183,7 +4235,8 @@ pub fn gather_rotate_normal__631e70(inv: &[f32; 16], n: &[f32; 3]) -> [f32; 3] {
     [lane(0), lane(1), lane(2)]
 }
 
-/// Plane-distance rebuild of 0x631e70 (block 0x632249):
+/// Plane-distance rebuild of 0x631e70 (block 0x632249).
+///
 /// `d = −(((nz·vz) + ny·vy) + nx·vx)` — folded z, y, x at f64, FCHS on the
 /// extended value, then a single FSTP m32.
 pub fn gather_plane_d__631e70(n: &[f32; 3], v: &[f32; 3]) -> f32 {
@@ -4281,10 +4334,10 @@ mod tests_gather_world_triangles__631e70 {
     }
 }
 
-/// Direction rotation by the world transform for
-/// `CMovement::BuildSweptBoundsAndQueryWorld` (@0x633840, 0x633907):
-/// per-component `((m[hi]·z + m[mid]·y) + m[lo]·x)` column dots, folded wide
-/// with one narrow each — the stock FADDP pairing.
+/// Direction rotation by the world transform for `CMovement::BuildSweptBoundsAndQueryWorld`.
+///
+/// (@0x633840, 0x633907): per-component `((m[hi]·z + m[mid]·y) + m[lo]·x)`
+/// column dots, folded wide with one narrow each — the stock FADDP pairing.
 pub fn swept_rotate_dir__633840(m: &[f32; 16], dir: [f32; 3]) -> [f32; 3] {
     let x = f64::from(dir[0]);
     let y = f64::from(dir[1]);
@@ -4295,7 +4348,8 @@ pub fn swept_rotate_dir__633840(m: &[f32; 16], dir: [f32; 3]) -> [f32; 3] {
     [c(0, 4, 8), c(1, 5, 9), c(2, 6, 10)]
 }
 
-/// Base capsule AABB (0x633982–0x633a01): `{x−r, y−r, z, x+r, y+r, z+h}` —
+/// Base capsule AABB (0x633982–0x633a01): `{x−r, y−r, z, x+r, y+r, z+h}`.
+///
 /// z-min is the RAW origin dword (no x87 pass); every other lane folds wide
 /// and narrows once.
 pub fn swept_base_box__633840(origin: [f32; 3], r: f32, h: f32) -> [f32; 6] {
@@ -4313,9 +4367,10 @@ pub fn swept_base_box__633840(origin: [f32; 3], r: f32, h: f32) -> [f32; 6] {
     ]
 }
 
-/// `dir · k` with the scalar WIDE across all three lanes (the stock keeps
-/// the reach/step product on the stack through the three FMULs), one
-/// narrow per lane.
+/// `dir · k` with the scalar WIDE across all three lanes.
+///
+/// The stock keeps the reach/step product on the stack through the three
+/// FMULs, one narrow per lane.
 pub fn swept_scaled_dir__633840(dir: [f32; 3], k: f64) -> [f32; 3] {
     [
         super::f64_to_f32(f64::from(dir[0]) * k),
@@ -4324,8 +4379,9 @@ pub fn swept_scaled_dir__633840(dir: [f32; 3], k: f64) -> [f32; 3] {
     ]
 }
 
-/// Component sum `a + b`, one narrow per lane (the mid-point/center Set
-/// folds at 0x633b9d/0x633d6b).
+/// Component sum `a + b`.
+///
+/// One narrow per lane (the mid-point/center Set folds at 0x633b9d/0x633d6b).
 pub fn swept_add3__633840(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     [
         super::f64_to_f32(f64::from(a[0]) + f64::from(b[0])),
@@ -4334,8 +4390,10 @@ pub fn swept_add3__633840(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     ]
 }
 
-/// Wide product / difference / sum single-lane folds (half-step, radius
-/// scale, falling z-adjust, hover drop — each one FMUL/FSUB/FADD + FSTP).
+/// Wide product / difference / sum single-lane folds.
+///
+/// Half-step, radius scale, falling z-adjust, hover drop — each one
+/// FMUL/FSUB/FADD + FSTP.
 pub fn swept_mul__633840(a: f32, b: f32) -> f32 {
     super::f64_to_f32(f64::from(a) * f64::from(b))
 }
@@ -4346,10 +4404,11 @@ pub fn swept_add__633840(a: f32, b: f32) -> f32 {
     super::f64_to_f32(f64::from(a) + f64::from(b))
 }
 
-/// Falling-arm lateral expand (0x633ac4–0x633b0c): `v = motionZ · g` stays
-/// WIDE through all four adjustments; applied only on `v > zero` ORDERED
-/// (`TEST AH,0x41; JNZ` skips on `<=`, `==`, NaN). `box4` is
-/// `{minX, maxX, minY, maxY}`.
+/// Falling-arm lateral expand (0x633ac4–0x633b0c).
+///
+/// `v = motionZ · g` stays WIDE through all four adjustments; applied only on
+/// `v > zero` ORDERED (`TEST AH,0x41; JNZ` skips on `<=`, `==`, NaN). `box4`
+/// is `{minX, maxX, minY, maxY}`.
 pub fn swept_fall_expand__633840(
     box4: [f32; 4],
     motion_z: f32,
@@ -4369,10 +4428,11 @@ pub fn swept_fall_expand__633840(
     }
 }
 
-/// Swim-arm finish (0x633c04–0x633c43): x/y lanes expand by the WIDE
-/// `r · g` product; the z-max grows by `max(height, rr)` with the pick
-/// polarity `height < rr` ORDERED → `rr`, NaN keeps `height` (the
-/// `TEST AH,0x5; JP` shape at 0x633c33).
+/// Swim-arm finish (0x633c04–0x633c43).
+///
+/// x/y lanes expand by the WIDE `r · g` product; the z-max grows by
+/// `max(height, rr)` with the pick polarity `height < rr` ORDERED → `rr`, NaN
+/// keeps `height` (the `TEST AH,0x5; JP` shape at 0x633c33).
 pub fn swept_swim_finish__633840(bx: [f32; 6], rr: f32, h: f32) -> [f32; 6] {
     let r = f64::from(rr);
     let z_ext = if h < rr { r } else { f64::from(h) };
@@ -4386,8 +4446,9 @@ pub fn swept_swim_finish__633840(bx: [f32; 6], rr: f32, h: f32) -> [f32; 6] {
     ]
 }
 
-/// Ground-arm mid box (0x633d93–0x633de9): `{mid ∓ R, mid.z}` with
-/// `R = r·g + halfStep` WIDE across all four lanes.
+/// Ground-arm mid box (0x633d93–0x633de9).
+///
+/// `{mid ∓ R, mid.z}` with `R = r·g + halfStep` WIDE across all four lanes.
 pub fn swept_ground_midbox__633840(mid: [f32; 3], r: f32, g: f32, hs: f32) -> [f32; 6] {
     let rr = f64::from(r) * f64::from(g) + f64::from(hs);
     let x = f64::from(mid[0]);
@@ -4402,16 +4463,18 @@ pub fn swept_ground_midbox__633840(mid: [f32; 3], r: f32, g: f32, hs: f32) -> [f
     ]
 }
 
-/// Ground-arm floor drop (0x633e35–0x633e4b):
+/// Ground-arm floor drop (0x633e35–0x633e4b).
+///
 /// `a8 − (scalar + step·g)` — the FADDP folds the delegate return with the
 /// wide product, one narrow.
 pub fn swept_ground_floor__633840(a8: f32, step: f32, g: f32, s: f32) -> f32 {
     super::f64_to_f32(f64::from(a8) - (f64::from(s) + f64::from(step) * f64::from(g)))
 }
 
-/// Plane pull-back rebase (0x633f6e–0x63400a): rotates the plane normal by
-/// the inverse transform's 3×3 (`((i[c]·x + i[c+8]·z) + i[c+4]·y)` per
-/// column, each narrowed) and refolds
+/// Plane pull-back rebase (0x633f6e–0x63400a).
+///
+/// Rotates the plane normal by the inverse transform's 3×3
+/// (`((i[c]·x + i[c+8]·z) + i[c+4]·y)` per column, each narrowed) and refolds
 /// `d = −((nz'·v.z + ny'·v.y) + nx'·v.x)` against the already-transformed
 /// first vertex, using the NARROWED rotated components. Returns
 /// `[nx', ny', nz', d]`.
@@ -4535,15 +4598,17 @@ mod tests_swept_bounds__633840 {
     }
 }
 
-/// `a + k` with `k` the WIDE pick from the vertical max (0x633e27), one
-/// narrow into the z-max store.
+/// `a + k` with `k` the WIDE pick from the vertical max (0x633e27).
+///
+/// One narrow into the z-max store.
 pub fn swept_add_wide__633840(a: f32, k: f64) -> f32 {
     super::f64_to_f32(k + f64::from(a))
 }
 
-/// Wide time-share for `CMovement::StepGroundMove` (@0x6367b0, 0x636993):
-/// `(hitT / remaining) · remainingMs`, kept WIDE across the slide-iter
-/// compare and the consumed/remaining updates.
+/// Wide time-share for `CMovement::StepGroundMove` (@0x6367b0, 0x636993).
+///
+/// `(hitT / remaining) · remainingMs`, kept WIDE across the slide-iter compare
+/// and the consumed/remaining updates.
 pub fn ground_time_spent__6367b0(hit_t: f32, remaining: f32, remaining_ms: f32) -> f64 {
     f64::from(hit_t) / f64::from(remaining) * f64::from(remaining_ms)
 }
@@ -4553,15 +4618,18 @@ pub fn ground_sub_wide__6367b0(a: f32, k: f64) -> f32 {
     super::f64_to_f32(f64::from(a) - k)
 }
 
-/// 2D distance shrink (0x6369b7): `rem2d − sqrt(mx² + my²)`, the squares
-/// folded wide (`FADDP` pairing x then y), one narrow.
+/// 2D distance shrink (0x6369b7).
+///
+/// `rem2d − sqrt(mx² + my²)`, the squares folded wide (`FADDP` pairing x
+/// then y), one narrow.
 pub fn ground_2d_shrink__6367b0(rem2d: f32, mx: f32, my: f32) -> f32 {
     let s = f64::from(mx) * f64::from(mx) + f64::from(my) * f64::from(my);
     super::f64_to_f32(f64::from(rem2d) - s.sqrt())
 }
 
-/// `a·b + c` wide fold, one narrow (the ground-stick probe distance at
-/// 0x636dd7 and relatives).
+/// `a·b + c` wide fold.
+///
+/// One narrow (the ground-stick probe distance at 0x636dd7 and relatives).
 pub fn ground_muladd__6367b0(a: f32, b: f32, c: f32) -> f32 {
     super::f64_to_f32(f64::from(a) * f64::from(b) + f64::from(c))
 }
@@ -4615,8 +4683,7 @@ pub fn ground_new_move__6367b0(
     ([nmx, nmy, nmz], len, dir, len2d, dir2d)
 }
 
-/// Hover lift fold (0x63706e): `(totalMs·ms2s)·rise + hoverDownT` wide,
-/// one narrow.
+/// Hover lift fold (0x63706e): `(totalMs·ms2s)·rise + hoverDownT` wide, one narrow.
 pub fn ground_hover_lift__6367b0(total_ms: f32, ms2s: f32, rise: f32, hdt: f32) -> f32 {
     super::f64_to_f32(f64::from(total_ms) * f64::from(ms2s) * f64::from(rise) + f64::from(hdt))
 }
@@ -4685,36 +4752,40 @@ mod tests_step_ground_move__6367b0 {
     }
 }
 
-/// Narrow a wide intermediate (the `FST` spill of a running f64 chain —
-/// the continue-time `remainingMs` store and the hover-lift space clamp).
+/// Narrow a wide intermediate.
+///
+/// The `FST` spill of a running f64 chain — the continue-time `remainingMs`
+/// store and the hover-lift space clamp.
 pub fn swept_sub_wrap__6367b0(w: f64) -> f32 {
     super::f64_to_f32(w)
 }
 
-/// Continue-time distance share (0x63694a): `left/total · dist` folded
-/// from the WIDE `left`, one narrow.
+/// Continue-time distance share (0x63694a).
+///
+/// `left/total · dist` folded from the WIDE `left`, one narrow.
 pub fn swept_time_share__6367b0(left: f64, total: f32, dist: f32) -> f32 {
     super::f64_to_f32(left / f64::from(total) * f64::from(dist))
 }
 
-/// Post-climb time rescale (0x636c14): `remaining/before · remainingMs`,
-/// one narrow.
+/// Post-climb time rescale (0x636c14): `remaining/before · remainingMs`, one narrow.
 pub fn ground_rescale_ms__6367b0(remaining: f32, before: f32, remaining_ms: f32) -> f32 {
     super::f64_to_f32(f64::from(remaining) / f64::from(before) * f64::from(remaining_ms))
 }
 
-/// Step-up ceiling rescale (0x636d59): `allowed/nmz · remaining` with
-/// `allowed` WIDE, one narrow.
+/// Step-up ceiling rescale (0x636d59).
+///
+/// `allowed/nmz · remaining` with `allowed` WIDE, one narrow.
 pub fn ground_ceiling_scale__6367b0(allowed: f64, nmz: f32, remaining: f32) -> f32 {
     super::f64_to_f32(allowed / f64::from(nmz) * f64::from(remaining))
 }
 
-/// Speed derivation for `CMovement::StepMovement` (@0x634040, 0x634062):
-/// `|moveDelta|` folds `((x·x + y·y) + z·z)` wide, `speedPerSec =
-/// mag / (deltaMs · ms2s)` narrows once, and when `|mag| >= eps` OR the
-/// compare is unordered (`TEST AH,0x5; JNP` skips only on ordered less)
-/// the direction normalizes through the wide `1/mag` reciprocal. Returns
-/// `(speed_per_sec, Some(dir))`.
+/// Speed derivation for `CMovement::StepMovement` (@0x634040, 0x634062).
+///
+/// `|moveDelta|` folds `((x·x + y·y) + z·z)` wide,
+/// `speedPerSec = mag / (deltaMs · ms2s)` narrows once, and when
+/// `|mag| >= eps` OR the compare is unordered (`TEST AH,0x5; JNP` skips only
+/// on ordered less) the direction normalizes through the wide `1/mag`
+/// reciprocal. Returns `(speed_per_sec, Some(dir))`.
 pub fn step_speed_and_dir__634040(
     delta: [f32; 3],
     delta_ms: u32,
@@ -4740,8 +4811,10 @@ pub fn step_speed_and_dir__634040(
     (speed, dir)
 }
 
-/// Substep distance (0x634122): `fv · ms2s · speedPerSec` from the
-/// zero-extended remaining milliseconds, one narrow.
+/// Substep distance (0x634122).
+///
+/// `fv · ms2s · speedPerSec` from the zero-extended remaining milliseconds,
+/// one narrow.
 pub fn step_distance__634040(fv: u32, ms2s: f32, speed: f32) -> f32 {
     super::f64_to_f32(f64::from(fv) * f64::from(ms2s) * f64::from(speed))
 }
@@ -4770,11 +4843,11 @@ mod tests_step_movement__634040 {
     }
 }
 
-/// Offset-delta front end for `CMovement::StepMovementWithOffset`
-/// (@0x616cb0): `d = (anchor + offset) − pos` per lane, with the stock's
-/// asymmetry pinned — the x/y sums stay WIDE into the subtract (one
-/// narrow each), but the z sum spills narrowed (`FSTP [ebp-0x10]` at
-/// 0x616cd2) before its subtract.
+/// Offset-delta front end for `CMovement::StepMovementWithOffset` (@0x616cb0).
+///
+/// `d = (anchor + offset) − pos` per lane, with the stock's asymmetry pinned —
+/// the x/y sums stay WIDE into the subtract (one narrow each), but the z sum
+/// spills narrowed (`FSTP [ebp-0x10]` at 0x616cd2) before its subtract.
 pub fn step_offset_delta__616cb0(anchor: [f32; 3], off: [f32; 3], pos: [f32; 3]) -> [f32; 3] {
     let zsum = super::f64_to_f32(f64::from(anchor[2]) + f64::from(off[2]));
     [
@@ -4796,11 +4869,12 @@ mod tests_step_offset__616cb0 {
     }
 }
 
-/// WMO-group trace-segment normalize folds (0x6b9359..0x6b9385): from the
-/// squared delta magnitude, `len = sqrt(sqmag)` (80-bit on the x87 stack),
-/// `len_dist = len × dist` and `inv_len = one / len`, each narrowed once.
-/// The subsequent direction normalize is a separate `ScaleInPlace(delta,
-/// inv_len)` hook call. Returns `(inv_len, len_dist)`.
+/// WMO-group trace-segment normalize folds (0x6b9359..0x6b9385).
+///
+/// From the squared delta magnitude, `len = sqrt(sqmag)` (80-bit on the x87
+/// stack), `len_dist = len × dist` and `inv_len = one / len`, each narrowed
+/// once. The subsequent direction normalize is a separate
+/// `ScaleInPlace(delta, inv_len)` hook call. Returns `(inv_len, len_dist)`.
 pub fn trace_seg_normalize__6b92b0(sqmag: f32, dist: f32, one: f32) -> (f32, f32) {
     let len = f64::from(sqmag).sqrt();
     (
@@ -4829,11 +4903,12 @@ mod tests_trace_seg_normalize__6b92b0 {
     }
 }
 
-/// Water-interaction level computation (0x6030e0..0x603156): the surface
-/// level `state × surfScale` and the ripple level `state × rippleScale`
-/// stay 80-bit for their comparisons (returned as `f64`), while the
-/// submerge offset `state × surfScale − off` is narrowed once (`FSTP m32`).
-/// Returns `(surface_wide, offset_narrowed, ripple_wide)`.
+/// Water-interaction level computation (0x6030e0..0x603156).
+///
+/// The surface level `state × surfScale` and the ripple level
+/// `state × rippleScale` stay 80-bit for their comparisons (returned as
+/// `f64`), while the submerge offset `state × surfScale − off` is narrowed
+/// once (`FSTP m32`). Returns `(surface_wide, offset_narrowed, ripple_wide)`.
 pub fn water_levels__6030c0(
     state: f32,
     surf_scale: f32,

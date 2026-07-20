@@ -6,8 +6,10 @@
 //! regardless of payload and `-0.0` equals `0.0`: a lane diverges only when the
 //! two values are numerically further apart than the allowed ULP distance.
 
-/// A diverging `f32` lane: its index within the region and both raw bit
-/// patterns (ours first, the original's second).
+/// A diverging `f32` lane.
+///
+/// Its index within the region and both raw bit patterns (ours first, the
+/// original's second).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LaneDiff {
     pub lane: usize,
@@ -15,9 +17,10 @@ pub struct LaneDiff {
     pub orig: u32,
 }
 
-/// Map `f32` bits onto a monotonically ordered integer line so the distance
-/// between two values is their ULP separation. Both zero encodings map to 0,
-/// negatives mirror below it.
+/// Map `f32` bits onto a monotonically ordered integer line.
+///
+/// The distance between two values is their ULP separation. Both zero
+/// encodings map to 0, negatives mirror below it.
 fn ordered(bits: u32) -> i64 {
     let magnitude = i64::from(bits & 0x7fff_ffff);
     if bits & 0x8000_0000 == 0 {
@@ -27,8 +30,9 @@ fn ordered(bits: u32) -> i64 {
     }
 }
 
-/// Whether two `f32`s are within `max_ulp` units in the last place of each
-/// other. Any two NaNs are equal; a NaN never equals a non-NaN; `-0.0 == 0.0`.
+/// Whether two `f32`s are within `max_ulp` units in the last place of each other.
+///
+/// Any two NaNs are equal; a NaN never equals a non-NaN; `-0.0 == 0.0`.
 pub fn f32_within_ulp(a: f32, b: f32, max_ulp: u32) -> bool {
     if a.is_nan() || b.is_nan() {
         return a.is_nan() && b.is_nan();
@@ -36,9 +40,11 @@ pub fn f32_within_ulp(a: f32, b: f32, max_ulp: u32) -> bool {
     ordered(a.to_bits()).abs_diff(ordered(b.to_bits())) <= u64::from(max_ulp)
 }
 
-/// First diverging `f32` lane between two equal-length regions, or `None` when
-/// every lane is within `max_ulp`. Trailing bytes past the last whole lane are
-/// ignored (region lengths are validated to whole lanes at build time).
+/// First diverging `f32` lane between two equal-length regions.
+///
+/// `None` when every lane is within `max_ulp`. Trailing bytes past the last
+/// whole lane are ignored (region lengths are validated to whole lanes at
+/// build time).
 pub fn first_divergence_f32(ours: &[u8], orig: &[u8], max_ulp: u32) -> Option<LaneDiff> {
     let (our_lanes, _) = ours.as_chunks::<4>();
     let (orig_lanes, _) = orig.as_chunks::<4>();

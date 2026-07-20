@@ -13,8 +13,10 @@
     clippy::nursery
 )]
 
-/// CRT float-to-i64 truncation (`__ftol`): round toward zero, with the x87
-/// indefinite value (`i64::MIN`) for NaN, infinities, and out-of-range inputs.
+/// CRT float-to-i64 truncation (`__ftol`).
+///
+/// Round toward zero, with the x87 indefinite value (`i64::MIN`) for NaN,
+/// infinities, and out-of-range inputs.
 ///
 /// Pure integer bit manipulation — the original swaps the FPU control word
 /// twice around an `fistp` for every float-to-int cast in the binary; a

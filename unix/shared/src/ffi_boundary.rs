@@ -37,6 +37,8 @@ use core::{
 pub struct InPtr<'a, T>(NonNull<T>, PhantomData<&'a T>);
 
 impl<T> InPtr<'_, T> {
+    /// Wrap a borrowed input pointer, filtering null.
+    ///
     /// # Safety
     /// Caller asserts that any non-null `p` is a valid, properly-aligned,
     /// initialised `T*` whose underlying storage outlives the call frame.
@@ -76,11 +78,14 @@ impl<T> Deref for InPtr<'_, T> {
     }
 }
 
-/// Exclusively-borrowed input pointer (handler params written back to the
-/// caller). Same shape as [`InPtr`] but yields `&mut T` via [`DerefMut`].
+/// Exclusively-borrowed input pointer (handler params written back to the caller).
+///
+/// Same shape as [`InPtr`] but yields `&mut T` via [`DerefMut`].
 pub struct InPtrMut<'a, T>(NonNull<T>, PhantomData<&'a mut T>);
 
 impl<T> InPtrMut<'_, T> {
+    /// Wrap an exclusively-borrowed input pointer, filtering null.
+    ///
     /// # Safety
     /// As [`InPtr::opt`], plus the caller asserts exclusive access for the
     /// call frame. For unix-call handler params: the PE side blocks on
@@ -125,11 +130,14 @@ impl<T> DerefMut for InPtrMut<'_, T> {
     }
 }
 
-/// Read-by-value typed FFI in-param (`D3DRECT`, `D3DMATRIX`, etc.). Filters
-/// null at `opt`; `read` consumes `self` and returns the value.
+/// Read-by-value typed FFI in-param (`D3DRECT`, `D3DMATRIX`, etc.).
+///
+/// Filters null at `opt`; `read` consumes `self` and returns the value.
 pub struct ValueIn<'a, T: Copy>(NonNull<T>, PhantomData<&'a T>);
 
 impl<T: Copy> ValueIn<'_, T> {
+    /// Wrap a read-by-value in-param pointer, filtering null.
+    ///
     /// # Safety
     /// Caller asserts that any non-null `p` is a properly-aligned pointer
     /// to an initialised `T` (the D3D9 ABI for typed-struct in-params).
@@ -169,6 +177,8 @@ impl<T: Copy> ValueIn<'_, T> {
 pub struct OutPtr<'a, T>(NonNull<T>, PhantomData<&'a mut T>);
 
 impl<T> OutPtr<'_, T> {
+    /// Wrap an out-param pointer, filtering null.
+    ///
     /// # Safety
     /// Caller asserts that any non-null `out` is a writable, properly-aligned
     /// `T*` valid for the call frame (the D3D9 ABI for typed out-params).
@@ -186,8 +196,9 @@ impl<T> OutPtr<'_, T> {
         unsafe { self.0.as_ptr().write(val) };
     }
 
-    /// One-shot null-guarded write. Convenience for the `opt + write` pair.
-    /// Silent no-op on null `out`.
+    /// One-shot null-guarded write.
+    ///
+    /// Convenience for the `opt + write` pair. Silent no-op on null `out`.
     ///
     /// # Safety
     /// As [`Self::opt`].
@@ -199,13 +210,17 @@ impl<T> OutPtr<'_, T> {
     }
 }
 
-/// `IUnknown` vtable `this`. Crashes on null per D3D9 spec (the spec leaves
-/// null-`this` UB; silently filtering would mask refcount underflow).
+/// `IUnknown` vtable `this`.
+///
+/// Crashes on null per D3D9 spec (the spec leaves null-`this` UB; silently
+/// filtering would mask refcount underflow).
 ///
 /// Construction is `unsafe`; [`Deref`] and [`DerefMut`] are safe.
 pub struct VtableThis<'a, T>(NonNull<T>, PhantomData<&'a mut T>);
 
 impl<T> VtableThis<'_, T> {
+    /// Wrap a vtable `this` pointer, panicking on null.
+    ///
     /// # Safety
     /// Caller is invoked from an `IUnknown` vtable thunk (`AddRef`,
     /// `Release`, `QueryInterface`, or any method that wants crash-on-bug

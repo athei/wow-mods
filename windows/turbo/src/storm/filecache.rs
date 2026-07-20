@@ -1,5 +1,6 @@
-//! Filename-resolution memo-cache backing the `StormArchive__FindFileEntry`
-//! hook (weirdperformance parity). The stock resolver re-derives every answer
+//! Filename-resolution memo-cache backing the `StormArchive__FindFileEntry` hook.
+//!
+//! (weirdperformance parity). The stock resolver re-derives every answer
 //! from scratch — per-character normalize, the Storm `0x7FED7FED` crypt-table
 //! hash, an open-addressing probe over the archive hash table, and a walk (or
 //! chain fan-out) across the open-archive list — all under two critical
@@ -20,23 +21,28 @@
 //! adapter (`crate::win::hooks`) owns the locking and the live-handle
 //! revalidation.
 
-/// Longest cacheable name in bytes. Longer names are legal for the game but
-/// never cached (mirrors the reference implementation; MPQ paths are far
-/// shorter in practice, so the fixed-size entry stays small).
+/// Longest cacheable name in bytes.
+///
+/// Longer names are legal for the game but never cached (mirrors the reference
+/// implementation; MPQ paths are far shorter in practice, so the fixed-size
+/// entry stays small).
 pub const NAME_CAP: usize = 0x80;
 
-/// 32 Ki buckets x 2 ways ≈ 9.5 MiB — sized to hold a full session's distinct
-/// lookups (a 1.12 client resolves tens of thousands of names, times the
-/// patch-chain fan-out) without growth or rehash on the hot path.
+/// 32 Ki buckets x 2 ways ≈ 9.5 MiB.
+///
+/// Sized to hold a full session's distinct lookups (a 1.12 client resolves tens
+/// of thousands of names, times the patch-chain fan-out) without growth or
+/// rehash on the hot path.
 const BUCKET_COUNT: usize = 1 << 15;
 const WAYS: usize = 2;
 
-/// A fully-normalized cache key. `new` is the only constructor: it applies the
-/// same character folding the stock hasher applies (ASCII uppercase, `/` →
-/// `\`), so two spellings stock treats as the same file share one entry.
-/// ASCII-only folding merges strictly fewer names than stock's CRT `toupper`
-/// (which may also fold high-half bytes) — a spelling pair we fail to merge
-/// costs one extra miss, never a wrong hit.
+/// A fully-normalized cache key.
+///
+/// `new` is the only constructor: it applies the same character folding the
+/// stock hasher applies (ASCII uppercase, `/` → `\`), so two spellings stock
+/// treats as the same file share one entry. ASCII-only folding merges strictly
+/// fewer names than stock's CRT `toupper` (which may also fold high-half bytes)
+/// — a spelling pair we fail to merge costs one extra miss, never a wrong hit.
 pub struct Key {
     hash: u32,
     archive: u32,
@@ -46,9 +52,10 @@ pub struct Key {
 }
 
 impl Key {
-    /// Build a key from the raw (unnormalized) name bytes. Returns `None` when
-    /// the name is longer than [`NAME_CAP`] — such lookups are valid but
-    /// uncacheable, and the caller falls through to stock.
+    /// Build a key from the raw (unnormalized) name bytes.
+    ///
+    /// Returns `None` when the name is longer than [`NAME_CAP`] — such lookups
+    /// are valid but uncacheable, and the caller falls through to stock.
     #[must_use]
     pub fn new(archive: u32, scope: u32, raw: &[u8]) -> Option<Self> {
         if raw.len() > NAME_CAP {
@@ -82,8 +89,9 @@ impl Key {
     }
 }
 
-/// ASCII uppercase + path-separator folding, the normalization stock applies
-/// per character before hashing.
+/// ASCII uppercase + path-separator folding.
+///
+/// The normalization stock applies per character before hashing.
 #[inline]
 const fn normalize_byte(b: u8) -> u8 {
     if b == b'/' {
@@ -102,17 +110,21 @@ fn fnv1a(seed: u32, bytes: &[u8]) -> u32 {
     h
 }
 
-/// A replayable prior answer. `negative` means stock returned 0 ("not found")
-/// for a global query; otherwise `found`/`block_index` reproduce a scoped
-/// positive (return 1).
+/// A replayable prior answer.
+///
+/// `negative` means stock returned 0 ("not found") for a global query;
+/// otherwise `found`/`block_index` reproduce a scoped positive (return 1).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Hit {
     pub negative: bool,
-    /// The handle stock wrote to `*outArchive` (the found archive, possibly a
-    /// redirect of the requested one). Only meaningful for positives.
+    /// The handle stock wrote to `*outArchive`.
+    ///
+    /// (the found archive, possibly a redirect of the requested one). Only
+    /// meaningful for positives.
     pub found: u32,
-    /// Index into the found archive's block table (`[found+0x290]`), stride
-    /// 0x2c. Only meaningful for positives.
+    /// Index into the found archive's block table (`[found+0x290]`), stride 0x2c.
+    ///
+    /// Only meaningful for positives.
     pub block_index: u32,
 }
 
@@ -151,8 +163,9 @@ const EMPTY_BUCKET: Bucket = Bucket {
     evict_next: 0,
 };
 
-/// Fixed-capacity, 2-way set-associative memo table. All methods are O(ways);
-/// nothing allocates after construction.
+/// Fixed-capacity, 2-way set-associative memo table.
+///
+/// All methods are O(ways); nothing allocates after construction.
 pub struct FileCache {
     buckets: Box<[Bucket]>,
 }
@@ -170,9 +183,11 @@ impl FileCache {
         (key.hash as usize) & (BUCKET_COUNT - 1)
     }
 
-    /// Look up a prior answer. Touches the pseudo-LRU marker on hit; performs
-    /// no other mutation and never observes game memory, so the differential
-    /// shadow path can call it freely.
+    /// Look up a prior answer.
+    ///
+    /// Touches the pseudo-LRU marker on hit; performs no other mutation and
+    /// never observes game memory, so the differential shadow path can call it
+    /// freely.
     pub fn probe(&mut self, key: &Key) -> Option<Hit> {
         let bucket = &mut self.buckets[Self::bucket_index(key)];
         for (w, entry) in bucket.ways.iter().enumerate() {
@@ -186,8 +201,10 @@ impl FileCache {
         None
     }
 
-    /// Record an answer, overwriting a same-key entry in place, filling an
-    /// empty way, or evicting per the bucket's pseudo-LRU marker.
+    /// Record an answer.
+    ///
+    /// Overwriting a same-key entry in place, filling an empty way, or evicting
+    /// per the bucket's pseudo-LRU marker.
     pub fn insert(&mut self, key: &Key, hit: Hit) {
         let bucket = &mut self.buckets[Self::bucket_index(key)];
         let way = bucket
@@ -282,8 +299,10 @@ mod tests_filecache {
         assert!(Key::new(0, 0, &[b'x'; NAME_CAP + 1]).is_none());
     }
 
-    /// Three same-bucket keys through a 2-way bucket: the pseudo-LRU keeps the
-    /// most-recently-touched way and the newest insert, evicting the stale way.
+    /// Three same-bucket keys through a 2-way bucket.
+    ///
+    /// The pseudo-LRU keeps the most-recently-touched way and the newest
+    /// insert, evicting the stale way.
     #[test]
     fn two_way_eviction_prefers_recently_used() {
         let mut cache = FileCache::new();

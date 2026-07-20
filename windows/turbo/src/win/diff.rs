@@ -51,9 +51,10 @@ impl Default for Stats {
     }
 }
 
-/// Stack scratch for input/output snapshots. Byte storage over-aligned to 16 so
-/// a kernel reading the snapshot through any lane type (`f32`/`u32`) stays
-/// aligned regardless of the region's layout.
+/// Stack scratch for input/output snapshots.
+///
+/// Byte storage over-aligned to 16 so a kernel reading the snapshot through any
+/// lane type (`f32`/`u32`) stays aligned regardless of the region's layout.
 #[repr(C, align(16))]
 pub struct Buf<const N: usize>(pub [u8; N]);
 
@@ -64,10 +65,12 @@ impl<const N: usize> Buf<N> {
     }
 }
 
-/// Report a mismatch event: detailed for the first [`MISMATCH_DETAIL`] events,
-/// then a periodic count. `expected = true` (a hook documented as deliberately
-/// more precise than the original) logs at debug instead of warn so the
-/// operator's warn stream stays actionable.
+/// Report a mismatch event.
+///
+/// Detailed for the first [`MISMATCH_DETAIL`] events, then a periodic count.
+/// `expected = true` (a hook documented as deliberately more precise than the
+/// original) logs at debug instead of warn so the operator's warn stream stays
+/// actionable.
 fn report(stats: &Stats, label: &str, expected: bool, detail: impl FnOnce() -> String) {
     let n = stats.tick();
     if n < MISMATCH_DETAIL {
@@ -85,18 +88,21 @@ fn report(stats: &Stats, label: &str, expected: bool, detail: impl FnOnce() -> S
     }
 }
 
-/// One-shot per hook: on the first ARMED call (diff selector set AND the hook
-/// reached), log that the compare path is live. Without it an armed-but-faithful
-/// hook is indistinguishable from one that never ran or was never armed.
-/// Subsequent calls are a cheap already-set atomic load.
+/// One-shot per hook.
+///
+/// On the first ARMED call (diff selector set AND the hook reached), log that
+/// the compare path is live. Without it an armed-but-faithful hook is
+/// indistinguishable from one that never ran or was never armed. Subsequent
+/// calls are a cheap already-set atomic load.
 pub fn note_armed(armed: &::core::sync::atomic::AtomicBool, label: &str) {
     if !armed.swap(true, ::core::sync::atomic::Ordering::Relaxed) {
         log::info!(target: super::LOG_TARGET, "[diff] armed: {label}");
     }
 }
 
-/// Compare an output region lane-by-lane as little-endian `f32`s within
-/// `max_ulp`; report the first diverging lane.
+/// Compare an output region lane-by-lane as little-endian `f32`s within `max_ulp`.
+///
+/// Report the first diverging lane.
 pub fn region_f32(
     stats: &Stats,
     label: &str,

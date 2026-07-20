@@ -87,6 +87,7 @@ mod enabled {
     pub(super) const SIDE_TAG: u8 = b'P';
 
     /// Map the breadcrumb file and validate (or initialize) its header.
+    ///
     /// Idempotent — first call per process opens and CAS-claims; later
     /// calls observe `HEADER_PTR` already populated and return.
     pub fn init() {
@@ -219,13 +220,14 @@ mod enabled {
         }
     }
 
-    /// Dump the recent ring to stderr once on each edge of a stall
-    /// condition, so an intermittent present stall self-documents in the
-    /// log with no manual timing. `stalled` is whether the current present
-    /// failed to acquire its drawable; the ring is written when that flips
-    /// in either direction — the rising edge captures the lead-up, the
-    /// falling edge captures the whole episode (few entries accrue while
-    /// stalled, so the recovery dump still spans it).
+    /// Dump the recent ring to stderr once on each edge of a stall condition.
+    ///
+    /// An intermittent present stall self-documents in the log with no manual
+    /// timing. `stalled` is whether the current present failed to acquire its
+    /// drawable; the ring is written when that flips in either direction — the
+    /// rising edge captures the lead-up, the falling edge captures the whole
+    /// episode (few entries accrue while stalled, so the recovery dump still
+    /// spans it).
     pub fn dump_on_stall_edge(stalled: bool) {
         static STALLED: AtomicBool = AtomicBool::new(false);
         if STALLED.swap(stalled, Ordering::Relaxed) != stalled {
@@ -303,8 +305,9 @@ mod enabled {
             }
         }
 
-        /// Open + size + mmap the breadcrumb file. Returns `(header, entries)`
-        /// pointers or `None` on failure.
+        /// Open + size + mmap the breadcrumb file.
+        ///
+        /// Returns `(header, entries)` pointers or `None` on failure.
         ///
         /// # Safety
         ///
@@ -496,8 +499,10 @@ mod enabled {
 #[cfg(wow_crumb)]
 pub use enabled::{dump_on_stall_edge, dump_recent, init, record};
 
-/// Probe macro. Records one breadcrumb entry with up to two `u64`
-/// payload slots. No-op when `cfg(wow_crumb)` is off.
+/// Probe macro.
+///
+/// Records one breadcrumb entry with up to two `u64` payload slots. No-op
+/// when `cfg(wow_crumb)` is off.
 #[macro_export]
 macro_rules! crumb {
     ($tag:expr $(,)?) => {

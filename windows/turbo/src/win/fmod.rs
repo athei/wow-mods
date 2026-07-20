@@ -1,5 +1,6 @@
-//! Runtime hook for FMOD3's `fmod__mixer_fpu` — the one reimpl that targets a
-//! module other than `Wow.exe`.
+//! Runtime hook for FMOD3's `fmod__mixer_fpu`.
+//!
+//! The one reimpl that targets a module other than `Wow.exe`.
 //!
 //! `fmod.dll` is a separate, packed module that unpacks its code into runtime
 //! memory, so the `symbols.toml` install path — RVA over `Wow.exe`'s `.text`,
@@ -26,33 +27,41 @@ use core::{
 
 use super::LOG_TARGET;
 
-/// `_FSOUND_SetMixer@4`'s RVA into fmod's unpacked image — the export we anchor
-/// the per-launch base to.
+/// `_FSOUND_SetMixer@4`'s RVA into fmod's unpacked image.
+///
+/// The export we anchor the per-launch base to.
 const SETMIXER_RVA: usize = 0x2_1ed4;
 /// `fmod__mixer_fpu`'s RVA — the synthesis-filterbank dewindow we replace.
 const MIXER_RVA: usize = 0x3_48e0;
-/// RVA of the `.data` slot holding the window coefficient table pointer. The
-/// mixer loads it via `MOV EBX,[disp32]`; the operand is relocated at load, so
-/// the detour reads the table base from this global at call time.
+/// RVA of the `.data` slot holding the window coefficient table pointer.
+///
+/// The mixer loads it via `MOV EBX,[disp32]`; the operand is relocated at load,
+/// so the detour reads the table base from this global at call time.
 const WINDOW_PTR_RVA: usize = 0x5_5144;
 
-/// `fmod__mixer_fpu`'s prologue. The `MOV EBX,[disp32]` operand (byte indices
-/// 21..25) is the relocated window-table global, so its four bytes are wildcarded;
-/// everything else is fixed.
+/// `fmod__mixer_fpu`'s prologue.
+///
+/// The `MOV EBX,[disp32]` operand (byte indices 21..25) is the relocated
+/// window-table global, so its four bytes are wildcarded; everything else is
+/// fixed.
 const MIXER_SIG: &str = "55 89 E5 50 53 51 52 56 57 50 8B 45 0C 8B 7D 10 \
                          C1 E0 02 8B 1D ?? ?? ?? ?? 81 C3 40 00 00 00 8B 75 08";
 
 const MIXER_LABEL: &str = "fmod::mixer_fpu";
 const INIT_LABEL: &str = "fmod::FSOUND_Init";
 
-/// fmod's unpacked base, resolved at attach; read by the init detour to locate
-/// the mixer and its window-table global.
+/// fmod's unpacked base, resolved at attach.
+///
+/// Read by the init detour to locate the mixer and its window-table global.
 static FMOD_BASE: AtomicUsize = AtomicUsize::new(0);
-/// The `FSOUND_Init` trampoline (the original prologue), published before the
-/// init hook is enabled so the detour can always call through.
+/// The `FSOUND_Init` trampoline (the original prologue).
+///
+/// Published before the init hook is enabled so the detour can always call
+/// through.
 static FSOUND_INIT_ORIGINAL: AtomicUsize = AtomicUsize::new(0);
-/// Address of fmod's window-table pointer global (`base + WINDOW_PTR_RVA`),
-/// published before the mixer hook is enabled; the mixer detour dereferences it
+/// Address of fmod's window-table pointer global (`base + WINDOW_PTR_RVA`).
+///
+/// Published before the mixer hook is enabled; the mixer detour dereferences it
 /// each call. `0` until the mixer hook is live.
 static WINDOW_GLOBAL: AtomicUsize = AtomicUsize::new(0);
 
@@ -62,13 +71,16 @@ unsafe extern "system" {
     fn GetProcAddress(module: usize, proc_name: *const u8) -> usize;
 }
 
-/// `FSOUND_Init` — `__stdcall(int mixrate, int maxsoftwarechannels, uint flags)`
-/// returning a `BOOL`. `extern "system"` is stdcall on the 32-bit target.
+/// `FSOUND_Init`.
+///
+/// `__stdcall(int mixrate, int maxsoftwarechannels, uint flags)` returning a
+/// `BOOL`. `extern "system"` is stdcall on the 32-bit target.
 type FSoundInitFn = unsafe extern "system" fn(i32, i32, u32) -> i32;
 
-/// Hook fmod's `FSOUND_Init` so the mixer hook installs once, right after sound
-/// init. Call from `DllMain` attach (fmod is already loaded + unpacked then). On
-/// any resolution failure it logs and leaves audio on the stock path.
+/// Hook fmod's `FSOUND_Init` so the mixer hook installs once, right after sound init.
+///
+/// Call from `DllMain` attach (fmod is already loaded + unpacked then). On any
+/// resolution failure it logs and leaves audio on the stock path.
 pub fn install_init_hook() {
     // SAFETY: a NUL-terminated module name.
     let module = unsafe { GetModuleHandleA(c"fmod.dll".as_ptr().cast()) };
@@ -100,8 +112,10 @@ pub fn install_init_hook() {
     let _ = unsafe { wow_hook::enable_hook(init, INIT_LABEL) };
 }
 
-/// Detour for `FSOUND_Init`: run the original (which allocates the window table),
-/// then install the mixer hook now that fmod is fully initialized.
+/// Detour for `FSOUND_Init`.
+///
+/// Run the original (which allocates the window table), then install the mixer
+/// hook now that fmod is fully initialized.
 ///
 /// # Safety
 ///
@@ -119,8 +133,9 @@ unsafe extern "system" fn fsound_init_detour(mixrate: i32, max_channels: i32, fl
     result
 }
 
-/// Verify and install the `fmod__mixer_fpu` detour. Called once, from the
-/// `FSOUND_Init` detour, after fmod is initialized.
+/// Verify and install the `fmod__mixer_fpu` detour.
+///
+/// Called once, from the `FSOUND_Init` detour, after fmod is initialized.
 fn install_mixer_hook() {
     let base = FMOD_BASE.load(Ordering::Relaxed);
     if base == 0 {
@@ -153,10 +168,12 @@ fn install_mixer_hook() {
     let _ = unsafe { wow_hook::enable_hook(mixer_va, MIXER_LABEL) };
 }
 
-/// Detour for `fmod__mixer_fpu`: read the live window-table base from fmod's
-/// relocated global, then run the reimpl. `__cdecl`, matching the original's
-/// stack args `(src, phase, out_stride, out)`; the original's return value is
-/// unused by its sole caller, so this returns nothing.
+/// Detour for `fmod__mixer_fpu`.
+///
+/// Read the live window-table base from fmod's relocated global, then run the
+/// reimpl. `__cdecl`, matching the original's stack args
+/// `(src, phase, out_stride, out)`; the original's return value is unused by
+/// its sole caller, so this returns nothing.
 ///
 /// # Safety
 ///

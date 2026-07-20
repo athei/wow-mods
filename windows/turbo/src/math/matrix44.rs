@@ -9,8 +9,9 @@
     clippy::too_many_arguments
 )]
 
-/// 4×4 row-major matrix product `out = a · b`
-/// (`out[r][c] = Σ_k a[r][k] · b[k][c]`, indices `r*4 + c`).
+/// 4×4 row-major matrix product `out = a · b`.
+///
+/// `out[r][c] = Σ_k a[r][k] · b[k][c]`, indices `r*4 + c`.
 ///
 /// `ikj` accumulation order: each output row is built as a sum of `b` rows scaled
 /// by the `a` entries, so the innermost work is over four contiguous `b`
@@ -127,6 +128,7 @@ mod tests {
     }
 
     /// Pin the exact bit pattern of a representative animation-shaped product.
+    ///
     /// The `k = 0..3` left-to-right `f32` accumulation must not drift (e.g. a
     /// reassociation into `(p0+p1)+(p2+p3)` or an `f64` intermediate would
     /// change these bits), since this is also the order the dispatched D3DX
@@ -202,9 +204,10 @@ mod tests_c44_matrix__add__7bc290 {
     }
 }
 
-/// Builds an orthonormal 3×3 basis (stored in the first three rows of a 4×4
-/// matrix) from a direction vector `dir` and a seed "up" reference taken from
-/// the matrix's existing row 0.
+/// Builds an orthonormal 3×3 basis (stored in the first three rows of a 4×4 matrix).
+///
+/// From a direction vector `dir` and a seed "up" reference taken from the
+/// matrix's existing row 0.
 ///
 /// Mirrors the original layout: row 1 (`out[4..7]`) = `up × dir`, normalized;
 /// row 0 (`out[0..3]`) = `dir × row1`; row 2 (`out[8..11]`) = `dir`. `up` is the
@@ -352,8 +355,9 @@ mod tests_c44_matrix__multiply_scalar__7bc8e0 {
     }
 }
 
-/// Builds a 3×3 rotation matrix (Rodrigues' formula) from an axis and angle,
-/// laid out in the first 12 floats of a 4×4 matrix (rows of three, then a zeroed
+/// Builds a 3×3 rotation matrix (Rodrigues' formula) from an axis and angle.
+///
+/// Laid out in the first 12 floats of a 4×4 matrix (rows of three, then a zeroed
 /// fourth column at indices 9..12).
 ///
 /// When `skip_normalize` is false the axis is normalized first; a true value
@@ -454,7 +458,8 @@ mod tests_c44_matrix__set_rotation_axis_angle__7bb860 {
     }
 }
 
-/// Transforms a 3D point by a 3×4 affine matrix stored column-major:
+/// Transforms a 3D point by a 3×4 affine matrix stored column-major.
+///
 /// `out = M3x3 · point + translation`.
 ///
 /// Row `r` of the output reads `mat[r]`, `mat[3+r]`, `mat[6+r]` as the basis
@@ -536,8 +541,7 @@ mod tests_c44_matrix__transform_point__7bb290 {
     }
 }
 
-/// In-place post-translate concat: adds `M3x3 · point` into the matrix's
-/// translation column.
+/// In-place post-translate concat: adds `M3x3 · point` into the matrix's translation column.
 ///
 /// The matrix is a column-major 3×4 affine: rotation in indices 0..9,
 /// translation in indices 9..12. Each translation component `t[r]` gains
@@ -606,11 +610,13 @@ mod tests_c44_matrix__translate_local__7bb990 {
     }
 }
 
-/// `C44Matrix::InvertOrthonormal`: inverse of a rotation (orthonormal 3×3) plus
-/// translation matrix. The inverse rotation is the transpose of the 3×3 block
-/// (rows at indices 0/1/2, 4/5/6, 8/9/10); the inverse translation is `-t · R`
-/// where `t` is the source translation (indices 12/13/14). Returns a 16-float
-/// row-major matrix with last row `[it0, it1, it2, 1]`.
+/// `C44Matrix::InvertOrthonormal`.
+///
+/// Inverse of a rotation (orthonormal 3×3) plus translation matrix. The inverse
+/// rotation is the transpose of the 3×3 block (rows at indices 0/1/2, 4/5/6,
+/// 8/9/10); the inverse translation is `-t · R` where `t` is the source
+/// translation (indices 12/13/14). Returns a 16-float row-major matrix with last
+/// row `[it0, it1, it2, 1]`.
 pub fn c44_matrix__invert_orthonormal__7bd700(src: &[f32; 16]) -> [f32; 16] {
     let r00 = src[0];
     let r01 = src[1];
@@ -731,8 +737,7 @@ mod tests_c44_matrix__invert_orthonormal__7bd700 {
     }
 }
 
-/// Pre-multiplies a 4x4 matrix by the rotation built from a quaternion:
-/// `out = R(quat) * m`.
+/// Pre-multiplies a 4x4 matrix by the rotation built from a quaternion: `out = R(quat) * m`.
 ///
 /// `quat` is `[x, y, z, w]`. The rotation `R` is the standard quaternion->matrix
 /// in the original's row-major scratch layout, then composed with the incoming
@@ -861,8 +866,7 @@ mod tests_c44_matrix__rotate_quaternion__7bddb0 {
     }
 }
 
-/// Scales the upper-left 3x3 of a 4x4 matrix (4-float row stride) row-wise by a
-/// 3-vector, in place.
+/// Scales the upper-left 3x3 of a 4x4 matrix (4-float row stride) row-wise by a 3-vector, in place.
 ///
 /// Row 0 (indices 0,1,2) is multiplied by `s.x`, row 1 (indices 4,5,6) by `s.y`,
 /// row 2 (indices 8,9,10) by `s.z`. The translation column and fourth row are
@@ -927,8 +931,9 @@ mod tests_c44_matrix__scale_rows_vec__7bdca0 {
     }
 }
 
-/// Scales the leading 3x3 (stored contiguously in indices 0..9) of a matrix
-/// row-wise by three scalars, in place.
+/// Scales the leading 3x3 (stored contiguously in indices 0..9) of a matrix.
+///
+/// Row-wise by three scalars, in place.
 ///
 /// Unlike [`c44_matrix__scale_rows_vec__7bdca0`], this overload reads a
 /// contiguous 3x3 block (no 4-float row stride): indices 0,1,2 x`sx`; 3,4,5
@@ -1102,9 +1107,11 @@ mod tests_c44_matrix__set_rotation_axis_angle__7bdb00 {
     }
 }
 
-/// `C44Matrix::TransformPoint` (column-major variant): transforms a 3D point by
-/// a 4×4 matrix with implied `w = 1`, applying the translation row at indices
-/// 12/13/14. `out[j] = in.x·mat[j] + in.y·mat[4+j] + in.z·mat[8+j] + mat[12+j]`.
+/// `C44Matrix::TransformPoint` (column-major variant).
+///
+/// Transforms a 3D point by a 4×4 matrix with implied `w = 1`, applying the
+/// translation row at indices 12/13/14.
+/// `out[j] = in.x·mat[j] + in.y·mat[4+j] + in.z·mat[8+j] + mat[12+j]`.
 pub fn c44_matrix__transform_point__7bca80(input: &[f32; 3], mat: &[f32; 16]) -> [f32; 3] {
     let ix = input[0];
     let iy = input[1];
@@ -1191,10 +1198,11 @@ mod tests_c44_matrix__transform_point__7bca80 {
     }
 }
 
-/// `C44Matrix::TransformPoint` (row-major variant): transforms a 3D point by a
-/// 4×4 matrix with implied `w = 1`, reading the translation from the last column
-/// (indices 3/7/11). `out[i] = in.x·mat[4i] + in.y·mat[4i+1] + in.z·mat[4i+2] +
-/// mat[4i+3]`.
+/// `C44Matrix::TransformPoint` (row-major variant).
+///
+/// Transforms a 3D point by a 4×4 matrix with implied `w = 1`, reading the
+/// translation from the last column (indices 3/7/11). `out[i] = in.x·mat[4i] +
+/// in.y·mat[4i+1] + in.z·mat[4i+2] + mat[4i+3]`.
 pub fn c44_matrix__transform_point__7bcae0(mat: &[f32; 16], input: &[f32; 3]) -> [f32; 3] {
     let ix = input[0];
     let iy = input[1];
@@ -1280,9 +1288,11 @@ mod tests_c44_matrix__transform_point__7bcae0 {
     }
 }
 
-/// `C44Matrix::TransformVector4`: transforms a homogeneous 4D vector by a 4×4
-/// matrix, computing the full `w` component. `out[j] = in.x·mat[j] +
-/// in.y·mat[4+j] + in.z·mat[8+j] + in.w·mat[12+j]` for `j = 0..3` (column-major).
+/// `C44Matrix::TransformVector4`.
+///
+/// Transforms a homogeneous 4D vector by a 4×4 matrix, computing the full `w`
+/// component. `out[j] = in.x·mat[j] + in.y·mat[4+j] + in.z·mat[8+j] +
+/// in.w·mat[12+j]` for `j = 0..3` (column-major).
 pub fn c44_matrix__transform_vector4__7bcb40(input: &[f32; 4], mat: &[f32; 16]) -> [f32; 4] {
     let ix = input[0];
     let iy = input[1];
@@ -1376,11 +1386,13 @@ mod tests_c44_matrix__transform_vector4__7bcb40 {
     }
 }
 
-/// `C44Matrix::TransformVertexInPlace`: transforms a 3D vertex by a 4×4 matrix
-/// (column-major, implied `w = 1`, translation at indices 12/13/14) — identical
-/// math to the column-major point transform. The original writes the result back
-/// into the input vertex and copies it to `out`; this returns the value so the
-/// adapter performs both writes.
+/// `C44Matrix::TransformVertexInPlace`.
+///
+/// Transforms a 3D vertex by a 4×4 matrix (column-major, implied `w = 1`,
+/// translation at indices 12/13/14) — identical math to the column-major point
+/// transform. The original writes the result back into the input vertex and
+/// copies it to `out`; this returns the value so the adapter performs both
+/// writes.
 pub fn c44_matrix__transform_vertex_in_place__7bcc60(vec: &[f32; 3], mat: &[f32; 16]) -> [f32; 3] {
     let ix = vec[0];
     let iy = vec[1];
@@ -1467,8 +1479,9 @@ mod tests_c44_matrix__transform_vertex_in_place__7bcc60 {
     }
 }
 
-/// In-place post-translate of a 4x4 matrix: adds `rot3x3 * trans` into the
-/// matrix's translation column (indices 12,13,14).
+/// In-place post-translate of a 4x4 matrix.
+///
+/// Adds `rot3x3 * trans` into the matrix's translation column (indices 12,13,14).
 ///
 /// The 4x4 has a 4-float row stride: the rotation columns scaling `trans.{x,y,z}`
 /// are read from indices {0,4,8}, {1,5,9}, {2,6,10}; each translation component
@@ -1780,9 +1793,10 @@ mod tests_build_box_projection_matrix__6d6fa0 {
     }
 }
 
-/// `C44Matrix::InvertWithScale`: inverts a rotation + uniform-scale +
-/// translation matrix. When `|scale - k| < eps` (the matrix is effectively
-/// orthonormal, `k` ~ 1.0) this is the plain transpose inverse and delegates to
+/// `C44Matrix::InvertWithScale`: inverts a rotation + uniform-scale + translation matrix.
+///
+/// When `|scale - k| < eps` (the matrix is effectively orthonormal, `k` ~ 1.0)
+/// this is the plain transpose inverse and delegates to
 /// [`c44_matrix__invert_orthonormal__7bd700`]. Otherwise the inverse rotation
 /// block is the transpose of the source 3×3 scaled row-wise by `k / scale²`
 /// (the inverse-transpose / normal matrix for a uniform scale), and the inverse
@@ -2000,11 +2014,12 @@ mod tests_c44_matrix__invert_with_scale__7bd820 {
     }
 }
 
-/// Builds the row-major rotation matrix of a quaternion `[x, y, z, w]`
-/// (assumed normalized): zero translation row, `m[15] = 1`. Diagonals are
-/// evaluated as `(1 - b) - c` with the `1 - 2xx` subterm computed once,
-/// mirroring the original's operation order (which differs from the
-/// `1 - (b + c)` association used by [`c44_matrix__rotate_quaternion__7bddb0`]).
+/// Builds the row-major rotation matrix of a quaternion `[x, y, z, w]` (assumed normalized).
+///
+/// Zero translation row, `m[15] = 1`. Diagonals are evaluated as `(1 - b) - c`
+/// with the `1 - 2xx` subterm computed once, mirroring the original's operation
+/// order (which differs from the `1 - (b + c)` association used by
+/// [`c44_matrix__rotate_quaternion__7bddb0`]).
 pub fn d3dx_matrix_rotation_quaternion__74b6bb(quat: &[f32; 4]) -> [f32; 16] {
     let [x, y, z, w] = *quat;
     let (x2, y2, z2) = (x + x, y + y, z + z);
@@ -2082,8 +2097,10 @@ mod tests_d3dx_matrix_rotation_quaternion__74b6bb {
         }
     }
 
-    /// Matches the rotation block the landed `0x7bddb0` kernel builds (same
-    /// expansion, different diagonal association) within a ulp-scale tolerance.
+    /// Matches the rotation block the landed `0x7bddb0` kernel builds.
+    ///
+    /// Same expansion, different diagonal association; within a ulp-scale
+    /// tolerance.
     #[test]
     fn matches_c44_rotation_block() {
         let q = [0.18_f32, 0.41, -0.32, 0.83];
@@ -2112,8 +2129,9 @@ mod tests_d3dx_matrix_rotation_quaternion__74b6bb {
     }
 }
 
-/// Pivot transformed by the row-vector convention including the translation
-/// row, summed in the natural lane order `((x + y) + z) + w` (the billboard
+/// Pivot transformed by the row-vector convention including the translation row.
+///
+/// Summed in the natural lane order `((x + y) + z) + w` (the billboard
 /// pre-pass flavor; the post-rebuild flavor groups differently, see
 /// [`bb_pivot_world_zyx__714260`]).
 pub fn bb_pivot_world_xyz__714260(m: &[f32; 16], p: &[f32; 3]) -> [f32; 3] {
@@ -2124,9 +2142,10 @@ pub fn bb_pivot_world_xyz__714260(m: &[f32; 16], p: &[f32; 3]) -> [f32; 3] {
     ]
 }
 
-/// Pivot world position as the billboard rebuild computes it: lane 0 sums
-/// `(z + y) + x`, lanes 1-2 sum `(x + z) + y` — the per-lane x87 schedules
-/// differ in the original and the groupings are load-bearing for bit
+/// Pivot world position as the billboard rebuild computes it.
+///
+/// Lane 0 sums `(z + y) + x`, lanes 1-2 sum `(x + z) + y` — the per-lane x87
+/// schedules differ in the original and the groupings are load-bearing for bit
 /// fidelity.
 pub fn bb_pivot_world_zyx__714260(m: &[f32; 16], p: &[f32; 3]) -> [f32; 3] {
     [
@@ -2136,8 +2155,7 @@ pub fn bb_pivot_world_zyx__714260(m: &[f32; 16], p: &[f32; 3]) -> [f32; 3] {
     ]
 }
 
-/// Per-row Euclidean lengths of the three rotation rows, each summed
-/// `(x² + y²) + z²`.
+/// Per-row Euclidean lengths of the three rotation rows, each summed `(x² + y²) + z²`.
 pub fn bb_row_lengths__714260(m: &[f32; 16]) -> [f32; 3] {
     [
         (m[0] * m[0] + m[1] * m[1] + m[2] * m[2]).sqrt(),
@@ -2146,9 +2164,11 @@ pub fn bb_row_lengths__714260(m: &[f32; 16]) -> [f32; 3] {
     ]
 }
 
-/// Normalize a basis row given its squared magnitude: skipped only when
-/// `|sqrt(sqmag)|` is strictly below the 2⁻²² epsilon (an unordered compare —
-/// NaN — still normalizes, poisoning the row like the original).
+/// Normalize a basis row given its squared magnitude.
+///
+/// Skipped only when `|sqrt(sqmag)|` is strictly below the 2⁻²² epsilon (an
+/// unordered compare — NaN — still normalizes, poisoning the row like the
+/// original).
 pub fn bb_normalize_row__714260(row: [f32; 3], sqmag: f32) -> [f32; 3] {
     const EPS: f32 = f32::from_bits(0x3480_0000);
     let s = sqmag.sqrt();
@@ -2159,7 +2179,8 @@ pub fn bb_normalize_row__714260(row: [f32; 3], sqmag: f32) -> [f32; 3] {
     row
 }
 
-/// Row replacement ratio for the project-onto-model-rows billboard mode:
+/// Row replacement ratio for the project-onto-model-rows billboard mode.
+///
 /// `sqrt(local² / model²)` when the model row clears the 1e-5 squared-length
 /// floor (ordered compare — NaN falls to the 1.0 arm), else 1.0. `local_sqmag`
 /// is computed by the caller with the mode's own `(x² + z²) + y²` grouping.
@@ -2172,14 +2193,16 @@ pub fn bb_row_ratio__714260(model_sqmag: f32, local_sqmag: f32) -> f32 {
     }
 }
 
-/// The local-row squared magnitude feeding [`bb_row_ratio__714260`]:
+/// The local-row squared magnitude feeding [`bb_row_ratio__714260`].
+///
 /// `(x² + z²) + y²` (the original pairs the x and z squares first).
 pub fn bb_row_sqmag_xzy__714260(row: &[f32; 3]) -> f32 {
     row[0] * row[0] + row[2] * row[2] + row[1] * row[1]
 }
 
-/// Cross product in the swapped orientation the axis-locked billboard modes
-/// use for their third row (`row1 × row0` expressed against `a = row0`,
+/// Cross product in the swapped orientation the axis-locked billboard modes use.
+///
+/// For their third row (`row1 × row0` expressed against `a = row0`,
 /// `b = row1`).
 pub fn bb_cross_swapped__714260(a: &[f32; 3], b: &[f32; 3]) -> [f32; 3] {
     [
@@ -2189,8 +2212,9 @@ pub fn bb_cross_swapped__714260(a: &[f32; 3], b: &[f32; 3]) -> [f32; 3] {
     ]
 }
 
-/// Standard-orientation cross product (the z-locked billboard mode's first
-/// row, `a = row2`, `b = row1`).
+/// Standard-orientation cross product.
+///
+/// The z-locked billboard mode's first row, `a = row2`, `b = row1`.
 pub fn bb_cross_std__714260(a: &[f32; 3], b: &[f32; 3]) -> [f32; 3] {
     [
         a[1] * b[2] - a[2] * b[1],
@@ -2199,10 +2223,12 @@ pub fn bb_cross_std__714260(a: &[f32; 3], b: &[f32; 3]) -> [f32; 3] {
     ]
 }
 
-/// Billboard finalize: zero the fourth column, rescale the rebuilt rows by
-/// the pre-rebuild lengths, set `m[15] = 1`, and recompute the translation
-/// row as `pivot_world − (scaled-basis · pivot)` with the original's
-/// `(y + z) + x` lane summation over the already-rescaled (f32-rounded) rows.
+/// Billboard finalize.
+///
+/// Zero the fourth column, rescale the rebuilt rows by the pre-rebuild lengths,
+/// set `m[15] = 1`, and recompute the translation row as
+/// `pivot_world − (scaled-basis · pivot)` with the original's `(y + z) + x` lane
+/// summation over the already-rescaled (f32-rounded) rows.
 pub fn bb_finalize__714260(m: &mut [f32; 16], l: &[f32; 3], pivot: &[f32; 3], pw: &[f32; 3]) {
     m[3] = 0.0;
     m[7] = 0.0;
@@ -2222,7 +2248,9 @@ pub fn bb_finalize__714260(m: &mut [f32; 16], l: &[f32; 3], pivot: &[f32; 3], pw
     m[14] = pw[2] - (m[6] * pivot[1] + m[10] * pivot[2] + m[2] * pivot[0]);
 }
 
-/// Translation-row fixup after the rotation/scale compose: `trans − (basis ·
+/// Translation-row fixup after the rotation/scale compose.
+///
+/// `trans − (basis ·
 /// pivot)` with the `(z + y) + x` lane summation of the original.
 pub fn bb_trans_fixup__714260(trans: &[f32; 3], m: &[f32; 16], pivot: &[f32; 3]) -> [f32; 3] {
     [
@@ -2343,10 +2371,11 @@ mod tests_bb__714260 {
     }
 }
 
-/// `C44Matrix::Adjugate` — 4×4 adjugate (transpose of the cofactor matrix), the
-/// numerator of the inverse. The original evaluates the sixteen 3×3 minors with
-/// `C33Matrix::Determinant`, applies eight `fchs` sign flips, and stores each
-/// cofactor into its transposed output slot.
+/// `C44Matrix::Adjugate` — 4×4 adjugate (transpose of the cofactor matrix).
+///
+/// The numerator of the inverse. The original evaluates the sixteen 3×3 minors
+/// with `C33Matrix::Determinant`, applies eight `fchs` sign flips, and stores
+/// each cofactor into its transposed output slot.
 ///
 /// Each minor selects nine source elements in the exact order the original
 /// passes them to the determinant (matching the per-call push order of the
@@ -2557,15 +2586,16 @@ mod tests_c44_matrix__adjugate__7bd390 {
     }
 }
 
-/// `C44Matrix::Determinant` (0x7bcf90) — `__fastcall(ecx = this)`, returns the
-/// 4×4 determinant in `ST(0)`. (The return is in `ST(0)`, not a hidden
-/// `float10*` out-pointer.)
-/// Cofactor expansion along row 0: `det = m00·M0 − m01·M1 + m02·M2 − m03·M3`,
-/// where each `Mk` is the 3×3 minor with row 0 and column `k` removed, evaluated
-/// by `C33Matrix::Determinant` in the exact nine-element order the original
-/// pushes (verified against the four `CALL 0x7bc040` push sequences). The
-/// accumulation order `((t0 − t1) + t2) − t3` matches the stock
-/// `FSUBR`/`FADD`/`FSUBR` chain; the result rounds to `f32` on return.
+/// `C44Matrix::Determinant` (0x7bcf90).
+///
+/// `__fastcall(ecx = this)`, returns the 4×4 determinant in `ST(0)`. (The return
+/// is in `ST(0)`, not a hidden `float10*` out-pointer.) Cofactor expansion along
+/// row 0: `det = m00·M0 − m01·M1 + m02·M2 − m03·M3`, where each `Mk` is the 3×3
+/// minor with row 0 and column `k` removed, evaluated by `C33Matrix::Determinant`
+/// in the exact nine-element order the original pushes (verified against the four
+/// `CALL 0x7bc040` push sequences). The accumulation order `((t0 − t1) + t2) − t3`
+/// matches the stock `FSUBR`/`FADD`/`FSUBR` chain; the result rounds to `f32` on
+/// return.
 pub fn c44_matrix__determinant__7bcf90(m: &[f32; 16]) -> f32 {
     let det3 = crate::math::matrix33::c33_matrix__determinant__7bc040;
     // Minor for the m0j cofactor: row 0 and column j removed (3×3 of rows 1..=3).
@@ -2662,7 +2692,9 @@ mod tests_c44_matrix__determinant__7bcf90 {
     }
 }
 
-/// `C44Matrix::InverseScaledByDet` (0x7bd6c0) — `__thiscall(ecx = src, [out],
+/// `C44Matrix::InverseScaledByDet` (0x7bd6c0).
+///
+/// `__thiscall(ecx = src, [out],
 /// [det])`. Builds the inverse of `src` given its precomputed determinant:
 /// `out = adjugate(src) · (1/det)`, then returns `out`. The reciprocal numerator
 /// is the stock `1.0f` constant at `0x7ff9d8` (`FLD; FDIV det`). Reuses the
@@ -2728,8 +2760,9 @@ mod tests_c44_matrix__inverse_scaled_by_det__7bd6c0 {
     }
 }
 
-/// Scales the upper-left 3x3 basis of a 4x4 matrix (4-float row stride) by a
-/// single scalar `s`, in place.
+/// Scales the upper-left 3x3 basis of a 4x4 matrix (4-float row stride).
+///
+/// By a single scalar `s`, in place.
 ///
 /// The nine basis elements — row 0 (indices 0,1,2), row 1 (indices 4,5,6), row
 /// 2 (indices 8,9,10) — become `s * m[i]`. The translation column (indices
@@ -2753,8 +2786,10 @@ pub fn c44_matrix__scale_rotation3x3__7bdd00(mat: &mut [f32; 16], s: f32) {
 mod tests_c44_matrix__scale_rotation3x3__7bdd00 {
     use super::c44_matrix__scale_rotation3x3__7bdd00 as scale;
 
-    /// A 4x4 with distinct, recognisable values: the 3x3 basis, the translation
-    /// column at 3/7/11, and the homogeneous row at 12..=15.
+    /// A 4x4 with distinct, recognisable values.
+    ///
+    /// The 3x3 basis, the translation column at 3/7/11, and the homogeneous row
+    /// at 12..=15.
     fn full() -> [f32; 16] {
         [
             1.0, 2.0, 3.0, 91.0, 4.0, 5.0, 6.0, 92.0, 7.0, 8.0, 9.0, 93.0, 94.0, 95.0, 96.0, 1.0,
@@ -2840,10 +2875,11 @@ mod tests_c44_matrix__scale_rotation3x3__7bdd00 {
     }
 }
 
-/// `BuildOrthoProjMatrix` (VA 0x5c3d90) — off-center **orthographic** 4×4
-/// row-major projection matrix built into `out`. `k` is the runtime scale
-/// constant `_DAT_00801628` (2.0 in the shipped image); read live by the
-/// adapter so the kernel stays value-faithful.
+/// `BuildOrthoProjMatrix` (VA 0x5c3d90).
+///
+/// Off-center **orthographic** 4×4 row-major projection matrix built into `out`.
+/// `k` is the runtime scale constant `_DAT_00801628` (2.0 in the shipped image);
+/// read live by the adapter so the kernel stays value-faithful.
 ///
 /// Diagonal scales `k/(r−l)`, `k/(t−b)`, `k/(f−n)`; the translation row
 /// (indices 12/13/14) `−(l+r)/(r−l)`, `−(b+t)/(t−b)`, `−(n+f)/(f−n)`; `m33 = 1`;

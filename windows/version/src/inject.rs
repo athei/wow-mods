@@ -33,6 +33,7 @@ unsafe extern "system" {
 }
 
 /// Read `dlls.txt` next to the host EXE and `LoadLibraryW` each entry.
+///
 /// Lets users replace external launchers (`CreateRemoteThread` / IAT-patch
 /// style) for detour-based mod DLLs — by the time `WoW`'s `main()` runs,
 /// every mod listed has had its `DllMain` ATTACH and installed its hooks.
@@ -120,9 +121,10 @@ fn to_wide(s: &OsStr) -> Vec<u16> {
     s.encode_wide().chain(std::iter::once(0)).collect()
 }
 
-/// Render the most recent `GetLastError` as `error <code>: <text>` using
-/// the Win32 system message table. Trailing `\r\n` from `FormatMessage` is
-/// stripped. Empty `FormatMessage` result falls back to just the code.
+/// Render the most recent `GetLastError` as `error <code>: <text>`.
+///
+/// Uses the Win32 system message table. Trailing `\r\n` from `FormatMessage`
+/// is stripped. Empty `FormatMessage` result falls back to just the code.
 fn last_error_text() -> String {
     const BUF_LEN: u32 = 256;
     // SAFETY: Win32 GetLastError reads thread-local state, no preconditions.

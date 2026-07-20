@@ -22,8 +22,9 @@ use std::{
 
 use log::info;
 
-/// Calibration message rides on the perf log target — TSC is a perf-only
-/// primitive across this workspace.
+/// Calibration message rides on the perf log target.
+///
+/// TSC is a perf-only primitive across this workspace.
 const LOG_TARGET: &str = "wow::perf";
 
 /// Read the timestamp / cycle counter.
@@ -96,8 +97,9 @@ pub fn u64_to_f64_exact(v: u64) -> f64 {
     f64::from(hi) * 4_294_967_296.0 + f64::from(lo)
 }
 
-/// Lossless `usize` → f64 via [`u64_to_f64_exact`]. `usize` is ≤ u64 on every
-/// platform we target, so the widening cast is exact.
+/// Lossless `usize` → f64 via [`u64_to_f64_exact`].
+///
+/// `usize` is ≤ u64 on every platform we target, so the widening cast is exact.
 ///
 /// # Panics
 ///
@@ -110,8 +112,9 @@ pub fn usize_to_f64_exact(v: usize) -> f64 {
     u64_to_f64_exact(u64::try_from(v).expect("usize fits u64 on all supported targets"))
 }
 
-/// Return the TSC cycle count that corresponds to the given wall-clock
-/// duration in seconds. Used to build rate-limit thresholds.
+/// Return the TSC cycle count that corresponds to the given wall-clock duration in seconds.
+///
+/// Used to build rate-limit thresholds.
 #[inline]
 #[must_use]
 pub fn secs_to_cycles(seconds: u64) -> u64 {

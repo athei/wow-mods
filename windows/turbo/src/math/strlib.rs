@@ -10,11 +10,13 @@
 
 use memchr::memmem;
 
-/// The Lua pattern "magic" characters. A pattern containing none of these
-/// matches exactly its own bytes, so it can be handled as a literal substring
-/// rather than by the recursive matcher. `^` is in the set, so an anchored
-/// pattern is never treated as a literal; `)` is in the set so a bare close-paren
-/// falls through to the recursive matcher (matching stock's `SPECIALS`).
+/// The Lua pattern "magic" characters.
+///
+/// A pattern containing none of these matches exactly its own bytes, so it can
+/// be handled as a literal substring rather than by the recursive matcher. `^`
+/// is in the set, so an anchored pattern is never treated as a literal; `)` is
+/// in the set so a bare close-paren falls through to the recursive matcher
+/// (matching stock's `SPECIALS`).
 const MAGIC: &[u8] = b"^$*+?.()[%-";
 
 /// Returns `true` if `pattern` contains any Lua pattern magic character.
@@ -23,9 +25,10 @@ pub fn pattern_has_magic(pattern: &[u8]) -> bool {
     pattern.iter().any(|b| MAGIC.contains(b))
 }
 
-/// Literal `string.gsub`: replace up to `max_n` non-overlapping occurrences of
-/// `pattern` in `subject` with `repl`, returning the rebuilt string and the
-/// replacement count.
+/// Literal `string.gsub`.
+///
+/// Replace up to `max_n` non-overlapping occurrences of `pattern` in `subject`
+/// with `repl`, returning the rebuilt string and the replacement count.
 ///
 /// Byte-identical to the stock collector for the caller's preconditions (a
 /// non-empty no-magic `pattern` and a `repl` string with no `%` escapes): the
@@ -55,10 +58,11 @@ pub fn literal_gsub(subject: &[u8], pattern: &[u8], repl: &[u8], max_n: i32) -> 
     (out, count)
 }
 
-/// Find the first occurrence of literal `pattern` in `subject` at or after byte
-/// offset `from`, returning its absolute offset. Drives the `string.gfind`
-/// iterator fast path (advance to the next match). Returns `None` for an empty
-/// pattern, a `from` past the end of `subject`, or no further match.
+/// Find the first occurrence of literal `pattern` in `subject` at or after byte offset `from`.
+///
+/// Returns its absolute offset. Drives the `string.gfind` iterator fast path
+/// (advance to the next match). Returns `None` for an empty pattern, a `from`
+/// past the end of `subject`, or no further match.
 #[must_use]
 pub fn literal_find_from(subject: &[u8], pattern: &[u8], from: usize) -> Option<usize> {
     if pattern.is_empty() || from > subject.len() {
@@ -71,10 +75,12 @@ pub fn literal_find_from(subject: &[u8], pattern: &[u8], from: usize) -> Option<
 mod tests {
     use super::{literal_find_from, literal_gsub, pattern_has_magic};
 
-    /// Position-by-position reference matching stock `str_gsub`'s loop: at each
-    /// position, if the replacement budget remains and the pattern matches here,
-    /// emit the replacement and skip the match; otherwise copy one byte. The
-    /// `memmem`-driven kernel must agree with this on every input.
+    /// Position-by-position reference matching stock `str_gsub`'s loop.
+    ///
+    /// At each position, if the replacement budget remains and the pattern
+    /// matches here, emit the replacement and skip the match; otherwise copy
+    /// one byte. The `memmem`-driven kernel must agree with this on every
+    /// input.
     fn oracle(subject: &[u8], pattern: &[u8], repl: &[u8], max_n: i32) -> (Vec<u8>, i32) {
         let mut out = Vec::new();
         let mut count: i32 = 0;

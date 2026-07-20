@@ -193,10 +193,12 @@ mod tests_c_cubic_spline__eval_basis_quadratic__453640 {
     }
 }
 
-/// Linear-mode spline segment position: lerp between the two interior control
-/// points `cp[seg*3+3]` and `cp[seg*3+6]` by `local_t`. The kernel takes the
-/// two already-selected control points `a` and `b`; the adapter performs the
-/// index arithmetic against the live control-point array.
+/// Linear-mode spline segment position.
+///
+/// Lerp between the two interior control points `cp[seg*3+3]` and `cp[seg*3+6]`
+/// by `local_t`. The kernel takes the two already-selected control points `a`
+/// and `b`; the adapter performs the index arithmetic against the live
+/// control-point array.
 ///
 /// `out = a + (b - a) * local_t`.
 pub fn c_cubic_spline__eval_segment_pos__4541b0(
@@ -287,8 +289,10 @@ mod tests_c_cubic_spline__sq_mag2_d__454980 {
     }
 }
 
-/// Cubic-spline position eval: per control row, Horner-evaluate a 4-coefficient
-/// cubic at `t`, weight by that row's 3-component basis vector, and sum.
+/// Cubic-spline position eval.
+///
+/// Per control row, Horner-evaluate a 4-coefficient cubic at `t`, weight by
+/// that row's 3-component basis vector, and sum.
 ///
 /// `control` holds 4 contiguous polynomial rows (4 coefficients each, highest
 /// degree first); `basis` holds the matching 4 rows of 3-component weights.

@@ -30,6 +30,7 @@ type UnitXpFn = extern "fastcall" fn(*mut c_void) -> i32;
 const UNIT_XP_LABEL: &str = "UnitXP";
 
 /// Every hardcoded VA this DLL touches, with the prologue it was captured from.
+///
 /// `UnitXP` is the one that gets patched; the three `lua_*` entries are only
 /// ever called, but they run on *every* pass-through, so a wrong client build
 /// would crash through them even with a verified patch target. All four are
@@ -41,15 +42,17 @@ const VERIFIED_SITES: [(usize, &str, &str); 4] = [
     (P_LUA_PUSHSTRING, LUA_PUSHSTRING_SIG, "lua_pushstring"),
 ];
 
-/// First bytes of an inline detour: `jmp rel32` (what `MinHook` itself writes,
-/// and every hand-rolled 1.12 hook) and `jmp [addr]`. `jmp rel8` is absent on
-/// purpose — it cannot reach a detour, so accepting it would only widen the
-/// window for mistaking a wrong client build for a hooked one.
+/// First bytes of an inline detour.
+///
+/// `jmp rel32` (what `MinHook` itself writes, and every hand-rolled 1.12 hook) and
+/// `jmp [addr]`. `jmp rel8` is absent on purpose — it cannot reach a detour, so
+/// accepting it would only widen the window for mistaking a wrong client build for
+/// a hooked one.
 const DETOUR_PROLOGUES: [&str; 2] = ["E9", "FF 25"];
 
-/// Pointer to the unhooked `UnitXP`, returned by `MinHook::create_hook` as a
-/// trampoline. Runtime-set in [`install`], hence `OnceLock` over `LazyLock`
-/// per the convention.
+/// Pointer to the unhooked `UnitXP`, returned by `MinHook::create_hook` as a trampoline.
+///
+/// Runtime-set in [`install`], hence `OnceLock` over `LazyLock` per the convention.
 static ORIGINAL_UNIT_XP: OnceLock<UnitXpFn> = OnceLock::new();
 
 pub fn install() {
@@ -80,8 +83,7 @@ pub fn install() {
     let _ = unsafe { wow_hook::enable_hook(P_UNIT_XP, UNIT_XP_LABEL) };
 }
 
-/// Whether all four hardcoded VAs still hold the functions their addresses were
-/// captured from.
+/// Whether all four hardcoded VAs still hold the functions their addresses were captured from.
 ///
 /// A site resolves two ways: its captured prologue is intact, or the prologue is
 /// an inline detour, meaning another mod hooked the function ahead of us. The
@@ -121,8 +123,9 @@ fn sites_resolve() -> bool {
     all_resolve
 }
 
-/// Whether the function at `va` begins with an unconditional jump, i.e. someone
-/// already patched its entry.
+/// Whether the function at `va` begins with an unconditional jump.
+///
+/// Someone already patched its entry.
 fn is_detoured(va: usize) -> bool {
     DETOUR_PROLOGUES.iter().any(|sig| {
         // SAFETY: `va` lies in the 1.12 client's mapped code section;
@@ -230,12 +233,14 @@ fn handle_translate_async(lua: &LuaState) -> i32 {
     1
 }
 
-/// Maximum completed results returned in one `poll`. Far above the addon's
-/// in-flight cap; just a guard on the response string size.
+/// Maximum completed results returned in one `poll`.
+///
+/// Far above the addon's in-flight cap; just a guard on the response string size.
 const POLL_MAX_RECORDS: usize = 64;
-/// Field separator within a record (ASCII Unit Separator). Cannot occur in
-/// chat text or Apple-translation output, so — unlike `|` — it never collides
-/// with translated content. Must match the Lua parser.
+/// Field separator within a record (ASCII Unit Separator).
+///
+/// Cannot occur in chat text or Apple-translation output, so — unlike `|` — it
+/// never collides with translated content. Must match the Lua parser.
 const FIELD_SEP: char = '\u{1f}';
 /// Record separator between results (ASCII Record Separator).
 const RECORD_SEP: char = '\u{1e}';

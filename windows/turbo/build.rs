@@ -36,20 +36,24 @@ struct Function {
     abi: String,
     ret: String,
     args: Vec<String>,
-    /// Volatile GP registers (subset of `eax`/`ecx`/`edx`; empty for none) the
-    /// original leaves intact and our reimpl must also leave intact — the 1.12
-    /// client keeps these caller-saved registers live across calls to these
-    /// internal functions. Orthogonal to `abi`; drives the save/restore shim.
+    /// Volatile GP registers the original leaves intact and our reimpl must also leave intact.
+    ///
+    /// Subset of `eax`/`ecx`/`edx`; empty for none. The 1.12 client keeps these
+    /// caller-saved registers live across calls to these internal functions.
+    /// Orthogonal to `abi`; drives the save/restore shim.
     preserve: Vec<String>,
-    /// Optional differential-mode annotation. Present only on functions the
-    /// harness can validate against the live original (`wow_turbo_diff` builds);
-    /// absent ⇒ the thunk is generated exactly as without the harness.
+    /// Optional differential-mode annotation.
+    ///
+    /// Present only on functions the harness can validate against the live
+    /// original (`wow_turbo_diff` builds); absent ⇒ the thunk is generated
+    /// exactly as without the harness.
     #[serde(default)]
     diff: Option<Diff>,
 }
 
-/// A contiguous pointer-addressed memory region described by which argument
-/// points at it and how many bytes it spans.
+/// A contiguous pointer-addressed memory region.
+///
+/// Described by which argument points at it and how many bytes it spans.
 #[derive(Deserialize)]
 struct Region {
     arg: usize,
@@ -67,8 +71,9 @@ struct Diff {
     /// The output region (required for `out`/`inout`; the reimpl writes here).
     #[serde(default)]
     out: Option<Region>,
-    /// Input regions snapshotted before the original runs and replayed into the
-    /// reimpl, so an in-place (`inout`) function sees the pre-call state.
+    /// Input regions snapshotted before the original runs and replayed into the reimpl.
+    ///
+    /// So an in-place (`inout`) function sees the pre-call state.
     #[serde(default)]
     ins: Vec<Region>,
     /// `"f32"` (lane compare within `ulp`) | `"bytes"` (exact memcmp).
@@ -77,15 +82,19 @@ struct Diff {
     /// Max ULP per `f32` lane before a divergence is reported.
     #[serde(default = "default_ulp")]
     ulp: u32,
-    /// `true` marks a function deliberately more precise than the original
-    /// (f64 intermediates vs x87/SP); divergences count and log at debug, never warn.
+    /// `true` marks a function deliberately more precise than the original.
+    ///
+    /// (f64 intermediates vs x87/SP); divergences count and log at debug, never
+    /// warn.
     #[serde(default)]
     expected: bool,
-    /// `true` waives the `tools/diff_audit.py` double-run safety checks (call-outs
-    /// via `transmute`, and writes through pointers other than the `out` arg) for
-    /// adapters whose call-outs are read-only and whose auxiliary writes are
-    /// idempotent (deterministic/constant) — so the differential replay running
-    /// the reimpl a second time cannot corrupt live state. A documented per-entry
+    /// `true` waives the `tools/diff_audit.py` double-run safety checks.
+    ///
+    /// The waived checks are call-outs via `transmute`, and writes through
+    /// pointers other than the `out` arg. The waiver is for adapters whose
+    /// call-outs are read-only and whose auxiliary writes are idempotent
+    /// (deterministic/constant) — so the differential replay running the reimpl
+    /// a second time cannot corrupt live state. A documented per-entry
     /// assertion of safety, like `unsafe`; consumed by `diff_audit.py`, not codegen.
     #[serde(default)]
     double_run_safe: bool,
@@ -102,8 +111,9 @@ const fn default_ulp() -> u32 {
 /// Largest snapshot region the generated diff path will stack-allocate.
 const MAX_DIFF_REGION: usize = 1024;
 
-/// Validate a `diff` annotation against its function at build time so a
-/// malformed table fails the build rather than miscompiling the harness.
+/// Validate a `diff` annotation against its function at build time.
+///
+/// A malformed table fails the build rather than miscompiling the harness.
 fn validate_diff(name: &str, f: &Function) {
     let Some(d) = &f.diff else { return };
     // Parsed from the manifest (the single schema source) but consumed by
@@ -232,8 +242,9 @@ fn main() {
         .status();
 }
 
-/// The caller-saved (volatile) GP registers, in capture order. A `preserve`
-/// entry may only name one of these.
+/// The caller-saved (volatile) GP registers, in capture order.
+///
+/// A `preserve` entry may only name one of these.
 const VOL_ORDER: [&str; 3] = ["eax", "ecx", "edx"];
 
 fn render(m: &Manifest) -> String {
@@ -543,8 +554,9 @@ fn render(m: &Manifest) -> String {
     out
 }
 
-/// Runtime selector for compare mode, appended under `#[cfg(wow_turbo_diff)]`. The
-/// value is a comma-separated token list: an `all` token arms every
+/// Runtime selector for compare mode, appended under `#[cfg(wow_turbo_diff)]`.
+///
+/// The value is a comma-separated token list: an `all` token arms every
 /// `[diff]`-annotated hook, a hook label arms that one. So
 /// `WOW_TURBO_DIFF_ARM=all` arms all of them; `Name1,Name2` arms those two. This is
 /// a runtime `WOW_TURBO_*` var: the launcher filters the PE environment down to an
@@ -568,13 +580,15 @@ fn diff_enabled(label: &str) -> bool {
 }
 "#;
 
-/// Emit the `#[cfg(wow_turbo_diff)]` compare machinery for one hook: its runtime
-/// switch, its per-hook reporting counter, and the `{snake}_diff` function the
-/// thunk routes to when armed. Only a hook carrying a `[diff]` `out`/`inout`
-/// table gets this — it runs the original on the live args, re-runs the reimpl
-/// on input snapshots, and reports only when the annotated output region
-/// diverges. Hooks without a table emit nothing here (and their thunk never
-/// references a diff path), so an armed run is silent unless a reimpl disagrees.
+/// Emit the `#[cfg(wow_turbo_diff)]` compare machinery for one hook.
+///
+/// Its runtime switch, its per-hook reporting counter, and the `{snake}_diff`
+/// function the thunk routes to when armed. Only a hook carrying a `[diff]`
+/// `out`/`inout` table gets this — it runs the original on the live args,
+/// re-runs the reimpl on input snapshots, and reports only when the annotated
+/// output region diverges. Hooks without a table emit nothing here (and their
+/// thunk never references a diff path), so an armed run is silent unless a
+/// reimpl disagrees.
 fn emit_diff(out: &mut String, name: &str, snake: &str, screaming: &str, f: &Function) {
     let Some(d) = f.diff.as_ref() else {
         return;
@@ -623,9 +637,11 @@ fn emit_diff(out: &mut String, name: &str, snake: &str, screaming: &str, f: &Fun
     out.push('\n');
 }
 
-/// `out`/`inout` body: snapshot inputs + the pre-call out region, run the
-/// original on the live arguments (the game keeps that result), re-run the
-/// reimpl against the snapshots, and compare the two outputs.
+/// `out`/`inout` body.
+///
+/// Snapshot inputs + the pre-call out region, run the original on the live
+/// arguments (the game keeps that result), re-run the reimpl against the
+/// snapshots, and compare the two outputs.
 fn emit_diff_compare(
     out: &mut String,
     name: &str,
@@ -789,9 +805,10 @@ fn emit_diff_compare(
     }
 }
 
-/// Emit the scalar-return comparison and the function's tail. `f32` returns
-/// compare within `ulp`; integer returns compare exactly (widened to `u64`);
-/// pointer and `void` returns have nothing to compare.
+/// Emit the scalar-return comparison and the function's tail.
+///
+/// `f32` returns compare within `ulp`; integer returns compare exactly (widened
+/// to `u64`); pointer and `void` returns have nothing to compare.
 fn emit_ret_compare(out: &mut String, name: &str, screaming: &str, f: &Function, d: &Diff) {
     if f.ret == "f32" {
         let _ = writeln!(
@@ -812,8 +829,9 @@ fn emit_ret_compare(out: &mut String, name: &str, screaming: &str, f: &Function,
     }
 }
 
-/// Whether a manifest return type is an integer the diff path can widen to `u64`
-/// for an exact comparison.
+/// Whether a manifest return type is an integer the diff path can widen to `u64`.
+///
+/// For an exact comparison.
 fn is_integer_ret(ret: &str) -> bool {
     matches!(
         ret,
@@ -821,17 +839,21 @@ fn is_integer_ret(ret: &str) -> bool {
     )
 }
 
-/// The fixed `install_thunk` helper appended to the generated module: refuse
-/// unless the bytes at the target match the recorded signature, then create the
-/// hook over the generated thunk, let the caller publish the original (the `store`
-/// closure runs before enabling, so the lazy resolver can never see an empty
-/// slot), then queue the enable — `install_all` applies the whole queue in one
-/// thread-freeze at the end.
-const INSTALL_THUNK: &str = r#"/// Install one hook; returns whether it was queued for enabling. Patching is
-/// refused unless the bytes at the target match the recorded `sig` — a `0` RVA,
-/// a signature mismatch, or a `MinHook` failure logs and skips. A hook must
-/// never crash the host, and must never patch an unverified address. The enable
-/// is only queued; `install_all`'s single `apply_queued` makes the batch live.
+/// The fixed `install_thunk` helper appended to the generated module.
+///
+/// Refuse unless the bytes at the target match the recorded signature, then
+/// create the hook over the generated thunk, let the caller publish the original
+/// (the `store` closure runs before enabling, so the lazy resolver can never see
+/// an empty slot), then queue the enable — `install_all` applies the whole queue
+/// in one thread-freeze at the end.
+const INSTALL_THUNK: &str = r#"
+/// Install one hook; returns whether it was queued for enabling.
+///
+/// Patching is refused unless the bytes at the target match the recorded `sig` —
+/// a `0` RVA, a signature mismatch, or a `MinHook` failure logs and skips. A hook
+/// must never crash the host, and must never patch an unverified address. The
+/// enable is only queued; `install_all`'s single `apply_queued` makes the batch
+/// live.
 fn install_thunk(
     image_base: usize,
     rva: usize,
@@ -879,11 +901,12 @@ fn install_thunk(
 }
 "#;
 
-/// Map a manifest ABI name to a Rust `extern` ABI string. The generated thunks
-/// are only ever compiled for the 32-bit `i686` target (the `win` module is
-/// `#[cfg(target_arch = "x86")]`), where every one of these conventions —
-/// including `thiscall` (`this` in `ecx`, the remaining args on a callee-cleaned
-/// stack) — lowers correctly.
+/// Map a manifest ABI name to a Rust `extern` ABI string.
+///
+/// The generated thunks are only ever compiled for the 32-bit `i686` target
+/// (the `win` module is `#[cfg(target_arch = "x86")]`), where every one of these
+/// conventions — including `thiscall` (`this` in `ecx`, the remaining args on a
+/// callee-cleaned stack) — lowers correctly.
 fn abi_str<'a>(abi: &'a str, name: &str) -> &'a str {
     match abi {
         "cdecl" | "stdcall" | "fastcall" | "thiscall" => abi,
@@ -891,16 +914,18 @@ fn abi_str<'a>(abi: &'a str, name: &str) -> &'a str {
     }
 }
 
-/// Emit the hook plumbing for an `abi = "x87st0"` entry: an MSVC CRT helper
-/// that takes its argument in `ST(0)` and returns in `EDX:EAX` — a register
-/// contract none of the named conventions can express, so the thunk is a naked
-/// shim that spills `ST(0)` to the stack (popping it, as the original does)
-/// and calls an ordinary `extern "C" fn(f64) -> i64` wrapper around the
-/// reimpl. Constraints: exactly one `f64` arg, an `i64` return, `preserve`
-/// limited to ECX (EAX/EDX carry the return), and no differential harness
-/// (capturing would need to re-materialize `ST(0)`; these entries are skipped
-/// by the `WOW_TURBO_DIFF_ARM` selector). Crumb builds skip recording here for
-/// the same reason — the shim has no Rust body to host the cfg'd call.
+/// Emit the hook plumbing for an `abi = "x87st0"` entry.
+///
+/// An MSVC CRT helper that takes its argument in `ST(0)` and returns in
+/// `EDX:EAX` — a register contract none of the named conventions can express,
+/// so the thunk is a naked shim that spills `ST(0)` to the stack (popping it,
+/// as the original does) and calls an ordinary `extern "C" fn(f64) -> i64`
+/// wrapper around the reimpl. Constraints: exactly one `f64` arg, an `i64`
+/// return, `preserve` limited to ECX (EAX/EDX carry the return), and no
+/// differential harness (capturing would need to re-materialize `ST(0)`; these
+/// entries are skipped by the `WOW_TURBO_DIFF_ARM` selector). Crumb builds skip
+/// recording here for the same reason — the shim has no Rust body to host the
+/// cfg'd call.
 fn emit_x87st0(
     out: &mut String,
     install_body: &mut String,
@@ -1129,8 +1154,9 @@ fn emit_x87pow(
     let _ = writeln!(install_body, "    ));");
 }
 
-/// Convert a `PascalCase`/`camelCase` manifest key to `snake_case`, preserving
-/// existing underscores (the `::` → `__` flattening of C++ names).
+/// Convert a `PascalCase`/`camelCase` manifest key to `snake_case`.
+///
+/// Preserving existing underscores (the `::` → `__` flattening of C++ names).
 fn to_snake(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 4);
     let mut prev: Option<char> = None;

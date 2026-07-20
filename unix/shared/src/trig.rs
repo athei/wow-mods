@@ -38,21 +38,25 @@
 
 /// `4 / pi` — scales the argument so its integer part is the octant index.
 const FOPI: f32 = 1.273_239_5;
-/// `pi / 4` split into three parts for extended-precision (Cody–Waite) argument
-/// reduction: subtracting `j * (DP1 + DP2 + DP3)` cancels far more significant
-/// bits than one `f32`-rounded `pi/4` could.
+/// `pi / 4` split into three parts for extended-precision (Cody–Waite) argument reduction.
+///
+/// Subtracting `j * (DP1 + DP2 + DP3)` cancels far more significant bits than one
+/// `f32`-rounded `pi/4` could.
 const DP1: f32 = 0.785_156_25;
 const DP2: f32 = 2.418_756_5e-4;
 const DP3: f32 = 3.774_895e-8;
-/// Largest `|x|` the fast `f32` reduction stays exact for. Beyond this the
-/// `as i32` octant index overflows and the `f32` subtraction loses all precision
-/// (a multiple of `pi/4` near `1e9` has no fractional bits left in `f32`), which
-/// would return a huge/Inf/NaN instead of a value in `[-1, 1]`. Larger arguments
-/// reduce in `f64` (below).
+/// Largest `|x|` the fast `f32` reduction stays exact for.
+///
+/// Beyond this the `as i32` octant index overflows and the `f32` subtraction loses
+/// all precision (a multiple of `pi/4` near `1e9` has no fractional bits left in
+/// `f32`), which would return a huge/Inf/NaN instead of a value in `[-1, 1]`.
+/// Larger arguments reduce in `f64` (below).
 const FAST_F32_LIMIT: f32 = 8192.0;
-/// `f64` reduction constants for `|x| >= FAST_F32_LIMIT` — `4/pi` and the
-/// three-part `pi/4` (Cody–Waite) carried at double precision so the octant index
-/// and reduced argument stay accurate out to the largest angles the game can pass.
+/// `f64` reduction constants for `|x| >= FAST_F32_LIMIT`.
+///
+/// `4/pi` and the three-part `pi/4` (Cody–Waite) carried at double precision so the
+/// octant index and reduced argument stay accurate out to the largest angles the
+/// game can pass.
 const FOPI_F64: f64 = 1.273_239_544_735_162_7;
 const DP1_F64: f64 = 0.785_398_125_648_498_54;
 const DP2_F64: f64 = 3.774_894_707_930_798_2e-8;
@@ -69,15 +73,19 @@ const COSCOF2: f32 = 4.166_664_6e-2;
 /// Sign bit of an `f32`.
 const SIGN: u32 = 0x8000_0000;
 
-/// Branchless float select: returns `if_set` where `mask` is all-ones, else
-/// `if_clear` (mask is always one of `0` / `0xFFFF_FFFF`). LLVM lowers this to a
-/// blend, so the two polynomials are both evaluated and merged without a branch.
+/// Branchless float select.
+///
+/// Returns `if_set` where `mask` is all-ones, else `if_clear` (mask is always one
+/// of `0` / `0xFFFF_FFFF`). LLVM lowers this to a blend, so the two polynomials are
+/// both evaluated and merged without a branch.
 fn select(mask: u32, if_set: f32, if_clear: f32) -> f32 {
     f32::from_bits((if_set.to_bits() & mask) | (if_clear.to_bits() & !mask))
 }
 
-/// Sine and cosine of `x` (radians), computed together — the range reduction and
-/// both polynomials are shared, so a caller needing both pays for one reduction.
+/// Sine and cosine of `x` (radians), computed together.
+///
+/// The range reduction and both polynomials are shared, so a caller needing both
+/// pays for one reduction.
 pub fn sin_cos(x: f32) -> (f32, f32) {
     let sign_in = x.to_bits() & SIGN;
     let xa = x.abs();
@@ -138,11 +146,12 @@ pub fn sin_cos(x: f32) -> (f32, f32) {
     (s, c)
 }
 
-/// Cold-path range reduction for `|x| >= FAST_F32_LIMIT`: computes the octant
-/// index and reduced argument in `f64`, where the `f32` Cody–Waite would overflow
-/// the index and lose all precision (returning huge/Inf/NaN). Kept out of line so
-/// the common small-angle path inlines lean; `xa` is finite (the caller guards
-/// Inf/NaN) and non-negative.
+/// Cold-path range reduction for `|x| >= FAST_F32_LIMIT`.
+///
+/// Computes the octant index and reduced argument in `f64`, where the `f32`
+/// Cody–Waite would overflow the index and lose all precision (returning
+/// huge/Inf/NaN). Kept out of line so the common small-angle path inlines lean;
+/// `xa` is finite (the caller guards Inf/NaN) and non-negative.
 #[cold]
 #[inline(never)]
 fn reduce_large(xa: f32) -> (u32, f32) {
@@ -159,14 +168,18 @@ fn reduce_large(xa: f32) -> (u32, f32) {
     (j as u32, xx as f32)
 }
 
-/// Sine of `x` (radians). Shares [`sin_cos`]; the unused cosine is cheap and
-/// folds away when the caller only needs the sine.
+/// Sine of `x` (radians).
+///
+/// Shares [`sin_cos`]; the unused cosine is cheap and folds away when the caller
+/// only needs the sine.
 pub fn sin(x: f32) -> f32 {
     sin_cos(x).0
 }
 
-/// Cosine of `x` (radians). Shares [`sin_cos`]; the unused sine folds away when
-/// the caller only needs the cosine.
+/// Cosine of `x` (radians).
+///
+/// Shares [`sin_cos`]; the unused sine folds away when the caller only needs the
+/// cosine.
 pub fn cos(x: f32) -> f32 {
     sin_cos(x).1
 }
@@ -201,8 +214,9 @@ pub fn atan(x: f32) -> f32 {
     if sign { -y } else { y }
 }
 
-/// Full-plane arctangent of `y / x` in radians, result in `(-pi, pi]`, with the
-/// quadrant resolved from the signs of both arguments (`x == 0` and `y == 0`
+/// Full-plane arctangent of `y / x` in radians, result in `(-pi, pi]`.
+///
+/// The quadrant is resolved from the signs of both arguments (`x == 0` and `y == 0`
 /// handled). Built on [`atan`].
 pub fn atan2(y: f32, x: f32) -> f32 {
     if x > 0.0 {
@@ -240,13 +254,16 @@ mod tests {
 
     use super::{acos, atan, atan2, sin_cos};
 
-    /// Arc-function tolerance: the reduction's division adds error over the raw
-    /// polynomial, so a slightly looser bound than the sin/cos `TOL`.
+    /// Arc-function tolerance.
+    ///
+    /// The reduction's division adds error over the raw polynomial, so a slightly
+    /// looser bound than the sin/cos `TOL`.
     const ATOL: f32 = 6e-6;
 
-    /// Max absolute error against an `f64` reference over a dense sweep. The
-    /// polynomial is `f32`, so a few ULP near `±1` is expected; `2e-6` is a tight
-    /// bound that still passes (and would catch a coefficient or sign error).
+    /// Max absolute error against an `f64` reference over a dense sweep.
+    ///
+    /// The polynomial is `f32`, so a few ULP near `±1` is expected; `2e-6` is a
+    /// tight bound that still passes (and would catch a coefficient or sign error).
     const TOL: f32 = 2e-6;
 
     fn ref_sin(x: f32) -> f32 {

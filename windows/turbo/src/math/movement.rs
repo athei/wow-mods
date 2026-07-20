@@ -9,8 +9,10 @@
     clippy::too_many_arguments
 )]
 
-/// `CMovement::AccelCurveOffset` — eased speed for a `delta_ms` step plus the
-/// receiver's positional bias (`+0x18`).
+/// `CMovement::AccelCurveOffset`.
+///
+/// Eased speed for a `delta_ms` step plus the receiver's positional bias
+/// (`+0x18`).
 ///
 /// Converts `delta_ms` to seconds (`* 0.001`), runs the acceleration curve over
 /// that interval (see [`c_movement__apply_accel_curve__7c5e70`]) using the live
@@ -56,8 +58,10 @@ mod tests_c_movement__accel_curve_offset__7c5f30 {
     }
 }
 
-/// `CMovement::ApplyAccelCurve` — integrate the current speed toward its capped
-/// maximum over `dt`, returning the eased speed.
+/// `CMovement::ApplyAccelCurve`.
+///
+/// Integrate the current speed toward its capped maximum over `dt`, returning
+/// the eased speed.
 ///
 /// `cur_speed` is the receiver's live speed (`+0xa0`); `flags & 0x2000_0000`
 /// selects the cap (7.0, else 60.148). The current speed is first clamped down
@@ -144,8 +148,10 @@ mod tests_c_movement__apply_accel_curve__7c5e70 {
     }
 }
 
-/// `CMovement::ComputeForwardVector` — derive the cached facing/heading direction
-/// fields from the scalar `facing` (yaw) and `pitch` angles.
+/// `CMovement::ComputeForwardVector`.
+///
+/// Derive the cached facing/heading direction fields from the scalar `facing`
+/// (yaw) and `pitch` angles.
 ///
 /// Returns the seven cached floats in struct order `[heading_x(+0x5c),
 /// heading_y(+0x60), heading_z(+0x64), cos_facing(+0x68), sin_facing(+0x6c),
@@ -224,10 +230,11 @@ mod tests_c_movement__compute_forward_vector__7c5880 {
     }
 }
 
-/// Gate predicate for the active spline/velocity source: the per-step source
-/// block is active iff the gating scalar is not bit-exactly equal to the host
-/// zero sentinel (`x != sentinel`, matching the original's `fcomp`/`jne`; a NaN
-/// scalar is unordered and so counts as active).
+/// Gate predicate for the active spline/velocity source.
+///
+/// The per-step source block is active iff the gating scalar is not bit-exactly
+/// equal to the host zero sentinel (`x != sentinel`, matching the original's
+/// `fcomp`/`jne`; a NaN scalar is unordered and so counts as active).
 pub fn c_movement__get_active_spline_source__618920(scalar: f32, sentinel: f32) -> bool {
     scalar != sentinel
 }
@@ -251,10 +258,11 @@ mod tests_c_movement__get_active_spline_source__618920 {
     }
 }
 
-/// Resolves the forward-speed source scalar from a movement flag word and the
-/// raw `+0x9c` value: bit `0x10` selects `+raw`, bit `0x20` selects `-raw`, else
-/// the host zero sentinel; the result is scaled by `mult` when any low/bias bit
-/// (`0x200f`) is set.
+/// Resolves the forward-speed source scalar from a movement flag word and the raw `+0x9c` value.
+///
+/// Bit `0x10` selects `+raw`, bit `0x20` selects `-raw`, else the host zero
+/// sentinel; the result is scaled by `mult` when any low/bias bit (`0x200f`) is
+/// set.
 pub fn c_movement__resolve_forward_speed__7c5c50(
     flags: u32,
     raw: f32,
@@ -300,9 +308,11 @@ mod tests_c_movement__resolve_forward_speed__7c5c50 {
     }
 }
 
-/// Resolves the turn-rate source scalar: bit `0x40` selects `+raw`, the sign bit
-/// (`0x8000_0000`) selects `-raw`, else the host zero sentinel; scaled by `mult`
-/// when any low/bias bit (`0x200f`) is set.
+/// Resolves the turn-rate source scalar.
+///
+/// Bit `0x40` selects `+raw`, the sign bit (`0x8000_0000`) selects `-raw`, else
+/// the host zero sentinel; scaled by `mult` when any low/bias bit (`0x200f`) is
+/// set.
 pub fn c_movement__resolve_turn_rate__7c5c90(flags: u32, raw: f32, zero: f32, mult: f32) -> f32 {
     let base = if (flags & 0x40) != 0 {
         raw
@@ -343,10 +353,12 @@ mod tests_c_movement__resolve_turn_rate__7c5c90 {
     }
 }
 
-/// Planar arc integration (forward + yaw turn, no pitch). Given the per-step
-/// forward `speed` (`+0x84`), the resolved turn `rate`, the timestep `dt`, the
-/// facing cosine/sine `cf`/`sf` (`+0x68`/`+0x6c`) and the planar scales `s0`/`s1`
-/// (`+0x70`/`+0x74`), returns the local-space displacement `[dx, dy, dz]`.
+/// Planar arc integration (forward + yaw turn, no pitch).
+///
+/// Given the per-step forward `speed` (`+0x84`), the resolved turn `rate`, the
+/// timestep `dt`, the facing cosine/sine `cf`/`sf` (`+0x68`/`+0x6c`) and the
+/// planar scales `s0`/`s1` (`+0x70`/`+0x74`), returns the local-space
+/// displacement `[dx, dy, dz]`.
 ///
 /// `versine = inv*(1 - cos)` where `inv = speed/rate`; the horizontal offset is
 /// the planar arc chord rotated by facing and scaled by `s0`, and the vertical
@@ -737,9 +749,10 @@ mod tests_c_movement__compute_box_ground_normal__6332a0 {
     }
 }
 
-/// `CMovement::IsPositionFinite` — validate that the mover position `(x, y, z)`
-/// is finite and that its world-plane coordinates lie inside the playable world
-/// rectangle.
+/// `CMovement::IsPositionFinite`.
+///
+/// Validate that the mover position `(x, y, z)` is finite and that its
+/// world-plane coordinates lie inside the playable world rectangle.
 ///
 /// Each component must be a finite float (not Inf/NaN). The X/Y coordinates are
 /// re-expressed relative to the world origin (`-(coord - bias)`) and each must
@@ -805,8 +818,7 @@ mod tests_c_movement__is_position_finite__616bf0 {
     }
 }
 
-/// `CMovement::StepSplineAndSnapPosition` (candidate-position + snap-decision
-/// kernel).
+/// `CMovement::StepSplineAndSnapPosition` (candidate-position + snap-decision kernel).
 ///
 /// Given the mover's current planar position `pos` (x at `+0x10`, y at `+0x14`),
 /// the spline base point `base` (`+0x44..+0x4c`) and the per-step spline
@@ -960,9 +972,10 @@ mod tests_c_movement__step_spline_and_snap_position__616af0 {
     }
 }
 
-/// `CMovement::UpdateSplinePath` — track progress: parameter `t` in
-/// `[0, 1]` for `elapsed_ms` against `duration_ms`, plus a completion
-/// latch (raised only when a non-zero duration has fully elapsed).
+/// `CMovement::UpdateSplinePath` — track progress.
+///
+/// Parameter `t` in `[0, 1]` for `elapsed_ms` against `duration_ms`, plus a
+/// completion latch (raised only when a non-zero duration has fully elapsed).
 ///
 /// Integer semantics mirror the source: a zero duration pins `t = 1`
 /// without latching, a negative elapsed pins `t = 0`, the
@@ -985,9 +998,10 @@ pub fn c_movement__update_spline_path__7c5490_track_param(
     }
 }
 
-/// `CMovement::UpdateSplinePath` — facing yaw from the evaluated 2D
-/// direction: `atan2(y, x)` wrapped from `(-pi, pi]` into `[0, two_pi)`
-/// by adding `two_pi` to strictly negative results.
+/// `CMovement::UpdateSplinePath` — facing yaw from the evaluated 2D direction.
+///
+/// `atan2(y, x)` wrapped from `(-pi, pi]` into `[0, two_pi)` by adding `two_pi`
+/// to strictly negative results.
 ///
 /// `atan2(0, 0)` is `0` (the hardware `fpatan` result for a degenerate
 /// vertical-tangent direction), so a zero direction yields yaw `0`
@@ -1002,16 +1016,17 @@ pub fn c_movement__update_spline_path__7c5490_yaw(
     if yaw < zero { yaw + two_pi } else { yaw }
 }
 
-/// `CMovement::UpdateSplinePath` — pitch from the evaluated direction's
-/// vertical component: `asin(z)` via the source's x87 identity
-/// `atan2(z, sqrt((1-z)(1+z)))`; the product is floored at zero so a
-/// `|z|` slightly above 1 saturates to `±pi/2` instead of going
-/// non-finite.
+/// `CMovement::UpdateSplinePath` — pitch from the evaluated direction's vertical component.
+///
+/// `asin(z)` via the source's x87 identity `atan2(z, sqrt((1-z)(1+z)))`; the
+/// product is floored at zero so a `|z|` slightly above 1 saturates to `±pi/2`
+/// instead of going non-finite.
 pub fn c_movement__update_spline_path__7c5490_pitch(dir_z: f32) -> f32 {
     crate::math::trig::atan2(dir_z, ((1.0 - dir_z) * (1.0 + dir_z)).max(0.0).sqrt())
 }
 
-/// `CMovement::UpdateSplinePath` — look-ahead track parameter:
+/// `CMovement::UpdateSplinePath` — look-ahead track parameter.
+///
 /// `advanced_ms / duration_ms` (signed int→float) clamped to `[0, 1]`.
 ///
 /// Comparison polarity mirrors the source's x87 compares: only a
@@ -1361,12 +1376,13 @@ mod tests_c_movement__update_spline_path__7c5490 {
     }
 }
 
-/// `CMovement::ComputeSlopeClimbDelta` (0x635c00) — the per-move slide/step
-/// collision-response helper: given a contact-plane normal `n = plane_n`, a
-/// horizontal move `dir * dist_in`, and the mover's step height, compute the
-/// vertical displacement `dz = -dot(n, dir) * dist / n.z` that keeps the mover
-/// riding the plane. Writes `out_vec = (0*dz, 0*dz, dz)` and (when clamped)
-/// rescales the translate distance, returned as `dist_out`.
+/// `CMovement::ComputeSlopeClimbDelta` (0x635c00).
+///
+/// The per-move slide/step collision-response helper: given a contact-plane
+/// normal `n = plane_n`, a horizontal move `dir * dist_in`, and the mover's step
+/// height, compute the vertical displacement `dz = -dot(n, dir) * dist / n.z`
+/// that keeps the mover riding the plane. Writes `out_vec = (0*dz, 0*dz, dz)`
+/// and (when clamped) rescales the translate distance, returned as `dist_out`.
 ///
 /// Faithful port of the x87 body, including the exact `FCOMP`/`FNSTSW`/`Jcc`
 /// NaN/boundary polarity of the six branches (Rust `<`/`<=`/`>` reproduce the
@@ -1660,17 +1676,19 @@ mod tests_c_movement__compute_slope_climb_delta__635c00 {
     }
 }
 
-/// Facing gate of `CMovement__ComputeGroundNormal` 0x637140 (block
-/// 0x6371a0): a contact record is PROCESSED iff its `normal.z > threshold`
-/// **or the compare is unordered** — stock `FCOMP; TEST AH,0x41; JNP`
-/// skips only on ordered `<=` (a NaN facing value falls through to
-/// processing). Port as `!(z <= thr)`, never "normalize" to `>`.
+/// Facing gate of `CMovement__ComputeGroundNormal` 0x637140 (block 0x6371a0).
+///
+/// A contact record is PROCESSED iff its `normal.z > threshold` **or the
+/// compare is unordered** — stock `FCOMP; TEST AH,0x41; JNP` skips only on
+/// ordered `<=` (a NaN facing value falls through to processing). Port as
+/// `!(z <= thr)`, never "normalize" to `>`.
 pub fn ground_normal_process__637140(z: f32, thr: f32) -> bool {
     !(z <= thr)
 }
 
-/// Normalize tail of 0x637140 (block 0x637248), reproducing the stock
-/// mixed-precision x87 structure exactly:
+/// Normalize tail of 0x637140 (block 0x637248).
+///
+/// Reproducing the stock mixed-precision x87 structure exactly:
 /// * `k = 1/hitCount` stays extended (f64 here);
 /// * `x' = sumX·k` STAYS extended all the way to the final store;
 /// * `y' = sumY·k` and `z' = sumZ·k` are narrowed to f32 (FSTP/FST m32),
@@ -1748,10 +1766,11 @@ mod tests_compute_ground_normal__637140 {
     }
 }
 
-/// Facing interpolation wrap (0x7c4afd..0x7c4b2a): `facing + base` folded
-/// wide, then wrapped into `[low, 2π)` — subtract `2π` when the sum is
-/// STRICTLY greater (ordered), add `2π` when it is below `low` OR unordered
-/// (NaN), else pass through. One narrow at the return.
+/// Facing interpolation wrap (0x7c4afd..0x7c4b2a).
+///
+/// `facing + base` folded wide, then wrapped into `[low, 2π)` — subtract `2π`
+/// when the sum is STRICTLY greater (ordered), add `2π` when it is below `low`
+/// OR unordered (NaN), else pass through. One narrow at the return.
 pub fn interpolate_facing__7c4ae0(facing: f32, base: f32, two_pi: f32, low: f32) -> f32 {
     let sum = f64::from(facing) + f64::from(base);
     let tp = f64::from(two_pi);
@@ -1792,10 +1811,12 @@ mod tests_interpolate_facing__7c4ae0 {
     }
 }
 
-/// Path-node position lerp (0x619217..0x619264): `new[i] = (pos[i] −
-/// node[i]) × frac + node[i]` where `frac = delta / period` (integer divide,
-/// 80-bit). The three lanes narrow differently — X pre-narrows the product,
-/// Y folds fully wide, Z pre-narrows both the delta and the product.
+/// Path-node position lerp (0x619217..0x619264).
+///
+/// `new[i] = (pos[i] − node[i]) × frac +
+/// node[i]` where `frac = delta / period` (integer divide, 80-bit). The three
+/// lanes narrow differently — X pre-narrows the product, Y folds fully wide, Z
+/// pre-narrows both the delta and the product.
 pub fn path_node_lerp__6191c0(pos: [f32; 3], node: [f32; 3], delta: i32, period: i32) -> [f32; 3] {
     let frac = f64::from(delta) / f64::from(period);
     let px = super::f64_to_f32((f64::from(pos[0]) - f64::from(node[0])) * frac);

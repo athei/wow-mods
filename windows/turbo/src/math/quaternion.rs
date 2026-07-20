@@ -36,9 +36,10 @@ fn qadd(a: &[f32; 4], b: &[f32; 4]) -> [f32; 4] {
     [a[0] + b[0], a[1] + b[1], a[2] + b[2], a[3] + b[3]]
 }
 
-/// Builds the inner SQUAD control (tangent) quaternions for cubic quaternion spline
-/// interpolation across three keyframes `q_prev`, `q_cur`, `q_next` at times
-/// `t_prev < t_cur < t_next`.
+/// Builds the inner SQUAD control (tangent) quaternions.
+///
+/// For cubic quaternion spline interpolation across three keyframes `q_prev`,
+/// `q_cur`, `q_next` at times `t_prev < t_cur < t_next`.
 ///
 /// `tension`/`continuity`/`bias` are TCB-style spline parameters. Returns `(tangent_in,
 /// tangent_out)`, each `tangent = q_cur (x) Exp(weighted log-combination)`.
@@ -459,8 +460,9 @@ mod tests_c4_quaternion__slerp__7c0570 {
     }
 }
 
-/// D3DX-style spherical linear interpolation of `q1 -> q2` by `t`, quaternions
-/// stored `[x, y, z, w]`; flips `q2`'s weight for the shortest arc.
+/// D3DX-style spherical linear interpolation of `q1 -> q2` by `t`.
+///
+/// Quaternions stored `[x, y, z, w]`; flips `q2`'s weight for the shortest arc.
 ///
 /// Differs from [`c4_quaternion__slerp__7c0570`] in three observable ways: the
 /// near-parallel guard tests `1 - |dot|` against `2^-23` (non-strict, NaN
@@ -527,8 +529,10 @@ mod tests_d3dx_quaternion_slerp__74d11a {
         approx4(slerp(&a, &a, 0.37), a, TOL);
     }
 
-    /// Anti-parallel input flips the second weight (shortest arc): blending a
-    /// quat with its negation returns the first quat's hemisphere throughout.
+    /// Anti-parallel input flips the second weight (shortest arc).
+    ///
+    /// Blending a quat with its negation returns the first quat's hemisphere
+    /// throughout.
     #[test]
     fn antiparallel_sign_flip() {
         let a = norm([0.2, -0.4, 0.1, 0.88]);
@@ -555,8 +559,9 @@ mod tests_d3dx_quaternion_slerp__74d11a {
         approx4(m, want, 1e-4);
     }
 
-    /// NaN dot routes to the fallback (no sqrt of garbage), mirroring the
-    /// original's unordered-compare branch.
+    /// NaN dot routes to the fallback (no sqrt of garbage).
+    ///
+    /// Mirrors the original's unordered-compare branch.
     #[test]
     fn nan_routes_to_fallback() {
         let a = [f32::NAN, 0.0, 0.0, 1.0];
@@ -568,9 +573,10 @@ mod tests_d3dx_quaternion_slerp__74d11a {
     }
 }
 
-/// `C4Quaternion::FromMatrix33` (Shoemake trace / largest-diagonal). Converts a
-/// 3x3 **row-major** rotation matrix `m` (`m[r][c]` at `m[r*3 + c]`, so the
-/// diagonal `m[i][i]` is `m[i*4]`) into the unit quaternion `[x, y, z, w]`.
+/// `C4Quaternion::FromMatrix33` (Shoemake trace / largest-diagonal).
+///
+/// Converts a 3x3 **row-major** rotation matrix `m` (`m[r][c]` at `m[r*3 + c]`, so
+/// the diagonal `m[i][i]` is `m[i*4]`) into the unit quaternion `[x, y, z, w]`.
 ///
 /// The x87 original branches with `FCOM`/`FCOMP` + `TEST AH,0x41`, which is
 /// unordered-aware; that polarity is load-bearing and reproduced exactly here:
@@ -624,9 +630,10 @@ pub fn c4_quaternion__from_matrix33__7c0190(m: &[f32; 9]) -> [f32; 4] {
 mod tests_c4_quaternion__from_matrix33__7c0190 {
     use super::c4_quaternion__from_matrix33__7c0190 as from_matrix;
 
-    /// Independent oracle: standard unit-quaternion -> row-major rotation matrix
-    /// (textbook form, matching the convention `from_matrix` inverts). Used to
-    /// build known-rotation inputs and to round-trip the result back to a matrix
+    /// Independent oracle: standard unit-quaternion -> row-major rotation matrix.
+    ///
+    /// Textbook form, matching the convention `from_matrix` inverts. Used to build
+    /// known-rotation inputs and to round-trip the result back to a matrix
     /// (matrices are sign-invariant, sidestepping the ±q ambiguity).
     fn quat_to_mat(q: &[f32; 4]) -> [f32; 9] {
         let (x, y, z, w) = (q[0], q[1], q[2], q[3]);

@@ -84,8 +84,9 @@ mod tests_build_rotation_matrix2x2__7c42f0 {
     }
 }
 
-/// Maps a travel `distance` to an output displacement along a transport path
-/// using a trapezoidal speed profile defined by `cruise` speed and `accel`.
+/// Maps a travel `distance` to an output displacement along a transport path.
+///
+/// Using a trapezoidal speed profile defined by `cruise` speed and `accel`.
 ///
 /// `accel_enabled` / `decel_enabled` select ramp-up / ramp-down phases. Returns
 /// the resulting displacement (as `f64`, matching the original x87 return) and a
@@ -267,12 +268,13 @@ mod tests_cg_game_object_display_mo_transport__eval_move_distance__5f8dc0 {
     }
 }
 
-/// Piecewise-linear sample of a circular gradient of `(position, value)` stop
-/// pairs (8-byte stride: `stops[i][0]` is the position in `[0,1)`, `stops[i][1]`
-/// the value). `t` is clamped to `[0, 1]`, the bracketing stops are found
-/// (wrapping around the array ends), and the value is lerped; if the bracket
-/// straddles the wrap seam the positions are unwrapped by `+1.0`. A degenerate
-/// bracket (positions within `EPS`) returns the lower stop's value unchanged.
+/// Piecewise-linear sample of a circular gradient of `(position, value)` stop pairs.
+///
+/// 8-byte stride: `stops[i][0]` is the position in `[0,1)`, `stops[i][1]` the
+/// value. `t` is clamped to `[0, 1]`, the bracketing stops are found (wrapping
+/// around the array ends), and the value is lerped; if the bracket straddles the
+/// wrap seam the positions are unwrapped by `+1.0`. A degenerate bracket
+/// (positions within `EPS`) returns the lower stop's value unchanged.
 pub fn cloud_gradient_sample__6cf6c0(stops: &[[f32; 2]], t: f32) -> f32 {
     // Span below which the bracket is treated as degenerate — the host's `.data`
     // guard constant at 0x801360 (0.001), compared with `FCOMP` before the divide.
@@ -605,8 +607,9 @@ mod tests_lerp_clamp01__674ba0 {
     }
 }
 
-/// Branch-balanced linear interpolation `a + (b - a) * t`, mirroring the
-/// reference's two operand orderings.
+/// Branch-balanced linear interpolation `a + (b - a) * t`.
+///
+/// Mirroring the reference's two operand orderings.
 ///
 /// The original branches purely to keep the x87 operand order identical in both
 /// directions (`a <= b` computes `(b - a) * t + a`; otherwise `a - (a - b) * t`),
@@ -723,9 +726,11 @@ mod tests_math_scale_one_third__6d6e50 {
     }
 }
 
-/// Half-open AABB overlap predicate: the query's `max` corner must lie strictly
-/// below the object's stored `max` corner on every axis, and the object's stored
-/// `min` corner must not exceed the query's `min` corner on every axis.
+/// Half-open AABB overlap predicate.
+///
+/// The query's `max` corner must lie strictly below the object's stored `max`
+/// corner on every axis, and the object's stored `min` corner must not exceed
+/// the query's `min` corner on every axis.
 ///
 /// Mirrors the reference predicate's exact comparison polarity. Both groups are
 /// **inclusive** (`<=`): the original compares each axis with `comiss` and the
@@ -833,8 +838,9 @@ mod tests_object_test_value_threshold__6a4670 {
     }
 }
 
-/// Seeds the 13 `f32` (52-byte `0x34`) fields of a `QuadElement` from a single
-/// `fill`: the header is `{0, 0, 1.0, center}`, the nine bound/extent floats
+/// Seeds the 13 `f32` (52-byte `0x34`) fields of a `QuadElement` from a single `fill`.
+///
+/// The header is `{0, 0, 1.0, center}`, the nine bound/extent floats
 /// (indices 4..=12) are all `fill`, and the center (index 3) is derived from the
 /// bounds as `(extent[1] + extent[0]) * K - extent[2]`.
 ///
@@ -1164,11 +1170,13 @@ mod tests_c_math_wrap_angle__7abbe0 {
     }
 }
 
-/// `NormalizeAngleToPi` (0x6084f0) — wrap a scalar angle into the canonical
-/// half-open interval `(-PI, PI]` via an fmod-by-2PI, reproducing the stock x87
-/// range-reduction. `__stdcall(float) -> float` (result in ST0). There is no
-/// `this` receiver despite the x87-stack fmod intrinsic; ECX is never touched
-/// and `RET 4` means a single float arg.
+/// `NormalizeAngleToPi` (0x6084f0).
+///
+/// Wrap a scalar angle into the canonical half-open interval `(-PI, PI]` via an
+/// fmod-by-2PI, reproducing the stock x87 range-reduction.
+/// `__stdcall(float) -> float` (result in ST0). There is no `this` receiver
+/// despite the x87-stack fmod intrinsic; ECX is never touched and `RET 4` means
+/// a single float arg.
 ///
 /// Constants are the exact image values: `HI = +PI` / `LO = -PI` as f32
 /// (`0x40490fdb` / `0xc0490fdb`), and the fmod divisor is `2*PI_f32` stored as an
@@ -1369,8 +1377,9 @@ mod tests_heap_sort_u_int32__71f860 {
         }
     }
 
-    /// Property: a deterministic pseudo-random sequence sorts nondecreasing and
-    /// matches the oracle exactly.
+    /// Property: a deterministic pseudo-random sequence sorts nondecreasing.
+    ///
+    /// Matches the oracle exactly.
     #[test]
     fn sorted_is_nondecreasing() {
         let mut state: u32 = 0x1234_5678;
@@ -1446,8 +1455,10 @@ mod tests_orientation__set_yaw__7acc40 {
     }
 }
 
-/// Saturates `value` into `[0, 1]`: returns `0.0` when `value < zero_lo`, `1.0`
-/// when `value >= one_hi`, else `value` unchanged.
+/// Saturates `value` into `[0, 1]`.
+///
+/// Returns `0.0` when `value < zero_lo`, `1.0` when `value >= one_hi`, else
+/// `value` unchanged.
 ///
 /// `zero_lo`/`one_hi` are the host saturation thresholds (`0.0` and `1.0` in the
 /// stock image). The branch order and comparison polarity mirror the original x87
@@ -1550,14 +1561,17 @@ mod tests_set_clamped_value01__453480 {
     }
 }
 
-/// CRT float-to-i64 truncation (`__ftol`) — kernel and tests live in
-/// `wow_shared::ftol` (shared with the d3d9 side); re-exported here to keep
-/// the `crate::math::misc::ftol__40a2b0` kernel/hook paths stable.
+/// CRT float-to-i64 truncation (`__ftol`).
+///
+/// Kernel and tests live in `wow_shared::ftol` (shared with the d3d9 side);
+/// re-exported here to keep the `crate::math::misc::ftol__40a2b0` kernel/hook
+/// paths stable.
 pub use wow_shared::ftol::ftol__40a2b0;
 
-/// One rotate-xor pass over the 64-entry hash table: pre-mix the input with
-/// two of its rotations, then XOR four rotated table entries selected by
-/// 6-bit slices of the mix.
+/// One rotate-xor pass over the 64-entry hash table.
+///
+/// Pre-mix the input with two of its rotations, then XOR four rotated table
+/// entries selected by 6-bit slices of the mix.
 fn hash_lo(perm: &[u32; 64], v: u32) -> u32 {
     let m = v ^ v.rotate_left(21) ^ v.rotate_left(11);
     perm[((m >> 18) & 0x3f) as usize].rotate_left(3)
@@ -1566,14 +1580,16 @@ fn hash_lo(perm: &[u32; 64], v: u32) -> u32 {
         ^ perm[(m & 0x3f) as usize]
 }
 
-/// Chained form of `hash_lo` with the final 4-bit rotate applied between
-/// axis levels of the corner-hash cascade.
+/// Chained form of `hash_lo` with the final 4-bit rotate.
+///
+/// Applied between axis levels of the corner-hash cascade.
 fn hash_hi(perm: &[u32; 64], v: u32) -> u32 {
     hash_lo(perm, v).rotate_left(4)
 }
 
-/// Hashes the eight unit-cube corner lattice points of cell `(ix, iy, iz)`:
-/// a z -> y -> x cascade where each level XORs the lattice coordinate into the
+/// Hashes the eight unit-cube corner lattice points of cell `(ix, iy, iz)`.
+///
+/// A z -> y -> x cascade where each level XORs the lattice coordinate into the
 /// previous level's hash. Order: `[x0, x1]` innermost, then y, then z.
 fn corner_hashes(perm: &[u32; 64], ix: u32, iy: u32, iz: u32) -> [u32; 8] {
     let z0 = hash_hi(perm, iz);
@@ -1596,8 +1612,9 @@ fn corner_hashes(perm: &[u32; 64], ix: u32, iy: u32, iz: u32) -> [u32; 8] {
     ]
 }
 
-/// Truncate-toward-zero cell index (`__ftol`, low 32 bits) with the
-/// negative-side floor fix-up (strict `v < cutoff` decrements, so exact
+/// Truncate-toward-zero cell index (`__ftol`, low 32 bits).
+///
+/// With the negative-side floor fix-up (strict `v < cutoff` decrements, so exact
 /// negative integers land in the cell below with fractional part 1.0 —
 /// matching the source).
 fn floor_cell(v: f64, cutoff: f64) -> u32 {
@@ -1613,8 +1630,10 @@ fn nib(h: u32, s: u32) -> i32 {
     ((h >> s) & 0xf) as i32
 }
 
-/// Signed ramp lookup; `idx` in `-15..=15` (a nibble or a nibble difference),
-/// anchored at the table midpoint.
+/// Signed ramp lookup.
+///
+/// `idx` in `-15..=15` (a nibble or a nibble difference), anchored at the table
+/// midpoint.
 fn ramp(t: &[f32; 31], idx: i32) -> f32 {
     t[(idx + 15) as usize]
 }
@@ -1624,14 +1643,17 @@ fn gn(grad: &[f32; 16], h: u32, s: u32) -> f32 {
     grad[((h >> s) & 0xf) as usize]
 }
 
-/// One Hermite lane: pre-tabulated end-minus-start difference `dif`, start
-/// value `base`, endpoint derivatives `d0`/`d1`, basis weights `w`/`v`/`u`.
+/// One Hermite lane.
+///
+/// Pre-tabulated end-minus-start difference `dif`, start value `base`, endpoint
+/// derivatives `d0`/`d1`, basis weights `w`/`v`/`u`.
 fn lane(dif: f32, base: f32, d0: f32, d1: f32, w: f32, v: f32, u: f32) -> f32 {
     dif * w + d0 * v + d1 * u + base
 }
 
-/// Hermite blend of four already-blended lanes picked from a 16-lane pass
-/// output: start `base`, end `end`, endpoint derivatives `d0`/`d1`.
+/// Hermite blend of four already-blended lanes picked from a 16-lane pass output.
+///
+/// Start `base`, end `end`, endpoint derivatives `d0`/`d1`.
 fn blend(
     o: &[f32; 16],
     base: usize,
@@ -1645,9 +1667,10 @@ fn blend(
     (o[end] - o[base]) * w + o[d0] * v + o[d1] * u + o[base]
 }
 
-/// Tiled cubic-Hermite gradient-noise sample at `(x, y, z)` with analytic
-/// gradient. Hashes the eight unit-cube corner lattice points through the
-/// 64-entry rotate-xor `perm` table; each corner hash packs eight 4-bit
+/// Tiled cubic-Hermite gradient-noise sample at `(x, y, z)` with analytic gradient.
+///
+/// Hashes the eight unit-cube corner lattice points through the 64-entry
+/// rotate-xor `perm` table; each corner hash packs eight 4-bit
 /// channels (value + derivative lanes) indexing the `grad`/`val_tab`/`dif_tab`
 /// ramps. Two 16-lane Hermite passes (x, then z) plus a y-blend tail produce
 /// the scalar and its three partial derivatives; the scalar is remapped
@@ -1831,9 +1854,10 @@ mod tests_perlin_noise3_d__452960 {
     const SCALE: f32 = 0.625;
     const BIAS: f32 = 0.1875;
 
-    /// Host-shaped ramps: 16-entry gradient ramp -1..1 (step 2/15), a 31-entry
-    /// value ramp anchored mid-table (step 1/15), and its difference ramp
-    /// (step 2/15).
+    /// Host-shaped ramps.
+    ///
+    /// 16-entry gradient ramp -1..1 (step 2/15), a 31-entry value ramp anchored
+    /// mid-table (step 1/15), and its difference ramp (step 2/15).
     fn ramp_tables() -> ([f32; 16], [f32; 31], [f32; 31]) {
         let mut grad = [0.0_f32; 16];
         let mut g = -1.0_f32;
@@ -1878,9 +1902,10 @@ mod tests_perlin_noise3_d__452960 {
         )
     }
 
-    /// With an all-zero hash table every corner hash is zero, so the 16 lanes
-    /// of each pass collapse to a value-lane and a gradient-lane scalar; the
-    /// whole pipeline reduces to closed-form algebra mirrored here.
+    /// With an all-zero hash table every corner hash is zero.
+    ///
+    /// So the 16 lanes of each pass collapse to a value-lane and a gradient-lane
+    /// scalar; the whole pipeline reduces to closed-form algebra mirrored here.
     #[test]
     fn zero_perm_known_value() {
         let tabs = ramp_tables();
@@ -1951,8 +1976,9 @@ mod tests_perlin_noise3_d__452960 {
         assert_eq!(got_grad[2].to_bits(), g_z.to_bits());
     }
 
-    /// Zero hash table => the sample depends only on the fractional parts,
-    /// so integer translation (and the negative-side floor fix-up landing on
+    /// Zero hash table => the sample depends only on the fractional parts.
+    ///
+    /// So integer translation (and the negative-side floor fix-up landing on
     /// the same fractions) reproduces the value bit-for-bit.
     #[test]
     fn zero_perm_translation_and_negative_floor() {
@@ -1969,12 +1995,13 @@ mod tests_perlin_noise3_d__452960 {
         }
     }
 
-    /// The Hermite construction is C1 across lattice planes: corner hashes are
-    /// shared between adjacent cells (the cascade re-derives them), the blend
-    /// weight hits 1 and both derivative weights hit 0 at t=1. Sample just
-    /// below and exactly on integer planes on every axis (including a negative
-    /// crossing exercising the floor fix-up) and require value and gradient to
-    /// agree within a slope bound.
+    /// The Hermite construction is C1 across lattice planes.
+    ///
+    /// Corner hashes are shared between adjacent cells (the cascade re-derives
+    /// them), the blend weight hits 1 and both derivative weights hit 0 at t=1.
+    /// Sample just below and exactly on integer planes on every axis (including
+    /// a negative crossing exercising the floor fix-up) and require value and
+    /// gradient to agree within a slope bound.
     #[test]
     fn lattice_continuity_all_axes() {
         let tabs = ramp_tables();
@@ -2005,8 +2032,10 @@ mod tests_perlin_noise3_d__452960 {
         }
     }
 
-    /// Same inputs => bit-identical outputs (and everything stays finite over
-    /// a spread of cells with a pseudo-random hash table).
+    /// Same inputs => bit-identical outputs.
+    ///
+    /// Everything stays finite over a spread of cells with a pseudo-random hash
+    /// table.
     #[test]
     fn deterministic_and_finite() {
         let tabs = ramp_tables();

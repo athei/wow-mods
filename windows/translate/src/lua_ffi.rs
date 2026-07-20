@@ -39,12 +39,17 @@ static LUA_PUSHSTRING: LazyLock<LuaPushstring> = LazyLock::new(|| {
     unsafe { core::mem::transmute::<usize, LuaPushstring>(P_LUA_PUSHSTRING) }
 });
 
-/// Borrowed Lua-state handle. Constructed once per hook entry from the raw
-/// pointer `WoW` passes in; methods on it are safe.
+/// Borrowed Lua-state handle.
+///
+/// Constructed once per hook entry from the raw pointer `WoW` passes in;
+/// methods on it are safe.
 pub struct LuaState(*mut c_void);
 
 impl LuaState {
+    /// Wrap a raw Lua-state pointer as a borrowed [`LuaState`].
+    ///
     /// # Safety
+    ///
     /// `ptr` must be the live Lua-state pointer `WoW` passed to a hook
     /// entry. The state outlives the call frame the hook owns.
     #[must_use]
@@ -84,10 +89,11 @@ impl LuaState {
         true
     }
 
-    /// Read the string at `index` on the Lua stack. Returns `None` only when
-    /// Lua reports null (non-string at index); bytes that aren't valid UTF-8
-    /// (e.g. chat truncated mid-codepoint at the wire byte cap) are recovered
-    /// lossily rather than rejected.
+    /// Read the string at `index` on the Lua stack.
+    ///
+    /// Returns `None` only when Lua reports null (non-string at index); bytes
+    /// that aren't valid UTF-8 (e.g. chat truncated mid-codepoint at the wire
+    /// byte cap) are recovered lossily rather than rejected.
     pub fn tostring(&self, index: i32) -> Option<String> {
         // SAFETY: `self.0` is a live Lua state per `from_raw`'s contract.
         let raw = unsafe { (*LUA_TOSTRING)(self.0, index) };
@@ -101,9 +107,10 @@ impl LuaState {
         Some(String::from_utf8_lossy(cstr.to_bytes()).into_owned())
     }
 
-    /// Push `s` onto the Lua stack. Interior NULs are stripped at the
-    /// `CString` boundary; Lua copies the bytes immediately so the
-    /// `CString` is free to drop on return.
+    /// Push `s` onto the Lua stack.
+    ///
+    /// Interior NULs are stripped at the `CString` boundary; Lua copies the
+    /// bytes immediately so the `CString` is free to drop on return.
     pub fn pushstring(&self, s: &str) {
         let owned: Vec<u8> = s.bytes().filter(|&b| b != 0).collect();
         let Ok(cstring) = CString::new(owned) else {

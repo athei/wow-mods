@@ -44,9 +44,11 @@ pub extern "C" fn wow_mods_unix_call(code: u32, args: *mut c_void) -> i32 {
     dispatch_unix_call(code, args)
 }
 
-/// `DLL_PROCESS_ATTACH` body. Kept as a private helper so the exported
-/// `dll_main` stub stays safe — `not_unsafe_ptr_arg_deref` only checks `pub`
-/// functions, so the pointer-passing unsafe work lives here.
+/// `DLL_PROCESS_ATTACH` body.
+///
+/// Kept as a private helper so the exported `dll_main` stub stays safe —
+/// `not_unsafe_ptr_arg_deref` only checks `pub` functions, so the
+/// pointer-passing unsafe work lives here.
 fn attach_process(instance: *mut c_void) -> i32 {
     // SAFETY: `instance` is the HINSTANCE the loader passed to DllMain; Win32 accepts it as-is.
     unsafe { DisableThreadLibraryCalls(instance) };
@@ -62,9 +64,11 @@ fn attach_process(instance: *mut c_void) -> i32 {
     1
 }
 
-/// Forwards to Wine's unix-call dispatcher. Private helper for the same reason
-/// as `attach_process` — keeps the exported `wow_mods_unix_call` free of
-/// raw-pointer unsafe work that clippy would otherwise flag.
+/// Forwards to Wine's unix-call dispatcher.
+///
+/// Private helper for the same reason as `attach_process` — keeps the exported
+/// `wow_mods_unix_call` free of raw-pointer unsafe work that clippy would
+/// otherwise flag.
 fn dispatch_unix_call(code: u32, args: *mut c_void) -> i32 {
     // SAFETY: Wine-published dispatcher fn-pointer + static unixlib handle; `args` is opaque to us.
     unsafe { (__wine_unix_call_dispatcher)(__wine_unixlib_handle, code, args) }

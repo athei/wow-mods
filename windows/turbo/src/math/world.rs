@@ -130,9 +130,10 @@ mod tests_c_map_chunk__build_grid_vertices__68d540 {
     }
 }
 
-/// Result of mapping a world XY into the liquid chunk grid: the flat grid index,
-/// the per-chunk sub-cell index, and the row/bit position into that chunk's
-/// liquid bitfield.
+/// Result of mapping a world XY into the liquid chunk grid.
+///
+/// The flat grid index, the per-chunk sub-cell index, and the row/bit position
+/// into that chunk's liquid bitfield.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct LiquidGridLookup {
     pub grid_index: usize,
@@ -194,8 +195,9 @@ fn round_i32(v: f32) -> i32 {
     v.round_ties_even() as i32
 }
 
-/// Tests a single liquid bit given the chunk's bitfield byte at the computed
-/// offset. `byte` is `bitfield[liquid_row*8 + (bit_index >> 3)]`; the result is
+/// Tests a single liquid bit given the chunk's bitfield byte at the computed offset.
+///
+/// `byte` is `bitfield[liquid_row*8 + (bit_index >> 3)]`; the result is
 /// `(byte & (1 << (bit_index & 7))) != 0`.
 pub fn liquid_bit_set(byte: u8, bit_index: u32) -> bool {
     (byte & (1u8 << (bit_index & 7))) != 0
@@ -333,8 +335,10 @@ mod tests_c_world__point_in_liquid_grid__69b350 {
     }
 }
 
-/// Normalizes a screen-space cursor into NDC against the viewport rect and gates
-/// it against the inclusive `[lo, hi]` bounds. `None` when outside the viewport.
+/// Normalizes a screen-space cursor into NDC against the viewport rect.
+///
+/// Gates it against the inclusive `[lo, hi]` bounds. `None` when outside the
+/// viewport.
 pub fn c_world_frame__unproject_cursor_to_world_ray__4813b0(
     screen_x: f32,
     screen_y: f32,
@@ -518,16 +522,19 @@ pub fn liquid_blend_height(row0: (f32, f32), row1: (f32, f32), fx: f32, fy: f32)
 /// Result of a liquid height-at-point test for one cell `kind` (`cellFlags & 3`).
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum LiquidHit {
-    /// The interpolated surface lies above `point.z`; carries the (unbiased)
-    /// surface height to report.
+    /// The interpolated surface lies above `point.z`.
+    ///
+    /// Carries the (unbiased) surface height to report.
     Hit(f32),
     /// The surface is at or below `point.z` (or the kind has no surface arm).
     Miss,
 }
 
-/// Tests one liquid cell kind. Kind 0 biases the surface by `bias` only for the
-/// comparison; kinds 2 and 3 compare the raw height. Any other kind misses.
-/// A hit requires the (compared) surface to be strictly above `point_z`.
+/// Tests one liquid cell kind.
+///
+/// Kind 0 biases the surface by `bias` only for the comparison; kinds 2 and 3
+/// compare the raw height. Any other kind misses. A hit requires the (compared)
+/// surface to be strictly above `point_z`.
 pub fn liquid_test_kind(kind: u32, height: f32, bias: f32, point_z: f32) -> LiquidHit {
     let compared = match kind {
         0 => height + bias,
@@ -615,11 +622,12 @@ pub struct DrawElem {
     pub sub_u16: u16,
 }
 
-/// Three-valued opaque draw-list comparator. Returns `Some(-1|1)` on a decided
-/// order or `None` when every keyed field ties (the caller then falls through to
-/// the extended comparator). `prio_a`/`prio_b` are the priority-table values for
-/// the two elements (only meaningful when `prio_enabled`); `tex_enabled` gates the
-/// texture-key tier.
+/// Three-valued opaque draw-list comparator.
+///
+/// Returns `Some(-1|1)` on a decided order or `None` when every keyed field ties
+/// (the caller then falls through to the extended comparator). `prio_a`/`prio_b`
+/// are the priority-table values for the two elements (only meaningful when
+/// `prio_enabled`); `tex_enabled` gates the texture-key tier.
 pub fn c_world_view__compare_draw_list_opaque__70ae10(
     a: &DrawElem,
     b: &DrawElem,
@@ -695,8 +703,10 @@ pub fn c_world_view__compare_draw_list_opaque__70ae10(
 mod tests_c_world_view__compare_draw_list_opaque__70ae10 {
     use super::{DrawElem, c_world_view__compare_draw_list_opaque__70ae10 as cmp};
 
-    /// All-zero element: every keyed field ties, so two of them compare as `None`
-    /// regardless of which tier is enabled.
+    /// All-zero element.
+    ///
+    /// Every keyed field ties, so two of them compare as `None` regardless of
+    /// which tier is enabled.
     fn zero_elem() -> DrawElem {
         DrawElem {
             type_idx: 0,
@@ -857,12 +867,13 @@ mod tests_c_world_view__compare_draw_list_opaque__70ae10 {
     }
 }
 
-/// Slot index for `HeightBucket_InsertNodeAtPosSub` (`0x681970`): the same
-/// 0..=31 Z-bucket as `height_bucket_insert_node_at_pos__6818b0`, composed with
-/// the caller `sub_index` into the flat slot index `(sub_index + bucket*9)*0xc`
-/// bytes of the 2-D bucket-pair array. Returns the int-element offset (already
-/// divided by 4, i.e. `(sub_index + bucket*9)*3`), or `None` when the bucket is
-/// rejected.
+/// Slot index for `HeightBucket_InsertNodeAtPosSub` (`0x681970`).
+///
+/// The same 0..=31 Z-bucket as `height_bucket_insert_node_at_pos__6818b0`,
+/// composed with the caller `sub_index` into the flat slot index
+/// `(sub_index + bucket*9)*0xc` bytes of the 2-D bucket-pair array. Returns the
+/// int-element offset (already divided by 4, i.e. `(sub_index + bucket*9)*3`),
+/// or `None` when the bucket is rejected.
 pub fn height_bucket_insert_node_at_pos_sub__681970(
     pos: &[f32; 3],
     coeff: &[f32; 4],
@@ -944,12 +955,13 @@ mod tests_height_bucket_insert_node_at_pos_sub__681970 {
     }
 }
 
-/// Projects a world position onto the scene Z-bucket plane and maps it to a
-/// 0..=31 bucket index. The plane is `scale * (c0*x + c1*y + c2*z + c3) - bias`,
-/// rounded to nearest (x87 round-half-to-even). A negative result clamps to
-/// bucket 0; a result `>= 32` is rejected (`None`). This is the only arithmetic
-/// shared by the height-bucket insert routines; the intrusive linked-list
-/// surgery they perform lives in the FFI adapter.
+/// Projects a world position onto the scene Z-bucket plane and maps it to a 0..=31 bucket index.
+///
+/// The plane is `scale * (c0*x + c1*y + c2*z + c3) - bias`, rounded to nearest
+/// (x87 round-half-to-even). A negative result clamps to bucket 0; a result
+/// `>= 32` is rejected (`None`). This is the only arithmetic shared by the
+/// height-bucket insert routines; the intrusive linked-list surgery they perform
+/// lives in the FFI adapter.
 fn bucket_index(pos: &[f32; 3], coeff: &[f32; 4], scale: f32, bias: f32) -> Option<usize> {
     let plane = coeff[0] * pos[0] + coeff[1] * pos[1] + coeff[2] * pos[2] + coeff[3];
     // x87 `FISTP` rounds the scaled-then-biased f32 to int via round-half-to-even.
@@ -963,9 +975,11 @@ fn bucket_index(pos: &[f32; 3], coeff: &[f32; 4], scale: f32, bias: f32) -> Opti
     }
 }
 
-/// Bucket index for `HeightBucket_InsertNodeAtPos` (`0x6818b0`): the projected
-/// 0..=31 Z-bucket for `pos`, or `None` when the projection lands at or past the
-/// last bucket. The adapter uses it to pick the global head slot to relink at.
+/// Bucket index for `HeightBucket_InsertNodeAtPos` (`0x6818b0`).
+///
+/// The projected 0..=31 Z-bucket for `pos`, or `None` when the projection lands
+/// at or past the last bucket. The adapter uses it to pick the global head slot
+/// to relink at.
 pub fn height_bucket_insert_node_at_pos__6818b0(
     pos: &[f32; 3],
     coeff: &[f32; 4],
@@ -979,8 +993,9 @@ pub fn height_bucket_insert_node_at_pos__6818b0(
 mod tests_height_bucket_insert_node_at_pos__6818b0 {
     use super::height_bucket_insert_node_at_pos__6818b0 as bucket;
 
-    /// Identity projection: `coeff = [1,0,0,0]`, unit scale, zero bias - the
-    /// bucket is the rounded x coordinate.
+    /// Identity projection: `coeff = [1,0,0,0]`, unit scale, zero bias.
+    ///
+    /// The bucket is the rounded x coordinate.
     const ID: [f32; 4] = [1.0, 0.0, 0.0, 0.0];
 
     #[test]
@@ -1058,9 +1073,10 @@ mod tests_height_bucket_insert_node_at_pos__6818b0 {
     }
 }
 
-/// Projects an object world position onto the bucket axis and rounds+clamps to a
-/// bucket index. `Some(0..=31)` is the destination bucket; `None` means the node
-/// projects past the far bucket and must be dropped (no relink).
+/// Projects an object world position onto the bucket axis and rounds+clamps to a bucket index.
+///
+/// `Some(0..=31)` is the destination bucket; `None` means the node projects past
+/// the far bucket and must be dropped (no relink).
 pub fn height_bucket_insert_node_from_object__6816f0(
     px: f32,
     py: f32,
@@ -1090,8 +1106,9 @@ pub fn height_bucket_insert_node_from_object__6816f0(
 mod tests_height_bucket_insert_node_from_object__6816f0 {
     use super::height_bucket_insert_node_from_object__6816f0 as bucket;
 
-    /// Drives the projection so the kernel sees exactly `projected` along `px`
-    /// with an identity plane/scale/bias (cx=1, all other plane terms 0).
+    /// Drives the projection so the kernel sees exactly `projected` along `px`.
+    ///
+    /// With an identity plane/scale/bias (cx=1, all other plane terms 0).
     fn at(projected: f32) -> Option<usize> {
         bucket(projected, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0)
     }
@@ -1192,11 +1209,12 @@ mod tests_height_bucket_insert_node_from_object__6816f0 {
     }
 }
 
-/// Builds the two 9-entry edge-index lists for a cell occluder pass. The first
-/// list (column edges) seeds at `0x88` when `col_far` (the frustum bound exceeds
-/// its threshold) else `0`, and steps by `stride`. The second (row edges) seeds
-/// at `8` when `row_far` else `0`, and steps by `stride*0x11` while a parallel
-/// cursor advances by `stride` to bound the 9-entry loop.
+/// Builds the two 9-entry edge-index lists for a cell occluder pass.
+///
+/// The first list (column edges) seeds at `0x88` when `col_far` (the frustum
+/// bound exceeds its threshold) else `0`, and steps by `stride`. The second
+/// (row edges) seeds at `8` when `row_far` else `0`, and steps by `stride*0x11`
+/// while a parallel cursor advances by `stride` to bound the 9-entry loop.
 pub fn height_bucket__rasterize_cell_occluder__6c15d0(
     stride: i32,
     col_far: bool,
@@ -1225,6 +1243,7 @@ mod tests_height_bucket__rasterize_cell_occluder__6c15d0 {
     use super::height_bucket__rasterize_cell_occluder__6c15d0 as kernel;
 
     /// Column list: `col[i] = i*stride + (0x88 if col_far else 0)`.
+    ///
     /// Row list: `row[i] = (8 if row_far else 0) + i*(stride*0x11)`.
     /// Known value for `stride=1`, both bounds far.
     #[test]
@@ -1242,8 +1261,10 @@ mod tests_height_bucket__rasterize_cell_occluder__6c15d0 {
         assert_eq!(row, [0, 34, 68, 102, 136, 170, 204, 238, 272]);
     }
 
-    /// Both lists are arithmetic progressions: the difference between adjacent
-    /// entries is constant (`stride` for columns, `stride*0x11` for rows).
+    /// Both lists are arithmetic progressions.
+    ///
+    /// The difference between adjacent entries is constant (`stride` for
+    /// columns, `stride*0x11` for rows).
     #[test]
     fn law_constant_first_difference() {
         for &stride in &[1i32, 2, 3, 7] {
@@ -1261,8 +1282,9 @@ mod tests_height_bucket__rasterize_cell_occluder__6c15d0 {
         }
     }
 
-    /// The far flags only shift the first entry by a fixed seed (`0x88` columns,
-    /// `8` rows); every entry shifts by exactly that seed relative to the near case.
+    /// The far flags only shift the first entry by a fixed seed (`0x88` columns, `8` rows).
+    ///
+    /// Every entry shifts by exactly that seed relative to the near case.
     #[test]
     fn law_far_flag_is_pure_offset() {
         for &stride in &[1i32, 4, 9] {
@@ -1277,8 +1299,9 @@ mod tests_height_bucket__rasterize_cell_occluder__6c15d0 {
         }
     }
 
-    /// The seed determines the first entry exactly; the seed range is one of the
-    /// two documented values per axis.
+    /// The seed determines the first entry exactly.
+    ///
+    /// The seed range is one of the two documented values per axis.
     #[test]
     fn law_seed_drives_first_entry() {
         for &col_far in &[false, true] {
@@ -1300,8 +1323,10 @@ pub const HB_COLUMN_COUNT: i32 = 0x140;
 /// Half-screen column origin added to every mapped column index.
 const HB_COLUMN_ORIGIN: i32 = 0xa0;
 
-/// Transforms a point by a column-major 4x4 with implied `w = 1` (the translation
-/// row at indices 12/13/14), matching `C44Matrix::TransformPoint` at `0x7bca80`.
+/// Transforms a point by a column-major 4x4 with implied `w = 1`.
+///
+/// The translation row is at indices 12/13/14, matching
+/// `C44Matrix::TransformPoint` at `0x7bca80`.
 fn hb_transform_point(p: [f32; 3], mat: &[f32; 16]) -> [f32; 3] {
     let x = p[0] * mat[0] + p[1] * mat[4] + p[2] * mat[8] + mat[12];
     let y = p[0] * mat[1] + p[1] * mat[5] + p[2] * mat[9] + mat[13];
@@ -1309,11 +1334,13 @@ fn hb_transform_point(p: [f32; 3], mat: &[f32; 16]) -> [f32; 3] {
     [x, y, z]
 }
 
-/// Round-half-to-even to i32 matching x87 `FISTP` under the default rounding mode,
-/// including the integer-indefinite value (`0x80000000`) the FPU stores for NaN and
-/// out-of-range magnitudes — unlike Rust's saturating float-to-int cast, which would
-/// clamp to `i32::MAX`/`i32::MIN`. Mirrors the indefinite convention in
-/// `ftol__40a2b0` (which truncates toward zero rather than rounding to nearest).
+/// Round-half-to-even to i32 matching x87 `FISTP` under the default rounding mode.
+///
+/// Including the integer-indefinite value (`0x80000000`) the FPU stores for NaN
+/// and out-of-range magnitudes — unlike Rust's saturating float-to-int cast,
+/// which would clamp to `i32::MAX`/`i32::MIN`. Mirrors the indefinite convention
+/// in `ftol__40a2b0` (which truncates toward zero rather than rounding to
+/// nearest).
 fn hb_round_to_i32(v: f32) -> i32 {
     let r = f64::from(v).round_ties_even();
     if (-2_147_483_648.0..2_147_483_648.0).contains(&r) {
@@ -1324,8 +1351,9 @@ fn hb_round_to_i32(v: f32) -> i32 {
     }
 }
 
-/// Maps a projected screen-X to a horizon column via `round(x*scale - bias)`
-/// plus the half-screen origin and a caller-supplied per-end adjustment. x87
+/// Maps a projected screen-X to a horizon column via `round(x*scale - bias)`.
+///
+/// Plus the half-screen origin and a caller-supplied per-end adjustment. x87
 /// `ROUND` is round-half-to-even, which `f32::round_ties_even` matches; the
 /// integer add wraps, matching x86 `add` (the downstream range test and the
 /// adapter's `[0, HB_COLUMN_COUNT-1]` clamp absorb the wrapped column).
@@ -1335,10 +1363,12 @@ fn hb_map_column(screen_x: f32, scale: f32, bias: f32, extra: i32) -> i32 {
         .wrapping_add(extra)
 }
 
-/// Result of an occluder projection: the inclusive horizon-column span the
-/// geometry covers and the projected screen height to compare against the
-/// horizon. The adapter clamps the span to `[0, HB_COLUMN_COUNT-1]` and reads the
-/// buffer; `None` means the geometry was rejected before reaching the buffer.
+/// Result of an occluder projection.
+///
+/// The inclusive horizon-column span the geometry covers and the projected
+/// screen height to compare against the horizon. The adapter clamps the span to
+/// `[0, HB_COLUMN_COUNT-1]` and reads the buffer; `None` means the geometry was
+/// rejected before reaching the buffer.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct OccluderSpan {
     pub col_min: i32,
@@ -1346,9 +1376,11 @@ pub struct OccluderSpan {
     pub test_height: f32,
 }
 
-/// One projected occluder vertex: its perspective-divided screen X, the
-/// perspective-divided screen height stored as the horizon depth, and the raw
-/// transformed depth (`eye_z`) used for the near-plane test.
+/// One projected occluder vertex.
+///
+/// Its perspective-divided screen X, the perspective-divided screen height
+/// stored as the horizon depth, and the raw transformed depth (`eye_z`) used for
+/// the near-plane test.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct ProjectedVert {
     pub screen_x: f32,
@@ -1356,9 +1388,10 @@ pub struct ProjectedVert {
     pub eye_z: f32,
 }
 
-/// Projects one occluder vertex (an indexed source position plus an offset)
-/// through the view matrix and divides by depth, yielding its screen X, the
-/// perspective-divided height stored for horizon rasterization, and the raw
+/// Projects one occluder vertex through the view matrix and divides by depth.
+///
+/// The vertex is an indexed source position plus an offset. Yields its screen X,
+/// the perspective-divided height stored for horizon rasterization, and the raw
 /// transformed `eye_z` kept for the near-plane test.
 pub fn height_bucket__project_vert__681b50(
     src: [f32; 3],
@@ -1376,11 +1409,13 @@ pub fn height_bucket__project_vert__681b50(
     }
 }
 
-/// Rasterizes one occluder edge into the horizon column span: the inclusive,
-/// pre-clamp `[col_lo, col_hi]` buffer-column range (already including the
-/// half-screen origin) and the depth to raise each covered column to (the smaller
-/// of the two endpoint depths). Returns `None` when either endpoint's raw `eye_z`
-/// fails the near-plane test (`near_z`), so the edge is skipped.
+/// Rasterizes one occluder edge into the horizon column span.
+///
+/// The inclusive, pre-clamp `[col_lo, col_hi]` buffer-column range (already
+/// including the half-screen origin) and the depth to raise each covered column
+/// to (the smaller of the two endpoint depths). Returns `None` when either
+/// endpoint's raw `eye_z` fails the near-plane test (`near_z`), so the edge is
+/// skipped.
 pub fn height_bucket__edge_span__681b50(
     a: ProjectedVert,
     b: ProjectedVert,
@@ -1479,8 +1514,9 @@ mod tests_height_bucket_rasterize {
         assert_eq!(edge_span(a, b, 1.0, 10.0, 0.0), None);
     }
 
-    /// A vertex projecting toward the near plane drives `screen_x` past the i32
-    /// range. The mapping must not trap (stock x86 `add` wraps): it yields the x87
+    /// A vertex projecting toward the near plane drives `screen_x` past the i32 range.
+    ///
+    /// The mapping must not trap (stock x86 `add` wraps): it yields the x87
     /// integer-indefinite column (`i32::MIN`) plus the origin, wrapping — not a
     /// saturated positive value. The old `as i32` saturate + checked `+` panicked.
     #[test]
@@ -1501,8 +1537,10 @@ mod tests_height_bucket_rasterize {
         );
     }
 
-    /// The full edge-projection path no longer panics when both endpoints project to
-    /// an extreme screen X (the near-plane perspective blow-up the crash log hit).
+    /// The full edge-projection path no longer panics.
+    ///
+    /// Both endpoints project to an extreme screen X (the near-plane perspective
+    /// blow-up the crash log hit).
     #[test]
     fn edge_span_extreme_projection_does_not_panic() {
         let a = ProjectedVert {
@@ -1520,10 +1558,11 @@ mod tests_height_bucket_rasterize {
     }
 }
 
-/// Projects the 8 corners of an AABB (`min` = `aabb[0..3]`, `max` = `aabb[3..6]`)
-/// through the view matrix and reduces to a horizon-column span plus the topmost
-/// projected height. Returns `None` when near-clip rejects a corner (unless
-/// `skip_near` is set) or the span never reaches the buffer.
+/// Projects the 8 corners of an AABB through the view matrix.
+///
+/// `min` = `aabb[0..3]`, `max` = `aabb[3..6]`. Reduces to a horizon-column span
+/// plus the topmost projected height. Returns `None` when near-clip rejects a
+/// corner (unless `skip_near` is set) or the span never reaches the buffer.
 ///
 /// The reference enumerates the 8 corners through fixed index tables; because the
 /// result aggregates `min`/`max` of the projected X and `max` of the projected
@@ -1615,11 +1654,12 @@ mod tests_height_bucket_test_box {
     }
 }
 
-/// Projects a bounding sphere (center + a screen-space radius derived from a
-/// separate radius matrix) to a horizon-column span and a test height. `center`
-/// is projected by `view`; the screen-space radius comes from transforming
-/// `(radius, radius, 0)` by `radius_mat`. Returns `None` on a too-small radius,
-/// near-clip rejection, or an out-of-buffer span.
+/// Projects a bounding sphere to a horizon-column span and a test height.
+///
+/// The sphere is a center + a screen-space radius derived from a separate radius
+/// matrix. `center` is projected by `view`; the screen-space radius comes from
+/// transforming `(radius, radius, 0)` by `radius_mat`. Returns `None` on a
+/// too-small radius, near-clip rejection, or an out-of-buffer span.
 pub fn height_bucket__test_sphere__686000(
     center: &[f32; 3],
     radius: f32,
@@ -1704,8 +1744,9 @@ mod tests_height_bucket_test_sphere {
     }
 }
 
-/// Page/cell decomposition and reconstructed world XY for a terrain-height cache
-/// keyed by an integer grid cell (column, row). The page grid is 5 columns wide;
+/// Page/cell decomposition and reconstructed world XY for a terrain-height cache.
+///
+/// Keyed by an integer grid cell (column, row). The page grid is 5 columns wide;
 /// each page holds a 32x32 block of height values.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct TerrainCellLookup {
@@ -1713,14 +1754,14 @@ pub struct TerrainCellLookup {
     pub page_index: usize,
     /// Value index within the page: `(row&0x1f)*0x20 + (col&0x1f)`.
     pub cell_index: usize,
-    /// Reconstructed world XY of the cell centre, fed to a downward raycast on a
-    /// cache miss.
+    /// Reconstructed world XY of the cell centre, fed to a downward raycast on a cache miss.
     pub world_x: f32,
     pub world_y: f32,
 }
 
-/// Decomposes an integer terrain cell `(col, row)` into the cache page/cell
-/// indices and the reconstructed world XY. The world position anchors at the
+/// Decomposes an integer terrain cell `(col, row)` into the cache page/cell indices.
+///
+/// Also returns the reconstructed world XY. The world position anchors at the
 /// integer grid origin scaled by `origin_scale`, steps by `cell_size` per cell,
 /// and offsets to the cell centre by `cell_size * sub_offset`.
 pub fn terrain_height_cache_sample_at_cell__67ca90(
@@ -1786,8 +1827,9 @@ mod tests_terrain_height_cache_cell {
     }
 }
 
-/// Quantizes a world XY into a 32x32 single-page terrain-height cache cell. The
-/// world position is shifted to grid-local space (`origin` scaled by
+/// Quantizes a world XY into a 32x32 single-page terrain-height cache cell.
+///
+/// The world position is shifted to grid-local space (`origin` scaled by
 /// `origin_scale`), rejected if below `lo_bound`, then mapped to a cell via the
 /// reference's bit-reinterpret trick: a magic bias is added so the integer part
 /// lands in the float mantissa, and the raw IEEE-754 bits are shifted. Returns
@@ -1846,8 +1888,9 @@ mod tests_terrain_height_cache_pos {
     }
 }
 
-/// Projection of a world-space AABB into the coarse tile-block grid used by
-/// the terrain spatial query.
+/// Projection of a world-space AABB into the coarse tile-block grid.
+///
+/// Used by the terrain spatial query.
 ///
 /// Each of the four extent components is mapped through the world map's affine
 /// tile transform `round(scale * -(c - bias_a) - bias_b)` (round to nearest,
@@ -1998,8 +2041,9 @@ mod tests_c_map_chunk__rasterize_chunk_triangles__6ad7e0 {
         assert_eq!(outcode(&[-0.5, EPS * 2.0, -0.5], &neg, EPS), 0x10);
     }
 
-    /// Mirroring point and box through the origin swaps min-face and max-face
-    /// bits with bit-identical arithmetic.
+    /// Mirroring point and box through the origin swaps min-face and max-face bits.
+    ///
+    /// The arithmetic is bit-identical.
     #[test]
     fn mirror_metamorphic() {
         let pts: [[f32; 3]; 4] = [
@@ -2036,8 +2080,9 @@ mod tests_c_map_chunk__rasterize_chunk_triangles__6ad7e0 {
     }
 }
 
-/// Inclusive cell rectangle of a 16x16 chunk-grid radius query, plus the
-/// routine's leftover scalar return.
+/// Inclusive cell rectangle of a 16x16 chunk-grid radius query.
+///
+/// Plus the routine's leftover scalar return.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct QueryRadiusRect {
     pub ret: i32,
@@ -2047,8 +2092,9 @@ pub struct QueryRadiusRect {
     pub col_hi: i32,
 }
 
-/// Quantizes a world XY and query radius into the inclusive `[0, 15]` cell
-/// rectangle of a 16x16 chunk grid.
+/// Quantizes a world XY and query radius into the inclusive `[0, 15]` cell rectangle.
+///
+/// The chunk grid is 16x16.
 ///
 /// `row` comes from `px`, `col` from `py`, each as
 /// `round((origin - coord) * scale - half) & 0xf`. The cell radius `n` is
@@ -2082,8 +2128,7 @@ pub fn c_map_chunk_grid__query_radius__68b0d0(
     }
 }
 
-/// Offset vector and squared distance from a 16x16 sub-grid candidate to the
-/// query point.
+/// Offset vector and squared distance from a 16x16 sub-grid candidate to the query point.
 ///
 /// `cell_x`/`cell_y` are the cell's world base; `sub_row`/`sub_col` index the 8x8
 /// sub-grid at `sub_spacing`; `lo`/`hi` are the candidate's Z extent averaged by
@@ -2333,8 +2378,7 @@ pub fn c_map_obj__group_test_flags__6a37b0(flags: u32) -> u32 {
     f
 }
 
-/// Geometric normal of a hit triangle and its dot product with the segment
-/// direction.
+/// Geometric normal of a hit triangle and its dot product with the segment direction.
 ///
 /// Edges are `a = v2 - v0`, `b = v1 - v0`; the normal is `cross(b, a)` and the
 /// dot accumulates `(nz*sz + ny*sy) + nx*sx` like the reference.
@@ -2355,8 +2399,10 @@ pub fn c_map_obj__hit_normal_dot__6a37b0(
     (n, dot)
 }
 
-/// Final facet-dot normalisation: `dot / |n|` with the reference's
-/// `(nz² + ny²) + nx²` accumulation (a zero normal divides by zero).
+/// Final facet-dot normalisation.
+///
+/// `dot / |n|` with the reference's `(nz² + ny²) + nx²` accumulation (a zero
+/// normal divides by zero).
 pub fn c_map_obj__normalize_facet_dot__6a37b0(dot: f32, n: &[f32; 3]) -> f32 {
     dot / ((n[2] * n[2] + n[1] * n[1]) + n[0] * n[0]).sqrt()
 }
@@ -2544,8 +2590,9 @@ mod tests_map_chunk__query_wmo_groups__6abc40 {
     }
 }
 
-/// Low/high cell indices (per axis, masked to a 64-wide grid) covered by a
-/// circular region: `ftol(floor((center ± radius) * scale ∓ bias)) & 0x3f`.
+/// Low/high cell indices (per axis, masked to a 64-wide grid) covered by a circular region.
+///
+/// `ftol(floor((center ± radius) * scale ∓ bias)) & 0x3f`.
 ///
 /// The reference evaluates each bound in extended precision and floors the
 /// double; the four results are `[x_lo, x_hi, y_lo, y_hi]`.
@@ -2789,8 +2836,10 @@ pub fn world_scene__deferred_fade_bases__683f80(
     [a0 - d0, a1 - d1, far2 - d2]
 }
 
-/// Distance-fade alpha of one deferred scene node, or `None` when the node is
-/// below the visibility threshold and must not be submitted.
+/// Distance-fade alpha of one deferred scene node.
+///
+/// `None` when the node is below the visibility threshold and must not be
+/// submitted.
 ///
 /// The fade band is selected by the node radius against three cutoffs; the
 /// fade input is the horizontal camera distance minus the radius. Alphas
@@ -2907,8 +2956,9 @@ mod tests_world_scene__flush_deferred_models__683f80 {
     }
 }
 
-/// View-space depth sort key of a scene node: one view-matrix row applied to
-/// the node centre, minus the node radius.
+/// View-space depth sort key of a scene node.
+///
+/// One view-matrix row applied to the node centre, minus the node radius.
 ///
 /// Accumulation order matches the reference: `(r1*y + r2*z) + r0*x + r3 - radius`.
 pub fn world_scene__node_depth_key__683700(center: &[f32; 3], row: &[f32; 4], radius: f32) -> f32 {
@@ -3066,8 +3116,9 @@ mod tests_world_sample_surface_height__6b7070 {
     }
 }
 
-/// `CMapChunk::DecompressVertexNormals` — decode 145 packed signed-byte normals
-/// into f32 components.
+/// `CMapChunk::DecompressVertexNormals`.
+///
+/// Decode 145 packed signed-byte normals into f32 components.
 ///
 /// Each packed normal is three contiguous `i8` components (range -128..127). The
 /// stock body widens each byte (`movsx`/`FILD`) and multiplies by the `.rdata`
@@ -3149,9 +3200,10 @@ mod tests_c_map_chunk__decompress_vertex_normals__6aff10 {
     }
 }
 
-/// `CWorldBsp::TraverseNode` interior-node split-axis overlap — does the box
-/// being traversed (`arg2`) overlap the node's split/clip box (`arg1`) on the
-/// split axis?
+/// `CWorldBsp::TraverseNode` interior-node split-axis overlap.
+///
+/// Does the box being traversed (`arg2`) overlap the node's split/clip box
+/// (`arg1`) on the split axis?
 ///
 /// Decoded from the two interior compares (`0x6bc23d..0x6bc25e`):
 /// * site1 `fld arg1[axis+3]; fcomp arg2[axis]; test ah,0x5; jnp REJECT` — reject
@@ -3172,9 +3224,10 @@ pub fn c_world_bsp__node_overlaps_box__6bc1c0_leaf(
     !(arg1[axis + 3] < arg2[axis]) && !(arg1[axis] > arg2[axis + 3])
 }
 
-/// Which child(ren) `CWorldBsp::TraverseNode` descends, from the child-side
-/// compares (`0x6bc28c..0x6bc2d0`), both against `arg1[axis]`/`arg1[axis+3]` vs
-/// the node split plane:
+/// Which child(ren) `CWorldBsp::TraverseNode` descends.
+///
+/// From the child-side compares (`0x6bc28c..0x6bc2d0`), both against
+/// `arg1[axis]`/`arg1[axis+3]` vs the node split plane:
 /// * site3 `fld arg1[axis]; fcomp split; test ah,0x41; jne` — greater-side-only
 ///   **only** when `arg1[axis] > split` strictly (`<`, `==`, unordered → onward).
 /// * site4 `fld arg1[axis+3]; fcomp split; test ah,0x5; jp` — both-children when
@@ -3194,6 +3247,7 @@ pub enum BspChildSide {
 }
 
 /// Pure child-descent selection for `CWorldBsp::TraverseNode` (`0x6bc28c..0x6bc2d0`).
+///
 /// `min` = `arg1[axis]`, `max` = `arg1[axis+3]`, `split` = `[node+0xc]`. Two strict
 /// compares with unordered routed into `Both` (site4's `jp` sends NaN to Both).
 pub fn c_world_bsp__child_side__6bc1c0(min: f32, max: f32, split: f32) -> BspChildSide {
@@ -3296,8 +3350,10 @@ mod tests_c_world_bsp__child_side__6bc1c0 {
     }
 }
 
-/// `CWorld::LinkEntityToTiles` index range — quantize an entity's world-space XY
-/// AABB into the inclusive tile-index loop bounds the stock driver iterates.
+/// `CWorld::LinkEntityToTiles` index range.
+///
+/// Quantize an entity's world-space XY AABB into the inclusive tile-index loop
+/// bounds the stock driver iterates.
 ///
 /// Stock re-anchors each AABB float against the map origin (`d = -(coord -
 /// 17066.666)`), scales by the cell size (`0.03`), biases by `0.5`, then x87
@@ -3320,10 +3376,12 @@ pub fn link_entity_tile_index_range(
     (q(min_x), q(max_x), q(min_y), q(max_y))
 }
 
-/// `CWorld::LinkEntityToTiles` per-tile grid/sub indices — decompose `(ix, iy)`
-/// into the flat 64x64 row-table index and the 16x16 sub-cell index, matching the
-/// stock `[4*grid + 0xc96318]` row lookup and `[row + 4*sub + 0x278]` tile lookup.
-/// Same idiom as `c_world__point_in_liquid_grid__69b350` with `x = ix`, `y = iy`.
+/// `CWorld::LinkEntityToTiles` per-tile grid/sub indices.
+///
+/// Decompose `(ix, iy)` into the flat 64x64 row-table index and the 16x16
+/// sub-cell index, matching the stock `[4*grid + 0xc96318]` row lookup and
+/// `[row + 4*sub + 0x278]` tile lookup. Same idiom as
+/// `c_world__point_in_liquid_grid__69b350` with `x = ix`, `y = iy`.
 /// The `>> 4` is arithmetic (`ix`/`iy` may be negative) — `i32 >> 4` (SAR).
 pub fn link_entity_tile_indices(ix: i32, iy: i32) -> (usize, usize) {
     let grid_index = (((ix >> 4) & 0x3f) * 0x40 + ((iy >> 4) & 0x3f)) as usize;
@@ -3331,8 +3389,10 @@ pub fn link_entity_tile_indices(ix: i32, iy: i32) -> (usize, usize) {
     (grid_index, sub_index)
 }
 
-/// `CWorld::LinkEntityToTiles` z-clip predicate — link proceeds onto a tile when
-/// the entity top-Z is not strictly below the tile's threshold.
+/// `CWorld::LinkEntityToTiles` z-clip predicate.
+///
+/// Link proceeds onto a tile when the entity top-Z is not strictly below the
+/// tile's threshold.
 ///
 /// Stock compare at 0x6a8dc1: `fld [ecx+0x58]` (ztop); `fcomp [edi+0x4c]`
 /// (thresh); `fnstsw ax`; `test ah,0x5`; `jnp SKIP` — masked C0(0x1)+C2(0x4),
@@ -3564,10 +3624,12 @@ mod tests_c_world__query_liquid_grid_map__69b6d0 {
     }
 }
 
-/// `World::QueryObjectBoxes` entry box construction — given the queried
-/// object's local AABB (`min = local[0..3]`, `max = local[3..6]`), returns both
-/// the box center `(min + max) * 0.5` and a copy of the local AABB recentered
-/// about the origin (`min - center`, `max - center`).
+/// `World::QueryObjectBoxes` entry box construction.
+///
+/// Given the queried object's local AABB (`min = local[0..3]`,
+/// `max = local[3..6]`), returns both the box center `(min + max) * 0.5` and a
+/// copy of the local AABB recentered about the origin (`min - center`,
+/// `max - center`).
 ///
 /// Pure prologue of the stock driver at `0x6ad330`: `C3Vector::Add`(min + max)
 /// then `C3Vector::Scale`(0.5) (the `push 0x3f000000` = `0.5f` at `0x6ad364`),
@@ -3685,8 +3747,10 @@ mod tests_world__query_object_boxes_recenter__6ad330 {
     }
 }
 
-/// Translates a query AABB into chunk-local space by subtracting the chunk
-/// origin from both the min (`aabb[0..3]`) and max (`aabb[3..6]`) corners.
+/// Translates a query AABB into chunk-local space.
+///
+/// Subtracts the chunk origin from both the min (`aabb[0..3]`) and max
+/// (`aabb[3..6]`) corners.
 ///
 /// Mirrors `CollectTileGeometry`'s entry block (0x6aae9d..0x6aaed7): the stock
 /// builds `neg = -origin`, adds it into the min corner with three inline
@@ -3707,11 +3771,12 @@ pub fn tile_collect_translate_aabb__6aadc0(aabb: &[f32; 6], origin: &[f32; 3]) -
     [lo0, lo1, lo2, hi[0], hi[1], hi[2]]
 }
 
-/// The `.rdata` clip bias added before the bit-reinterpret floor in the tile
-/// outcode (static 0x4101b8 == `0.019444443`). The production adapter reads this
-/// value LIVE from `.rdata` and passes it to `tile_collect_outcode6__6aadc0`;
-/// this pinned copy exists only so the host tests can fix the bit-trick against
-/// the exact source dword, so it is gated to test builds.
+/// The `.rdata` clip bias added before the bit-reinterpret floor in the tile outcode.
+///
+/// Static 0x4101b8 == `0.019444443`. The production adapter reads this value
+/// LIVE from `.rdata` and passes it to `tile_collect_outcode6__6aadc0`; this
+/// pinned copy exists only so the host tests can fix the bit-trick against the
+/// exact source dword, so it is gated to test builds.
 // The `__6aadc0` VA suffix carries lowercase hex (`a`/`d`/`c`); the snake-suffix
 // convention applies to every helper/const in this shared module, so allow the
 // otherwise all-uppercase requirement here.
@@ -3719,8 +3784,9 @@ pub fn tile_collect_translate_aabb__6aadc0(aabb: &[f32; 6], origin: &[f32; 3]) -
 #[allow(non_upper_case_globals)]
 const TILE_OUTCODE_BIAS__6aadc0: f32 = f32::from_bits(0x3c9f_49f4);
 
-/// Computes the 6-bit clip outcode for one grid vertex against the chunk-local
-/// query AABB (`tile_collect_translate_aabb__6aadc0`'s output).
+/// Computes the 6-bit clip outcode for one grid vertex against the chunk-local query AABB.
+///
+/// The query AABB is `tile_collect_translate_aabb__6aadc0`'s output.
 ///
 /// Mirrors the inner ladder at 0x6aaf60..0x6ab00e. Each of the six plane tests
 /// forms a biased difference, reinterprets its IEEE-754 bits, and extracts the
@@ -3760,8 +3826,9 @@ pub fn tile_collect_vertex_to_world__6aadc0(v: &[f32; 3], origin: &[f32; 3]) -> 
     [v[0] + origin[0], v[1] + origin[1], v[2] + origin[2]]
 }
 
-/// Builds the face plane `[nx, ny, nz, d]` for one emitted triangle using the
-/// raw SSE `rsqrtss` approximation (the `DAT_00c9e388 != 0` fast path,
+/// Builds the face plane `[nx, ny, nz, d]` for one emitted triangle.
+///
+/// Uses the raw SSE `rsqrtss` approximation (the `DAT_00c9e388 != 0` fast path,
 /// 0x6ab2bb..0x6ab375), which has NO Newton-Raphson refinement.
 ///
 /// `n = cross(v1 - v0, v2 - v0)` with the stock fadd/fsub grouping; the length
@@ -3803,11 +3870,11 @@ pub fn tile_collect_triangle_plane__6aadc0(
     [nnx, nny, nnz, d]
 }
 
-/// Single-pass SSE reciprocal square root (`rsqrtss`, 12-bit approximation, no
-/// refinement). Replicates the stock `rsqrtss xmm1,[mem]` at 0x6ab340 exactly;
-/// `libm` reciprocal sqrt would not bit-match. Available on both `x86` and
-/// `x86_64` (host tests run x86_64 under the same translation as the shipped
-/// i686 image).
+/// Single-pass SSE reciprocal square root (`rsqrtss`, 12-bit approximation, no refinement).
+///
+/// Replicates the stock `rsqrtss xmm1,[mem]` at 0x6ab340 exactly; `libm`
+/// reciprocal sqrt would not bit-match. Available on both `x86` and `x86_64`
+/// (host tests run x86_64 under the same translation as the shipped i686 image).
 #[inline]
 #[must_use]
 // The three nested SSE intrinsics form one logically atomic `rsqrtss`; keeping
@@ -3970,10 +4037,11 @@ mod tests_c_world__collect_tile_geometry__6aadc0 {
     }
 }
 
-/// Negates the query-box midpoint for the recentering subtract in
-/// `CollectGeometryFromNodes` (the three inline `fld;fchs;fstp` at
-/// 0x6aaaf5..0x6aab19 feeding the `C3Vector::Set` store pack). Pure IEEE-754
-/// sign flips — exact for every input, including NaN payloads and ±0.
+/// Negates the query-box midpoint for the recentering subtract in `CollectGeometryFromNodes`.
+///
+/// The three inline `fld;fchs;fstp` at 0x6aaaf5..0x6aab19 feed the
+/// `C3Vector::Set` store pack. Pure IEEE-754 sign flips — exact for every input,
+/// including NaN payloads and ±0.
 #[must_use]
 pub fn collect_nodes_negate_center__6aaab0(center: &[f32; 3]) -> [f32; 3] {
     [-center[0], -center[1], -center[2]]
@@ -4048,49 +4116,56 @@ pub mod draw_bucket_classify__707680 {
     /// Opaque-alpha threshold constant `[0x808120]` (`0x3f7fff58`, ~0.99999f).
     pub const OPAQUE_THRESHOLD: f32 = f32::from_bits(0x3f7f_ff58);
 
-    /// Facing test: `fcomp` then `test ah,0x41; jp` is taken on greater-OR-
-    /// unordered (C3|C0 even parity), i.e. `!(a <= b)` keeping NaN. Used at the
-    /// geometry site 0x7079df and the cloud mirror 0x7084d8 to set the
-    /// front-facing flag from the transformed depth `a` versus the (possibly
-    /// `fchs`-negated) screen-radius term `b`.
+    /// Facing test.
+    ///
+    /// `fcomp` then `test ah,0x41; jp` is taken on greater-OR-unordered (C3|C0
+    /// even parity), i.e. `!(a <= b)` keeping NaN. Used at the geometry site
+    /// 0x7079df and the cloud mirror 0x7084d8 to set the front-facing flag from
+    /// the transformed depth `a` versus the (possibly `fchs`-negated)
+    /// screen-radius term `b`.
     #[inline]
     #[must_use]
     pub fn greater_or_unordered(a: f32, b: f32) -> bool {
         !(a <= b)
     }
 
-    /// `fcomp` then `test ah,0x1; je` is C0-only: returns `true` iff `a < b`
-    /// strictly and ordered (the C0==1 case). Used at 0x7079ce / 0x7079f5 (vs
-    /// 0.0). NaN is not-less (C0==0).
+    /// `fcomp` then `test ah,0x1; je` is C0-only.
+    ///
+    /// Returns `true` iff `a < b` strictly and ordered (the C0==1 case). Used at
+    /// 0x7079ce / 0x7079f5 (vs 0.0). NaN is not-less (C0==0).
     #[inline]
     #[must_use]
     pub fn strictly_less(a: f32, b: f32) -> bool {
         a < b
     }
 
-    /// Combined open-lower-band cull: at 0x707b45 `test ah,0x5; jnp` culls on
-    /// strictly-less (`alpha < 0`), and at 0x707b59 `test ah,0x44; jnp` culls on
-    /// equal-OR-unordered (`alpha == 0` or NaN). The batch therefore proceeds
-    /// iff `alpha > 0.0` strictly and ordered. The cloud mirror is at 0x70853b /
-    /// 0x70854f. Returns `true` to PROCEED.
+    /// Combined open-lower-band cull.
+    ///
+    /// At 0x707b45 `test ah,0x5; jnp` culls on strictly-less (`alpha < 0`), and
+    /// at 0x707b59 `test ah,0x44; jnp` culls on equal-OR-unordered
+    /// (`alpha == 0` or NaN). The batch therefore proceeds iff `alpha > 0.0`
+    /// strictly and ordered. The cloud mirror is at 0x70853b / 0x70854f. Returns
+    /// `true` to PROCEED.
     #[inline]
     #[must_use]
     pub fn alpha_proceeds(alpha: f32) -> bool {
         alpha > NEAR_ZERO
     }
 
-    /// Translucency decision at 0x707ba6 (`fcomp` vs `OPAQUE_THRESHOLD` then
-    /// `test ah,0x1; je`): the translucent flag is set iff `alpha < threshold`
-    /// strictly (C0==1). `alpha >= threshold` (or eq/unordered) stays opaque.
-    /// Returns `true` for translucent.
+    /// Translucency decision at 0x707ba6 (`fcomp` vs `OPAQUE_THRESHOLD` then `test ah,0x1; je`).
+    ///
+    /// The translucent flag is set iff `alpha < threshold` strictly (C0==1).
+    /// `alpha >= threshold` (or eq/unordered) stays opaque. Returns `true` for
+    /// translucent.
     #[inline]
     #[must_use]
     pub fn is_translucent(alpha: f32) -> bool {
         alpha < OPAQUE_THRESHOLD
     }
 
-    /// Cloud-block clamp at 0x7080f9 (`fcomp` vs `0.0` then `test ah,0x5; jp`):
-    /// the value is forced to `0.0` ONLY when strictly less than zero (the `jp`
+    /// Cloud-block clamp at 0x7080f9 (`fcomp` vs `0.0` then `test ah,0x5; jp`).
+    ///
+    /// The value is forced to `0.0` ONLY when strictly less than zero (the `jp`
     /// keeps it for `>= 0` or NaN). Returns the clamped value.
     #[inline]
     #[must_use]
@@ -4098,10 +4173,11 @@ pub mod draw_bucket_classify__707680 {
         if v < NEAR_ZERO { 0.0 } else { v }
     }
 
-    /// Cloud-block opaque test at 0x7081a8 / 0x7085ed (`fcomp` vs threshold then
-    /// `test ah,0x1; jne`): the non-opaque branch is taken iff `v < threshold`
-    /// strictly (C0==1). Returns `true` when the OPAQUE path should be taken
-    /// (`v >= threshold`, eq, or unordered).
+    /// Cloud-block opaque test at 0x7081a8 / 0x7085ed.
+    ///
+    /// `fcomp` vs threshold then `test ah,0x1; jne`: the non-opaque branch is
+    /// taken iff `v < threshold` strictly (C0==1). Returns `true` when the OPAQUE
+    /// path should be taken (`v >= threshold`, eq, or unordered).
     #[inline]
     #[must_use]
     pub fn cloud_is_opaque(v: f32) -> bool {
@@ -4200,12 +4276,13 @@ mod tests_c_world_view__build_draw_list__707680 {
     }
 }
 
-/// `CWorldView::ComputeSortHash` (0x70a600) polynomial fold: `h = h*0x13 + term`
-/// per term, all wrapping. The stock body seeds `h` with the `node[0x30]` value
-/// then folds a fixed sequence of record/node/substate dwords; the adapter
-/// gathers those term ranges in stock order and folds them through this kernel so
-/// the hash inlines into the dedup loop instead of calling out. Integer-exact, so
-/// the dedup buckets identically to the original.
+/// `CWorldView::ComputeSortHash` (0x70a600) polynomial fold.
+///
+/// `h = h*0x13 + term` per term, all wrapping. The stock body seeds `h` with the
+/// `node[0x30]` value then folds a fixed sequence of record/node/substate dwords;
+/// the adapter gathers those term ranges in stock order and folds them through
+/// this kernel so the hash inlines into the dedup loop instead of calling out.
+/// Integer-exact, so the dedup buckets identically to the original.
 #[inline]
 #[must_use]
 pub fn c_world_view__compute_sort_hash_fold__70a600(initial: u32, terms: &[u32]) -> u32 {
@@ -4244,15 +4321,17 @@ mod tests_c_world_view__compute_sort_hash_fold__70a600 {
     }
 }
 
-/// x87 `FISTP m32` under the default control word: round-to-nearest-even to a
-/// 32-bit integer, storing the integer-indefinite pattern (`0x8000_0000`) for
-/// NaN, ±Inf, and every value whose rounded result falls outside `i32` — unlike
-/// Rust's saturating `as` cast (NaN → 0, clamp to `MAX`/`MIN`). Built from the
-/// raw f64 bits with no float rounding intrinsic (which may lower through x87
-/// `FRNDINT` on i686) and no FPU arithmetic at all, mirroring the pure-integer
-/// discipline of `misc::ftol__40a2b0` (that one truncates toward zero; this one
-/// rounds to nearest, ties to even). `pub(crate)`: shared by the sibling
-/// biased-FISTP idioms in other kernel families (e.g. `light`).
+/// x87 `FISTP m32` under the default control word.
+///
+/// Round-to-nearest-even to a 32-bit integer, storing the integer-indefinite
+/// pattern (`0x8000_0000`) for NaN, ±Inf, and every value whose rounded result
+/// falls outside `i32` — unlike Rust's saturating `as` cast (NaN → 0, clamp to
+/// `MAX`/`MIN`). Built from the raw f64 bits with no float rounding intrinsic
+/// (which may lower through x87 `FRNDINT` on i686) and no FPU arithmetic at all,
+/// mirroring the pure-integer discipline of `misc::ftol__40a2b0` (that one
+/// truncates toward zero; this one rounds to nearest, ties to even).
+/// `pub(crate)`: shared by the sibling biased-FISTP idioms in other kernel
+/// families (e.g. `light`).
 pub(crate) fn fistp_round_ties_even(x: f64) -> i32 {
     let bits = x.to_bits();
     let exp = ((bits >> 52) & 0x7ff) as i32;
@@ -4291,10 +4370,11 @@ pub(crate) fn fistp_round_ties_even(x: f64) -> i32 {
     }
 }
 
-/// `World_RasterizeTraceLineCells` (0x69c780) DDA core: rasterizes the 2D
-/// segment `p1 -> p2` onto the cell grid described by `desc`, driving `emit`
-/// with every appended `(perp, major)` i32 pair in stock order. `desc` is
-/// `[start major, start perp, end major, end perp]`.
+/// `World_RasterizeTraceLineCells` (0x69c780) DDA core.
+///
+/// Rasterizes the 2D segment `p1 -> p2` onto the cell grid described by `desc`,
+/// driving `emit` with every appended `(perp, major)` i32 pair in stock order.
+/// `desc` is `[start major, start perp, end major, end perp]`.
 ///
 /// Faithful transcription of the stock walk:
 /// - `slope = (y1-y0)/(x1-x0)` and `inv = numer/slope` are RAW divides with no
@@ -4400,10 +4480,11 @@ mod tests_world_rasterize_trace_line_cells__69c780 {
         out
     }
 
-    /// Line y = x/2 from (0,0) to (4,2), quarter-cell step: hand-traced against
-    /// the stock walk. Exercises both FISTP ties in one run (0.5 -> 0 and
-    /// 2.5 -> 2 round to EVEN; round-half-away would emit a different list) and
-    /// pins the one-past-end pair (major 5 = desc[2]+1).
+    /// Line y = x/2 from (0,0) to (4,2), quarter-cell step.
+    ///
+    /// Hand-traced against the stock walk. Exercises both FISTP ties in one run
+    /// (0.5 -> 0 and 2.5 -> 2 round to EVEN; round-half-away would emit a
+    /// different list) and pins the one-past-end pair (major 5 = desc[2]+1).
     #[test]
     fn forward_walk_matches_hand_trace() {
         let got = run([0.0, 0.0], [4.0, 2.0], [0, 0, 4, 2], [1.0, 0.25, 1.0, 0.0]);
@@ -4420,9 +4501,11 @@ mod tests_world_rasterize_trace_line_cells__69c780 {
         assert_eq!(got, want);
     }
 
-    /// Same line walked end -> start: direction flips to -1 and the seed cell is
-    /// desc[0] itself (not desc[0]+1). Tail pair still suppressed because the
-    /// last index reaches desc[3].
+    /// Same line walked end -> start.
+    ///
+    /// Direction flips to -1 and the seed cell is desc[0] itself (not
+    /// desc[0]+1). Tail pair still suppressed because the last index reaches
+    /// desc[3].
     #[test]
     fn reverse_walk_matches_hand_trace() {
         let got = run([4.0, 2.0], [0.0, 0.0], [4, 2, 0, 0], [1.0, 0.25, 1.0, 0.0]);
@@ -4439,19 +4522,22 @@ mod tests_world_rasterize_trace_line_cells__69c780 {
         assert_eq!(got, want);
     }
 
-    /// Equal endpoints still walk exactly one step with direction -1 (stock's
-    /// signed JLE picks the negative arm on equality), and a mismatched final
-    /// index appends the (desc[3], desc[2]) tail pair.
+    /// Equal endpoints still walk exactly one step with direction -1.
+    ///
+    /// Stock's signed JLE picks the negative arm on equality, and a mismatched
+    /// final index appends the (desc[3], desc[2]) tail pair.
     #[test]
     fn equal_endpoints_walk_one_negative_step_and_tail() {
         let got = run([0.0, 0.0], [1.0, 1.0], [3, 7, 3, 9], [1.0, 1.0, 1.0, 0.0]);
         assert_eq!(got, [(7, 3), (3, 3), (3, 2), (9, 3)]);
     }
 
-    /// Vertical segment: slope = dy/0 = +Inf flows RAW through both divides
-    /// (b = -Inf, inv = 0) and the per-step product is Inf*0 = NaN, which the
-    /// FISTP folds to the x87 integer-indefinite cell index — a guarded or
-    /// saturating port would emit a different (non-0x80000000) index.
+    /// Vertical segment.
+    ///
+    /// Slope = dy/0 = +Inf flows RAW through both divides (b = -Inf, inv = 0)
+    /// and the per-step product is Inf*0 = NaN, which the FISTP folds to the x87
+    /// integer-indefinite cell index — a guarded or saturating port would emit a
+    /// different (non-0x80000000) index.
     #[test]
     fn vertical_segment_emits_integer_indefinite_indices() {
         let got = run([1.0, 0.0], [1.0, 5.0], [0, 9, 2, 9], [1.0, 1.0, 1.0, 0.0]);
@@ -4462,9 +4548,10 @@ mod tests_world_rasterize_trace_line_cells__69c780 {
         );
     }
 
-    /// Horizontal segment: slope = 0, so the SECOND raw divide blows up
-    /// (inv = numer/0 = +Inf) and the finite (worldX-b) scales to -Inf ->
-    /// integer indefinite.
+    /// Horizontal segment.
+    ///
+    /// Slope = 0, so the SECOND raw divide blows up (inv = numer/0 = +Inf) and
+    /// the finite (worldX-b) scales to -Inf -> integer indefinite.
     #[test]
     fn horizontal_segment_emits_integer_indefinite_indices() {
         let got = run([0.0, 2.0], [4.0, 2.0], [0, 5, 1, 5], [1.0, 0.25, 1.0, 0.0]);
@@ -4472,8 +4559,9 @@ mod tests_world_rasterize_trace_line_cells__69c780 {
         assert_eq!(got, [(5, 0), (ind, 0), (ind, 1), (ind, 2), (5, 1)]);
     }
 
-    /// desc[2]+dir wraps (end = i32::MAX, dir = +1) to exactly the start major:
-    /// the stock pre-check then skips the whole walk after the seed pair. A
+    /// desc[2]+dir wraps (end = i32::MAX, dir = +1) to exactly the start major.
+    ///
+    /// The stock pre-check then skips the whole walk after the seed pair. A
     /// checked add would panic here; stock's ADD wraps.
     #[test]
     fn wraparound_stop_skips_loop_after_seed() {
@@ -4486,9 +4574,11 @@ mod tests_world_rasterize_trace_line_cells__69c780 {
         assert_eq!(got, [(5, i32::MIN)]);
     }
 
-    /// FISTP specials: NaN, ±Inf, and out-of-range magnitudes all store the
-    /// integer-indefinite pattern; the i32 boundary cases round exactly like
-    /// the FPU (ties to even, indefinite only when the ROUNDED value escapes).
+    /// FISTP specials.
+    ///
+    /// NaN, ±Inf, and out-of-range magnitudes all store the integer-indefinite
+    /// pattern; the i32 boundary cases round exactly like the FPU (ties to even,
+    /// indefinite only when the ROUNDED value escapes).
     #[test]
     fn fistp_specials_and_boundaries() {
         assert_eq!(fistp(f64::NAN), i32::MIN);
@@ -4509,8 +4599,9 @@ mod tests_world_rasterize_trace_line_cells__69c780 {
         assert_eq!(fistp(-2_147_483_649.0), i32::MIN);
     }
 
-    /// FISTP small-magnitude rounding: ties to even in both directions, exact
-    /// zeros/subnormals collapse to 0.
+    /// FISTP small-magnitude rounding.
+    ///
+    /// Ties to even in both directions, exact zeros/subnormals collapse to 0.
     #[test]
     fn fistp_ties_to_even_small_values() {
         assert_eq!(fistp(0.5), 0);
@@ -4529,9 +4620,11 @@ mod tests_world_rasterize_trace_line_cells__69c780 {
         assert_eq!(fistp(-0.75), -1);
     }
 
-    /// Sweep oracle: the pure-integer helper agrees with the host's
-    /// `round_ties_even` (SSE2 on x86_64) across a dense in-range sweep
-    /// including every x.5 tie and non-tie fractions at several magnitudes.
+    /// Sweep oracle.
+    ///
+    /// The pure-integer helper agrees with the host's `round_ties_even` (SSE2 on
+    /// x86_64) across a dense in-range sweep including every x.5 tie and non-tie
+    /// fractions at several magnitudes.
     #[test]
     fn fistp_matches_round_ties_even_oracle_sweep() {
         for i in -100_000_i64..=100_000 {
@@ -4543,10 +4636,11 @@ mod tests_world_rasterize_trace_line_cells__69c780 {
     }
 }
 
-/// `Rasterizer_EmitSlopedLineDDA` (0x69c600) core: walks the major axis of
-/// the 2D segment `p0 -> p1` one cell at a time, appending `(major, minor)`
-/// i32 pairs in stock order via `emit`. `seg` is `[start minor, start major,
-/// end minor, end major]`.
+/// `Rasterizer_EmitSlopedLineDDA` (0x69c600) core.
+///
+/// Walks the major axis of the 2D segment `p0 -> p1` one cell at a time,
+/// appending `(major, minor)` i32 pairs in stock order via `emit`. `seg` is
+/// `[start minor, start major, end minor, end major]`.
 ///
 /// Sibling of [`world_rasterize_trace_line_cells__69c780`] (same biased-FISTP
 /// round, same global output list). Faithful transcription:
@@ -4647,9 +4741,10 @@ mod tests_rasterizer_emit_sloped_line_dda__69c600 {
         out
     }
 
-    /// Line y = x/2 from (0,0) to (4,2), quarter step: hand-traced against the
-    /// stock walk. The v=0.5 evaluation pins the FISTP tie (0.5 -> 0, round
-    /// to EVEN); the (5,1) pair pins the one-past-end step.
+    /// Line y = x/2 from (0,0) to (4,2), quarter step.
+    ///
+    /// Hand-traced against the stock walk. The v=0.5 evaluation pins the FISTP
+    /// tie (0.5 -> 0, round to EVEN); the (5,1) pair pins the one-past-end step.
     #[test]
     fn forward_walk_matches_hand_trace() {
         let got = run([0.0, 0.0], [4.0, 2.0], [0, 0, 2, 4], [0.25, 1.0, 0.0]);
@@ -4666,9 +4761,10 @@ mod tests_rasterizer_emit_sloped_line_dda__69c600 {
         assert_eq!(got, want);
     }
 
-    /// Same line walked backward (end major < start major): dir −1 seeds the
-    /// start cell itself, and the final minor reaches `end minor`, so no tail
-    /// pair is emitted.
+    /// Same line walked backward (end major < start major).
+    ///
+    /// Dir −1 seeds the start cell itself, and the final minor reaches
+    /// `end minor`, so no tail pair is emitted.
     #[test]
     fn backward_walk_matches_hand_trace() {
         let got = run([0.0, 0.0], [4.0, 2.0], [2, 4, 0, 0], [0.25, 1.0, 0.0]);
@@ -4684,8 +4780,10 @@ mod tests_rasterizer_emit_sloped_line_dda__69c600 {
         assert_eq!(got, want);
     }
 
-    /// A point segment divides 0/0: the NaN flows through every evaluation
-    /// into the FISTP integer indefinite, exactly as the unguarded stock FDIV.
+    /// A point segment divides 0/0.
+    ///
+    /// The NaN flows through every evaluation into the FISTP integer indefinite,
+    /// exactly as the unguarded stock FDIV.
     #[test]
     fn point_segment_nan_flows_to_integer_indefinite() {
         let got = run([1.0, 1.0], [1.0, 1.0], [0, 0, 0, 0], [0.25, 1.0, 0.0]);
@@ -4694,8 +4792,9 @@ mod tests_rasterizer_emit_sloped_line_dda__69c600 {
     }
 }
 
-/// `CMap::LoadWdl` (0x6944a0) MARE height-grid conversion (0x694602-0x69463a):
-/// converts one WDL tile's 545 `i16` heights (17x17 outer + 16x16 inner
+/// `CMap::LoadWdl` (0x6944a0) MARE height-grid conversion (0x694602-0x69463a).
+///
+/// Converts one WDL tile's 545 `i16` heights (17x17 outer + 16x16 inner
 /// lattice) to `f32` while tracking the running min/max. Stock seeds min with
 /// the immediate `0x7f7f_ffff` (`f32::MAX`) and max with the `.rdata` const at
 /// `0x8105b4` (`-f32::MAX`), passed in as `max_init`. Compare shape: min via
@@ -4728,17 +4827,19 @@ pub fn c_map__load_wdl_mare_to_grid__6944a0(
     (grid, min, max)
 }
 
-/// Per-tile AABB corner / bounding-sphere values of `CMap::LoadWdl`
-/// (0x6944a0), exactly the f32s stock stores at 0x69463c-0x694718. The
-/// offset map (base = the `CMapAreaLow`): `min_x`/`min_y` at `+0x00`/`+0x04`,
-/// `max_x` at `+0x0c` (dup `+0x28`), `max_y` at `+0x10` (dup `+0x2c`),
-/// `center` at `+0x18..+0x20`, `radius` at `+0x24`. The min/max HEIGHTS
-/// (`+0x08`/`+0x14`) come straight from the MARE loop and are not duplicated
-/// here.
+/// Per-tile AABB corner / bounding-sphere values of `CMap::LoadWdl` (0x6944a0).
+///
+/// Exactly the f32s stock stores at 0x69463c-0x694718. The offset map
+/// (base = the `CMapAreaLow`): `min_x`/`min_y` at `+0x00`/`+0x04`, `max_x` at
+/// `+0x0c` (dup `+0x28`), `max_y` at `+0x10` (dup `+0x2c`), `center` at
+/// `+0x18..+0x20`, `radius` at `+0x24`. The min/max HEIGHTS (`+0x08`/`+0x14`)
+/// come straight from the MARE loop and are not duplicated here.
 #[derive(Clone, Copy, Debug)]
 pub struct WdlTileBounds {
-    /// `f32(outer * 33.3333)` — stock's dead first store to `+0x2c`
-    /// (immediately overwritten with `max_y`); kept for store-order fidelity.
+    /// `f32(outer * 33.3333)`.
+    ///
+    /// Stock's dead first store to `+0x2c` (immediately overwritten with
+    /// `max_y`); kept for store-order fidelity.
     pub fvar1: f32,
     /// AABB max X (`+0x0c`, dup `+0x28`): `-(outer*33.3333) + 17066.666`.
     pub max_x: f32,
@@ -4750,17 +4851,16 @@ pub struct WdlTileBounds {
     pub min_y: f32,
     /// Sphere center (`+0x18..+0x20`): `(min + max) * 0.5` per axis.
     pub center: [f32; 3],
-    /// Bounding radius (`+0x24`): `sqrt((dz*dz + dy*dy) + dx*dx)` of
-    /// `max - center`.
+    /// Bounding radius (`+0x24`): `sqrt((dz*dz + dy*dy) + dx*dx)` of `max - center`.
     pub radius: f32,
 }
 
-/// `CMap::LoadWdl` (0x6944a0) per-tile AABB + bounding-sphere math
-/// (0x69463c-0x694718), transcribed in stock x87 op order with `f64`
-/// intermediates narrowed through [`super::f64_to_f32`] at every stock f32
-/// store. `outer`/`inner` are the raw 0x10-step tile loop counters
-/// (0, 0x10, .., 0x3f0) `FILD`ed as zero-extended qwords; `consts` are the
-/// five `.rdata` f32 constants in stock order:
+/// `CMap::LoadWdl` (0x6944a0) per-tile AABB + bounding-sphere math (0x69463c-0x694718).
+///
+/// Transcribed in stock x87 op order with `f64` intermediates narrowed through
+/// [`super::f64_to_f32`] at every stock f32 store. `outer`/`inner` are the raw
+/// 0x10-step tile loop counters (0, 0x10, .., 0x3f0) `FILD`ed as zero-extended
+/// qwords; `consts` are the five `.rdata` f32 constants in stock order:
 /// `[0x80fee4 (+33.3333 outer scale), 0x8105b0 (-33.3333 inner scale),
 /// 0x7ffab4 (17066.666 corner origin), 0x80654c (533.3333 tile span),
 /// 0x7ffa24 (0.5)]`. Precision shape:
@@ -4991,8 +5091,9 @@ mod tests_c_map__load_wdl__6944a0 {
         assert!((f64::from(b.radius) - dist).abs() < 1e-3);
     }
 }
-/// Output block for `CMapChunk::BuildVerticesAndBounds` (`0x6b0e50`): the 145
-/// generated vertex XY pairs (Z is the raw MCVT height dword the adapter
+/// Output block for `CMapChunk::BuildVerticesAndBounds` (`0x6b0e50`).
+///
+/// The 145 generated vertex XY pairs (Z is the raw MCVT height dword the adapter
 /// bit-copies alongside), the origin-translated AABB, its center and bounding
 /// radius, and the cached 6-float box (the reference's final 6-dword copy of
 /// `min`/`max` into `chunk+0x94`).
@@ -5005,12 +5106,13 @@ pub struct ChunkVertsAndBounds {
     pub cached: [f32; 6],
 }
 
-/// Builds a terrain chunk's 145 local-space vertices (a 9x9 outer grid
-/// interleaved with 8x8 half-cell inner rows as 17-vertex row pairs) plus its
-/// AABB/center/radius, from the map-grid indices, the raw MCVT height dwords,
-/// the chunk world origin, and the four host globals (`scale` = grid-index ->
-/// world scale, `base` = world base offset, `cells` = 8.0 cells/chunk, `half` =
-/// 2.0 midpoint divisor).
+/// Builds a terrain chunk's 145 local-space vertices.
+///
+/// A 9x9 outer grid interleaved with 8x8 half-cell inner rows as 17-vertex row
+/// pairs, plus its AABB/center/radius, from the map-grid indices, the raw MCVT
+/// height dwords, the chunk world origin, and the four host globals
+/// (`scale` = grid-index -> world scale, `base` = world base offset,
+/// `cells` = 8.0 cells/chunk, `half` = 2.0 midpoint divisor).
 ///
 /// Arithmetic follows the reference's x87 op order, computed in `f64` and
 /// narrowed exactly where the original stores an f32 — bit-exact, because each
@@ -5175,10 +5277,12 @@ mod tests_c_map_chunk__build_vertices_and_bounds__6b0e50 {
         [v.to_bits(); 145]
     }
 
-    /// Power-of-two globals make every coordinate exact: scale=32, base=1024
-    /// give step = -4.0 and half-step = -2.0 on both axes, so the interleave,
-    /// the half-cell placement, and the emit-order indexing are all assertable
-    /// bit-for-bit (including the `0 * negative-step = -0.0` sign at c=0/r=0).
+    /// Power-of-two globals make every coordinate exact.
+    ///
+    /// scale=32, base=1024 give step = -4.0 and half-step = -2.0 on both axes,
+    /// so the interleave, the half-cell placement, and the emit-order indexing
+    /// are all assertable bit-for-bit (including the `0 * negative-step = -0.0`
+    /// sign at c=0/r=0).
     #[test]
     fn emit_order_interleave_and_half_cell_exact() {
         let out = build(
@@ -5215,9 +5319,11 @@ mod tests_c_map_chunk__build_vertices_and_bounds__6b0e50 {
         assert_eq!(out.xy[0][1].to_bits(), (-0.0f32).to_bits());
     }
 
-    /// Bounds/center/radius over the exact grid: local box is
-    /// [-32,-32,5.25]..[-0.0,-0.0,5.25], translated by the origin; the radius
-    /// is sqrt(16^2 + 16^2 + 0) = sqrt(512), exact through the f64 path.
+    /// Bounds/center/radius over the exact grid.
+    ///
+    /// Local box is [-32,-32,5.25]..[-0.0,-0.0,5.25], translated by the origin;
+    /// the radius is sqrt(16^2 + 16^2 + 0) = sqrt(512), exact through the f64
+    /// path.
     #[test]
     fn bounds_center_radius_and_cached_copy() {
         let out = build(
@@ -5255,12 +5361,13 @@ mod tests_c_map_chunk__build_vertices_and_bounds__6b0e50 {
         assert_eq!(out0.min[0], -32.0);
     }
 
-    /// Realistic WoW globals with far-apart grid indices: the two axes' f32
-    /// spans (and so steps and half-cells) differ in their low bits, which
-    /// pins x-from-row/y-from-col against transposition, bit-for-bit, via an
-    /// independently written oracle of the same op chain; min/max/center are
-    /// cross-checked against a plain fold; the radius against a full-f64
-    /// oracle within 1 ULP.
+    /// Realistic WoW globals with far-apart grid indices.
+    ///
+    /// The two axes' f32 spans (and so steps and half-cells) differ in their low
+    /// bits, which pins x-from-row/y-from-col against transposition,
+    /// bit-for-bit, via an independently written oracle of the same op chain;
+    /// min/max/center are cross-checked against a plain fold; the radius against
+    /// a full-f64 oracle within 1 ULP.
     #[test]
     fn realistic_globals_match_f64_oracle() {
         let (col, row) = (989i32, 21i32);
@@ -5342,11 +5449,12 @@ mod tests_c_map_chunk__build_vertices_and_bounds__6b0e50 {
         assert!(dist <= 1, "radius {} vs oracle {oracle}", out.radius);
     }
 
-    /// NaN heights follow both callees' stock unordered polarity — the VERTEX
-    /// operand wins unordered lanes on min (0x699250) AND max (0x6b11f0). A
-    /// mid-stream NaN poisons both accumulators' z and the next vertex
-    /// recovers both (src wins the next unordered compare); a NaN on the LAST
-    /// vertex sticks in BOTH and flows through translate/center into the
+    /// NaN heights follow both callees' stock unordered polarity.
+    ///
+    /// The VERTEX operand wins unordered lanes on min (0x699250) AND max
+    /// (0x6b11f0). A mid-stream NaN poisons both accumulators' z and the next
+    /// vertex recovers both (src wins the next unordered compare); a NaN on the
+    /// LAST vertex sticks in BOTH and flows through translate/center into the
     /// radius and the cached box.
     #[test]
     fn nan_height_unordered_polarity() {
@@ -5372,11 +5480,12 @@ mod tests_c_map_chunk__build_vertices_and_bounds__6b0e50 {
         assert!(out.cached[5].is_nan());
     }
 
-    /// ±0 bit-ties take the VERTEX's bits in both accumulators, per the stock
-    /// callees (max 0x6b11f0: equal parity pattern jumps to the src load; min
-    /// 0x699250: b wins ties). heights[0] = +0.0 seeds both z accumulators
-    /// with +0.0; every later height is −0.0, an equal compare that stock
-    /// re-stores as the src's −0.0 bits. Observable through the translate
+    /// ±0 bit-ties take the VERTEX's bits in both accumulators.
+    ///
+    /// Per the stock callees (max 0x6b11f0: equal parity pattern jumps to the
+    /// src load; min 0x699250: b wins ties). heights[0] = +0.0 seeds both z
+    /// accumulators with +0.0; every later height is −0.0, an equal compare that
+    /// stock re-stores as the src's −0.0 bits. Observable through the translate
     /// when origin.z = −0.0: (−0.0) + (−0.0) keeps the sign, so min.z, max.z
     /// and both cached z lanes must all carry the −0.0 bit pattern.
     #[test]
@@ -5391,8 +5500,9 @@ mod tests_c_map_chunk__build_vertices_and_bounds__6b0e50 {
         assert_eq!(out.cached[5].to_bits(), (-0.0f32).to_bits());
     }
 
-    /// The +1 grid increments wrap like the reference's 32-bit INC (a plain
-    /// `+ 1` would overflow-panic in debug builds and change the anchor).
+    /// The +1 grid increments wrap like the reference's 32-bit INC.
+    ///
+    /// A plain `+ 1` would overflow-panic in debug builds and change the anchor.
     #[test]
     fn grid_index_increment_wraps() {
         let out = build(
@@ -5415,10 +5525,11 @@ mod tests_c_map_chunk__build_vertices_and_bounds__6b0e50 {
     }
 }
 
-/// View-gate predicates for `CMap__UpdateMapObjs` @0x698720. Every stock
-/// compare is FCOMP + FNSTSW with a polarity that CULLS on NaN (unordered
-/// takes the skip arm in all three boxes), so plain ordered `<=` reproduces
-/// each one exactly.
+/// View-gate predicates for `CMap__UpdateMapObjs` @0x698720.
+///
+/// Every stock compare is FCOMP + FNSTSW with a polarity that CULLS on NaN
+/// (unordered takes the skip arm in all three boxes), so plain ordered `<=`
+/// reproduces each one exactly.
 ///
 /// Near-box half-gate: `viewMin[i] <= objMax[i]` per axis (the other half is
 /// the already-native `C3Vector__GreaterEqualAll(viewMax, objMin)`).
@@ -5426,8 +5537,7 @@ pub fn map_obj_view_gate__698720(view_min: &[f32; 3], obj_max: &[f32; 3]) -> boo
     view_min[0] <= obj_max[0] && view_min[1] <= obj_max[1] && view_min[2] <= obj_max[2]
 }
 
-/// Tight-box full test (6 compares in stock order: the three max-side, then
-/// the three min-side).
+/// Tight-box full test (6 compares in stock order: the three max-side, then the three min-side).
 pub fn map_obj_tight_gate__698720(
     tight: &[f32; 6],
     node_min: &[f32; 3],
@@ -5460,8 +5570,9 @@ pub fn map_obj_far_gate__698720(
 mod tests_map_obj_gates__698720 {
     use super::{map_obj_far_gate__698720, map_obj_tight_gate__698720, map_obj_view_gate__698720};
 
-    /// Overlap passes, separation fails, boundary equality PASSES (ordered
-    /// `==` continues in stock), and any NaN bound CULLS.
+    /// Overlap passes, separation fails, boundary equality PASSES.
+    ///
+    /// Ordered `==` continues in stock, and any NaN bound CULLS.
     #[test]
     fn view_gate_polarity() {
         assert!(map_obj_view_gate__698720(&[0.0; 3], &[1.0; 3]));
@@ -5516,11 +5627,12 @@ mod tests_map_obj_gates__698720 {
     }
 }
 
-/// Depth sort key of `CWorldObjList__UpdateVisibility` 0x6838f0 (block
-/// 0x683972): `((ny·y + nz·z) + nx·x + d) − radius`, folded in exactly
-/// that FADDP order at x87 extended (f64 here), narrowed once by the
-/// final FSTP into the object's `+0x78` slot. `plane` = `[nx,ny,nz,d]`
-/// (the camera depth plane globals at 0xc7bcb0..bc).
+/// Depth sort key of `CWorldObjList__UpdateVisibility` 0x6838f0 (block 0x683972).
+///
+/// `((ny·y + nz·z) + nx·x + d) − radius`, folded in exactly that FADDP order at
+/// x87 extended (f64 here), narrowed once by the final FSTP into the object's
+/// `+0x78` slot. `plane` = `[nx,ny,nz,d]` (the camera depth plane globals at
+/// 0xc7bcb0..bc).
 pub fn visibility_sort_key__6838f0(plane: &[f32; 4], center: &[f32; 3], radius: f32) -> f32 {
     super::f64_to_f32(
         ((f64::from(plane[1]) * f64::from(center[1]) + f64::from(plane[2]) * f64::from(center[2]))
@@ -5530,10 +5642,12 @@ pub fn visibility_sort_key__6838f0(plane: &[f32; 4], center: &[f32; 3], radius: 
     )
 }
 
-/// Near test of 0x6838f0 (block 0x683a48): squared distance from the
-/// object center to the camera reference, folded `(dz² + dx²) + dy²` (that
-/// FADDP order), compared `< threshold` with `TEST AH,0x5; JNP` — strictly
-/// less sets near; `>=` AND **unordered (NaN) both give far/not-near**.
+/// Near test of 0x6838f0 (block 0x683a48).
+///
+/// Squared distance from the object center to the camera reference, folded
+/// `(dz² + dx²) + dy²` (that FADDP order), compared `< threshold` with
+/// `TEST AH,0x5; JNP` — strictly less sets near; `>=` AND
+/// **unordered (NaN) both give far/not-near**.
 pub fn visibility_is_near__6838f0(center: &[f32; 3], reference: &[f32; 3], thresh: f32) -> bool {
     let dx = f64::from(center[0]) - f64::from(reference[0]);
     let dy = f64::from(center[1]) - f64::from(reference[1]);
@@ -5582,13 +5696,13 @@ mod tests_update_visibility__6838f0 {
     }
 }
 
-/// LOD near test of `WorldScene__CullAndBucketNodes` 0x6834e0 (block
-/// 0x683681): the camera deltas are EACH narrowed to f32 (stock FSTPs
-/// every component to the stack before `C3Vector__Set`), the squared
-/// magnitude is the hooked 0x4549f0 kernel (f32 `x·x + y·y + z·z` —
-/// stock already calls our hook at 0x6836b4), and the compare is
-/// `FCOMP; TEST AH,0x5; JP` against the LOD threshold
-/// (`DAT_00810178`): near = strictly less; `>=` AND unordered (NaN)
+/// LOD near test of `WorldScene__CullAndBucketNodes` 0x6834e0 (block 0x683681).
+///
+/// The camera deltas are EACH narrowed to f32 (stock FSTPs every component to
+/// the stack before `C3Vector__Set`), the squared magnitude is the hooked
+/// 0x4549f0 kernel (f32 `x·x + y·y + z·z` — stock already calls our hook at
+/// 0x6836b4), and the compare is `FCOMP; TEST AH,0x5; JP` against the LOD
+/// threshold (`DAT_00810178`): near = strictly less; `>=` AND unordered (NaN)
 /// both give far.
 pub fn cull_lod_is_near__6834e0(center: &[f32; 3], camera: &[f32; 3], thresh: f32) -> bool {
     let d = [
@@ -5646,23 +5760,25 @@ mod tests_cull_and_bucket__6834e0 {
     }
 }
 
-/// Span-node timer tick for `SceneTransientMgr::TickAndReap` (@0x6b3890,
-/// 0x6b398a/0x6b39be): `FLD t; FSUB delta; FSTP` — one narrow, and the
-/// expiry compare re-loads the NARROWED store from memory (the caller does
-/// that re-read and the strict `< 0` ordered compare itself).
+/// Span-node timer tick for `SceneTransientMgr::TickAndReap` (@0x6b3890, 0x6b398a/0x6b39be).
+///
+/// `FLD t; FSUB delta; FSTP` — one narrow, and the expiry compare re-loads the
+/// NARROWED store from memory (the caller does that re-read and the strict
+/// `< 0` ordered compare itself).
 pub fn transient_span_timer__6b3890(t: f32, delta: f32) -> f32 {
     super::f64_to_f32(f64::from(t) - f64::from(delta))
 }
 
-/// Lifetime timer tick for `SceneTransientMgr::TickAndReap` (0x6b39eb model
-/// arm, 0x6b3a72 node arm): `FST` keeps the WIDE difference on the stack, so
-/// the store narrows but the `FCOMP 0.0; TEST AH,0x41; JP` expiry gate
-/// consumes the wide value — expired iff `t − delta <= zero` ORDERED (both
-/// C0-set and C3-set fall through; NaN's even parity skips). For a single
-/// f32−f32 subtract the wide and narrowed compares agree (the exact
-/// difference is a multiple of 2^-149, never rounding to zero from
-/// positive); the wide form is kept because it is what the FST/FCOMP pair
-/// executes.
+/// Lifetime timer tick for `SceneTransientMgr::TickAndReap`.
+///
+/// At the 0x6b39eb model arm and the 0x6b3a72 node arm, `FST` keeps the WIDE
+/// difference on the stack, so the store narrows but the
+/// `FCOMP 0.0; TEST AH,0x41; JP` expiry gate consumes the wide value — expired
+/// iff `t − delta <= zero` ORDERED (both C0-set and C3-set fall through; NaN's
+/// even parity skips). For a single f32−f32 subtract the wide and narrowed
+/// compares agree (the exact difference is a multiple of 2^-149, never rounding
+/// to zero from positive); the wide form is kept because it is what the
+/// FST/FCOMP pair executes.
 pub fn transient_life_timer__6b3890(t: f32, delta: f32, zero: f32) -> (f32, bool) {
     let wide = f64::from(t) - f64::from(delta);
     (super::f64_to_f32(wide), wide <= f64::from(zero))
@@ -5690,8 +5806,9 @@ mod tests_tick_and_reap_timers__6b3890 {
         assert!(expired);
     }
 
-    /// Any strictly positive remainder survives, down to the smallest
-    /// representable difference of two f32 inputs.
+    /// Any strictly positive remainder survives.
+    ///
+    /// Down to the smallest representable difference of two f32 inputs.
     #[test]
     fn life_positive_remainder_survives() {
         let (stored, expired) = life(1.0 + f32::EPSILON, 1.0, 0.0);
@@ -5713,15 +5830,16 @@ mod tests_tick_and_reap_timers__6b3890 {
     }
 }
 
-/// Bounds guard for `CWorld::CollectGeometryInBox` (@0x6aa8b0,
-/// 0x6aa92d–0x6aa9ae): negates the four offset-relative box coordinates
-/// (each `FSUB ofs; FCHS` narrowed to the stack — except `b4`'s, whose WIDE
-/// value feeds the first compare via `FST`) and applies the four
-/// NaN-PASSING guards: fail on `−(b4−ofs) < lo` (wide) or `−(b3−ofs) < lo`
-/// (narrowed), both ordered; fail on `−(b1−ofs) >= hi` or `−(b0−ofs) >= hi`
-/// (narrowed, ordered) — every unordered compare passes, exactly the stock
-/// `TEST AH,0x5; JNP` / `TEST AH,0x1; JZ` parities. Returns the narrowed
-/// negated coords `(v0, v1, v3, v4)` for the cell converts.
+/// Bounds guard for `CWorld::CollectGeometryInBox` (@0x6aa8b0, 0x6aa92d–0x6aa9ae).
+///
+/// Negates the four offset-relative box coordinates (each `FSUB ofs; FCHS`
+/// narrowed to the stack — except `b4`'s, whose WIDE value feeds the first
+/// compare via `FST`) and applies the four NaN-PASSING guards: fail on
+/// `−(b4−ofs) < lo` (wide) or `−(b3−ofs) < lo` (narrowed), both ordered; fail on
+/// `−(b1−ofs) >= hi` or `−(b0−ofs) >= hi` (narrowed, ordered) — every unordered
+/// compare passes, exactly the stock `TEST AH,0x5; JNP` / `TEST AH,0x1; JZ`
+/// parities. Returns the narrowed negated coords `(v0, v1, v3, v4)` for the cell
+/// converts.
 pub fn collect_box_guard__6aa8b0(
     b0: f32,
     b1: f32,
@@ -5752,10 +5870,11 @@ pub fn collect_box_guard__6aa8b0(
     Some((v0, v1, v3, v4))
 }
 
-/// Cell-grid convert (0x6aa9b4–0x6aaa11): `scale · v` narrows once
-/// (FSTP/FLD round-trip), the bias subtracts WIDE into the FISTP — the
-/// shared biased-FISTP idiom (round-to-nearest-even; NaN/overflow store the
-/// integer indefinite).
+/// Cell-grid convert (0x6aa9b4–0x6aaa11).
+///
+/// `scale · v` narrows once (FSTP/FLD round-trip), the bias subtracts WIDE into
+/// the FISTP — the shared biased-FISTP idiom (round-to-nearest-even;
+/// NaN/overflow store the integer indefinite).
 pub fn collect_cell_index__6aa8b0(v: f32, scale: f32, bias: f32) -> i32 {
     let p = super::f64_to_f32(f64::from(scale) * f64::from(v));
     fistp_round_ties_even(f64::from(p) - f64::from(bias))
@@ -5800,10 +5919,12 @@ mod tests_collect_geometry_in_box__6aa8b0 {
     }
 }
 
-/// WMO-hit world lerp (0x6a2652..0x6a26a1): `hit[i] = (end[i] - start[i]) ×
-/// frac + start[i]`, with each lane's x87 narrowing pinned exactly —
-/// X narrows the delta×frac product before adding start, Y folds the whole
-/// lane wide, Z narrows the delta (`FSTP m32`) before the wide product+add.
+/// WMO-hit world lerp (0x6a2652..0x6a26a1).
+///
+/// `hit[i] = (end[i] - start[i]) × frac + start[i]`, with each lane's x87
+/// narrowing pinned exactly — X narrows the delta×frac product before adding
+/// start, Y folds the whole lane wide, Z narrows the delta (`FSTP m32`) before
+/// the wide product+add.
 pub fn trace_group_lerp__6a2600(start: [f32; 3], end: [f32; 3], frac: f32) -> [f32; 3] {
     let f = f64::from(frac);
     // X: delta×frac narrowed (FSTP m32), then + start narrowed.
@@ -5840,8 +5961,10 @@ mod tests_trace_group_lerp__6a2600 {
     }
 }
 
-/// Terrain-trace world→grid recentre (0x69c32b..0x69c360): `-(coord − c)`
-/// with the single `FSTP m32` narrow, `c` = the world-origin global.
+/// Terrain-trace world→grid recentre (0x69c32b..0x69c360).
+///
+/// `-(coord − c)` with the single `FSTP m32` narrow, `c` = the world-origin
+/// global.
 pub fn terrain_recentre__69c320(coord: f32, center: f32) -> f32 {
     super::f64_to_f32(-(f64::from(coord) - f64::from(center)))
 }
@@ -5851,9 +5974,10 @@ pub fn terrain_delta__69c320(a: f32, b: f32) -> f32 {
     super::f64_to_f32(f64::from(a) - f64::from(b))
 }
 
-/// Terrain-trace cell index (0x69c375..0x69c3d2): `round(narrow(scale ×
-/// val) − bias)`. The product narrows (`FSTP m32`) before the wide bias
-/// subtract and the round-ties-even `FISTP`.
+/// Terrain-trace cell index (0x69c375..0x69c3d2).
+///
+/// `round(narrow(scale × val) − bias)`. The product narrows (`FSTP m32`) before
+/// the wide bias subtract and the round-ties-even `FISTP`.
 pub fn terrain_cell__69c320(scale: f32, val: f32, bias: f32) -> i32 {
     let prod = super::f64_to_f32(f64::from(scale) * f64::from(val));
     fistp_round_ties_even(f64::from(prod) - f64::from(bias))
@@ -5886,10 +6010,11 @@ mod tests_terrain_trace__69c320 {
     }
 }
 
-/// Anim-record scrolled parameter (0x71204a..0x712058): `ftol((counter −
-/// base) × scale) + offset`, where `counter − base` is an i32 subtraction
-/// FILDed into the x87 product (80-bit) and truncated by `__ftol`, then the
-/// i32 offset is added. Returns the scrolled i32.
+/// Anim-record scrolled parameter (0x71204a..0x712058).
+///
+/// `ftol((counter − base) × scale) + offset`, where `counter − base` is an i32
+/// subtraction FILDed into the x87 product (80-bit) and truncated by `__ftol`,
+/// then the i32 offset is added. Returns the scrolled i32.
 pub fn anim_scroll_param__711fe0(delta: i32, scale: f32, offset: i32) -> i32 {
     let t = super::misc::ftol__40a2b0(f64::from(delta) * f64::from(scale)) as i32;
     t.wrapping_add(offset)
@@ -5909,9 +6034,10 @@ mod tests_anim_scroll_param__711fe0 {
     }
 }
 
-/// Depth-bucket projection cache (0x681a46..0x681a6e): the 4-term plane dot
-/// `m60·p60 + m64·p64 + m5c·p5c + c − w`, folded wide with one narrow at the
-/// `FSTP` into the object's `+0x78` z-cache.
+/// Depth-bucket projection cache (0x681a46..0x681a6e).
+///
+/// The 4-term plane dot `m60·p60 + m64·p64 + m5c·p5c + c − w`, folded wide with
+/// one narrow at the `FSTP` into the object's `+0x78` slot.
 #[allow(clippy::too_many_arguments)]
 pub fn depth_bucket_project__681a40(
     m60: f32,
@@ -5932,9 +6058,11 @@ pub fn depth_bucket_project__681a40(
     )
 }
 
-/// Depth-bucket index (0x681a71..0x681ab2): the second plane dot stays 80-bit
-/// (never stored), so `scale × proj2` narrows only after the full wide fold,
-/// then `round(narrow − bias)` picks the 0x20-slot bucket.
+/// Depth-bucket index (0x681a71..0x681ab2).
+///
+/// The second plane dot stays 80-bit (never stored), so `scale × proj2` narrows
+/// only after the full wide fold, then `round(narrow − bias)` picks the
+/// 0x20-slot bucket.
 #[allow(clippy::too_many_arguments)]
 pub fn depth_bucket_index__681a40(
     m60: f32,

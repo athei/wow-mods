@@ -9,9 +9,10 @@
     clippy::too_many_arguments
 )]
 
-/// `CParticleEmitter::SetAlpha` — fixed-point quantize of a float alpha to an
-/// 8-bit value: `trunc(alpha * 255.0 + 0.5)`, returned as the i32 the original
-/// `__ftol` (truncate-toward-zero) produces. The caller stores its low byte.
+/// `CParticleEmitter::SetAlpha` — fixed-point quantize of a float alpha to an 8-bit value.
+///
+/// `trunc(alpha * 255.0 + 0.5)`, returned as the i32 the original `__ftol`
+/// (truncate-toward-zero) produces. The caller stores its low byte.
 ///
 /// The original is `FLD alpha; FMUL 255.0; FADD 0.5; CALL __ftol`; adding 0.5
 /// before a truncating cast yields round-half-up for the non-negative alphas
@@ -75,12 +76,13 @@ mod tests_c_particle_emitter__set_alpha__7b7b10 {
     }
 }
 
-/// `CParticleEmitter::SetColor` — packs three float color channels and the
-/// already-quantized alpha byte (set earlier by `SetAlpha`) into the emitter's
-/// 32-bit color. Each channel is fixed-point quantized `trunc(c * 255.0 + 0.5)`
-/// and masked to a byte; the alpha byte is requantized
-/// `trunc(a * 255.0 * 255.0 + 0.5)` (a fixed-point squaring, low byte kept)
-/// before being placed in the high byte.
+/// `CParticleEmitter::SetColor` — packs the emitter's 32-bit color.
+///
+/// Packs three float color channels and the already-quantized alpha byte (set
+/// earlier by `SetAlpha`) into the emitter's 32-bit color. Each channel is
+/// fixed-point quantized `trunc(c * 255.0 + 0.5)` and masked to a byte; the
+/// alpha byte is requantized `trunc(a * 255.0 * 255.0 + 0.5)` (a fixed-point
+/// squaring, low byte kept) before being placed in the high byte.
 ///
 /// Layout matches the original register packing
 /// `(alpha << 24) | (c0 << 16) | (c1 << 8) | c2` and the SiliconPatch SSE
@@ -161,8 +163,9 @@ mod tests_c_particle_emitter__set_color__7b7a80 {
     }
 }
 
-/// `CParticleEmitter::SetGravity` — clamps the incoming gravity to be
-/// non-negative: returns `gravity` when `gravity > 0.0`, else `0.0`.
+/// `CParticleEmitter::SetGravity` — clamps the incoming gravity to be non-negative.
+///
+/// Returns `gravity` when `gravity > 0.0`, else `0.0`.
 ///
 /// Matches the original's `FLD gravity; FCOMP 0.0; if 0.0 < gravity keep else
 /// store 0` (the SiliconPatch SSE replacement is the branchless
@@ -316,9 +319,10 @@ pub fn c_particle_emitter__update_particle_physics__7b2680(
     (p, v, ff, alive)
 }
 
-/// Snap each component to exactly `0.0` when it is non-zero and its magnitude is
-/// below `eps` (a deadband around zero). A component already equal to `0.0` is
-/// left untouched, matching the original's `value != 0.0` guard.
+/// Snap each component to exactly `0.0` when it is non-zero and its magnitude is below `eps`.
+///
+/// (A deadband around zero.) A component already equal to `0.0` is left
+/// untouched, matching the original's `value != 0.0` guard.
 fn snap_deadband(v: [f32; 3], eps: f32) -> [f32; 3] {
     v.map(|c| if c != 0.0 && c.abs() < eps { 0.0 } else { c })
 }
@@ -434,8 +438,10 @@ mod tests_c_particle_emitter__update_particle_physics__7b2680 {
     }
 }
 
-/// Per-particle lifetime-fraction interpolation producing a packed BGRA vertex
-/// color, the particle size, and a pair of `u`/`v` atlas-cell indices.
+/// Per-particle lifetime-fraction interpolation.
+///
+/// Produces a packed BGRA vertex color, the particle size, and a pair of
+/// `u`/`v` atlas-cell indices.
 ///
 /// `frac` is the normalized lifetime parameter `((age - t0) * inv_span) * cm0 + cb`.
 /// Each output channel is `slope * frac + base (+ bias)` accumulated in 14.18 fixed
@@ -547,9 +553,10 @@ mod tests_c_particle_emitter__compute_vertex_color_uv__7b9b10 {
         )
     }
 
-    /// Reference extractor: the bit-pattern shift the original performs. For an
-    /// integer channel value `c` this returns `c` (low byte) — the closed form
-    /// the assertions below check against.
+    /// Reference extractor: the bit-pattern shift the original performs.
+    ///
+    /// For an integer channel value `c` this returns `c` (low byte) — the closed
+    /// form the assertions below check against.
     fn extract_byte(value: f32) -> u32 {
         ((value + BIAS).to_bits() >> 14) & 0xff
     }
@@ -677,8 +684,10 @@ mod tests_c_particle_emitter__build_particle_quad_fade_index {
     // The host magic-bias constant `_DAT_008029cc`.
     const BIAS: f32 = 512.0;
 
-    /// Closed form of the bit-pattern extract the original performs, mirrored
-    /// here so the assertions check the kernel against the trick, not itself.
+    /// Closed form of the bit-pattern extract the original performs.
+    ///
+    /// Mirrored here so the assertions check the kernel against the trick, not
+    /// itself.
     fn slot(fade: f32, addr: u32) -> u32 {
         (((fade + BIAS).to_bits() >> 14).wrapping_add(addr >> 5)) & 0x7f
     }
@@ -732,9 +741,10 @@ fn rng_unit(r: u32, one: f32) -> f32 {
     f32::from_bits((r & 0x007f_ffff) | 0x3f80_0000) - one
 }
 
-/// `CParticleEmitter::SpawnParticle` initialiser math: builds a freshly spawned
-/// particle record from three RNG draws and the emitter's spawn parameters,
-/// returning the nine 32-bit slots
+/// `CParticleEmitter::SpawnParticle` initialiser math.
+///
+/// Builds a freshly spawned particle record from three RNG draws and the
+/// emitter's spawn parameters, returning the nine 32-bit slots
 /// `[life_remaining, life, pos.x, pos.y, pos.z, vel.x, vel.y, vel.z, p8]`.
 ///
 /// `life` is a random fraction of `dt` clamped to zero once it reaches
@@ -951,10 +961,12 @@ mod tests_c_particle_emitter__spawn_particle__7ba200 {
     }
 }
 
-/// Copies a caller 4x4 matrix and accumulates a 3-component spawn offset into its
-/// translation row (column-major elements 12, 13, 14), returning the combined 16-float
-/// matrix. This is the pure prelude of the emitter spawn-transform update; the optional
-/// bone-relative multiply and the double-buffered struct writes are handled by the adapter.
+/// Copies a caller 4x4 matrix and accumulates a 3-component spawn offset into its translation row.
+///
+/// (Column-major elements 12, 13, 14.) Returns the combined 16-float matrix.
+/// This is the pure prelude of the emitter spawn-transform update; the optional
+/// bone-relative multiply and the double-buffered struct writes are handled by
+/// the adapter.
 pub fn c_particle_system__update_spawn_transform__7b76c0(
     matrix: &[f32; 16],
     position: &[f32; 3],
@@ -966,11 +978,12 @@ pub fn c_particle_system__update_spawn_transform__7b76c0(
     m
 }
 
-/// Extracts the three spawn-basis vec3s the emitter caches from a (possibly
-/// bone-transformed) 4x4: the SECOND row `(m[4..7])`, row2 `(m[8..11])`, and the
-/// translation `(m[12..15])`. Returned as `(row0, row2, translation)` to mirror the
-/// struct layout (`this+0x7c`, `this+0x94`, `this+0x20`). Stock caches `m[4],m[5],m[6]`
-/// into the `this+0x7c` slot, not the first row.
+/// Extracts the three spawn-basis vec3s the emitter caches from a (possibly bone-transformed) 4x4.
+///
+/// The SECOND row `(m[4..7])`, row2 `(m[8..11])`, and the translation
+/// `(m[12..15])`. Returned as `(row0, row2, translation)` to mirror the struct
+/// layout (`this+0x7c`, `this+0x94`, `this+0x20`). Stock caches
+/// `m[4],m[5],m[6]` into the `this+0x7c` slot, not the first row.
 pub fn c_particle_system__spawn_basis__7b76c0(m: &[f32; 16]) -> ([f32; 3], [f32; 3], [f32; 3]) {
     let row0 = [m[4], m[5], m[6]];
     let row2 = [m[8], m[9], m[10]];
@@ -984,8 +997,9 @@ mod tests_c_particle_system__update_spawn_transform__7b76c0 {
         c_particle_system__spawn_basis__7b76c0, c_particle_system__update_spawn_transform__7b76c0,
     };
 
-    /// A 4x4 in column-major order with distinct entries so a basis extractor cannot
-    /// accidentally pass by reading the wrong slot.
+    /// A 4x4 in column-major order with distinct entries.
+    ///
+    /// So a basis extractor cannot accidentally pass by reading the wrong slot.
     fn sample_matrix() -> [f32; 16] {
         [
             1.0, 2.0, 3.0, 0.0, // row0 candidates m[0..3]
@@ -995,9 +1009,10 @@ mod tests_c_particle_system__update_spawn_transform__7b76c0 {
         ]
     }
 
-    /// Law: only the translation slots (12, 13, 14) change; every other element is
-    /// carried through untouched, and each translation slot is the source plus the
-    /// matching position component.
+    /// Law: only the translation slots (12, 13, 14) change.
+    ///
+    /// Every other element is carried through untouched, and each translation
+    /// slot is the source plus the matching position component.
     #[test]
     fn only_translation_accumulates() {
         let src = sample_matrix();
@@ -1014,8 +1029,9 @@ mod tests_c_particle_system__update_spawn_transform__7b76c0 {
         }
     }
 
-    /// Metamorphic law: accumulating the offset in two halves equals accumulating it
-    /// once. Applying `(a + b)` in one shot must match applying `a` then `b`.
+    /// Metamorphic law: accumulating the offset in two halves equals accumulating it once.
+    ///
+    /// Applying `(a + b)` in one shot must match applying `a` then `b`.
     #[test]
     fn offset_accumulation_is_additive() {
         let src = sample_matrix();
@@ -1045,8 +1061,10 @@ mod tests_c_particle_system__update_spawn_transform__7b76c0 {
         }
     }
 
-    /// Known value: with the sample matrix and offset `(0.5, -1.5, 100.0)` the
-    /// translation row becomes `(10.5, 9.5, 112.0)` while the other elements hold.
+    /// Known value.
+    ///
+    /// With the sample matrix and offset `(0.5, -1.5, 100.0)` the translation
+    /// row becomes `(10.5, 9.5, 112.0)` while the other elements hold.
     #[test]
     fn known_value() {
         let src = sample_matrix();
@@ -1058,9 +1076,10 @@ mod tests_c_particle_system__update_spawn_transform__7b76c0 {
         assert_eq!(out[15].to_bits(), 1.0f32.to_bits());
     }
 
-    /// Law: the basis extractor pulls row0 from `m[0..3]`, row2 from `m[8..11]`, and
-    /// the translation from `m[12..15]` of the accumulated matrix — exactly the slots
-    /// the adapter caches into the emitter struct.
+    /// Law: the basis extractor pulls row0 from `m[0..3]`, row2 from `m[8..11]`.
+    ///
+    /// The translation comes from `m[12..15]` of the accumulated matrix —
+    /// exactly the slots the adapter caches into the emitter struct.
     #[test]
     fn basis_pulls_expected_slots() {
         let src = sample_matrix();
@@ -1082,13 +1101,15 @@ mod tests_c_particle_system__update_spawn_transform__7b76c0 {
     }
 }
 
-/// Floats per trail vertex-ring slot (`0x28` bytes: two edge vertices, each a
-/// position plus texture u/v).
+/// Floats per trail vertex-ring slot.
+///
+/// (`0x28` bytes: two edge vertices, each a position plus texture u/v.)
 pub const TRAIL_VERT_FLOATS: usize = 10;
 
-/// Trail-emitter state for `c_particle_emitter__advance_trail__7b7e60`: the
-/// segment-ring indices plus every object field the advance reads, injected by
-/// value. `head`, `tail`, `spawn_fraction` and `flags` are updated in place.
+/// Trail-emitter state for `c_particle_emitter__advance_trail__7b7e60`.
+///
+/// The segment-ring indices plus every object field the advance reads, injected
+/// by value. `head`, `tail`, `spawn_fraction` and `flags` are updated in place.
 pub struct TrailAdvance {
     /// Ring capacity in slots (object `+0x8`).
     pub capacity: u32,
@@ -1098,11 +1119,14 @@ pub struct TrailAdvance {
     pub tail: u32,
     /// Fractional spawn accumulator carried between calls (object `+0x1c`).
     pub spawn_fraction: f32,
-    /// Emitter flag word (object `+0x148`): bits 0 and 2 gate spawning; the
-    /// advance sets bit 3 and clears bit 4 on exit.
+    /// Emitter flag word (object `+0x148`).
+    ///
+    /// Bits 0 and 2 gate spawning; the advance sets bit 3 and clears bit 4 on
+    /// exit.
     pub flags: u32,
-    /// Maximum trail arc span (object `+0xf8`); clamps the advance and retires
-    /// slots whose age would exceed it.
+    /// Maximum trail arc span (object `+0xf8`).
+    ///
+    /// Clamps the advance and retires slots whose age would exceed it.
     pub max_arc: f32,
     /// Segments spawned per unit of advance (object `+0xf4`).
     pub spawn_per_unit: f32,
@@ -1126,8 +1150,9 @@ pub struct TrailAdvance {
     pub dir_cur: [f32; 3],
     /// Ribbon edge direction at the previous sample (object `+0x88`).
     pub dir_prev: [f32; 3],
-    /// Unscaled drift vector for the current end (object `+0x94`); the frame
-    /// scales it by the inter-sample distance.
+    /// Unscaled drift vector for the current end (object `+0x94`).
+    ///
+    /// The frame scales it by the inter-sample distance.
     pub drift_cur_raw: [f32; 3],
     /// Unscaled drift vector for the previous end (object `+0xa0`).
     pub drift_prev_raw: [f32; 3],
@@ -1137,8 +1162,9 @@ pub struct TrailAdvance {
     pub extent_lo: f32,
 }
 
-/// Spawn interpolation frame derived from the current / previous emitter
-/// samples (object `+0xac..+0xf0`), refreshed once per spawning advance.
+/// Spawn interpolation frame derived from the current / previous emitter samples.
+///
+/// (Object `+0xac..+0xf0`.) Refreshed once per spawning advance.
 pub struct TrailFrame {
     /// Drift offset blended toward the current end (`+0xac`).
     pub drift_cur: [f32; 3],
@@ -1166,8 +1192,10 @@ fn v3_sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
 }
 
-/// One ring-index step: `index + step`, minus `capacity` once the sum reaches
-/// it (the trail ring's modular advance).
+/// One ring-index step.
+///
+/// `index + step`, minus `capacity` once the sum reaches it (the trail ring's
+/// modular advance).
 fn ring_step(index: u32, step: u32, capacity: u32) -> u32 {
     let next = index.wrapping_add(step);
     if next >= capacity {
@@ -1177,10 +1205,11 @@ fn ring_step(index: u32, step: u32, capacity: u32) -> u32 {
     }
 }
 
-/// Rebuilds the spawn frame from the current / previous samples: edge points
-/// pulled in by `extent_lo` / pushed out by `extent_hi` along each sample's
-/// edge direction, and the drift vectors scaled by the inter-sample distance
-/// (times the injected `width_ref`, stock 1.0).
+/// Rebuilds the spawn frame from the current / previous samples.
+///
+/// Edge points pulled in by `extent_lo` / pushed out by `extent_hi` along each
+/// sample's edge direction, and the drift vectors scaled by the inter-sample
+/// distance (times the injected `width_ref`, stock 1.0).
 fn trail_frame(st: &TrailAdvance, width_ref: f32) -> TrailFrame {
     let delta = v3_sub(st.pos, st.prev);
     let span = (delta[0] * delta[0] + delta[1] * delta[1] + delta[2] * delta[2]).sqrt() * width_ref;
@@ -1194,10 +1223,12 @@ fn trail_frame(st: &TrailAdvance, width_ref: f32) -> TrailFrame {
     }
 }
 
-/// Writes one ribbon slot at `tail`: both edge vertices interpolate between
-/// the frame's previous (`t = 1`) and current (`t = 0`) ends with the drift
-/// terms blended in, the slot age is seeded, and the tail advances by `step`
-/// slots (`step = 0` leaves the slot uncommitted at the tail).
+/// Writes one ribbon slot at `tail`.
+///
+/// Both edge vertices interpolate between the frame's previous (`t = 1`) and
+/// current (`t = 0`) ends with the drift terms blended in, the slot age is
+/// seeded, and the tail advances by `step` slots (`step = 0` leaves the slot
+/// uncommitted at the tail).
 fn spawn_slot(
     st: &mut TrailAdvance,
     ages: &mut [f32],
@@ -1229,18 +1260,19 @@ fn spawn_slot(
     st.tail = ring_step(st.tail, step, st.capacity);
 }
 
-/// Advances a trail-ribbon emitter by `advance` arc units: clamps the advance
-/// into `[0, max_arc]` (a strictly negative advance flushes to zero; NaN or an
-/// overlong advance saturates at `max_arc`), retires ring slots whose age
-/// would exceed the span, spawns interpolated segments when flag bits 0 and 2
-/// are set and `spawn_gate` is bit-pattern `+0.0` (the original tests the raw
-/// argument word), ages every live slot — adding the parabolic z sag
-/// `(2·age + d)·d·sag_rate` to both edge vertices and refreshing texture u/v —
-/// then sets flag bit 3 and clears bit 4. `ages` holds one float per ring slot
-/// and `verts` `TRAIL_VERT_FLOATS` floats per slot. `seg_ref` / `min_advance`
-/// / `width_ref` are injected host constants (stock 1.0 / 0.0 / 1.0). Returns
-/// the refreshed spawn frame when a spawn pass ran so the adapter can write it
-/// back to the object.
+/// Advances a trail-ribbon emitter by `advance` arc units.
+///
+/// Clamps the advance into `[0, max_arc]` (a strictly negative advance flushes
+/// to zero; NaN or an overlong advance saturates at `max_arc`), retires ring
+/// slots whose age would exceed the span, spawns interpolated segments when
+/// flag bits 0 and 2 are set and `spawn_gate` is bit-pattern `+0.0` (the
+/// original tests the raw argument word), ages every live slot — adding the
+/// parabolic z sag `(2·age + d)·d·sag_rate` to both edge vertices and
+/// refreshing texture u/v — then sets flag bit 3 and clears bit 4. `ages` holds
+/// one float per ring slot and `verts` `TRAIL_VERT_FLOATS` floats per slot.
+/// `seg_ref` / `min_advance` / `width_ref` are injected host constants (stock
+/// 1.0 / 0.0 / 1.0). Returns the refreshed spawn frame when a spawn pass ran so
+/// the adapter can write it back to the object.
 pub fn c_particle_emitter__advance_trail__7b7e60(
     st: &mut TrailAdvance,
     ages: &mut [f32],
@@ -1599,8 +1631,10 @@ mod tests_c_particle_emitter__advance_trail__7b7e60 {
     }
 }
 
-/// Offsets a row-major 4x4 transform's translation row by a billboard vector
-/// resolved through the transform's upper-3x3 column basis.
+/// Offsets a row-major 4x4 transform's translation row by a billboard vector.
+///
+/// The billboard vector is resolved through the transform's upper-3x3 column
+/// basis.
 ///
 /// Returns a copy of `m` whose translation row (`m[12..15]`) is advanced by the
 /// billboard offset; the rest of the matrix is unchanged.
@@ -1676,8 +1710,9 @@ mod draw_batch_tests {
     }
 }
 
-/// `CParticleEmitter::Update` entry guard + per-particle age/fade decisions —
-/// the only host-testable logic in the otherwise-impure update driver.
+/// `CParticleEmitter::Update` entry guard + per-particle age/fade decisions.
+///
+/// The only host-testable logic in the otherwise-impure update driver.
 ///
 /// Locks the three x87 `FNSTSW`/`TEST AH`/`Jcc` polarities the driver depends on
 /// so they can be asserted bit-exactly off the live image. `dt_runs_body`
@@ -1702,10 +1737,11 @@ pub fn c_particle_emitter__update__7b5a10_dt_runs_body(dt: f32) -> bool {
     !(dt <= 0.0)
 }
 
-/// Per-particle age advance plus the two cull/fade decisions, returning the new
-/// age and the `(culled, fade_byte)` outcome. The age add and both compares are
-/// the only float math the driver does inline; physics, position eval, and list
-/// mutation are all delegated.
+/// Per-particle age advance plus the two cull/fade decisions.
+///
+/// Returns the new age and the `(culled, fade_byte)` outcome. The age add and
+/// both compares are the only float math the driver does inline; physics,
+/// position eval, and list mutation are all delegated.
 pub fn c_particle_emitter__update__7b5a10_age_advance(
     age: f32,
     dt: f32,
@@ -1811,10 +1847,11 @@ mod tests_c_particle_emitter__update__7b5a10 {
     }
 }
 
-/// Quantizes a color channel to its 8-bit value the way
-/// `CParticleEmitter::ApplyRenderState` does for every diffuse/emissive channel
-/// and alpha: clamp to `[0, 1]`, then `trunc(c * 255.0 + 0.5)`, keeping the low
-/// byte the stock body stores from `__ftol`'s `al`.
+/// Quantizes a color channel to its 8-bit value the way `CParticleEmitter::ApplyRenderState` does.
+///
+/// For every diffuse/emissive channel and alpha: clamp to `[0, 1]`, then
+/// `trunc(c * 255.0 + 0.5)`, keeping the low byte the stock body stores from
+/// `__ftol`'s `al`.
 ///
 /// The clamp mirrors the x87 ladder exactly: `c < 0` floors to `0.0`; `c > 1`
 /// ceils to `1.0`; otherwise (`c <= 1`, and any NaN) the value passes through.
@@ -1842,8 +1879,9 @@ pub fn clamp01_to_color_byte__70c190(c: f32) -> u32 {
     ((clamped * 255.0 + 0.5) as i32 & 0xff) as u32
 }
 
-/// Decides the `RenderState(5)` value from one basis row of the emitter's
-/// orientation: `0` when the row is (near-)unit length, `1` otherwise.
+/// Decides the `RenderState(5)` value from one basis row of the emitter's orientation.
+///
+/// `0` when the row is (near-)unit length, `1` otherwise.
 ///
 /// Reproduces the squared-magnitude epsilon test at `0x70c36a`/`0x70c569`:
 /// `((x*x + y*y) + z*z) - 1.0`, absolute value, compared against the epsilon
@@ -1860,16 +1898,18 @@ pub fn rotation_row_render_state__70c190(x: f32, y: f32, z: f32, epsilon: f32) -
     u32::from((sqmag - 1.0).abs() > epsilon)
 }
 
-/// `trunc(depth * 224.0)` blend/sort parameter at site `0x70c256`
-/// (`fld [ecx+0x10]; fmul 224.0; call __ftol`), returned as the i32 the stock
+/// `trunc(depth * 224.0)` blend/sort parameter at site `0x70c256`.
+///
+/// (`fld [ecx+0x10]; fmul 224.0; call __ftol`.) Returned as the i32 the stock
 /// truncating `__ftol` produces for `RenderState(8)`. The `224.0` scale
 /// (`0x43600000`) lives at host global `0x812034`.
 pub fn blend_sort_param_224__70c190(depth: f32) -> i32 {
     (depth * 224.0) as i32
 }
 
-/// Packs four already-quantized channel bytes into the `0xAARRGGBB` D3DCOLOR
-/// dword the stock body assembles from its `[ebp-4 .. ebp-1]` byte slots before
+/// Packs four already-quantized channel bytes into the `0xAARRGGBB` D3DCOLOR dword.
+///
+/// The stock body assembles it from its `[ebp-4 .. ebp-1]` byte slots before
 /// calling the scalar render-state setter (`B` at the low address, `A` at the
 /// high). Each argument carries only its low 8 bits, as the source stores do.
 pub fn pack_argb__70c190(a: u32, r: u32, g: u32, b: u32) -> u32 {
@@ -1939,21 +1979,24 @@ mod tests_apply_render_state__70c190 {
     }
 }
 
-/// Mantissa of a 32-bit RNG word reinterpreted into `[1, 2)`: the raw
-/// `AND 0x7fffff; OR 0x3f800000` bit trick of `SpawnParticle` 0x7b8890 (unlike
-/// [`rng_unit`] above, the `- 1.0` normalisation is NOT folded in here — the
-/// callers subtract a host-injected base/center instead).
+/// Mantissa of a 32-bit RNG word reinterpreted into `[1, 2)`.
+///
+/// The raw `AND 0x7fffff; OR 0x3f800000` bit trick of `SpawnParticle` 0x7b8890
+/// (unlike [`rng_unit`] above, the `- 1.0` normalisation is NOT folded in here
+/// — the callers subtract a host-injected base/center instead).
 fn spawn_rand_mantissa__7b8890(r: u32) -> f32 {
     f32::from_bits((r & 0x007f_ffff) | 0x3f80_0000)
 }
 
-/// Sign-centered random draw of `SpawnParticle` 0x7b8890: the mantissa float
-/// `m ∈ [1, 2)` is folded about `center` (the host global at 0x801628 —
-/// **live image value 2.0f**, so the spread is `±(2 − m) ∈ (-1, 1)` mirrored
-/// by the RNG sign; an earlier 1.5/±0.5 reading of that slot was wrong) using
-/// the SIGN BIT of the raw RNG word as an integer test — `center - m` when
-/// `(int)r < 0`, else `m - center`. No x87 compares are involved (stock uses
-/// `TEST EAX,EAX; JGE`), so there is no NaN-polarity concern.
+/// Sign-centered random draw of `SpawnParticle` 0x7b8890.
+///
+/// The mantissa float `m ∈ [1, 2)` is folded about `center` (the host global
+/// at 0x801628 — **live image value 2.0f**, so the spread is
+/// `±(2 − m) ∈ (-1, 1)` mirrored by the RNG sign; an earlier 1.5/±0.5 reading
+/// of that slot was wrong) using the SIGN BIT of the raw RNG word as an integer
+/// test — `center - m` when `(int)r < 0`, else `m - center`. No x87 compares
+/// are involved (stock uses `TEST EAX,EAX; JGE`), so there is no NaN-polarity
+/// concern.
 fn spawn_rand_centered__7b8890(r: u32, center: f32) -> f32 {
     let m = spawn_rand_mantissa__7b8890(r);
     if (r as i32) < 0 {
@@ -1963,16 +2006,19 @@ fn spawn_rand_centered__7b8890(r: u32, center: f32) -> f32 {
     }
 }
 
-/// Particle age seed of `SpawnParticle` 0x7b8890: `(m - base) * dt` where `m`
-/// is the `[1, 2)` mantissa float of the first draw (NO sign fold) and `base`
-/// is the host global at 0x7ff9d8 (1.0), giving `[0, 1) · dt`.
+/// Particle age seed of `SpawnParticle` 0x7b8890.
+///
+/// `(m - base) * dt` where `m` is the `[1, 2)` mantissa float of the first draw
+/// (NO sign fold) and `base` is the host global at 0x7ff9d8 (1.0), giving
+/// `[0, 1) · dt`.
 pub fn c_particle_emitter__spawn_age__7b8890(r: u32, base: f32, dt: f32) -> f32 {
     (spawn_rand_mantissa__7b8890(r) - base) * dt
 }
 
-/// Planar spawn offset of `SpawnParticle` 0x7b8890 — the emitter-local x/y
-/// position built from two sign-centered draws. Stock draws the Y word FIRST
-/// (draw #2) and the X word second (draw #3):
+/// Planar spawn offset of `SpawnParticle` 0x7b8890.
+///
+/// The emitter-local x/y position built from two sign-centered draws. Stock
+/// draws the Y word FIRST (draw #2) and the X word second (draw #3):
 /// `x = centered(r_x)·scale_x·half`, `y = centered(r_y)·scale_y·half` where
 /// `scale_x`/`scale_y` are emitter fields +0x290/+0x294 and `half` is the host
 /// global at 0x7ffa24 (0.5). Returns `[x, y]`; z is stored as literal `+0.0`
@@ -1990,8 +2036,9 @@ pub fn c_particle_emitter__spawn_planar_offset__7b8890(
     [cx * scale_x * half, cy * scale_y * half]
 }
 
-/// Emission-cone velocity of `SpawnParticle` 0x7b8890 (mode selector +0x188 is
-/// zero): two sign-centered draws scaled by the emitter cone-angle fields
+/// Emission-cone velocity of `SpawnParticle` 0x7b8890 (mode selector +0x188 is zero).
+///
+/// Two sign-centered draws scaled by the emitter cone-angle fields
 /// (+0x298 azimuth `scale_a`, +0x29c elevation `scale_b`) feed the classic
 /// spherical direction at `radius`:
 /// `[cos(b)·sin(a)·r, sin(b)·sin(a)·r, cos(a)·r]` with `sin(a)·r` computed
@@ -2019,9 +2066,10 @@ pub fn c_particle_emitter__spawn_cone_velocity__7b8890(
     [vx, vy, vz]
 }
 
-/// Directed velocity of `SpawnParticle` 0x7b8890 (mode selector +0x188 is
-/// non-zero): normalise `dir` — the vector from the target point to the spawn
-/// offset — to length `radius`: `s = radius / sqrt(dir·dir)`, `v = dir · s`.
+/// Directed velocity of `SpawnParticle` 0x7b8890 (mode selector +0x188 is non-zero).
+///
+/// Normalise `dir` — the vector from the target point to the spawn offset — to
+/// length `radius`: `s = radius / sqrt(dir·dir)`, `v = dir · s`.
 ///
 /// Stock performs `FSQRT; FDIVR` with NO zero guard: a zero-length `dir`
 /// divides by zero (`s = ±inf`, or NaN when `radius` is also 0) and the
@@ -2034,12 +2082,13 @@ pub fn c_particle_emitter__spawn_directed_velocity__7b8890(dir: [f32; 3], radius
     [dir[0] * s, dir[1] * s, dir[2] * s]
 }
 
-/// Random velocity kick of `SpawnParticle` 0x7b8890 (flag 0x400): one more
-/// sign-centered draw builds the kick magnitude `k = centered·scale + base`
-/// (`scale` = emitter +0x184, `base` = the 1.0 host global at 0x7ff9d8 — the
-/// same word the age math subtracts), which scales the emitter velocity
-/// direction (+0x258/+0x25c/+0x260) and accumulates onto the current record
-/// velocity: `vel + k·dir` per component.
+/// Random velocity kick of `SpawnParticle` 0x7b8890 (flag 0x400).
+///
+/// One more sign-centered draw builds the kick magnitude
+/// `k = centered·scale + base` (`scale` = emitter +0x184, `base` = the 1.0 host
+/// global at 0x7ff9d8 — the same word the age math subtracts), which scales the
+/// emitter velocity direction (+0x258/+0x25c/+0x260) and accumulates onto the
+/// current record velocity: `vel + k·dir` per component.
 pub fn c_particle_emitter__spawn_velocity_kick__7b8890(
     r: u32,
     center: f32,
@@ -2067,11 +2116,12 @@ mod tests_c_particle_emitter__spawn_particle__7b8890 {
         spawn_rand_centered__7b8890 as centered,
     };
 
-    /// Host-global stand-ins the adapter injects. The kernels are fully
-    /// parameterized, so these are MOCK values for the tests; the live image
-    /// holds `_DAT_00801628 = 2.0f` (CENTER here is deliberately different to
-    /// exercise the fold generically), `_DAT_007ff9d8 = 1.0f`,
-    /// `_DAT_007ffa24 = 0.5f`.
+    /// Host-global stand-ins the adapter injects.
+    ///
+    /// The kernels are fully parameterized, so these are MOCK values for the
+    /// tests; the live image holds `_DAT_00801628 = 2.0f` (CENTER here is
+    /// deliberately different to exercise the fold generically),
+    /// `_DAT_007ff9d8 = 1.0f`, `_DAT_007ffa24 = 0.5f`.
     const CENTER: f32 = 1.5; // mock; live _DAT_00801628 is 2.0f
     const BASE: f32 = 1.0; // _DAT_007ff9d8
     const HALF: f32 = 0.5; // _DAT_007ffa24
@@ -2081,9 +2131,10 @@ mod tests_c_particle_emitter__spawn_particle__7b8890 {
         (1.0 + f64::from(r & 0x007f_ffff) / 8_388_608.0) as f32
     }
 
-    /// Tiny deterministic LCG standing in for the stock table PRNG (the real
-    /// draw stream is stateful game memory — only in-game validation can check
-    /// draw ORDER; these tests pin the pure math on arbitrary words).
+    /// Tiny deterministic LCG standing in for the stock table PRNG.
+    ///
+    /// (The real draw stream is stateful game memory — only in-game validation
+    /// can check draw ORDER; these tests pin the pure math on arbitrary words.)
     fn mock_prng(state: &mut u32) -> u32 {
         *state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
         *state
@@ -2239,9 +2290,11 @@ mod tests_c_particle_emitter__spawn_particle__7b8890 {
     }
 }
 
-/// Catch-up split for `CParticleEmitter::UpdateFixedStep` (@0x7b5880): breaks
-/// an oversized `dt` into `count` fixed-step Update calls plus a residual,
-/// and pre-scales the three `+0x26c..+0x274` state floats by `1/(count+1)`.
+/// Catch-up split for `CParticleEmitter::UpdateFixedStep` (@0x7b5880).
+///
+/// Breaks an oversized `dt` into `count` fixed-step Update calls plus a
+/// residual, and pre-scales the three `+0x26c..+0x274` state floats by
+/// `1/(count+1)`.
 ///
 /// Returns `None` on the copy arm — the stock `FCOMP dt, step; TEST AH,0x41`
 /// takes it for `dt <= step` AND for NaN `dt` (unordered sets C0/C3), so the
@@ -2308,8 +2361,10 @@ mod tests_fixed_step_catchup__7b5880 {
         assert!(catchup(f32::NAN, 10.0, [1.0; 3], STEP, CAP, MAGIC, 1.0).is_none());
     }
 
-    /// dt = 5.25 steps: rint rounds the quotient to 5, the residual keeps the
-    /// quarter step, and the pre-scale divides by count+1 = 6.
+    /// dt = 5.25 steps.
+    ///
+    /// rint rounds the quotient to 5, the residual keeps the quarter step, and
+    /// the pre-scale divides by count+1 = 6.
     #[test]
     fn exact_split_and_prescale() {
         let (residual, count, scaled) =
@@ -2322,8 +2377,9 @@ mod tests_fixed_step_catchup__7b5880 {
         assert_eq!(scaled[2].to_bits(), 3.0f32.to_bits());
     }
 
-    /// The rint is to-nearest-EVEN on a true .5 quotient (exact dyadic
-    /// operands): 2.5 steps -> 2, and the residual keeps the half step.
+    /// The rint is to-nearest-EVEN on a true .5 quotient (exact dyadic operands).
+    ///
+    /// 2.5 steps -> 2, and the residual keeps the half step.
     #[test]
     fn rint_ties_even_on_quotient() {
         let (residual, count, _) = catchup(0.625, 10.0, [1.0; 3], 0.25, CAP, MAGIC, 1.0).unwrap();
@@ -2353,8 +2409,9 @@ mod tests_fixed_step_catchup__7b5880 {
     }
 }
 
-/// Camera-fade scalar of `CParticleEmitter::EmitParticles` (0x7b5550
-/// prologue): `t = one − (cam − fade_base) × fade_scale`, computed wide.
+/// Camera-fade scalar of `CParticleEmitter::EmitParticles` (0x7b5550 prologue).
+///
+/// `t = one − (cam − fade_base) × fade_scale`, computed wide.
 /// The FIRST clamp compares the WIDE value against `quarter` (`FST` keeps
 /// ST0; `TEST AH,5; JP` — only an ordered `t < quarter` takes 0.25, NaN
 /// falls through), the SECOND compares the NARROWED store against `one`
@@ -2416,8 +2473,9 @@ mod tests_emit_fade_clamp__7b5550 {
     }
 }
 
-/// Emission rate of `CParticleEmitter::EmitParticles` (0x7b55a3..0x7b55bb):
-/// the inlined `WowGlobals` getter float × the emitter rate field × the
+/// Emission rate of `CParticleEmitter::EmitParticles` (0x7b55a3..0x7b55bb).
+///
+/// The inlined `WowGlobals` getter float × the emitter rate field × the
 /// fade scalar, all wide, one narrowing at the `FSTP`.
 #[must_use]
 pub fn emit_rate__7b5550(g: f32, emitter_rate: f32, fade: f32) -> f32 {
@@ -2440,8 +2498,9 @@ mod tests_emit_rate__7b5550 {
     }
 }
 
-/// Accumulator step of `CParticleEmitter::EmitParticles` (0x7b565d..0x7b56b6
-/// / 0x7b57d0): `wide = rate × dt + accum` stays on the x87 stack — the
+/// Accumulator step of `CParticleEmitter::EmitParticles` (0x7b565d..0x7b56b6 / 0x7b57d0).
+///
+/// `wide = rate × dt + accum` stays on the x87 stack — the
 /// `FST` into `this+0x8` narrows the STORE but the `+half` count truncation
 /// consumes the WIDE value. Returns `(stored, count)` with `count` = the
 /// CRT `__ftol` low 32 of `wide + half`.
@@ -2485,8 +2544,9 @@ mod tests_emit_accum_count__7b5550 {
     }
 }
 
-/// Path-interpolation deltas of the flag-0x1000 arm (0x7b5686..0x7b56ad):
-/// per-component `FSUB` + `FSTP` — each `ctx` position minus the emitter
+/// Path-interpolation deltas of the flag-0x1000 arm (0x7b5686..0x7b56ad).
+///
+/// Per-component `FSUB` + `FSTP` — each `ctx` position minus the emitter
 /// base narrows once.
 #[must_use]
 pub fn emit_path_deltas__7b5550(pos: &[f32; 3], base: &[f32; 3]) -> [f32; 3] {
@@ -2510,8 +2570,9 @@ mod tests_emit_path_deltas__7b5550 {
     }
 }
 
-/// One interpolated spawn point of the flag-0x1000 arm (0x7b56e6..0x7b572b):
-/// the RNG draw's mantissa bits build the `[1, 2)` float, `frac = m − one`
+/// One interpolated spawn point of the flag-0x1000 arm (0x7b56e6..0x7b572b).
+///
+/// The RNG draw's mantissa bits build the `[1, 2)` float, `frac = m − one`
 /// (exact) stays WIDE on the stack, and each component is `delta × frac +
 /// base` with one narrowing. `base` and `one` are re-read live per spawn by
 /// the adapter, exactly like the stock per-iteration loads.
@@ -2554,7 +2615,8 @@ mod tests_emit_path_point__7b5550 {
     }
 }
 
-/// Accumulator settle of `CParticleEmitter::EmitParticles` (0x7b5861 tail):
+/// Accumulator settle of `CParticleEmitter::EmitParticles` (0x7b5861 tail).
+///
 /// `FILD` of the zero-extended spawn counter (exact in f64) subtracted from
 /// the re-read accumulator, one narrowing at the store.
 #[must_use]
@@ -2581,8 +2643,9 @@ mod tests_emit_accum_settle__7b5550 {
     }
 }
 
-/// Negated translation column of `CParticleEmitter::Render`'s local matrix
-/// (0x7b3e51..0x7b3e8d): three inline `fld;fchs;fstp` of the emitter pivot.
+/// Negated translation column of `CParticleEmitter::Render`'s local matrix (0x7b3e51..0x7b3e8d).
+///
+/// Three inline `fld;fchs;fstp` of the emitter pivot.
 /// Pure IEEE-754 sign flips — exact for every input.
 #[must_use]
 pub fn render_neg_translation__7b3d20(pos: &[f32; 3]) -> [f32; 3] {
@@ -2603,8 +2666,9 @@ mod tests_render_neg_translation__7b3d20 {
     }
 }
 
-/// The 3x3 billboard-fixup transform of `CParticleEmitter::Render`
-/// (0x7b41a5..0x7b4243): each of the four fixup rows is rotated by the
+/// The 3x3 billboard-fixup transform of `CParticleEmitter::Render` (0x7b41a5..0x7b4243).
+///
+/// Each of the four fixup rows is rotated by the
 /// billboard matrix's 3x3 block. Per component the x87 chain runs wide and
 /// narrows once, with the exact stock sum trees:
 /// `out.x = (m4·y + m8·z) + m0·x`, `out.y = (m5·y + m1·x) + m9·z`,
@@ -2663,8 +2727,9 @@ mod tests_render_billboard_fixup__7b3d20 {
     }
 }
 
-/// Facing-vector normalize of `CParticleEmitter::Render` (0x7b426b..0x7b429c):
-/// the 0x4549f0 squared magnitude returns a WIDE ST0 (modeled in f64 with the
+/// Facing-vector normalize of `CParticleEmitter::Render` (0x7b426b..0x7b429c).
+///
+/// The 0x4549f0 squared magnitude returns a WIDE ST0 (modeled in f64 with the
 /// `(x²+y²)+z²` sum order), `FSQRT` stays wide, and the gate is
 /// `TEST AH,0x5; JNP` — the normalize is SKIPPED only on an ordered
 /// `|len| < eps`; **NaN falls through to the normalize** (an `eps <= |len|`
@@ -2715,8 +2780,9 @@ mod tests_render_facing_normalize__7b3d20 {
     }
 }
 
-/// Budget product of `Node::DistributeScaledBudget` (0x7b1dd9 and the
-/// per-child copy at 0x7b1e13): `__ftol(a × b × K)` — two emitter f32
+/// Budget product of `Node::DistributeScaledBudget` (0x7b1dd9 and the per-child copy at 0x7b1e13).
+///
+/// `__ftol(a × b × K)` — two emitter f32
 /// fields multiplied wide, scaled by the live K global, truncated by the
 /// CRT `__ftol`; the caller keeps EAX (the low 32 bits).
 #[must_use]
@@ -2747,8 +2813,9 @@ mod tests_distribute_budget_count__7b1dd0 {
     }
 }
 
-/// Uniform-scale tail of `CObjectPlacement::SetRelativeTransform`
-/// (0x7b5219): `|row0|` of the incoming transform. The x87 chain squares and
+/// Uniform-scale tail of `CObjectPlacement::SetRelativeTransform` (0x7b5219).
+///
+/// `|row0|` of the incoming transform. The x87 chain squares and
 /// sums entirely wide as `(x·x + y·y) + z·z`, takes `FSQRT`, and narrows
 /// ONCE at the `+0x264` store — modeled in f64 like the 0x7b5230 speed
 /// chain (each f32 product is exact in f64; the sqrt's double rounding is
@@ -2792,8 +2859,9 @@ mod tests_set_relative_transform_scale__7b5160 {
     }
 }
 
-/// Camera-relative distance for `CParticleEmitter::UpdateWithSubsteps`
-/// (@0x7b5230, prologue): per-component `FSUB`+`FSTP` narrows each delta,
+/// Camera-relative distance for `CParticleEmitter::UpdateWithSubsteps` (@0x7b5230, prologue).
+///
+/// Per-component `FSUB`+`FSTP` narrows each delta,
 /// squared magnitude via the shared 0x4549f0 kernel, then `FSQRT` with one
 /// narrow into the `_DAT_00cf58e8` store (double rounding through f64 is
 /// innocuous for a square root, 53 >= 2*24+2).
@@ -2807,10 +2875,10 @@ pub fn substep_camera_distance__7b5230(p: [f32; 3], q: [f32; 3]) -> f32 {
     super::f64_to_f32(f64::from(sq).sqrt())
 }
 
-/// Velocity arm of `CParticleEmitter::UpdateWithSubsteps` (flag 0x40000,
-/// 0x7b530e–0x7b53c0): returns the narrowed frame deltas `cur − snap` (stored
-/// to `+0x26c` BEFORE scaling) and the clamp-scaled copies that overwrite
-/// them.
+/// Velocity arm of `CParticleEmitter::UpdateWithSubsteps` (flag 0x40000, 0x7b530e–0x7b53c0).
+///
+/// Returns the narrowed frame deltas `cur − snap` (stored to `+0x26c` BEFORE
+/// scaling) and the clamp-scaled copies that overwrite them.
 ///
 /// The speed chain runs wide end to end: the three narrowed deltas re-load,
 /// square, and sum as `(x·x + y·y) + z·z`, then `sqrt/dt·s1 + s0` with NO
@@ -2854,9 +2922,10 @@ pub fn substep_velocity_scale__7b5230(
     (d, scaled)
 }
 
-/// Drift-window accumulate of `CParticleEmitter::UpdateWithSubsteps` (flag
-/// 0x400, 0x7b53ce–0x7b53e8): returns the narrowed `+0x254` store value and
-/// `Some(ratio)` when the window fires.
+/// Drift-window accumulate of `CParticleEmitter::UpdateWithSubsteps`.
+///
+/// (Flag 0x400, 0x7b53ce–0x7b53e8.) Returns the narrowed `+0x254` store value
+/// and `Some(ratio)` when the window fires.
 ///
 /// The `FST` keeps the WIDE sum on the stack: the `> window` gate and the
 /// `ratio = acc/window` divide both consume the wide value, not the narrowed
@@ -2872,7 +2941,9 @@ pub fn substep_drift_accum__7b5230(dt: f32, acc_old: f32, window: f32) -> (f32, 
     }
 }
 
-/// Drift-scale tail (0x7b5467–0x7b54cd): narrowed deltas `cur − snap` (stored
+/// Drift-scale tail (0x7b5467–0x7b54cd).
+///
+/// Narrowed deltas `cur − snap` (stored
 /// to `+0x258` before scaling) and the scaled copies, with
 /// `k = (one/ratio) · k_src` folded wide (`FDIVR`/`FMUL` straight off the
 /// stack) and one narrow per component multiply.

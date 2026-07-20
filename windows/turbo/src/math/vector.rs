@@ -18,8 +18,7 @@
 
 use super::f64_to_f32;
 
-/// Normalize a 3-component vector in place to `target_len`:
-/// `v *= target_len / |v|`.
+/// Normalize a 3-component vector in place to `target_len`: `v *= target_len / |v|`.
 ///
 /// Computed in f64 (sum of squares, `sqrt`, the reciprocal scale, and the
 /// per-component product) to stay close to the original's x87 80-bit
@@ -462,10 +461,11 @@ mod tests_c3_vector__subtract_scalar__637300 {
     }
 }
 
-/// Returns `1` iff `a` dominates `b` component-wise (`a.x>=b.x && a.y>=b.y &&
-/// a.z>=b.z`), else `0`. The hardware rejects each lane on the unordered/`a<b`
-/// flag, so a NaN in either operand makes that lane fail; the `>=` comparison
-/// reproduces this exactly (it is `false` for NaN).
+/// Returns `1` iff `a` dominates `b` component-wise.
+///
+/// (`a.x>=b.x && a.y>=b.y && a.z>=b.z`), else `0`. The hardware rejects each lane
+/// on the unordered/`a<b` flag, so a NaN in either operand makes that lane fail;
+/// the `>=` comparison reproduces this exactly (it is `false` for NaN).
 pub fn c3_vector__greater_equal_all__699330(a: &[f32; 3], b: &[f32; 3]) -> i32 {
     let ge = a[0] >= b[0] && a[1] >= b[1] && a[2] >= b[2];
     i32::from(ge)
@@ -507,11 +507,12 @@ mod tests_c3_vector__greater_equal_all__699330 {
     }
 }
 
-/// Returns `1` iff every lane of a 3-vector is finite (neither NaN nor
-/// infinite), else `0`. Each lane is promoted to f64 and its 11 exponent bits
-/// tested against the all-ones pattern, exactly mirroring the original's
-/// per-lane `(exp_bits != 0x7ff)` check on the widened double (an inlined
-/// 2-instruction pure leaf). The test short-circuits, matching the original.
+/// Returns `1` iff every lane of a 3-vector is finite (neither NaN nor infinite), else `0`.
+///
+/// Each lane is promoted to f64 and its 11 exponent bits tested against the
+/// all-ones pattern, exactly mirroring the original's per-lane
+/// `(exp_bits != 0x7ff)` check on the widened double (an inlined 2-instruction
+/// pure leaf). The test short-circuits, matching the original.
 pub fn c3_vector__is_valid__6337d0(v: &[f32; 3]) -> u8 {
     fn finite(x: f32) -> bool {
         // Promote to f64; the exponent field is all-ones only for Inf/NaN.
@@ -555,8 +556,9 @@ mod tests_c3_vector__is_valid__6337d0 {
     }
 }
 
-/// In-place component-wise maximum: `dst[i] = max(dst[i], src[i])` for the three
-/// lanes. Stock keeps `dst` ONLY when `src` is strictly-ordered-less: the z/y
+/// In-place component-wise maximum: `dst[i] = max(dst[i], src[i])` for the three lanes.
+///
+/// Stock keeps `dst` ONLY when `src` is strictly-ordered-less: the z/y
 /// lanes are `FCOMPP; FNSTSW; TEST AH,0x5; JP src` and the x lane is
 /// `FCOMP; FNSTSW; TEST AH,0x41; JNZ src` (0x6b11f6..0x6b1236), all of which
 /// route equal AND unordered to the `src` load — so a `src` NaN sticks, a `dst`
@@ -628,7 +630,8 @@ mod tests_c3_vector__max_in_place__6b11f0 {
     }
 }
 
-/// Component-wise maximum of two 3-vectors into a fresh vector:
+/// Component-wise maximum of two 3-vectors into a fresh vector.
+///
 /// `out[i] = max(a[i], b[i])`. Stock (0x6992c3..0x699311, same FCOMPP/`TEST
 /// AH,0x5`/JP and FCOMP/`TEST AH,0x41`/JNZ shape as `MaxInPlace` 0x6b11f0)
 /// keeps `a` (EDX) ONLY when `b` (the stack arg) is strictly-ordered-less:
@@ -694,8 +697,10 @@ mod tests_c3_vector__max__6992c0 {
     }
 }
 
-/// `ScaleStoredVec3ByFactor` (0x7c4ed0) — scales a base vec3 by an external
-/// `scale` times an internal `mag`, one FMUL chain per lane.
+/// `ScaleStoredVec3ByFactor` (0x7c4ed0).
+///
+/// Scales a base vec3 by an external `scale` times an internal `mag`, one FMUL
+/// chain per lane.
 ///
 /// The stock x87 evaluates each lane as `(scale * base[i]) * mag`
 /// (`fld scale; fmul base[i]; fmul mag`), so the grouping is reproduced

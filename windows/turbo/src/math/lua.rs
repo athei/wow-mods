@@ -9,9 +9,11 @@
     clippy::too_many_arguments
 )]
 
-/// Horner-scheme evaluation of a polynomial whose `degree + 1` coefficients are
-/// `coeffs[0..=degree]`, ordered high-to-low: `acc = coeffs[0]` then for each
-/// `i` in `1..=degree`, `acc = acc * x + coeffs[i]`. Returns the value at `x`.
+/// Horner-scheme evaluation of a polynomial.
+///
+/// The `degree + 1` coefficients are `coeffs[0..=degree]`, ordered high-to-low:
+/// `acc = coeffs[0]` then for each `i` in `1..=degree`,
+/// `acc = acc * x + coeffs[i]`. Returns the value at `x`.
 ///
 /// A strictly serial multiply-add dependency chain (no `mul_add`: the baseline
 /// has no hardware FMA, so it would lower to a slow libm call and change
@@ -72,11 +74,13 @@ mod tests_eval_polynomial_horner__453620 {
     }
 }
 
-/// Lua number-key main-position index helper: biases the key `n` by `bias`
-/// (a fixed disambiguation constant, classically `1.0`), reinterprets the
-/// resulting `f64` as raw bits, folds its two 32-bit halves with a wrapping sum,
-/// reduces that modulo `((1 << (lsizenode & 0x1f)) - 1) | 1`, and returns the
-/// byte offset `node_base + idx * 0x28` of the chosen 40-byte node.
+/// Lua number-key main-position index helper.
+///
+/// Biases the key `n` by `bias` (a fixed disambiguation constant, classically
+/// `1.0`), reinterprets the resulting `f64` as raw bits, folds its two 32-bit
+/// halves with a wrapping sum, reduces that modulo
+/// `((1 << (lsizenode & 0x1f)) - 1) | 1`, and returns the byte offset
+/// `node_base + idx * 0x28` of the chosen 40-byte node.
 ///
 /// Pure integer hashing over the bit pattern; no floating-point arithmetic other
 /// than the single bias add. The wrapping sum mirrors the 32-bit `ADD` in the
@@ -147,11 +151,12 @@ mod tests_lua_h_hashnum__6fa260 {
     }
 }
 
-/// Primitive Lua value equality for two tagged values. Equal requires matching
-/// type tags (`tag_a == tag_b`); a nil tag (`0`) is then always equal, a number
-/// tag (`3`) compares the two `f64` payloads (so `NaN != NaN`, matching the
-/// reference's ordered `FCOMPP`), and any other tag compares the 32-bit
-/// value/pointer payloads.
+/// Primitive Lua value equality for two tagged values.
+///
+/// Equal requires matching type tags (`tag_a == tag_b`); a nil tag (`0`) is
+/// then always equal, a number tag (`3`) compares the two `f64` payloads (so
+/// `NaN != NaN`, matching the reference's ordered `FCOMPP`), and any other tag
+/// compares the 32-bit value/pointer payloads.
 pub fn lua_o_rawequal_obj__6f58b0(
     tag_a: i32,
     tag_b: i32,
@@ -216,25 +221,30 @@ mod tests_lua_o_rawequal_obj__6f58b0 {
     }
 }
 
-/// How `lua_h_get__6fa7a0` routes a table lookup based on the key's tag and (for
-/// numbers) its integer-exactness.
+/// How `lua_h_get__6fa7a0` routes a table lookup.
+///
+/// Based on the key's tag and (for numbers) its integer-exactness.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum LuaGetRoute {
-    /// Number key whose `f64` value is an exact `i32`: use the integer fast path
-    /// (`luaH_getnum`) with the carried truncated key.
+    /// Number key whose `f64` value is an exact `i32`.
+    ///
+    /// Use the integer fast path (`luaH_getnum`) with the carried truncated key.
     NumberExactInt(i32),
     /// String key: use the interned-string lookup (`luaH_getstr`).
     String,
-    /// Anything else (non-exact number, boolean, nil, ...): generic node walk
-    /// (`luaH_getany`).
+    /// Anything else (non-exact number, boolean, nil, ...).
+    ///
+    /// Generic node walk (`luaH_getany`).
     Any,
 }
 
-/// Classify a key for `lua_h_get__6fa7a0`. Tag `3` is a number — if its `f64`
-/// value truncates losslessly to `i32` (`(int)n as f64 == n`, matching the
-/// reference's `__ftol` + `FILD` + `FCOMPP` equal test) it routes to the integer
-/// fast path carrying that `i32`; otherwise to the generic walk. Tag `4` is a
-/// string. Every other tag uses the generic walk.
+/// Classify a key for `lua_h_get__6fa7a0`.
+///
+/// Tag `3` is a number — if its `f64` value truncates losslessly to `i32`
+/// (`(int)n as f64 == n`, matching the reference's `__ftol` + `FILD` + `FCOMPP`
+/// equal test) it routes to the integer fast path carrying that `i32`;
+/// otherwise to the generic walk. Tag `4` is a string. Every other tag uses the
+/// generic walk.
 pub fn lua_h_get_route__6fa7a0(key_tag: i32, key_num: f64) -> LuaGetRoute {
     if key_tag == 3 {
         let truncated = key_num as i32;
@@ -282,11 +292,12 @@ mod tests_lua_h_get__6fa7a0 {
     }
 }
 
-/// Array-part fast path for an integer-keyed table fetch. A key in `1..=sizearray`
-/// indexes the contiguous array directly: the slot lives at
-/// `array_base + (key - 1) * 0x10` (16-byte tagged values). Returns the byte
-/// offset of the slot, or `None` when the key falls outside the array part and
-/// the caller must fall back to the hash chain.
+/// Array-part fast path for an integer-keyed table fetch.
+///
+/// A key in `1..=sizearray` indexes the contiguous array directly: the slot
+/// lives at `array_base + (key - 1) * 0x10` (16-byte tagged values). Returns
+/// the byte offset of the slot, or `None` when the key falls outside the array
+/// part and the caller must fall back to the hash chain.
 pub fn lua_h_getnum_array_slot__6fa700(key: i32, sizearray: i32, array_base: u32) -> Option<u32> {
     if key > 0 && key <= sizearray {
         // array_base + key*0x10 - 0x10, matching the LEA [base + key*16 - 16].
@@ -300,10 +311,12 @@ pub fn lua_h_getnum_array_slot__6fa700(key: i32, sizearray: i32, array_base: u32
     }
 }
 
-/// Does a hash node match the wanted integer key? A node matches when its type
-/// tag is `3` (number) and its stored `f64` payload equals the key promoted to
-/// `f64`. The equality is ordered (`==`), so a `NaN` payload never matches —
-/// mirroring the reference's `FCOMP`/`TEST AH,0x44`/`JNP` equal test.
+/// Does a hash node match the wanted integer key?
+///
+/// A node matches when its type tag is `3` (number) and its stored `f64`
+/// payload equals the key promoted to `f64`. The equality is ordered (`==`), so
+/// a `NaN` payload never matches — mirroring the reference's
+/// `FCOMP`/`TEST AH,0x44`/`JNP` equal test.
 pub fn lua_h_getnum_node_matches__6fa700(node_tag: i32, node_num: f64, key: i32) -> bool {
     node_tag == 3 && node_num == key as f64
 }
@@ -363,10 +376,11 @@ mod tests_lua_h_getnum__6fa700 {
     }
 }
 
-/// Lua main-position table-node selector. Given a key's type tag `tt` and the
-/// table's node array (`node_base` absolute address, `lsizenode` size exponent),
-/// returns the byte offset of the chosen 40-byte (`0x28`) node:
-/// `node_base + idx * 0x28`.
+/// Lua main-position table-node selector.
+///
+/// Given a key's type tag `tt` and the table's node array (`node_base`
+/// absolute address, `lsizenode` size exponent), returns the byte offset of the
+/// chosen 40-byte (`0x28`) node: `node_base + idx * 0x28`.
 ///
 /// The index is derived per tag, mirroring the original dispatch: a boolean/`nil`
 /// key (`tt = 1`) and a string key (`tt = 4`) mask the supplied 32-bit value by
@@ -480,9 +494,11 @@ pub enum LuaSetKey {
     Ok,
 }
 
-/// Classify a not-yet-present key for `lua_h_set__6fa840`. A nil tag (`0`) is
-/// rejected as `Nil`; a number tag (`3`) whose payload is `NaN` (the self-unequal
-/// `n != n` test) is rejected as `Nan`; every other key is `Ok` to insert.
+/// Classify a not-yet-present key for `lua_h_set__6fa840`.
+///
+/// A nil tag (`0`) is rejected as `Nil`; a number tag (`3`) whose payload is
+/// `NaN` (the self-unequal `n != n` test) is rejected as `Nan`; every other key
+/// is `Ok` to insert.
 pub fn lua_h_set_classify_key__6fa840(key_tag: i32, key_num: f64) -> LuaSetKey {
     if key_tag == 0 {
         LuaSetKey::Nil
@@ -523,11 +539,12 @@ mod tests_lua_h_set__6fa840 {
     }
 }
 
-/// Maps the extended-precision scanner's flag word and the narrowing helper's
-/// retcode onto the scan-result flags: `0x80` when either step reported
-/// range-high, `0x100` (combinable) when either reported range-low. The
-/// no-conversion case (`scan_flags & 4`) never reaches the narrowing step and
-/// is handled by the caller.
+/// Maps the extended-precision scanner's flag word and the narrowing helper's retcode.
+///
+/// Onto the scan-result flags: `0x80` when either step reported range-high,
+/// `0x100` (combinable) when either reported range-low. The no-conversion case
+/// (`scan_flags & 4`) never reaches the narrowing step and is handled by the
+/// caller.
 pub fn scan_double_token__747560(scan_flags: u32, narrow_rc: i32) -> u32 {
     let mut flags = 0;
     if scan_flags & 2 != 0 || narrow_rc == 1 {
@@ -577,9 +594,10 @@ mod tests_scan_double_token__747560 {
     }
 }
 
-/// Decides whether a constant array of `size` slots must grow before
-/// appending entry number `count` (zero-based): grow when `count + 1` would
-/// exceed the capacity. Counts are host-capped at `0x3ffff`, far below
+/// Decides whether a constant array of `size` slots must grow.
+///
+/// Before appending entry number `count` (zero-based): grow when `count + 1`
+/// would exceed the capacity. Counts are host-capped at `0x3ffff`, far below
 /// overflow.
 pub fn lua_k_addk__700ad0(count: i32, size: i32) -> bool {
     count + 1 > size
@@ -608,9 +626,11 @@ mod tests_lua_k_addk__700ad0 {
     }
 }
 
-/// Accepts a string-to-number conversion: the scan must have consumed at
-/// least one character and the remaining tail — already whitespace-skipped by
-/// the caller — must terminate immediately. Returns the host's `1`/`0`.
+/// Accepts a string-to-number conversion.
+///
+/// The scan must have consumed at least one character and the remaining tail —
+/// already whitespace-skipped by the caller — must terminate immediately.
+/// Returns the host's `1`/`0`.
 pub fn lua_o_str2d__6f5900(consumed_any: bool, tail_first_byte: u8) -> i32 {
     i32::from(consumed_any && tail_first_byte == 0)
 }
@@ -637,11 +657,13 @@ mod tests_lua_o_str2d__6f5900 {
     }
 }
 
-/// Classifies the scan-result flag word into the conversion outcome: `0` use
-/// the parsed value, `1` no conversion (zero result, end pointer rewound),
-/// `2` range high (signed huge result + range errno), `3` range low (zero +
-/// range errno). The no-conversion mask (`0x240`) wins over both range bits,
-/// and range high (`0x81` mask) wins over range low when both are reported.
+/// Classifies the scan-result flag word into the conversion outcome.
+///
+/// `0` use the parsed value, `1` no conversion (zero result, end pointer
+/// rewound), `2` range high (signed huge result + range errno), `3` range low
+/// (zero + range errno). The no-conversion mask (`0x240`) wins over both range
+/// bits, and range high (`0x81` mask) wins over range low when both are
+/// reported.
 pub fn strtod__741e39(flags: u32) -> u32 {
     if flags & 0x240 != 0 {
         1
@@ -690,11 +712,11 @@ mod tests_strtod__741e39 {
     }
 }
 
-/// Stock Lua 5.0 string hash — the sampling recurrence inlined in
-/// `luaS_newlstr@0x6f9d00`. Seeds with the length, then folds one byte every
-/// `step = (len >> 5) + 1` positions walking from the tail, so it inspects at
-/// most ~32 bytes regardless of length: `h ^= (h << 5) + (h >> 2) + byte`, all
-/// 32-bit wrapping.
+/// Stock Lua 5.0 string hash — the sampling recurrence inlined in `luaS_newlstr@0x6f9d00`.
+///
+/// Seeds with the length, then folds one byte every `step = (len >> 5) + 1`
+/// positions walking from the tail, so it inspects at most ~32 bytes regardless
+/// of length: `h ^= (h << 5) + (h >> 2) + byte`, all 32-bit wrapping.
 ///
 /// Reproduced bit-for-bit because the interner reimpl's dual-probe fallback
 /// re-hashes a miss with this function to find strings that were interned (and
@@ -715,14 +737,16 @@ pub fn lua_s_newlstr_hash_stock__6f9d00(bytes: &[u8]) -> u32 {
     hash
 }
 
-/// FNV-1a (32-bit) over the whole byte string — the interner reimpl's hash,
-/// replacing the stock sampling recurrence. Every byte is mixed (`xor` then a
-/// wrapping multiply by the FNV prime), so structurally similar long strings
-/// (combat-log lines, chat, item links) that the stock hash buckets together by
-/// its ~32-byte tail sample are spread across buckets. That shortens the
-/// collision chains the interner walks — and the full-length `memcmp` each chain
-/// node otherwise costs. Portable and SIMD-free (the shipped i686 build stays
-/// 0-ymm), deterministic, returns the value stored at `TString+0x08`.
+/// FNV-1a (32-bit) over the whole byte string.
+///
+/// The interner reimpl's hash, replacing the stock sampling recurrence. Every
+/// byte is mixed (`xor` then a wrapping multiply by the FNV prime), so
+/// structurally similar long strings (combat-log lines, chat, item links) that
+/// the stock hash buckets together by its ~32-byte tail sample are spread
+/// across buckets. That shortens the collision chains the interner walks — and
+/// the full-length `memcmp` each chain node otherwise costs. Portable and
+/// SIMD-free (the shipped i686 build stays 0-ymm), deterministic, returns the
+/// value stored at `TString+0x08`.
 pub fn lua_s_newlstr_hash__6f9d00(bytes: &[u8]) -> u32 {
     const FNV_OFFSET_BASIS: u32 = 0x811c_9dc5;
     const FNV_PRIME: u32 = 0x0100_0193;

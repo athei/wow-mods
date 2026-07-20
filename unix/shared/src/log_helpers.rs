@@ -153,11 +153,13 @@ macro_rules! log_once_info_by {
     }};
 }
 
-/// Test helper. Returns `true` the first time a given `key` is seen by
-/// the shared `seen` set, `false` on subsequent calls. Mirrors the
-/// first-seen check inside `log_once_warn_by!` so the dedup semantics
-/// can be asserted without installing a `log` subscriber (which would
-/// require the crate to opt into `log`'s `std` feature just for tests).
+/// Test helper.
+///
+/// Returns `true` the first time a given `key` is seen by the shared `seen`
+/// set, `false` on subsequent calls. Mirrors the first-seen check inside
+/// `log_once_warn_by!` so the dedup semantics can be asserted without
+/// installing a `log` subscriber (which would require the crate to opt into
+/// `log`'s `std` feature just for tests).
 #[cfg(test)]
 pub fn first_seen(seen: &std::sync::Mutex<std::collections::BTreeSet<u64>>, key: u64) -> bool {
     seen.lock().unwrap().insert(key)

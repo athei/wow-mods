@@ -1,5 +1,6 @@
-//! `wow_turbo.dll` — a native performance mod for `Wow.exe` (`WoW` 1.12) that
-//! replaces hot client functions with faster Rust reimplementations.
+//! `wow_turbo.dll` — a native performance mod for `Wow.exe` (`WoW` 1.12).
+//!
+//! Replaces hot client functions with faster Rust reimplementations.
 //!
 //! The original machine code stays in place for everything not yet ported; each
 //! ported function gets a `jmp` patched into its prologue redirecting to a Rust
@@ -25,9 +26,10 @@
 #[cfg(any(target_arch = "x86", test))]
 mod math;
 
-/// Portable Storm/MPQ reimplementation kernels (currently the zlib sector-inflate
-/// codec). Like `math`, they depend on nothing Windows-specific and are
-/// host-unit-tested under the same toolchain.
+/// Portable Storm/MPQ reimplementation kernels (currently the zlib sector-inflate codec).
+///
+/// Like `math`, they depend on nothing Windows-specific and are host-unit-tested
+/// under the same toolchain.
 #[cfg(any(target_arch = "x86", test))]
 mod storm;
 

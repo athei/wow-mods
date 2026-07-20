@@ -9,12 +9,12 @@
     clippy::too_many_arguments
 )]
 
-/// Inverse of 255, the host's `_DAT_008026c8`: normalises a 0..255 colour byte
-/// to 0.0..1.0.
+/// Inverse of 255, the host's `_DAT_008026c8`.
+///
+/// Normalises a 0..255 colour byte to 0.0..1.0.
 const INV_255: f32 = 1.0 / 255.0;
 
-/// Unpacks a packed `BGRA` colour word into `[R, G, B, A]`, each byte scaled by
-/// `scale / 255`.
+/// Unpacks a packed `BGRA` colour word into `[R, G, B, A]`, each byte scaled by `scale / 255`.
 ///
 /// Mirrors the reference's per-channel `movzx`/`mulps`: the low byte is blue,
 /// then green, red, with the high byte alpha. Every channel is multiplied by
@@ -97,8 +97,9 @@ mod tests_unpack_bgra_scaled {
     }
 }
 
-/// Packs the 28-float fog/light gradient block from 27 source params and the
-/// eight per-column scale constants.
+/// Packs the 28-float fog/light gradient block.
+///
+/// From 27 source params and the eight per-column scale constants.
 ///
 /// `p` holds the seven rows of source parameters (27 contiguous floats). The
 /// scale arguments name their reference-DLL global by suffix: `c4`, `c0`, `bc`,
@@ -212,8 +213,10 @@ mod tests_gx_light_pack_fog_gradient_block__71c4e0 {
     }
 }
 
-/// Builds the cached ambient light direction plus the transformed primary light
-/// direction and the updated light-direction accumulator.
+/// Builds the cached ambient light direction.
+///
+/// Plus the transformed primary light direction and the updated
+/// light-direction accumulator.
 ///
 /// `dir` is the raw ambient direction, `m` the row-major 3x3 orientation,
 /// `light` the primary light vector, `accum_in` the prior accumulator. `eps_sq`
@@ -739,12 +742,13 @@ mod tests_encode_fog_color__71c730 {
     }
 }
 
-/// `ColorTrack::SampleARGB` per-channel colour lerp — the x87 hotspot at
-/// 0x6d631e–0x6d63c7. Given the two bracketing keyframe colours (packed
-/// `0x??RRGGBB`, the alpha byte ignored) and the interpolation fraction `frac`
-/// the keyframe search produced, it linearly blends each of R/G/B and re-packs an
-/// opaque ARGB8888 (`0xff << 24`). The empty-track (`count == 0`) early-out that
-/// yields opaque black lives in the adapter.
+/// `ColorTrack::SampleARGB` per-channel colour lerp — the x87 hotspot at 0x6d631e–0x6d63c7.
+///
+/// Given the two bracketing keyframe colours (packed `0x??RRGGBB`, the alpha
+/// byte ignored) and the interpolation fraction `frac` the keyframe search
+/// produced, it linearly blends each of R/G/B and re-packs an opaque ARGB8888
+/// (`0xff << 24`). The empty-track (`count == 0`) early-out that yields opaque
+/// black lives in the adapter.
 ///
 /// Each channel reproduces the stock magic-bias fast-round **bit-exactly**:
 /// `fild(end-start) · fmul frac · fiadd start · fadd 512.0`, then the raw f32 bits
@@ -854,7 +858,8 @@ mod tests_color_track__sample_argb__6d62e0 {
     }
 }
 
-/// Wrapped-segment membership test + interpolation fraction
+/// Wrapped-segment membership test + interpolation fraction.
+///
 /// (`AngleTable__FindWrappedIntervalFraction` @0x6d63e0, per-segment body).
 ///
 /// The keyframe-time table is cyclic with period 0xb40 (2880 day-time ticks).
@@ -923,8 +928,9 @@ mod tests_wrapped_interval_fraction__6d63e0 {
         assert!(frac(1000, 2800, 80).is_none());
     }
 
-    /// Equal endpoints classify as a wrapping segment: `hi` is lifted a full
-    /// period, so the span is 0xb40, never zero.
+    /// Equal endpoints classify as a wrapping segment.
+    ///
+    /// `hi` is lifted a full period, so the span is 0xb40, never zero.
     #[test]
     fn equal_endpoints_span_full_period() {
         assert_eq!(frac(100, 100, 100).unwrap().to_bits(), 0.0f32.to_bits());
@@ -934,8 +940,10 @@ mod tests_wrapped_interval_fraction__6d63e0 {
         );
     }
 
-    /// Out-of-period tables can fold the span to zero: 0/0 must be the x87
-    /// real-indefinite QNaN, n/0 the masked-zero-divide infinity.
+    /// Out-of-period tables can fold the span to zero.
+    ///
+    /// 0/0 must be the x87 real-indefinite QNaN, n/0 the masked-zero-divide
+    /// infinity.
     #[test]
     fn degenerate_zero_span() {
         assert_eq!(frac(0xb40, 0xb40, 0).unwrap().to_bits(), 0xffc0_0000);
@@ -950,8 +958,9 @@ mod tests_wrapped_interval_fraction__6d63e0 {
     }
 }
 
-/// Sky-dome channel rounding (`SkyDome__ComputeVertexColors` @0x6d0f50): the
-/// stock chain is `FSTP f32` (one rounding of the lerp result), `FSUB bias`
+/// Sky-dome channel rounding (`SkyDome__ComputeVertexColors` @0x6d0f50).
+///
+/// The stock chain is `FSTP f32` (one rounding of the lerp result), `FSUB bias`
 /// at extended precision, `FISTP` (round-to-nearest-even), `(char)` truncate.
 /// `round_ties_even` + the x87-free ftol keeps the i686 build free of the
 /// f64→i64 cast's fld/fisttp leak.
@@ -960,23 +969,28 @@ pub fn sky_round_channel__6d0f50(v: f32, bias: f32) -> u8 {
     (crate::math::misc::ftol__40a2b0(r) & 0xff) as u8
 }
 
-/// Byte-lerp one color channel: `u8 → FILD → Math_LerpFloat → round`. The
-/// int→f32 conversions are exact for 0..255.
+/// Byte-lerp one color channel.
+///
+/// `u8 → FILD → Math_LerpFloat → round`. The int→f32 conversions are exact for
+/// 0..255.
 pub fn sky_lerp_channel__6d0f50(a: u8, b: u8, t: f32, bias: f32) -> u8 {
     let v = crate::math::misc::math_lerp_float__6d15f0(f32::from(a), f32::from(b), t);
     sky_round_channel__6d0f50(v, bias)
 }
 
-/// Pack three channel bytes with a forced 0xFF alpha, memory order
-/// `[c0, c1, c2, a]` (`CImVector__SetPackedBGRA(0xff, c2, c1, c0)` inlined —
-/// both packer twins produce exactly this dword).
+/// Pack three channel bytes with a forced 0xFF alpha.
+///
+/// Memory order `[c0, c1, c2, a]` (`CImVector__SetPackedBGRA(0xff, c2, c1, c0)`
+/// inlined — both packer twins produce exactly this dword).
 pub fn sky_pack_channels__6d0f50(c0: u8, c1: u8, c2: u8) -> u32 {
     u32::from(c0) | (u32::from(c1) << 8) | (u32::from(c2) << 16) | 0xff00_0000
 }
 
-/// Lightning-flash blend weight: `((1.0 − flash) · k + magic)` single-rounded
-/// to f32, then the magic-bias fixed-point extraction `(bits >> 14) & 0xff`
-/// (the stock float→fixed trick; k @0x7ffe58, magic @0x8029cc).
+/// Lightning-flash blend weight.
+///
+/// `((1.0 − flash) · k + magic)` single-rounded to f32, then the magic-bias
+/// fixed-point extraction `(bits >> 14) & 0xff` (the stock float→fixed trick;
+/// k @0x7ffe58, magic @0x8029cc).
 pub fn sky_flash_alpha__6d0f50(flash: f32, k: f32, magic: f32) -> u8 {
     let v = ((1.0 - f64::from(flash)) * f64::from(k) + f64::from(magic)) as f32;
     ((v.to_bits() >> 14) & 0xff) as u8
@@ -1020,9 +1034,11 @@ mod tests_sky_dome__6d0f50 {
         );
     }
 
-    /// The magic-bias extraction: anchored at 1.5·2^23 (ulp = 1.0), a scale
-    /// in units of 2^14 places the weight exactly in bits 14..21 — the stock
-    /// float→fixed trick this reproduces bit-for-bit.
+    /// The magic-bias extraction.
+    ///
+    /// Anchored at 1.5·2^23 (ulp = 1.0), a scale in units of 2^14 places the
+    /// weight exactly in bits 14..21 — the stock float→fixed trick this
+    /// reproduces bit-for-bit.
     #[test]
     fn flash_alpha_extraction() {
         let magic = 12_582_912.0f32; // 1.5 * 2^23, mantissa 0x400000
@@ -1034,7 +1050,8 @@ mod tests_sky_dome__6d0f50 {
     }
 }
 
-/// Camera distance to a light zone for `DayNight_BlendNearbyLights`
+/// Camera distance to a light zone for `DayNight_BlendNearbyLights`.
+///
 /// (@0x6d2d00, hot block 0x6d2d69): the three camera−pos deltas stay WIDE on
 /// the x87 stack (no FSTP between the subtracts and the squares, unlike the
 /// particle sibling), fold `(dz·dz + dy·dy) + dx·dx`, FSQRT, one narrow.
@@ -1045,20 +1062,23 @@ pub fn light_camera_distance__6d2d00(cam: [f32; 3], pos: [f32; 3]) -> f32 {
     super::f64_to_f32((dz * dz + dy * dy + dx * dx).sqrt())
 }
 
-/// Half-minute time index (0x6d2f40/0x6d2f98): `t · scale` narrows once
-/// (FSTP/FLD round-trip), then the bias subtracts WIDE into the FISTP —
-/// the shared biased-FISTP idiom (round-to-nearest-even, indefinite on
-/// NaN/overflow).
+/// Half-minute time index (0x6d2f40/0x6d2f98).
+///
+/// `t · scale` narrows once (FSTP/FLD round-trip), then the bias subtracts
+/// WIDE into the FISTP — the shared biased-FISTP idiom (round-to-nearest-even,
+/// indefinite on NaN/overflow).
 pub fn light_time_index__6d2d00(t: f32, scale: f32, bias: f32) -> i32 {
     let v = super::f64_to_f32(f64::from(t) * f64::from(scale));
     crate::math::world::fistp_round_ties_even(f64::from(v) - f64::from(bias))
 }
 
-/// Falloff blend weight (0x6d2ff8–0x6d3022): 1.0 inside `falloffStart`,
-/// else `1 − (dist−start)/(end−start)` folded wide with one narrow. The
-/// gate is `dist > start` ORDERED (`TEST AH,0x41; JNZ` keeps the 1.0
-/// immediate on `<=`, `==`, and NaN); the raw FDIV has no degenerate
-/// guard — `end == start` propagates ±Inf/NaN into the weight, as stock.
+/// Falloff blend weight (0x6d2ff8–0x6d3022).
+///
+/// 1.0 inside `falloffStart`, else `1 − (dist−start)/(end−start)` folded wide
+/// with one narrow. The gate is `dist > start` ORDERED (`TEST AH,0x41; JNZ`
+/// keeps the 1.0 immediate on `<=`, `==`, and NaN); the raw FDIV has no
+/// degenerate guard — `end == start` propagates ±Inf/NaN into the weight, as
+/// stock.
 pub fn light_blend_weight__6d2d00(dist: f32, start: f32, end: f32, one: f32) -> f32 {
     if dist > start {
         super::f64_to_f32(

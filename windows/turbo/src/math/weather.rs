@@ -9,7 +9,8 @@
     clippy::too_many_arguments
 )]
 
-/// Scales three packed color bytes (each `0..=255`) by a normalization factor
+/// Scales three packed color bytes (each `0..=255`) by a normalization factor.
+///
 /// (the source's literal `1.0/255.0`) into a linear RGB triple. The input bytes
 /// are taken in the order the original writes them to its output vector
 /// (`red`, `green`, `blue`), so the returned lanes map directly onto
@@ -77,21 +78,23 @@ mod tests_cloud_apply_depth_range_and_color__6c31e0 {
     }
 }
 
-/// Reciprocal-square-root bit-hack seed used by the cloud shader: the stock
-/// helper's single magic-constant step (no refinement iterations).
+/// Reciprocal-square-root bit-hack seed used by the cloud shader.
+///
+/// The stock helper's single magic-constant step (no refinement iterations).
 fn cloud_rsqrt_seed__456330(x: f32) -> f32 {
     const MAGIC: u32 = 0x5f39_97bb;
     f32::from_bits(MAGIC.wrapping_sub((x.to_bits() >> 1) & 0x3fff_ffff))
 }
 
-/// Shades one non-empty cloud-density cell to its packed output bytes
-/// `[blue, green, red, alpha]`. The density byte maps to a shade scalar
-/// `(((255 - d) >> 1) + 0x40) / 255`, the base-lit color is `sun * shade +
-/// base` per lane, and when the cell's normalized gradient faces the light
-/// (`dot > 0`, both vectors normalized by the bit-hack seed) the `tint` color
-/// scaled by `gain` is added on top. Lanes clamp to `limit`, then pack to
-/// 8 bits through the `value * pack_scale + pack_bias` float-bit trick
-/// (mantissa bits 14..22 of the stored f32). Alpha carries the density byte.
+/// Shades one non-empty cloud-density cell to its packed output bytes `[blue, green, red, alpha]`.
+///
+/// The density byte maps to a shade scalar `(((255 - d) >> 1) + 0x40) / 255`,
+/// the base-lit color is `sun * shade + base` per lane, and when the cell's
+/// normalized gradient faces the light (`dot > 0`, both vectors normalized by
+/// the bit-hack seed) the `tint` color scaled by `gain` is added on top. Lanes
+/// clamp to `limit`, then pack to 8 bits through the
+/// `value * pack_scale + pack_bias` float-bit trick (mantissa bits 14..22 of
+/// the stored f32). Alpha carries the density byte.
 pub fn cloud_shade_layer__6cfb00(
     density: u8,
     grad: [f32; 2],
@@ -276,11 +279,12 @@ mod tests_cloud_shade_layer__6cfb00 {
     }
 }
 
-/// Nearest-hit fraction update for one traced doodad candidate: a candidate at
-/// `frac` replaces `best` only when strictly nearer (an unordered compare
-/// keeps `best`). A non-negative trace depth `hit` applies the depth bias
-/// `frac - ((1 - inv_dz * hit) * inv_dz + inv_dz)` floored at zero; a negative
-/// (or unordered) depth keeps the raw `frac`.
+/// Nearest-hit fraction update for one traced doodad candidate.
+///
+/// A candidate at `frac` replaces `best` only when strictly nearer (an
+/// unordered compare keeps `best`). A non-negative trace depth `hit` applies
+/// the depth bias `frac - ((1 - inv_dz * hit) * inv_dz + inv_dz)` floored at
+/// zero; a negative (or unordered) depth keeps the raw `frac`.
 pub fn doodad_raycast_segment__6b7790(
     frac: f32,
     hit: f32,
@@ -307,10 +311,12 @@ pub fn doodad_raycast_segment__6b7790(
     }
 }
 
-/// Sub-node bounds test for a traced segment: the node's X/Y interval must
-/// straddle the segment start, its Z maximum must reach the segment end and
-/// its Z minimum must stay below the segment start. Written as negated strict
-/// compares so unordered (NaN) operands pass, matching the stock x87 chain.
+/// Sub-node bounds test for a traced segment.
+///
+/// The node's X/Y interval must straddle the segment start, its Z maximum must
+/// reach the segment end and its Z minimum must stay below the segment start.
+/// Written as negated strict compares so unordered (NaN) operands pass,
+/// matching the stock x87 chain.
 pub fn doodad_raycast_segment_node_overlaps__6b7790(
     bounds_min: [f32; 3],
     bounds_max: [f32; 3],
@@ -392,8 +398,9 @@ mod tests_doodad_raycast_segment__6b7790 {
     }
 }
 
-/// Packs one ground-splash vertex (24 bytes as six little-endian dwords): the
-/// position dwords copied verbatim, the diffuse dword set to `corner << 24`
+/// Packs one ground-splash vertex (24 bytes as six little-endian dwords).
+///
+/// The position dwords copied verbatim, the diffuse dword set to `corner << 24`
 /// (optionally with its red/blue bytes swapped for the active vertex-color
 /// order), then the two texture-coordinate dwords copied verbatim.
 pub fn weather_build_patter_geometry__6753c0(
@@ -544,9 +551,10 @@ pub fn weather_raindrop_vertex__675ac0(
     })
 }
 
-/// Crash-class scalars the rain-drop driver threads into one streak's six
-/// vertices. `rel` is the camera-relative position, `tilt`/`neg_tilt` the
-/// normalized view-space stretch, `fade` the clamped lifetime fade and the two
+/// Crash-class scalars the rain-drop driver threads into one streak's six vertices.
+///
+/// `rel` is the camera-relative position, `tilt`/`neg_tilt` the normalized
+/// view-space stretch, `fade` the clamped lifetime fade and the two
 /// `tex_*_index` the packed texture/animation byte indices.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct RainDropScalars {
@@ -670,18 +678,21 @@ mod tests_weather_raindrop_vertex__675ac0 {
     }
 }
 
-/// Inverse-stride scalar for one octave column: the stock `fild(1<<col)`
-/// followed by `one / x` (`fdivr` against the live `1.0` constant). `col` is the
-/// octave index `0..depth`; the reciprocal feeds the per-cell noise scale.
+/// Inverse-stride scalar for one octave column.
+///
+/// The stock `fild(1<<col)` followed by `one / x` (`fdivr` against the live
+/// `1.0` constant). `col` is the octave index `0..depth`; the reciprocal feeds
+/// the per-cell noise scale.
 pub fn cloud_layer_inv_stride__6cffc0(one: f32, col: u32) -> f32 {
     let stride = (1i32 << (col & 0x1f)) as f32;
     (f64::from(one) / f64::from(stride)) as f32
 }
 
-/// Builds the eight gradient-LUT record floats for one octave cell from four
-/// adjacent-sample pairs. Each pair `(base, next)` becomes `base` and the
-/// forward difference `next - base`, matching the stock `fld;fst;fld;fsub;fstp`
-/// chain that fills record slots `+0x28..+0x44`.
+/// Builds the eight gradient-LUT record floats for one octave cell from four adjacent-sample pairs.
+///
+/// Each pair `(base, next)` becomes `base` and the forward difference
+/// `next - base`, matching the stock `fld;fst;fld;fsub;fstp` chain that fills
+/// record slots `+0x28..+0x44`.
 pub fn cloud_layer_grad_diff__6cffc0(pairs: [(f32, f32); 4]) -> [f32; 8] {
     let mut out = [0.0f32; 8];
     let mut i = 0usize;
@@ -694,10 +705,12 @@ pub fn cloud_layer_grad_diff__6cffc0(pairs: [(f32, f32); 4]) -> [f32; 8] {
     out
 }
 
-/// Core value-noise bilinear cell evaluation: blends the eight record gradient
-/// floats `rec` (`[a0,a1,b0,b1,c0,c1,d0,d1]`, the `+0x28..+0x44` slots) through
-/// the three smoothstep weights `(wu, wa, wb)`, scales by `scale` (record
-/// `+0x14`) and adds the running accumulator `acc`. Returns the new accumulator.
+/// Core value-noise bilinear cell evaluation.
+///
+/// Blends the eight record gradient floats `rec` (`[a0,a1,b0,b1,c0,c1,d0,d1]`,
+/// the `+0x28..+0x44` slots) through the three smoothstep weights
+/// `(wu, wa, wb)`, scales by `scale` (record `+0x14`) and adds the running
+/// accumulator `acc`. Returns the new accumulator.
 /// The f64-widened grouping reproduces the stock x87 fld/fmul/fadd/fsub/faddp
 /// ordering exactly (lerp in U, lerp the pair, cross-blend in V, then MAD).
 pub fn cloud_layer_bilerp_cell__6cffc0(
@@ -724,9 +737,10 @@ pub fn cloud_layer_bilerp_cell__6cffc0(
     (tail * f64::from(scale) + f64::from(acc)) as f32
 }
 
-/// Velocity/derivative deltas written when the octave column index reaches its
-/// midpoint. `s` is `(1 << (shift - 7))` as an integer (the stock `fild`
-/// argument); `prev` is the previous depth-cell accumulator (`fVar4`), `acc` the
+/// Velocity/derivative deltas written when the octave column index reaches its midpoint.
+///
+/// `s` is `(1 << (shift - 7))` as an integer (the stock `fild` argument);
+/// `prev` is the previous depth-cell accumulator (`fVar4`), `acc` the
 /// current accumulator, `stored` the value already held in the `+0x5c` buffer.
 /// Returns `((prev - acc) * s, (stored - acc) * s)` for the `+8*edx`/`+8*edx+4`
 /// slots; the caller then copies `acc` into both `fVar4` and the `+0x5c` buffer.
@@ -737,10 +751,12 @@ pub fn cloud_layer_cross_term__6cffc0(prev: f32, acc: f32, stored: f32, s: i32) 
     (d0, d1)
 }
 
-/// Magic-bias byte quantize of one density float: `((v*k0 + k1 + k2) as f32
-/// bits) >> 14`, yielding the raw 8-bit index BEFORE the floor subtraction and
-/// clamp-table lookup. The `>> 14` is the stored-f32 mantissa extraction, not a
-/// numeric cast, so boundary ULPs match the stock `fstp;mov;shr eax,0xe` trick.
+/// Magic-bias byte quantize of one density float.
+///
+/// `((v*k0 + k1 + k2) as f32 bits) >> 14`, yielding the raw 8-bit index BEFORE
+/// the floor subtraction and clamp-table lookup. The `>> 14` is the stored-f32
+/// mantissa extraction, not a numeric cast, so boundary ULPs match the stock
+/// `fstp;mov;shr eax,0xe` trick.
 pub fn cloud_layer_pack_byte__6cffc0(v: f32, k0: f32, k1: f32, k2: f32) -> u32 {
     let packed = (f64::from(v) * f64::from(k0) + f64::from(k1) + f64::from(k2)) as f32;
     (packed.to_bits() >> 14) & 0xff

@@ -25,8 +25,9 @@ unsafe extern "system" {
     fn GetModuleHandleA(module_name: *const u8) -> usize;
 }
 
-/// Standard `DLL_PROCESS_ATTACH` setup for an injected helper DLL: opt out of
-/// per-thread loader notifications and bring up the shared logger.
+/// Standard `DLL_PROCESS_ATTACH` setup for an injected helper DLL.
+///
+/// Opt out of per-thread loader notifications and bring up the shared logger.
 ///
 /// Call this once, from `DllMain` on `DLL_PROCESS_ATTACH`, before installing
 /// any hooks.
@@ -86,8 +87,10 @@ pub unsafe fn create_hook(
     }
 }
 
-/// Enable a hook previously created at `target_va` by [`create_hook`]. Returns
-/// `true` on success; logs against `label` and returns `false` on failure.
+/// Enable a hook previously created at `target_va` by [`create_hook`].
+///
+/// Returns `true` on success; logs against `label` and returns `false` on
+/// failure.
 ///
 /// # Safety
 ///
@@ -107,9 +110,10 @@ pub unsafe fn enable_hook(target_va: usize, label: &str) -> bool {
     true
 }
 
-/// Queue a hook previously created at `target_va` by [`create_hook`] for
-/// enabling by the next [`apply_queued`] call. Returns `true` on success; logs
-/// against `label` and returns `false` on failure.
+/// Queue a hook previously created at `target_va` by [`create_hook`].
+///
+/// For enabling by the next [`apply_queued`] call. Returns `true` on success;
+/// logs against `label` and returns `false` on failure.
 ///
 /// Every `MinHook` enable freezes all threads of the process to patch safely;
 /// queueing lets an installer with many hooks pay that freeze once for the
@@ -191,8 +195,10 @@ pub unsafe fn install(target_va: usize, detour: *mut c_void, label: &str) -> Opt
     }
 }
 
-/// Whether the bytes at `va` match the IDA-style signature `sig` — space-separated
-/// hex bytes where `??` is a wildcard, e.g. `"55 8B EC ?? E8 ?? ?? ?? ??"`.
+/// Whether the bytes at `va` match the IDA-style signature `sig`.
+///
+/// Space-separated hex bytes where `??` is a wildcard, e.g.
+/// `"55 8B EC ?? E8 ?? ?? ?? ??"`.
 ///
 /// Patching a function whose prologue no longer matches (a client update, a
 /// different build variant, a stale RVA) corrupts the host, so installers verify

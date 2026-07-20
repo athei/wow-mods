@@ -110,9 +110,10 @@ mod tests_os_gui_unscale_y__41ae50 {
     }
 }
 
-/// Snaps a coordinate to the nearest integer after multiplying by an integer
-/// device scale, rounding half away from zero, returning the rounded value as a
-/// float. `scale` is the device pixel-scale read as a 32-bit integer.
+/// Snaps a coordinate to the nearest integer after multiplying by an integer device scale.
+///
+/// Rounding half away from zero, returning the rounded value as a float.
+/// `scale` is the device pixel-scale read as a 32-bit integer.
 ///
 /// `prod = scale * coord`; the result is `trunc(prod + 0.5)` when `prod > 0` and
 /// `trunc(prod - 0.5)` otherwise — the add/sub-0.5-then-truncate-toward-zero
@@ -159,10 +160,11 @@ mod tests_snap_coord_to_pixel_y__5c7010 {
     }
 }
 
-/// Scans an obstacle-rectangle list for one that overlaps `rect` and, on the
-/// first overlap, returns the clearance gap along `direction` (0..3). Returns
-/// `None` when nothing overlaps (or the direction is out of range for every
-/// overlapping rectangle).
+/// Scans an obstacle-rectangle list for one that overlaps `rect`.
+///
+/// On the first overlap, returns the clearance gap along `direction` (0..3).
+/// Returns `None` when nothing overlaps (or the direction is out of range for
+/// every overlapping rectangle).
 ///
 /// Each rectangle is four floats `[a, b, c, d]`. Two rectangles overlap when
 /// `rect[3] > obs[1]`, `rect[1] < obs[3]`, `rect[0] > obs[2]`, and
@@ -244,8 +246,9 @@ mod tests_ui_frame_rect_overlap_distance__509220 {
     }
 }
 
-/// Cohen-Sutherland-style clamp of a UI rect `(left, bottom, right, top)` to the
-/// screen bounds, returning `(outcode, clamped)`.
+/// Cohen-Sutherland-style clamp of a UI rect `(left, bottom, right, top)` to the screen bounds.
+///
+/// Returning `(outcode, clamped)`.
 ///
 /// `extent_x`/`extent_y` are the derived screen extents (cursor-scale minus the
 /// screen-extent globals); `min_x`/`min_y` are the lower screen bounds. The
@@ -325,8 +328,9 @@ mod tests_ui_frame_clamp_rect_to_screen__509bf0 {
             .all(|(x, y)| x.to_bits() == y.to_bits())
     }
 
-    /// A rect fully inside the screen bounds produces outcode 0 and is returned
-    /// unchanged (no shift applied).
+    /// A rect fully inside the screen bounds produces outcode 0 and is returned unchanged.
+    ///
+    /// (no shift applied).
     #[test]
     fn inside_bounds_is_identity() {
         let rect = [10.0_f32, 10.0, 20.0, 20.0];
@@ -335,8 +339,10 @@ mod tests_ui_frame_clamp_rect_to_screen__509bf0 {
         assert!(rect_bits_eq(clamped, rect));
     }
 
-    /// Known value: bottom drops below `min_x`, so only bit0 is set and the rect
-    /// is shifted up by exactly the bottom underflow, preserving its height.
+    /// Known value: bottom drops below `min_x`, so only bit0 is set.
+    ///
+    /// The rect is shifted up by exactly the bottom underflow, preserving its
+    /// height.
     #[test]
     fn bottom_out_known_value() {
         let (outcode, clamped) = clamp(10.0, -5.0, 20.0, 5.0, 100.0, 100.0, 0.0, 0.0);
@@ -344,8 +350,10 @@ mod tests_ui_frame_clamp_rect_to_screen__509bf0 {
         assert!(rect_bits_eq(clamped, [10.0, 0.0, 20.0, 10.0]));
     }
 
-    /// Known value: `left` exceeds `extent_y`, so only bit2 is set and the rect
-    /// is shifted left to butt against the right extent, preserving its width.
+    /// Known value: `left` exceeds `extent_y`, so only bit2 is set.
+    ///
+    /// The rect is shifted left to butt against the right extent, preserving
+    /// its width.
     #[test]
     fn left_out_known_value() {
         let (outcode, clamped) = clamp(200.0, 10.0, 190.0, 20.0, 100.0, 100.0, 0.0, 0.0);
@@ -353,8 +361,9 @@ mod tests_ui_frame_clamp_rect_to_screen__509bf0 {
         assert!(rect_bits_eq(clamped, [100.0, 10.0, 90.0, 20.0]));
     }
 
-    /// Outcode law: each bit is exactly its defining strict inequality, and only
-    /// those four bits (1|2|4|8) can ever be set.
+    /// Outcode law: each bit is exactly its defining strict inequality.
+    ///
+    /// Only those four bits (1|2|4|8) can ever be set.
     #[test]
     fn outcode_bits_match_inequalities() {
         let cases = [
@@ -385,9 +394,10 @@ mod tests_ui_frame_clamp_rect_to_screen__509bf0 {
         }
     }
 
-    /// Metamorphic law: the shift operations are pure translations, so whenever a
-    /// rect is clamped its width (`l - r`) and height (`t - b`) are preserved
-    /// from the original corners on every shifted axis.
+    /// Metamorphic law: the shift operations are pure translations.
+    ///
+    /// Whenever a rect is clamped its width (`l - r`) and height (`t - b`) are
+    /// preserved from the original corners on every shifted axis.
     #[test]
     fn shifts_preserve_extents() {
         let cases = [
@@ -415,9 +425,10 @@ mod tests_ui_frame_clamp_rect_to_screen__509bf0 {
     }
 }
 
-/// Minimap blip projection (`Minimap__ProjectBlipDelta` @0x4eaa30): maps a
-/// tracked object's world-XY delta from the minimap center into the blip's
-/// 2-float local offset.
+/// Minimap blip projection (`Minimap__ProjectBlipDelta` @0x4eaa30).
+///
+/// Maps a tracked object's world-XY delta from the minimap center into the
+/// blip's 2-float local offset.
 ///
 /// `k = 0.5·zoom_a·zoom_b` (the half-extent scale), `s = 1/range`;
 /// `out.x = k − k·(obj_y − ctr_y)·s`, `out.y = k + k·(obj_x − ctr_x)·s`.
@@ -454,8 +465,9 @@ pub fn minimap__project_blip_delta__4eaa30(a: &[f32; 8]) -> [f32; 2] {
 mod tests_minimap__project_blip_delta__4eaa30 {
     use super::minimap__project_blip_delta__4eaa30 as f;
 
-    /// Object at the minimap center lands exactly on the blip-space center
-    /// `(k, k)` regardless of range.
+    /// Object at the minimap center lands exactly on the blip-space center `(k, k)`.
+    ///
+    /// Regardless of range.
     #[test]
     fn centered_object_maps_to_k() {
         let k = 0.5f32 * 64.0 * 1.5;
@@ -464,8 +476,9 @@ mod tests_minimap__project_blip_delta__4eaa30 {
         assert_eq!(out[1].to_bits(), k.to_bits());
     }
 
-    /// Known offsets: +y world delta moves out.x down by k·dy/range, +x world
-    /// delta moves out.y up by k·dx/range.
+    /// Known offsets: +y world delta moves out.x down by k·dy/range.
+    ///
+    /// +x world delta moves out.y up by k·dx/range.
     #[test]
     fn known_offsets() {
         // k = 0.5·10·2 = 10, s = 1/100. dy = +50 -> out.x = 10 − 10·50/100 = 5.
@@ -477,8 +490,10 @@ mod tests_minimap__project_blip_delta__4eaa30 {
         assert_eq!(out[1].to_bits(), 7.5f32.to_bits());
     }
 
-    /// arg 3 (`ctr_z`) is dead — any value, even NaN, must not affect the
-    /// result (the stock body never reads its stack slot).
+    /// arg 3 (`ctr_z`) is dead.
+    ///
+    /// Any value, even NaN, must not affect the result (the stock body never
+    /// reads its stack slot).
     #[test]
     fn ctr_z_is_dead() {
         let base = f(&[1.0, 2.0, 0.0, 30.0, 4.0, 5.0, 6.0, 7.0]);
@@ -487,8 +502,9 @@ mod tests_minimap__project_blip_delta__4eaa30 {
         assert_eq!(base[1].to_bits(), nanz[1].to_bits());
     }
 
-    /// range = 0 divides to infinity (masked x87 semantics — no trap): the
-    /// scaled terms become ±inf and the outputs follow IEEE through the
+    /// range = 0 divides to infinity (masked x87 semantics — no trap).
+    ///
+    /// The scaled terms become ±inf and the outputs follow IEEE through the
     /// add/sub.
     #[test]
     fn zero_range_flows_infinite() {
@@ -506,7 +522,8 @@ mod tests_minimap__project_blip_delta__4eaa30 {
         assert!(out[0].is_nan());
     }
 
-    /// The out.y intermediate really is double-rounded through f32 memory
+    /// The out.y intermediate really is double-rounded through f32 memory.
+    ///
     /// (matching the stock FSTP/reload), not carried extended like out.x:
     /// sweep inputs until the two chains disagree in the last ULP, proving
     /// the memory-store rounding is live in the kernel.
@@ -536,8 +553,9 @@ mod tests_minimap__project_blip_delta__4eaa30 {
     }
 }
 
-/// Range gate of `Minimap__UnitBlipEnumCallback` 0x4eaa90 (block
-/// 0x4eaae5): `d = pos − center`, then FCOMPP of `range²` vs
+/// Range gate of `Minimap__UnitBlipEnumCallback` 0x4eaa90 (block 0x4eaae5).
+///
+/// `d = pos − center`, then FCOMPP of `range²` vs
 /// `(dz²+dy²)+dx²` (that FADDP order) with `TEST AH,0x5; JNP` — the
 /// callback EXITS only on ordered `range² < dist²`; equality and
 /// **unordered both continue** (NaN parity is 0x05 => PF=1 => no jump).

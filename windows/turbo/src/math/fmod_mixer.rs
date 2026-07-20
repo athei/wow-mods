@@ -18,19 +18,22 @@
 //! original) reproduces the result to within ≤1 int16 LSB.
 #![allow(non_snake_case)]
 
-/// Round a synthesized sample to clamped 16-bit PCM, matching the original's
-/// `FISTP`→`CMP 0x7fff`/`CMP 0xffff8000` sequence: round to nearest (ties to
-/// even, the x87 default mode) then clamp into the int16 range.
+/// Round a synthesized sample to clamped 16-bit PCM.
+///
+/// Matches the original's `FISTP`→`CMP 0x7fff`/`CMP 0xffff8000` sequence: round
+/// to nearest (ties to even, the x87 default mode) then clamp into the int16
+/// range.
 #[inline]
 fn pack_i16(sample: f64) -> i16 {
     let rounded = sample.round_ties_even();
     rounded.clamp(-32768.0, 32767.0) as i16
 }
 
-/// Reimplementation of `fmod__mixer_fpu` (fmod RVA `0x348e0`): the MPEG synthesis
-/// dewindow. Computes the 32 output samples exactly as the original walks its
-/// pointers — `window` advances `+0x80` bytes (32 f32) per sample in segments 1/2
-/// and `-0x80` per sample in segment 3; `src` advances `±0x40` bytes (16 f32).
+/// Reimplementation of `fmod__mixer_fpu` (fmod RVA `0x348e0`): the MPEG synthesis dewindow.
+///
+/// Computes the 32 output samples exactly as the original walks its pointers —
+/// `window` advances `+0x80` bytes (32 f32) per sample in segments 1/2 and
+/// `-0x80` per sample in segment 3; `src` advances `±0x40` bytes (16 f32).
 ///
 /// * `window` — the coefficient table base (`*(fmod_base + 0x55144)` at runtime).
 /// * `src` — the decoded V buffer.

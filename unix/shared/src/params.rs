@@ -73,8 +73,9 @@ impl Thunk for TranslateParams {
     const CODE: u32 = Thunks::Translate as u32;
 }
 
-/// Wire-format result code for a translated item. `#[repr(u32)]` so it crosses
-/// the PE↔unix boundary as a plain fixed-width int.
+/// Wire-format result code for a translated item.
+///
+/// `#[repr(u32)]` so it crosses the PE↔unix boundary as a plain fixed-width int.
 ///
 /// PE callers default to `Internal` before the call so a handler that returns
 /// without writing status doesn't surface as a spurious `Ok`.

@@ -103,8 +103,9 @@ mod tests_c_world_frustum__classify_point__686c20 {
     }
 }
 
-/// Tests an oriented AABB against six frustum planes; returns 3 if the box may
-/// be visible, 0 if any plane fully rejects it.
+/// Tests an oriented AABB against six frustum planes.
+///
+/// Returns 3 if the box may be visible, 0 if any plane fully rejects it.
 ///
 /// `planes` is 6 planes of 4 floats `[a, b, c, d]` (stride 4). `aabb` is two
 /// `C3Vector`s at `[0..3]` and `[3..6]`. `orientation` is a row-major 3x3 matrix
@@ -278,9 +279,10 @@ mod tests_c_world_frustum__test_oriented_box__6869c0 {
         const { assert!(FRUSTUM_PLANE_EPS < 0.0 && FRUSTUM_PLANE_EPS > -0.1) };
     }
 
-    /// The pre-fold world-space formulation, kept verbatim as the differential
-    /// oracle: round-trip the support corner to world space and evaluate the
-    /// plane there. Equal to the folded form by the transpose identity up to
+    /// The pre-fold world-space formulation, kept verbatim as the differential oracle.
+    ///
+    /// Round-trip the support corner to world space and evaluate the plane
+    /// there. Equal to the folded form by the transpose identity up to
     /// final-sum rounding.
     fn world_space_oracle(planes: &[f32; 24], aabb: &[f32; 6], o: &[f32; 9], t: &[f32; 3]) -> u32 {
         let extent_a = [aabb[0], aabb[1], aabb[2]];
@@ -328,8 +330,10 @@ mod tests_c_world_frustum__test_oriented_box__6869c0 {
         assert_eq!(got, want, "{what}: aabb={aabb:?} o={o:?} t={t:?}");
     }
 
-    /// Structured battery: degenerate/inverted/straddling/NaN/signed-zero/
-    /// non-orthonormal inputs agree with the world-space formulation.
+    /// Structured battery.
+    ///
+    /// Degenerate/inverted/straddling/NaN/signed-zero/non-orthonormal inputs
+    /// agree with the world-space formulation.
     #[test]
     fn differential_structured() {
         let f = box_frustum();
@@ -416,8 +420,10 @@ mod tests_c_world_frustum__test_oriented_box__6869c0 {
         );
     }
 
-    /// Seeded random sweep at game-scale magnitudes: the folded form and the
-    /// world-space oracle classify identically away from the epsilon knife edge.
+    /// Seeded random sweep at game-scale magnitudes.
+    ///
+    /// The folded form and the world-space oracle classify identically away
+    /// from the epsilon knife edge.
     #[test]
     fn differential_random_sweep() {
         let mut state = 0x243f_6a88_85a3_08d3_u64;
@@ -463,8 +469,9 @@ mod tests_c_world_frustum__test_oriented_box__6869c0 {
     }
 }
 
-/// Tests a bounding sphere against six frustum planes; returns 3 if the sphere
-/// may be visible, 0 if any plane fully rejects it.
+/// Tests a bounding sphere against six frustum planes.
+///
+/// Returns 3 if the sphere may be visible, 0 if any plane fully rejects it.
 ///
 /// `planes` is 6 planes of 4 floats `[a, b, c, d]` (stride 4). `sphere` is
 /// `[x, y, z, radius]`. A plane rejects when the signed distance of the centre
@@ -815,15 +822,17 @@ mod tests_frustum_compute_c3_vector__699250 {
     }
 }
 
-/// The `|w|` underflow replacement for the portal perspective divide: the raw
-/// dword `0x3727c5ac` (~1.0000000e-5) MOV'd over the clipped vertex's `w` when
-/// `|w| < DAT_00801360` (0x6b49bf / 0x6b49d3). Note it is NOT the usual
-/// `0x801360` epsilon itself and it is unsigned — a small negative `w` is
-/// replaced by the positive constant, flipping the vertex across the origin
+/// The `|w|` underflow replacement for the portal perspective divide.
+///
+/// The raw dword `0x3727c5ac` (~1.0000000e-5) MOV'd over the clipped vertex's
+/// `w` when `|w| < DAT_00801360` (0x6b49bf / 0x6b49d3). Note it is NOT the
+/// usual `0x801360` epsilon itself and it is unsigned — a small negative `w`
+/// is replaced by the positive constant, flipping the vertex across the origin
 /// exactly as stock does.
 const PORTAL_W_REPLACEMENT: f32 = f32::from_bits(0x3727_c5ac);
 
-/// Portal plane normal from the portal's first three world verts
+/// Portal plane normal from the portal's first three world verts.
+///
 /// (`CMapObj::ComputePortalNdcRect` 0x6b4809..0x6b48c7): `n = e1 × e2` with
 /// `e1 = v1 - v0`, `e2 = v2 - v0`, then normalized.
 ///
@@ -874,10 +883,12 @@ pub fn c_map_obj__portal_plane_normal__6b46f0(
     ]
 }
 
-/// Camera-on-portal-plane test (0x6b48cc..0x6b4930): plane
-/// `d = -((nnx*v0.x + nnz*v0.z) + nny*v0.y)` (FCHS then FSTP f32 @0x6b48fe),
-/// then `dist = |((nnz*cam.z + nny*cam.y) + nnx*cam.x) + d|` kept on the x87
-/// stack (never narrowed) and FCOMP'd against `eps` (`_DAT_008029d0`).
+/// Camera-on-portal-plane test (0x6b48cc..0x6b4930).
+///
+/// Plane `d = -((nnx*v0.x + nnz*v0.z) + nny*v0.y)` (FCHS then FSTP f32
+/// @0x6b48fe), then `dist = |((nnz*cam.z + nny*cam.y) + nnx*cam.x) + d|` kept
+/// on the x87 stack (never narrowed) and FCOMP'd against `eps`
+/// (`_DAT_008029d0`).
 ///
 /// NaN polarity (0x6b4925 `TEST AH,0x41; JP`): the full-screen-force arm is
 /// entered only on the ORDERED `dist <= eps` (C0-only or C3-only ⇒ odd parity ⇒
@@ -901,8 +912,9 @@ pub fn c_map_obj__portal_camera_on_plane__6b46f0(
     dist <= f64::from(eps)
 }
 
-/// `C3Vector::DominantAxis` (0x7bf680, trivial leaf reimplemented inline):
-/// index (0 = x, 1 = y, 2 = z) of the component with the largest |value|.
+/// `C3Vector::DominantAxis` (0x7bf680, trivial leaf reimplemented inline).
+///
+/// Index (0 = x, 1 = y, 2 = z) of the component with the largest |value|.
 ///
 /// Each `FCOM`/`TEST AH,0x41` pair falls through only on the ORDERED strict
 /// `>`; equal or unordered (NaN) takes the "not greater" branch — a NaN lane
@@ -921,8 +933,9 @@ pub fn c3_vector__dominant_axis__7bf680(v: &[f32; 3]) -> u32 {
     }
 }
 
-/// One iteration of the portal perspective-divide + NDC-rect min/max loop
-/// (0x6b49c0..0x6b4a4a). `vert = [x, y, w]` is one clipped homogeneous vertex;
+/// One iteration of the portal perspective-divide + NDC-rect min/max loop (0x6b49c0..0x6b4a4a).
+///
+/// `vert = [x, y, w]` is one clipped homogeneous vertex;
 /// `rect = [minY, minX, maxY, maxX]` mirrors `outEntry+4/+8/+0xc/+0x10`.
 /// Returns the divided `[x', y', w']` the adapter writes back into the
 /// clipper's static buffer, exactly as stock mutates it in place.
@@ -1169,7 +1182,8 @@ mod tests_c_map_obj__compute_portal_ndc_rect__6b46f0 {
     }
 }
 
-/// Unit-box `[0,1]³` vertex outcode for the 24-plane polygon clipper
+/// Unit-box `[0,1]³` vertex outcode for the 24-plane polygon clipper.
+///
 /// (`World_ClipPolygonToFrustum24` @0x686db0) and
 /// `CMovement__ClipVerticalStepAgainstHull`.
 ///
@@ -1210,8 +1224,9 @@ mod tests_world_compute_vertex_outcode__686d20 {
         [v[0].to_bits(), v[1].to_bits(), v[2].to_bits()]
     }
 
-    /// A point strictly inside the unit box: all six distances positive,
-    /// outcode 0.
+    /// A point strictly inside the unit box.
+    ///
+    /// All six distances positive, outcode 0.
     #[test]
     fn inside_point_has_zero_outcode() {
         let out = f(&bits([0.25, 0.5, 0.75]));
@@ -1224,8 +1239,9 @@ mod tests_world_compute_vertex_outcode__686d20 {
         assert_eq!(out[6], 0);
     }
 
-    /// Each violated slab sets exactly its documented bit, in lane order
-    /// x→31, 1−x→30, y→29, 1−y→28, z→27, 1−z→26.
+    /// Each violated slab sets exactly its documented bit.
+    ///
+    /// In lane order x→31, 1−x→30, y→29, 1−y→28, z→27, 1−z→26.
     #[test]
     fn per_slab_bits() {
         assert_eq!(f(&bits([-0.5, 0.5, 0.5]))[6], 0x8000_0000);
@@ -1243,10 +1259,12 @@ mod tests_world_compute_vertex_outcode__686d20 {
         );
     }
 
-    /// `-0.0` input: the raw sign bit counts as "outside" for the near slab
-    /// (bit 31) even though `-0.0 < 0.0` is false — this is why the pack must
-    /// read `to_bits()`, not compare floats. The far lane `1 - (-0.0) = 1.0`
-    /// stays positive.
+    /// `-0.0` input.
+    ///
+    /// The raw sign bit counts as "outside" for the near slab (bit 31) even
+    /// though `-0.0 < 0.0` is false — this is why the pack must read
+    /// `to_bits()`, not compare floats. The far lane `1 - (-0.0) = 1.0` stays
+    /// positive.
     #[test]
     fn negative_zero_counts_as_negative() {
         let out = f(&bits([-0.0, 0.5, 0.5]));
@@ -1254,15 +1272,18 @@ mod tests_world_compute_vertex_outcode__686d20 {
         assert_eq!(out[6], 0x8000_0000);
     }
 
-    /// Boundary values: exactly 0.0 and 1.0 have positive/zero lanes on both
-    /// sides (`+0.0` sign bit clear) — no bits set.
+    /// Boundary values.
+    ///
+    /// Exactly 0.0 and 1.0 have positive/zero lanes on both sides (`+0.0` sign
+    /// bit clear) — no bits set.
     #[test]
     fn boundaries_are_inside() {
         assert_eq!(f(&bits([0.0, 1.0, 0.0]))[6], 0);
     }
 
-    /// NaN passes through the copy lanes bit-exact (payload preserved) and
-    /// propagates through the `1 - v` lanes; the outcode then reflects the
+    /// NaN passes through the copy lanes bit-exact (payload preserved).
+    ///
+    /// Propagates through the `1 - v` lanes; the outcode then reflects the
     /// NaN's raw sign bit per lane, matching the stock integer pack.
     #[test]
     fn nan_payload_and_sign_flow_through() {
@@ -1275,8 +1296,10 @@ mod tests_world_compute_vertex_outcode__686d20 {
         assert_eq!(out[6] & 0x8000_0000, 0x8000_0000);
     }
 
-    /// The `1 - v` lanes round exactly once (subnormal-adjacent and
-    /// sub-ULP inputs match the reference computation bit-for-bit).
+    /// The `1 - v` lanes round exactly once.
+    ///
+    /// (subnormal-adjacent and sub-ULP inputs match the reference computation
+    /// bit-for-bit).
     #[test]
     fn far_lane_single_rounding() {
         for &x in &[1e-8f32, 0.333_333_34, 0.999_999_94, 1.000_000_1, 123.456] {

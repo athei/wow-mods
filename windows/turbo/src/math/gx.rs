@@ -9,8 +9,10 @@
     clippy::too_many_arguments
 )]
 
-/// Returns the selected 16-float (4x4) matrix unchanged — the original
-/// copies the current top-of-stack matrix into the destination verbatim.
+/// Returns the selected 16-float (4x4) matrix unchanged.
+///
+/// The original copies the current top-of-stack matrix into the destination
+/// verbatim.
 pub fn c_gx_device__copy_current_matrix__592730(src: &[f32; 16]) -> [f32; 16] {
     *src
 }
@@ -65,12 +67,14 @@ mod tests_c_gx_device__copy_current_matrix__592730 {
     }
 }
 
-/// Computes `m = max(baseline, rgb[0], rgb[1], rgb[2])` and, when
-/// `m >= threshold`, normalizes each of `rgb` and `baseline` by `1/m`, clamps
-/// each normalized value to `[0, 1]`, maps it to `[0, 255]` (with a `+0.5`
-/// round bias on the in-range path, then truncating toward zero), and packs the
-/// four bytes into one dword as `baseline<<24 | rgb0<<16 | rgb1<<8 | rgb2`.
-/// Returns `(packed, m)`; `packed` is `0` when `m < threshold`.
+/// Computes `m = max(baseline, rgb[0], rgb[1], rgb[2])`.
+///
+/// When `m >= threshold`, normalizes each of `rgb` and `baseline` by `1/m`,
+/// clamps each normalized value to `[0, 1]`, maps it to `[0, 255]` (with a
+/// `+0.5` round bias on the in-range path, then truncating toward zero), and
+/// packs the four bytes into one dword as
+/// `baseline<<24 | rgb0<<16 | rgb1<<8 | rgb2`. Returns `(packed, m)`;
+/// `packed` is `0` when `m < threshold`.
 ///
 /// The clamp sentinels (`0.0`/`255.0`) and the in-range remap `v*255.0 + 0.5`
 /// are the reference `.rdata` constants; `threshold` is injected by the caller.
@@ -183,10 +187,12 @@ mod tests_gx_light_clamp_color_component_to_byte__71ca80 {
     }
 }
 
-/// Returns whether a plane-array slot must be rewritten: the host stores the
-/// new value only when it differs (strict ordered inequality) from the cached
-/// one. The original mirrors the x87 `FCOMP`/`JNP` skip-when-equal test, so an
-/// unordered (NaN) comparison takes the skip path and is reported as no-change.
+/// Returns whether a plane-array slot must be rewritten.
+///
+/// The host stores the new value only when it differs (strict ordered
+/// inequality) from the cached one. The original mirrors the x87 `FCOMP`/`JNP`
+/// skip-when-equal test, so an unordered (NaN) comparison takes the skip path
+/// and is reported as no-change.
 #[allow(clippy::double_comparisons)]
 pub fn c_gx_device__set_plane_float__593770(current: f32, value: f32) -> bool {
     current < value || current > value
@@ -227,8 +233,9 @@ mod c_gx_device__set_plane_float__593770_tests {
     }
 }
 
-/// Packs the device fog gradient color (mode-1 path) into one `0xAARRGGBB`
-/// dword with the alpha forced to `0xff`. `c0`/`c1`/`c2` are the raw `r`/`g`/`b`
+/// Packs the device fog gradient color (mode-1 path) into one `0xAARRGGBB` dword.
+///
+/// With the alpha forced to `0xff`. `c0`/`c1`/`c2` are the raw `r`/`g`/`b`
 /// channels read from `device+0x190`/`+0x194`/`+0x198`. Each channel is clamped
 /// to `[0, 1]` (the `!(0.0 < v)` lower test snaps `<= 0` and `NaN` to `0`; the
 /// `v < 1.0` upper test maps in-range values by `v * 255.0 + 0.5` and snaps
@@ -245,9 +252,11 @@ pub fn fog_pack_color_argb__70baf0(c0: f32, c1: f32, c2: f32) -> u32 {
         | fog_clamp_byte__70baf0(c2)
 }
 
-/// Clamps `v` to `[0, 1]`, maps the in-range arm by `v * 255.0 + 0.5`, and
-/// truncates toward zero via the reference `__ftol` (`crate::math::misc`),
-/// returning the low byte. Mirrors the proven clamp used by
+/// Clamps `v` to `[0, 1]`.
+///
+/// Maps the in-range arm by `v * 255.0 + 0.5`, and truncates toward zero via
+/// the reference `__ftol` (`crate::math::misc`), returning the low byte.
+/// Mirrors the proven clamp used by
 /// `gx_light_clamp_color_component_to_byte__71ca80`; the compare polarities are
 /// the x87 `fcomp`/`test ah,0x41`/`jp` (lower) and `test ah,0x1`/`jne` (upper)
 /// tests, so a `NaN` lane snaps to `0`. The in-range remap runs in `f32` whereas
@@ -317,10 +326,12 @@ mod tests_fog_pack_color_argb__70baf0 {
     }
 }
 
-/// `CGxDevice::SetViewport` (0x592530) dedup predicate — returns `true` when the
-/// six incoming viewport floats differ from the currently-cached rect, so the
-/// caller should store them and raise the viewport-dirty flag. The cached rect
-/// lives at `this+0xf38..0xf4c` and the dirty flag at `this+0xf34`.
+/// `CGxDevice::SetViewport` (0x592530) dedup predicate.
+///
+/// Returns `true` when the six incoming viewport floats differ from the
+/// currently-cached rect, so the caller should store them and raise the
+/// viewport-dirty flag. The cached rect lives at `this+0xf38..0xf4c` and the
+/// dirty flag at `this+0xf34`.
 ///
 /// Bit-faithful to the stock x87 dedup chain (six `FLD [this+0xf..]; FCOMP
 /// [stack]; FNSTSW; TEST AH,0x44; JP write`). `TEST AH,0x44; JP` fires the write
@@ -371,10 +382,12 @@ mod tests_c_gx_device__set_viewport__592530 {
     }
 }
 
-/// `GxSetViewport` (0x58af60) validate+clamp predicate — validates a normalized
-/// viewport box and snaps its near-edges to 0/1, returning the sanitized box or
-/// `None` (⇒ caller raises STORM_ERROR_INVALID_PARAMETER). `near`/`far` are the
-/// device depth-range globals (`DAT_007ffd74`=0.0, `_DAT_007ff9d8`=1.0), read live.
+/// `GxSetViewport` (0x58af60) validate+clamp predicate.
+///
+/// Validates a normalized viewport box and snaps its near-edges to 0/1,
+/// returning the sanitized box or `None` (⇒ caller raises
+/// STORM_ERROR_INVALID_PARAMETER). `near`/`far` are the device depth-range
+/// globals (`DAT_007ffd74`=0.0, `_DAT_007ff9d8`=1.0), read live.
 ///
 /// Every predicate is ordered — the stock x87 `FCOMP` chain routes greater/less/
 /// unordered to the error path — so plain IEEE `<`/`<=` reproduce the NaN→reject
@@ -469,11 +482,13 @@ mod tests_gx_set_viewport__58af60 {
     }
 }
 
-/// Unsigned lexicographic byte compare of two `len`-byte blocks — the exact
-/// `REPE CMPSB; SBB EAX,EAX; SBB EAX,-1` idiom the 1.12 client inlines for its
-/// render-sort key blocks (e.g. `RenderBatch::CompareSortKey` @ 0x70a710): the
-/// first differing byte decides (`-1` when `a`'s byte is smaller unsigned, `+1`
-/// when larger), all bytes equal returns `0`. Classic `memcmp` sign semantics.
+/// Unsigned lexicographic byte compare of two `len`-byte blocks.
+///
+/// The exact `REPE CMPSB; SBB EAX,EAX; SBB EAX,-1` idiom the 1.12 client
+/// inlines for its render-sort key blocks (e.g. `RenderBatch::CompareSortKey`
+/// @ 0x70a710): the first differing byte decides (`-1` when `a`'s byte is
+/// smaller unsigned, `+1` when larger), all bytes equal returns `0`. Classic
+/// `memcmp` sign semantics.
 ///
 /// Raw-pointer loop with unaligned reads — never a `&[u8]` over game memory
 /// (see the repo rule: `slice::from_raw_parts` debug-asserts alignment and
@@ -503,8 +518,10 @@ pub unsafe fn lex_cmp(a: *const u8, b: *const u8, len: usize) -> i32 {
 mod tests_lex_cmp {
     use super::lex_cmp;
 
-    /// Independent oracle: Rust's slice `Ord` is unsigned byte lexicographic;
-    /// on equal-length inputs it matches `memcmp` sign semantics exactly.
+    /// Independent oracle.
+    ///
+    /// Rust's slice `Ord` is unsigned byte lexicographic; on equal-length
+    /// inputs it matches `memcmp` sign semantics exactly.
     fn oracle(a: &[u8], b: &[u8]) -> i32 {
         match a.cmp(b) {
             core::cmp::Ordering::Less => -1,
@@ -582,10 +599,12 @@ mod tests_lex_cmp {
     }
 }
 
-/// `CGxDeviceD3d::IXformSetProjection` (0x5a11d0) conversion core — turns the
-/// engine's GL-convention row-major projection into D3D convention. Three
-/// stages, transcribed from the stock x87 body (computed in `f64` tracking the
-/// 80-bit intermediates, narrowed at the exact points stock stores `f32`):
+/// `CGxDeviceD3d::IXformSetProjection` (0x5a11d0) conversion core.
+///
+/// Turns the engine's GL-convention row-major projection into D3D convention.
+/// Three stages, transcribed from the stock x87 body (computed in `f64`
+/// tracking the 80-bit intermediates, narrowed at the exact points stock
+/// stores `f32`):
 ///
 /// 1. **eps-guarded w-normalize** — unless `|m23 − 1| < eps` or `|m23| < eps`
 ///    (`m23 = m[11]`), every element is scaled by `1/m23`. Both stock guards
@@ -677,8 +696,9 @@ mod tests_c_gx_device_d3d__i_xform_set_projection__5a11d0 {
     /// `_DAT_008029d4` in the shipped image: bits 0x34800000 = 2^-22.
     const EPS: f32 = f32::from_bits(0x3480_0000);
 
-    /// GL-convention row-vector perspective (v' = v·M): `m[10] = (f+n)/(n−f)`,
-    /// `m[14] = 2fn/(n−f)`, `m[11] = −1`, `m[15] = 0`.
+    /// GL-convention row-vector perspective (v' = v·M).
+    ///
+    /// `m[10] = (f+n)/(n−f)`, `m[14] = 2fn/(n−f)`, `m[11] = −1`, `m[15] = 0`.
     fn gl_perspective(n: f32, f: f32) -> [f32; 16] {
         let mut m = [0.0f32; 16];
         m[0] = 1.5;
@@ -689,8 +709,9 @@ mod tests_c_gx_device_d3d__i_xform_set_projection__5a11d0 {
         m
     }
 
-    /// GL-convention row-vector ortho: `m[10] = −2/(f−n)`, `m[14] = −(f+n)/(f−n)`,
-    /// `m[11] = 0`, `m[15] = 1`.
+    /// GL-convention row-vector ortho.
+    ///
+    /// `m[10] = −2/(f−n)`, `m[14] = −(f+n)/(f−n)`, `m[11] = 0`, `m[15] = 1`.
     fn gl_ortho(n: f32, f: f32) -> [f32; 16] {
         let mut m = [0.0f32; 16];
         m[0] = 0.5;
@@ -702,8 +723,10 @@ mod tests_c_gx_device_d3d__i_xform_set_projection__5a11d0 {
         m
     }
 
-    /// Independent oracle: post-conversion NDC depth of an eye-space point at
-    /// `z` (row-vector convention, GL looks down −z).
+    /// Independent oracle.
+    ///
+    /// Post-conversion NDC depth of an eye-space point at `z` (row-vector
+    /// convention, GL looks down −z).
     fn depth(m: &[f32; 16], z: f32) -> f32 {
         (z * m[10] + m[14]) / (z * m[11] + m[15])
     }
@@ -833,41 +856,48 @@ mod tests_c_gx_device_d3d__i_xform_set_projection__5a11d0 {
     }
 }
 
-/// `CGxString::EmitLineQuads` (0x5ccbe0) `unitsPerPixel` — the per-run scale
-/// `snappedLineHeight / fontPixelHeight`. Stock zero-extends the u32 pixel
-/// height to a qword (`FILD` of `{height, 0}`, exact) and divides with `FDIVR`,
-/// rounding once at the f32 store; `f64` division reproduces that (a pixel
-/// height of 0 yields ±inf/NaN under masked x87 exceptions, same as IEEE f64).
+/// `CGxString::EmitLineQuads` (0x5ccbe0) `unitsPerPixel`.
+///
+/// The per-run scale `snappedLineHeight / fontPixelHeight`. Stock zero-extends
+/// the u32 pixel height to a qword (`FILD` of `{height, 0}`, exact) and divides
+/// with `FDIVR`, rounding once at the f32 store; `f64` division reproduces that
+/// (a pixel height of 0 yields ±inf/NaN under masked x87 exceptions, same as
+/// IEEE f64).
 pub fn text_units_per_pixel__5ccbe0(glyph_height_world: f32, font_px_height: u32) -> f32 {
     super::f64_to_f32(f64::from(glyph_height_world) / f64::from(font_px_height))
 }
 
-/// One `FLD m32; FADD m32; FSTP m32` — the emitter's ubiquitous two-term f32
-/// add (pen advance accumulation, quad corner width/height adds, hyperlink pen
-/// stores). Computed in `f64` (exact for two f32 addends within 2^29 exponent
-/// spread) and narrowed once, matching the single x87 store rounding.
+/// One `FLD m32; FADD m32; FSTP m32`.
+///
+/// The emitter's ubiquitous two-term f32 add (pen advance accumulation, quad
+/// corner width/height adds, hyperlink pen stores). Computed in `f64` (exact
+/// for two f32 addends within 2^29 exponent spread) and narrowed once, matching
+/// the single x87 store rounding.
 pub fn text_add_f32__5ccbe0(a: f32, b: f32) -> f32 {
     super::f64_to_f32(f64::from(a) + f64::from(b))
 }
 
-/// Sub-pixel glyph advance, screen-space arm (`worldFlag` low byte == 0): the
-/// raw glyph advance run through the CRT ceil helper (0x73fdf5 forces control
-/// word 0x1b3f = round toward +inf around `FRNDINT`) — native `ceil`, with the
-/// f64 argument widening the stock `FLD m32; FSTP m64` spill exactly.
+/// Sub-pixel glyph advance, screen-space arm (`worldFlag` low byte == 0).
+///
+/// The raw glyph advance run through the CRT ceil helper (0x73fdf5 forces
+/// control word 0x1b3f = round toward +inf around `FRNDINT`) — native `ceil`,
+/// with the f64 argument widening the stock `FLD m32; FSTP m64` spill exactly.
 pub fn glyph_ceil_advance__5cb080(advance: f32) -> f32 {
     super::f64_to_f32(f64::from(advance).ceil())
 }
 
-/// Sub-pixel glyph advance, world-space arm: `lineHeight / pixelHeight ×
-/// advance`. The pixel height divides as a SIGNED 32-bit integer (stock
-/// `FIDIV m32int` — the adjacent zeroed dword is a dead qword-slot artifact),
-/// and the divide/multiply chain folds on the x87 stack (modeled in f64)
-/// before the single f32 narrow at the return boundary.
+/// Sub-pixel glyph advance, world-space arm.
+///
+/// `lineHeight / pixelHeight × advance`. The pixel height divides as a SIGNED
+/// 32-bit integer (stock `FIDIV m32int` — the adjacent zeroed dword is a dead
+/// qword-slot artifact), and the divide/multiply chain folds on the x87 stack
+/// (modeled in f64) before the single f32 narrow at the return boundary.
 pub fn glyph_scaled_advance__5cb080(line_height: f32, px_height: i32, advance: f32) -> f32 {
     super::f64_to_f32(f64::from(line_height) / f64::from(px_height) * f64::from(advance))
 }
 
-/// The four scaled glyph texture coordinates stored at `this+0x60..0x6c`:
+/// The four scaled glyph texture coordinates stored at `this+0x60..0x6c`.
+///
 /// `[prod*sy, u30*sx, sum*sy, (u48+u30)*sx]` where `prod = a*b` is a SIGNED
 /// 32-bit wrap product (`FILD m32int`), `sum = prod + b` reloads as an
 /// UNSIGNED dword (`FILD` of a zero-extended qword slot), and `u30`/`u48`
@@ -894,7 +924,8 @@ pub fn glyph_tex_coords__5c7f80(a: i32, b: i32, u30: u32, u48: u32, sx: f32, sy:
     ]
 }
 
-/// Kerned-advance fold on the miss path of the pair cache:
+/// Kerned-advance fold on the miss path of the pair cache.
+///
 /// `baseAdvance + kern × scale`, where `kern` is the clamped (≤ 0) signed
 /// kerning FILDed exactly, `scale` is the f32 at `font+0x188`, and the
 /// FILD/FMUL/FADDP chain folds wide before the single `FSTP m32` narrow.
@@ -902,11 +933,12 @@ pub fn kerned_advance__5ca2d0(kern: i32, scale: f32, base: f32) -> f32 {
     super::f64_to_f32(f64::from(kern) * f64::from(scale) + f64::from(base))
 }
 
-/// Screen-space line-spacing seed (0x5cdcd1..0x5cdd10): `spacing ×
-/// deviceXScale + bias` truncates via `__ftol`, reloads as a zero-extended
-/// u32 qword (a negative sum wraps huge-positive like stock), `FST`s an f32
-/// copy, and divides the WIDE reload back by the scale for the reduced
-/// spacing. Returns `(t_f32, spacing_scaled)`.
+/// Screen-space line-spacing seed (0x5cdcd1..0x5cdd10).
+///
+/// `spacing × deviceXScale + bias` truncates via `__ftol`, reloads as a
+/// zero-extended u32 qword (a negative sum wraps huge-positive like stock),
+/// `FST`s an f32 copy, and divides the WIDE reload back by the scale for the
+/// reduced spacing. Returns `(t_f32, spacing_scaled)`.
 pub fn build_line_spacing__5cdc20(spacing: f32, x_scale: u32, bias: f32) -> (f32, f32) {
     let t = super::misc::ftol__40a2b0(f64::from(spacing) * f64::from(x_scale) + f64::from(bias));
     let t_wide = f64::from(t as u32);
@@ -916,8 +948,9 @@ pub fn build_line_spacing__5cdc20(spacing: f32, x_scale: u32, bias: f32) -> (f32
     )
 }
 
-/// Per-line block-height step: `used + lineHeight + spacing` folded wide,
-/// one narrow.
+/// Per-line block-height step.
+///
+/// `used + lineHeight + spacing` folded wide, one narrow.
 pub fn build_block_step__5cdc20(used: f32, line_h: f32, spacing: f32) -> f32 {
     super::f64_to_f32(f64::from(used) + f64::from(line_h) + f64::from(spacing))
 }
@@ -927,9 +960,10 @@ pub fn build_pen_step__5cdc20(a: f32, advance: f32) -> f32 {
     super::f64_to_f32(f64::from(a) - f64::from(advance))
 }
 
-/// Justification snap argument: right-justify negates the width exactly
-/// (`FCHS`); center-justify negates the WIDE `width × half` product and
-/// narrows at the argument push.
+/// Justification snap argument.
+///
+/// Right-justify negates the width exactly (`FCHS`); center-justify negates
+/// the WIDE `width × half` product and narrows at the argument push.
 pub fn build_justify_arg__5cdc20(width: f32, half: f32, center: bool) -> f32 {
     if center {
         super::f64_to_f32(-(f64::from(width) * f64::from(half)))
@@ -978,10 +1012,12 @@ mod tests_build_geometry__5cdc20 {
     }
 }
 
-/// Line-fit pixel budget: `ceil(pxHeight / snappedHeight × maxWidth ×
-/// yScale)` with the pixel height FILDed as a zero-extended u32, the device
-/// Y scale FIMULed as a SIGNED dword, the whole chain wide, and the CRT-ceil
-/// (0x73fdf5) applied before the single f32 narrow.
+/// Line-fit pixel budget.
+///
+/// `ceil(pxHeight / snappedHeight × maxWidth × yScale)` with the pixel height
+/// FILDed as a zero-extended u32, the device Y scale FIMULed as a SIGNED dword,
+/// the whole chain wide, and the CRT-ceil (0x73fdf5) applied before the single
+/// f32 narrow.
 pub fn fit_budget__5c7470(px_height: u32, snapped: f32, max_width: f32, y_scale: i32) -> f32 {
     super::f64_to_f32(
         (f64::from(px_height) / f64::from(snapped) * f64::from(max_width) * f64::from(y_scale))
@@ -989,17 +1025,21 @@ pub fn fit_budget__5c7470(px_height: u32, snapped: f32, max_width: f32, y_scale:
     )
 }
 
-/// Line-fit overflow gate: the 80-bit `kern + advance + accum` fold compared
-/// against the pixel budget; only a STRICTLY greater sum overflows (the
-/// `TEST AH,0x41; JZ` arm) — an unordered/NaN sum keeps fitting.
+/// Line-fit overflow gate.
+///
+/// The 80-bit `kern + advance + accum` fold compared against the pixel budget;
+/// only a STRICTLY greater sum overflows (the `TEST AH,0x41; JZ` arm) — an
+/// unordered/NaN sum keeps fitting.
 pub fn fit_overflows__5c7470(kern: f32, adv: f32, accum: f32, budget: f32) -> bool {
     f64::from(kern) + f64::from(adv) + f64::from(accum) > f64::from(budget)
 }
 
-/// Line-fit tail rescale: one wide quotient `one / yScale` multiplies both
-/// the `lastAdvance + accum` fold and the recorded line width, each narrowed
-/// once (stock computes the quotient once and keeps it on the stack for both
-/// FMULs). Returns `(accum_scaled, width_scaled)`.
+/// Line-fit tail rescale.
+///
+/// One wide quotient `one / yScale` multiplies both the `lastAdvance + accum`
+/// fold and the recorded line width, each narrowed once (stock computes the
+/// quotient once and keeps it on the stack for both FMULs). Returns
+/// `(accum_scaled, width_scaled)`.
 pub fn fit_tail_scale__5c7470(
     one: f32,
     y_scale: u32,
@@ -1014,9 +1054,11 @@ pub fn fit_tail_scale__5c7470(
     )
 }
 
-/// Line-fit units-per-pixel split: the quotient `snapped / pxHeight` is
-/// FST-narrowed for the break-rewind width but stays WIDE for the full-line
-/// `q × accum` product. Returns `(upp_narrowed, full_line_width)`.
+/// Line-fit units-per-pixel split.
+///
+/// The quotient `snapped / pxHeight` is FST-narrowed for the break-rewind
+/// width but stays WIDE for the full-line `q × accum` product. Returns
+/// `(upp_narrowed, full_line_width)`.
 pub fn fit_upp_width__5c7470(snapped: f32, px_height: u32, accum: f32) -> (f32, f32) {
     let q = f64::from(snapped) / f64::from(px_height);
     (
@@ -1067,10 +1109,11 @@ mod tests_fit_text_to_width__5c7470 {
     }
 }
 
-/// Final measured-run width: `(kernAccum + lastAdvance) × (reqHeight /
-/// pixelHeight)`, with the pixel height FILDed as a zero-extended u32 and
-/// the whole sum/quotient/product chain folded wide before the single
-/// `FSTP m32` into the caller's out slot.
+/// Final measured-run width.
+///
+/// `(kernAccum + lastAdvance) × (reqHeight / pixelHeight)`, with the pixel
+/// height FILDed as a zero-extended u32 and the whole sum/quotient/product
+/// chain folded wide before the single `FSTP m32` into the caller's out slot.
 pub fn measured_width__5c7300(
     kern_accum: f32,
     last_advance: f32,
@@ -1103,9 +1146,10 @@ mod tests_measured_width__5c7300 {
     }
 }
 
-/// Glyph advance fallback fold: sub-pixel advance plus the SIGNED 32-bit
-/// glyph width at `glyph+0x48` (`FIADD m32int` on the x87 result), one f32
-/// narrow at the return boundary.
+/// Glyph advance fallback fold.
+///
+/// Sub-pixel advance plus the SIGNED 32-bit glyph width at `glyph+0x48`
+/// (`FIADD m32int` on the x87 result), one f32 narrow at the return boundary.
 pub fn glyph_advance_plus_width__5c6b70(subadv: f32, width: i32) -> f32 {
     super::f64_to_f32(f64::from(subadv) + f64::from(width))
 }
@@ -1212,28 +1256,33 @@ mod tests_sub_pixel_advance__5cb080 {
     }
 }
 
-/// Per-token pen advance `kerningPx * unitsPerPixel` (`FLD; FMUL; FSTP` at
-/// 0x5ccdb2..0x5ccdb8) — an exact f32×f32 product in `f64`, one f32 rounding.
+/// Per-token pen advance `kerningPx * unitsPerPixel` (`FLD; FMUL; FSTP` at 0x5ccdb2..0x5ccdb8).
+///
+/// An exact f32×f32 product in `f64`, one f32 rounding.
 pub fn text_advance__5ccbe0(kerning_px: f32, units_per_pixel: f32) -> f32 {
     super::f64_to_f32(f64::from(kerning_px) * f64::from(units_per_pixel))
 }
 
-/// Screen-space pen-advance rounding (0x5cd040..0x5cd05b): `FADD` the bias
-/// (`DAT_007ffa24`, 0.5 in the shipped image), truncate via `__ftol`, keep EAX
-/// only and zero the high dword, `FILD` the qword back and store f32 — i.e.
-/// `f32(u64(u32(trunc(advance + bias))))`. A negative sum wraps through the u32
-/// reinterpretation to a huge positive float, exactly like stock.
+/// Screen-space pen-advance rounding (0x5cd040..0x5cd05b).
+///
+/// `FADD` the bias (`DAT_007ffa24`, 0.5 in the shipped image), truncate via
+/// `__ftol`, keep EAX only and zero the high dword, `FILD` the qword back and
+/// store f32 — i.e. `f32(u64(u32(trunc(advance + bias))))`. A negative sum
+/// wraps through the u32 reinterpretation to a huge positive float, exactly
+/// like stock.
 pub fn text_round_advance__5ccbe0(advance: f32, bias: f32) -> f32 {
     let t = super::misc::ftol__40a2b0(f64::from(advance) + f64::from(bias));
     super::f64_to_f32(f64::from(t as u32))
 }
 
-/// Glyph width in world units (0x5cd0b6..0x5cd0d2): `FILD` of the zero-extended
-/// u32 advance-px (`{px, 0}` qword, exact) × `unitsPerPixel`, stored f32; then,
-/// screen-space only, the CRT rounder at 0x73ff3f. That rounder is **floor**,
-/// not rint: it forces the FPU control word to `[0x875f00]` = 0x173f (RC=01,
-/// round toward −∞; the sibling ceil at 0x73fdf5 forces 0x1b3f/RC=10) around a
-/// double-precision `FRNDINT`, so half-integer widths always round DOWN.
+/// Glyph width in world units (0x5cd0b6..0x5cd0d2).
+///
+/// `FILD` of the zero-extended u32 advance-px (`{px, 0}` qword, exact) ×
+/// `unitsPerPixel`, stored f32; then, screen-space only, the CRT rounder at
+/// 0x73ff3f. That rounder is **floor**, not rint: it forces the FPU control
+/// word to `[0x875f00]` = 0x173f (RC=01, round toward −∞; the sibling ceil at
+/// 0x73fdf5 forces 0x1b3f/RC=10) around a double-precision `FRNDINT`, so
+/// half-integer widths always round DOWN.
 pub fn text_glyph_width_world__5ccbe0(
     advance_px: u32,
     units_per_pixel: f32,
@@ -1247,10 +1296,12 @@ pub fn text_glyph_width_world__5ccbe0(
     }
 }
 
-/// Per-glyph quad top Y (0x5cd0d8..0x5cd113): `penY − ySub` (the font outline/
-/// shadow offset, 0.0 when neither font flag is set — `x − 0.0 ≡ x` bit-exactly,
-/// so the no-offset arm needs no special case), plus `yBearing (i32, FILD dword)
-/// × unitsPerPixel`, all on the x87 stack with one f32 rounding at the store.
+/// Per-glyph quad top Y (0x5cd0d8..0x5cd113).
+///
+/// `penY − ySub` (the font outline/shadow offset, 0.0 when neither font flag is
+/// set — `x − 0.0 ≡ x` bit-exactly, so the no-offset arm needs no special
+/// case), plus `yBearing (i32, FILD dword) × unitsPerPixel`, all on the x87
+/// stack with one f32 rounding at the store.
 pub fn text_glyph_quad_y__5ccbe0(
     pen_y: f32,
     y_sub: f32,
@@ -1262,9 +1313,11 @@ pub fn text_glyph_quad_y__5ccbe0(
     )
 }
 
-/// Pre-run glyph-height adjust (0x5cccb1..0x5ccccd): font flag 0x8 (outline)
-/// adds `DAT_0080306c`, else flag 0x1 (shadow) adds `DAT_00801628`; neither
-/// leaves the snapped height untouched (bit-exact passthrough, no `+ 0.0`).
+/// Pre-run glyph-height adjust (0x5cccb1..0x5ccccd).
+///
+/// Font flag 0x8 (outline) adds `DAT_0080306c`, else flag 0x1 (shadow) adds
+/// `DAT_00801628`; neither leaves the snapped height untouched (bit-exact
+/// passthrough, no `+ 0.0`).
 pub fn text_glyph_height_adjust__5ccbe0(
     snapped: f32,
     font_flags: u32,
@@ -1280,17 +1333,19 @@ pub fn text_glyph_height_adjust__5ccbe0(
     }
 }
 
-/// Full glyph quad (0x5cd162..0x5cd277) — four 5-f32 vertices `[x,y,z,u,v]` in
-/// slot order v0..v3. All four start as `(x, y, z, 0, 0)`; the corner fixup
-/// then adds `width` to v2/v3 x and `height` to v1/v3 y. The stock world-space
-/// (0x5cd1aa) and screen-space (0x5cd1cf) arms interleave their copies/adds
-/// differently but read every input lane before any aliasing write, and the
-/// four freshly-written vertices are identical — so both arms produce these
-/// same lanes (the arms differ only in WHICH height local the caller selects,
-/// and in the world-only half-texel UV inset applied here). UV lane mapping
-/// (from the stores at 0x5cd250..0x5cd274): v0=(uv1,uv2), v1=(uv1,uv0),
-/// v2=(uv3,uv2), v3=(uv3,uv0), with `uv[i] += uv_inset[i]` first when
-/// world-space (insets `+1/512, +1/512, −1/512, −1/512` in the live image).
+/// Full glyph quad (0x5cd162..0x5cd277).
+///
+/// Four 5-f32 vertices `[x,y,z,u,v]` in slot order v0..v3. All four start as
+/// `(x, y, z, 0, 0)`; the corner fixup then adds `width` to v2/v3 x and
+/// `height` to v1/v3 y. The stock world-space (0x5cd1aa) and screen-space
+/// (0x5cd1cf) arms interleave their copies/adds differently but read every
+/// input lane before any aliasing write, and the four freshly-written vertices
+/// are identical — so both arms produce these same lanes (the arms differ only
+/// in WHICH height local the caller selects, and in the world-only half-texel
+/// UV inset applied here). UV lane mapping (from the stores at
+/// 0x5cd250..0x5cd274): v0=(uv1,uv2), v1=(uv1,uv0), v2=(uv3,uv2), v3=(uv3,uv0),
+/// with `uv[i] += uv_inset[i]` first when world-space (insets
+/// `+1/512, +1/512, −1/512, −1/512` in the live image).
 pub fn emit_glyph_quad__5ccbe0(
     pen: [f32; 3],
     width_world: f32,
@@ -1478,9 +1533,10 @@ mod tests_emit_line_quads_5ccbe0 {
     }
 }
 
-/// UI textured-quad UV corner (0x6cd7a3..0x6cd7c6): `u = baseU × scaleX +
-/// offX`, `v = baseV × scaleY + offY`, each folded wide with one narrow at
-/// the `FSTP`.
+/// UI textured-quad UV corner (0x6cd7a3..0x6cd7c6).
+///
+/// `u = baseU × scaleX + offX`, `v = baseV × scaleY + offY`, each folded wide
+/// with one narrow at the `FSTP`.
 pub fn quad_uv__6cd750(
     base_u: f32,
     base_v: f32,

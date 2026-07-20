@@ -9,8 +9,10 @@ const STATUS_SUCCESS: i32 = 0;
 // NTSTATUS bit-pattern reinterpret for the `unix_call` return value.
 const STATUS_UNSUCCESSFUL: i32 = 0xC000_0001_u32.cast_signed();
 
-/// One-shot logger init. `wow_translate.dll` dispatches this as its first thunk
-/// from `DllMain`, after it has wired up its own PE-side `env_logger`.
+/// One-shot logger init.
+///
+/// `wow_translate.dll` dispatches this as its first thunk from `DllMain`, after
+/// it has wired up its own PE-side `env_logger`.
 pub extern "C" fn init_logger_handler(_args: *mut c_void) -> i32 {
     // The PE side can replay this (a second attach), so the one-time process
     // setup runs under a single `Once`.

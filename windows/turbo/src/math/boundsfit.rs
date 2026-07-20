@@ -9,8 +9,10 @@
     clippy::too_many_arguments
 )]
 
-/// Accumulate a point delta into a bounds-fit accumulator: running centroid sum
-/// (`sum`) plus a K-scaled diagonal accumulator (`diag`). K = 3.544907808303833.
+/// Accumulate a point delta into a bounds-fit accumulator.
+///
+/// Running centroid sum (`sum`) plus a K-scaled diagonal accumulator (`diag`).
+/// K = 3.544907808303833.
 pub fn bounds_fit__accumulate_centroid__71bc70(
     sum: &[f32; 3],
     diag: &[f32; 3],
@@ -66,8 +68,7 @@ mod tests_bounds_fit__accumulate_centroid__71bc70 {
     }
 }
 
-/// Accumulate a 3-vector delta into the running normal/offset sum of a bounds-fit
-/// accumulator.
+/// Accumulate a 3-vector delta into the running normal/offset sum of a bounds-fit accumulator.
 pub fn bounds_fit__accumulate_normal_sum__71bf60(sum: &[f32; 3], delta: &[f32; 3]) -> [f32; 3] {
     [sum[0] + delta[0], sum[1] + delta[1], sum[2] + delta[2]]
 }
@@ -99,9 +100,10 @@ mod tests_bounds_fit__accumulate_normal_sum__71bf60 {
     }
 }
 
-/// Compute the inverse depth-range scale `1.0 / (far - near)` stored by
-/// `BoundsFit::SetDepthRange`. The near/far/direction values are stored verbatim
-/// by the caller; this is the sole computed term.
+/// Compute the inverse depth-range scale `1.0 / (far - near)`.
+///
+/// Stored by `BoundsFit::SetDepthRange`. The near/far/direction values are stored
+/// verbatim by the caller; this is the sole computed term.
 pub fn bounds_fit__set_depth_range__71c110(near_depth: f32, far_depth: f32) -> f32 {
     1.0_f32 / (far_depth - near_depth)
 }
@@ -134,8 +136,9 @@ mod tests_bounds_fit__set_depth_range__71c110 {
 /// Per-object moment accumulation deltas: (moment[12], wsum[3], shX[9], shY[9], shZ[9]).
 type MomentAccum = ([f32; 12], [f32; 3], [f32; 9], [f32; 9], [f32; 9]);
 
-/// Spherical-harmonics (SH9) second-moment accumulator for an ambient/bounds-fit
-/// accumulator. Optionally rotates the direction `vec` by the column-major 3x3
+/// Spherical-harmonics (SH9) second-moment accumulator for an ambient/bounds-fit accumulator.
+///
+/// Optionally rotates the direction `vec` by the column-major 3x3
 /// `rot` (rows `(rot[0],rot[3],rot[6])`, `(rot[1],rot[4],rot[7])`,
 /// `(rot[2],rot[5],rot[8])`) when `rotate` is set, then folds `weight` into: (a)
 /// the 3x4 moment block `moment` (`weight[i] * v` for the first three rows plus a
@@ -432,9 +435,11 @@ mod tests_bounds_fit__accumulate_moment__71bce0 {
     }
 }
 
-/// A fixed 4-slot max-heap keyed by squared distance, each key paired with an
-/// opaque object handle. Mirrors the in-struct heap a bounds-fit accumulator
-/// keeps in `objs`/`keys`/`count` for the `kind == 1` (far-object) path.
+/// A fixed 4-slot max-heap keyed by squared distance.
+///
+/// Each key is paired with an opaque object handle. Mirrors the in-struct heap a
+/// bounds-fit accumulator keeps in `objs`/`keys`/`count` for the `kind == 1`
+/// (far-object) path.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct FarHeap {
     pub objs: [u32; 4],
@@ -608,11 +613,12 @@ mod tests_bounds_fit__add_object__71bf90 {
     }
 }
 
-/// Rotate an accumulated fit direction by the upper-left 3x3 of a column-major
-/// 4x4 (linear, no translation), then normalize it when its magnitude is at
-/// least `eps`. `norm_k` is the normalize numerator (`v *= norm_k / |v|`, stock
-/// 1.0); below `eps` the direction is left as the rotated (un-normalized) value.
-/// Returns the finalized direction.
+/// Rotate an accumulated fit direction by the upper-left 3x3 of a column-major 4x4.
+///
+/// Linear, no translation. Then normalize it when its magnitude is at least `eps`.
+/// `norm_k` is the normalize numerator (`v *= norm_k / |v|`, stock 1.0); below
+/// `eps` the direction is left as the rotated (un-normalized) value. Returns the
+/// finalized direction.
 pub fn bounds_fit__finalize_planes__71c160(
     dir: &[f32; 3],
     mat: &[f32; 16],
