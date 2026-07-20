@@ -1,13 +1,7 @@
 //! `particle` family kernels.
-#![allow(
-    non_snake_case,
-    // intentional NaN-reject via `!(a >= b)`
-    // (differs from `a < b` on NaN), bit-exact source constants kept verbatim,
-    // and ABI-dictated parameter counts.
-    clippy::neg_cmp_op_on_partial_ord,
-    clippy::excessive_precision,
-    clippy::too_many_arguments
-)]
+// Adapter and kernel names mirror the host's C++ symbols verbatim, with `__`
+// standing in for the `::`, so the whole module is non-snake-case by construction.
+#![allow(non_snake_case)]
 
 /// `CParticleEmitter::SetAlpha` — fixed-point quantize of a float alpha to an 8-bit value.
 ///
@@ -233,6 +227,10 @@ mod tests_c_particle_emitter__set_gravity__7b4bf0 {
 /// (`drag_enabled`), separate from the float coefficient `drag_coeff`. The
 /// alive/cull test multiplies the pre-drag velocity (scaled by `dt`) against the
 /// updated position; a strictly-positive dot retires the particle.
+// Every emitter field and particle-record slot the original reads out of `this`
+// is injected by value, so the parameter count follows the client's data layout
+// rather than a design choice.
+#[allow(clippy::too_many_arguments)]
 pub fn c_particle_emitter__update_particle_physics__7b2680(
     pos: [f32; 3],
     vel: [f32; 3],
@@ -449,6 +447,10 @@ mod tests_c_particle_emitter__update_particle_physics__7b2680 {
 /// channel additionally scales by `scale` before the bias. When `prec_sel != 1.0`
 /// the `u`/`v` interpolation parameter is replaced by `pow(frac * prec_sel, pow_k)`
 /// evaluated in extended precision; otherwise the linear `frac` is used directly.
+// One parameter per interpolation track the original reads from the emitter's
+// color / size / uv tables; the count mirrors that table layout rather than a
+// design choice.
+#[allow(clippy::too_many_arguments)]
 pub fn c_particle_emitter__compute_vertex_color_uv__7b9b10(
     age: f32,
     scale: f32,
@@ -524,6 +526,10 @@ mod tests_c_particle_emitter__compute_vertex_color_uv__7b9b10 {
     // Drive the kernel with a chosen lifetime `frac` by setting `age - t0 = frac`
     // and the linear remap to identity (`inv_span = 1`, `color_mul = 1`,
     // `color_add = 0`). All non-exercised channels are zeroed.
+    // The helper forwards straight into the kernel above, pinning only the
+    // remap constants, so its list is that ABI-dictated one shortened; a params
+    // struct would hide which argument feeds which slot.
+    #[allow(clippy::too_many_arguments)]
     fn with_frac(
         frac: f32,
         scale: f32,
@@ -754,6 +760,10 @@ fn rng_unit(r: u32, one: f32) -> f32 {
 /// 4-byte field copied verbatim from `emitter + 0x20`. `one`/`half`/`zero` are
 /// injected host constants (1.0, 0.5, 0.0). Slots are returned as bit patterns
 /// so the adapter stores them without an extra round-trip.
+// The RNG draws, spawn parameters and injected host constants are all values the
+// original reads from `this`; the list mirrors that read set rather than a
+// design choice.
+#[allow(clippy::too_many_arguments)]
 pub fn c_particle_emitter__spawn_particle__7ba200(
     r1: u32,
     r2: u32,
@@ -1227,6 +1237,10 @@ fn trail_frame(st: &TrailAdvance, width_ref: f32) -> TrailFrame {
 /// current (`t = 0`) ends with the drift terms blended in, the slot age is
 /// seeded, and the tail advances by `step` slots (`step = 0` leaves the slot
 /// uncommitted at the tail).
+// A private helper carved out of the inlined spawn path: it takes the ring
+// state, both output buffers, the frame and the `seg_ref` constant that path had
+// live, so the list follows the original's operand set.
+#[allow(clippy::too_many_arguments)]
 fn spawn_slot(
     st: &mut TrailAdvance,
     ages: &mut [f32],
@@ -1271,6 +1285,10 @@ fn spawn_slot(
 /// `seg_ref` / `min_advance` / `width_ref` are injected host constants (stock
 /// 1.0 / 0.0 / 1.0). Returns the refreshed spawn frame when a spawn pass ran so
 /// the adapter can write it back to the object.
+// The trailing `seg_ref` / `min_advance` / `width_ref` are host constants the
+// original reads inline, alongside the gate word; the list mirrors the client's
+// call rather than a design choice.
+#[allow(clippy::too_many_arguments)]
 pub fn c_particle_emitter__advance_trail__7b7e60(
     st: &mut TrailAdvance,
     ages: &mut [f32],
@@ -1729,6 +1747,10 @@ mod draw_batch_tests {
 /// early-outs only for `dt <= 0`. Encoded as `!(dt <= 0.0)` so NaN (where
 /// `NaN <= 0.0 == false`) runs the body, faithful to the even-parity unordered
 /// result of `test ah,0x41; jnp`.
+// `!(dt <= 0.0)` is not `dt > 0.0`: a NaN `dt` sets BOTH masked status bits, so
+// the stock even-parity `jnp` runs the body. Only the negated ordered test
+// carries that polarity.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn c_particle_emitter__update__7b5a10_dt_runs_body(dt: f32) -> bool {
     // Stock: `jnp early_out` is NOT taken (body runs) when AH&(C3|C0)==0 (dt>0)
     // OR when both bits are set (NaN => even parity). Only dt<=0 takes the jump.
@@ -1740,6 +1762,10 @@ pub fn c_particle_emitter__update__7b5a10_dt_runs_body(dt: f32) -> bool {
 /// Returns the new age and the `(culled, fade_byte)` outcome. The age add and
 /// both compares are the only float math the driver does inline; physics,
 /// position eval, and list mutation are all delegated.
+// `!(new_age < lifespan)` is not `new_age >= lifespan`: on a NaN age the stock
+// parity jump culls, which the plain `>=` would not. The negation keeps the
+// unordered case on the cull side.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn c_particle_emitter__update__7b5a10_age_advance(
     age: f32,
     dt: f32,
@@ -2312,6 +2338,10 @@ mod tests_c_particle_emitter__spawn_particle__7b8890 {
 /// - `k = one / (count+1)` divides wide (64-bit FILD of the incremented
 ///   count), and each source float multiplies against the WIDE quotient with
 ///   its own narrow (three FSTPs).
+// `!(dt > step)` is not `dt <= step`: the stock `FCOMP` / `TEST AH,0x41` takes
+// the early-return arm on unordered too, so a NaN `dt` must yield `None`. The
+// negation keeps that arm.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn fixed_step_catchup__7b5880(
     dt: f32,
     lifetime: f32,

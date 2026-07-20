@@ -1,13 +1,6 @@
-//! `object` family kernels.
-#![allow(
-    non_snake_case,
-    // intentional NaN-reject via `!(a >= b)`
-    // (differs from `a < b` on NaN), bit-exact source constants kept verbatim,
-    // and ABI-dictated parameter counts.
-    clippy::neg_cmp_op_on_partial_ord,
-    clippy::excessive_precision,
-    clippy::too_many_arguments
-)]
+// Adapter and kernel names mirror the host's C++ symbols verbatim, with `__`
+// standing in for the `::`, so the whole module is non-snake-case by construction.
+#![allow(non_snake_case)]
 
 /// World-space position of a local point under a parent transform.
 ///
@@ -623,6 +616,11 @@ mod tests_object_draw_debug_box_recursive__6a8050 {
 /// direction `d * (one / dist)` from the source toward the owner and the
 /// colour scaled by the fade alpha — `1.0` inside `fade_start`, else
 /// `one - (dist - fade_start) * fade_rate`.
+// The eight parameters are the stock draw node's own operands: anchor, bias,
+// source, the three fade constants, the unit global and the colour. The list
+// mirrors what the client passes, so folding them into a params struct would
+// describe a shape no caller on the hook path has.
+#[allow(clippy::too_many_arguments)]
 pub fn object_draw_debug_box__6a7ac0(
     pos: [f32; 3],
     z_bias: f32,
@@ -1036,6 +1034,10 @@ pub fn cg_render_entity__update_transform_delta__6717d0(
 /// below** the threshold, and a NaN displacement counts as moved (republish).
 /// (The naive "NaN ⇒ moved=0" reading misses the `SETZ` inversion: a NaN
 /// displacement counts as moved.)
+// `!(len2.abs() < threshold)` is the polarity the stock parity jump plus `SETZ`
+// produces. Clippy's `len2.abs() >= threshold` drops the unordered arm, and an
+// unordered compare has to report "moved" so the republish still happens.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 #[must_use]
 pub fn cg_render_entity__update_transform_moved__6717d0(delta: &[f32; 3], threshold: f32) -> bool {
     let (dx, dy, dz) = (
@@ -1092,6 +1094,10 @@ pub fn cg_render_entity__update_transform_inv_scale__6717d0(one: f32, scale: f32
 /// Rust `!(min <= max)` reproduces the mask exactly. `ext` is
 /// `{min.xyz, max.xyz}`; lanes are tested in x, y, z order (no side effects,
 /// so short-circuiting is free).
+// Each lane is written `!(min <= max)` so an unordered lane collapses the box,
+// matching the stock `TEST AH,0x41; JP` mask. Clippy's `min > max` would leave
+// a NaN lane uncollapsed and diverge from the original on exactly that input.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 #[must_use]
 pub fn cg_render_entity__update_transform_extent_collapsed__6717d0(ext: &[f32; 6]) -> bool {
     !(ext[0] <= ext[3]) || !(ext[1] <= ext[4]) || !(ext[2] <= ext[5])
@@ -1555,6 +1561,10 @@ pub fn facing_wrap__600cd0(d: f32, hi: f32, lo: f32, two_pi: f32) -> f32 {
 /// `d > 0` ordered keeps the average iff NOT `d < avg` (a NaN average
 /// survives); `d <= 0` and NaN-d keep it iff NOT `d > avg`. The average
 /// narrows only when selected; the raw delta passes through unnarrowed.
+// Both overshoot guards are negated ordered tests, so a NaN average survives
+// the guard the way the stock branch leaves it selected. Clippy's `d >= avg` /
+// `d <= avg` would discard the average on that input instead.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn facing_smooth__600cd0(d: f32, hist: [f32; 4], quarter: f32, zero: f32) -> f32 {
     let sum = f64::from(zero)
         + f64::from(hist[0])

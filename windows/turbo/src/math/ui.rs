@@ -1,13 +1,7 @@
 //! `ui` family kernels.
-#![allow(
-    non_snake_case,
-    // intentional NaN-reject via `!(a >= b)`
-    // (differs from `a < b` on NaN), bit-exact source constants kept verbatim,
-    // and ABI-dictated parameter counts.
-    clippy::neg_cmp_op_on_partial_ord,
-    clippy::excessive_precision,
-    clippy::too_many_arguments
-)]
+// Adapter and kernel names mirror the host's C++ symbols verbatim, with `__`
+// standing in for the `::`, so the whole module is non-snake-case by construction.
+#![allow(non_snake_case)]
 
 /// Forward affine scale of a coordinate: `scale * x`.
 pub fn os_gui_scale_x__41ae60(x: f32, scale: f32) -> f32 {
@@ -260,6 +254,10 @@ mod tests_ui_frame_rect_overlap_distance__509220 {
 /// when it actually performs the clamp (the outcode-only path discards it). The
 /// height (`top - bottom`) and width (`left - right`) deltas come from the
 /// original pre-clamp corners.
+// The eight parameters are the client's own argument list at 0x509bf0: the four
+// rect edges first, then the derived screen extents and the lower screen bounds.
+// Folding them into a params struct would break the stack the client hands us.
+#[allow(clippy::too_many_arguments)]
 pub fn ui_frame_clamp_rect_to_screen__509bf0(
     left: f32,
     bottom: f32,
@@ -561,6 +559,10 @@ mod tests_minimap__project_blip_delta__4eaa30 {
 /// **unordered both continue** (NaN parity is 0x05 => PF=1 => no jump).
 /// NB this corrects the wave-4 errata note that claimed NaN exits.
 /// Subtractions/products/sums all run at x87 extended => f64 here.
+// `!(r_sq < dist_sq)` is the ordered FCOMPP test the callback branches on: an
+// unordered compare leaves the exit jump untaken, so a NaN operand stays in
+// range. The suggested `r_sq >= dist_sq` is false there, inverting that.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn blip_in_range__4eaa90(pos: &[f32; 3], center: &[f32; 3], range: f32) -> bool {
     let dx = f64::from(pos[0]) - f64::from(center[0]);
     let dy = f64::from(pos[1]) - f64::from(center[1]);

@@ -1,13 +1,7 @@
 //! `spline` family kernels.
-#![allow(
-    non_snake_case,
-    // intentional NaN-reject via `!(a >= b)`
-    // (differs from `a < b` on NaN), bit-exact source constants kept verbatim,
-    // and ABI-dictated parameter counts.
-    clippy::neg_cmp_op_on_partial_ord,
-    clippy::excessive_precision,
-    clippy::too_many_arguments
-)]
+// Adapter and kernel names mirror the host's C++ symbols verbatim, with `__`
+// standing in for the `::`, so the whole module is non-snake-case by construction.
+#![allow(non_snake_case)]
 
 /// Arc-length -> (segment, localT) reparametrization.
 ///
@@ -431,6 +425,9 @@ pub fn c_cubic_spline__eval_frame_at_distance__454580(
 ) -> ([f32; 3], [f32; 3], [f32; 3]) {
     // Bit-exact host constants: 2^-22 (degenerate-length gate, 0x8029d4),
     // 0.01 (tangent-length gate, 0x8029d0), 0.5 (agreement dot, 0x7ffa24).
+    // Every digit of the 2^-22 literal is that dword's exact value; trimming
+    // any of them changes the gate the original compared against.
+    #[allow(clippy::excessive_precision)]
     const EPS_LEN: f32 = 2.384_185_791_015_625e-7;
     const EPS_TANGENT: f32 = 0.01;
     const DOT_AGREE: f32 = 0.5;
@@ -508,6 +505,9 @@ mod tests_c_cubic_spline__eval_frame_at_distance__454580 {
         b
     }
 
+    // The 2^-22 literal is spelled in full because this test checks its bit
+    // pattern; a shortened literal is a different dword and proves nothing.
+    #[allow(clippy::excessive_precision)]
     #[test]
     fn host_constants_are_bit_exact() {
         // The embedded gates must match the host .rdata dwords.

@@ -1,13 +1,7 @@
 //! `lua` family kernels.
-#![allow(
-    non_snake_case,
-    // intentional NaN-reject via `!(a >= b)`
-    // (differs from `a < b` on NaN), bit-exact source constants kept verbatim,
-    // and ABI-dictated parameter counts.
-    clippy::neg_cmp_op_on_partial_ord,
-    clippy::excessive_precision,
-    clippy::too_many_arguments
-)]
+// Adapter and kernel names mirror the host's C++ symbols verbatim, with `__`
+// standing in for the `::`, so the whole module is non-snake-case by construction.
+#![allow(non_snake_case)]
 
 /// Horner-scheme evaluation of a polynomial.
 ///

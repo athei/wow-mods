@@ -26,11 +26,6 @@
 //! returning huge/Inf/NaN) falls back to an out-of-line `f64` reduction so the
 //! result stays bounded and correct — callers do occasionally pass such a large
 //! angle, and a garbage result there must not propagate downstream.
-#![allow(
-    clippy::many_single_char_names,
-    // The f64 Cody–Waite reduction constants are kept bit-exact (Cephes values).
-    clippy::excessive_precision
-)]
 
 /// `4 / pi` — scales the argument so its integer part is the octant index.
 const FOPI: f32 = 1.273_239_5;
@@ -54,7 +49,12 @@ const FAST_F32_LIMIT: f32 = 8192.0;
 /// octant index and reduced argument stay accurate out to the largest angles the
 /// game can pass.
 const FOPI_F64: f64 = 1.273_239_544_735_162_7;
+// Carried bit-exact as published: the digits past `f64` are what make the
+// three-part sum cancel the bits a single `pi/4` cannot.
+#[allow(clippy::excessive_precision)]
 const DP1_F64: f64 = 0.785_398_125_648_498_54;
+// As above — the second term of the same three-part reduction.
+#[allow(clippy::excessive_precision)]
 const DP2_F64: f64 = 3.774_894_707_930_798_2e-8;
 const DP3_F64: f64 = 2.695_151_429_079_059_6e-15;
 /// Minimax coefficients for `sin` on the reduced interval (Horner, descending).

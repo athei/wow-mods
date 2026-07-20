@@ -1,13 +1,6 @@
-//! `movement` family kernels.
-#![allow(
-    non_snake_case,
-    // intentional NaN-reject via `!(a >= b)`
-    // (differs from `a < b` on NaN), bit-exact source constants kept verbatim,
-    // and ABI-dictated parameter counts.
-    clippy::neg_cmp_op_on_partial_ord,
-    clippy::excessive_precision,
-    clippy::too_many_arguments
-)]
+// Adapter and kernel names mirror the host's C++ symbols verbatim, with `__`
+// standing in for the `::`, so the whole module is non-snake-case by construction.
+#![allow(non_snake_case)]
 
 /// `CMovement::AccelCurveOffset`.
 ///
@@ -164,6 +157,9 @@ mod tests_c_movement__apply_accel_curve__7c5e70 {
 pub fn c_movement__compute_forward_vector__7c5880(flags: u32, facing: f32, pitch: f32) -> [f32; 7] {
     const SWIM_FLAG: u32 = 0x0020_0000;
     // 2^-20, the engine's "pitch is significant" epsilon (DAT at VA 0x8026bc).
+    // Reproduced bit-exactly from that stored constant; a shorter literal is a
+    // different float, and this one is the swim-pitch branch boundary itself.
+    #[allow(clippy::excessive_precision)]
     const PITCH_EPS: f32 = 9.536_743_16e-7;
 
     let (sin_f, cos_f) = crate::math::trig::sin_cos(facing);
@@ -431,6 +427,11 @@ mod tests_c_movement__integrate_arc_flat_turn__7c52c0 {
 /// cross-coupling scale. The pitch is advanced by `rate*dt` and clamped; when it
 /// crosses a bound the leftover `overshoot` is spliced back into the vertical
 /// component. Returns the local displacement `[dx, dy, dz]`.
+// The fourteen parameters are the 0x7c4fd0 argument list: the receiver fields
+// the stock body reads one at a time (`+0x84`, `+0x54`, `+0x68`/`+0x6c`,
+// `+0x70`/`+0x74`) plus the constants it loads inline from 0x7ff9d8 and
+// 0x7ffa24. A params struct would invent a grouping the client does not have.
+#[allow(clippy::too_many_arguments)]
 pub fn c_movement__integrate_arc_fwd_turn_pitch__7c4fd0(
     speed: f32,
     fwd: f32,
@@ -561,6 +562,11 @@ mod tests_c_movement__integrate_arc_fwd_turn_pitch__7c4fd0 {
 /// pitch is advanced by `rate*dt` and clamped; the leftover `overshoot` is
 /// spliced back into the vertical component. Returns the local displacement
 /// `[dx, dy, dz]`.
+// The twelve parameters are the 0x7c5180 argument list: the same receiver
+// fields and pitch-clamp bounds as the 0x7c4fd0 variant, less the forward speed
+// and the yaw cross-coupling scale this entry point does not take. The count
+// follows the client's frame, not a choice about how to group the inputs.
+#[allow(clippy::too_many_arguments)]
 pub fn c_movement__integrate_arc_turn_pitch__7c5180(
     speed: f32,
     rate: f32,
@@ -833,6 +839,12 @@ mod tests_c_movement__is_position_finite__616bf0 {
 /// the (ground-clamped) live position untouched. Unordered compares snap too
 /// (a NaN deviation recovers onto the spline), hence the negated `<=` forms.
 /// Returns `(candidate[x,y,z], snap)`.
+// The eight parameters are the 0x616af0 argument list: the live planar
+// position, the spline base and delta, and the packed speed with the scale and
+// tolerance words the snap compares against. Those tests keep the source's
+// `!(d <= tol)` polarity, which differs from `d > tol` when the deviation is
+// NaN, and the unordered case has to snap.
+#[allow(clippy::too_many_arguments, clippy::neg_cmp_op_on_partial_ord)]
 pub fn c_movement__step_spline_and_snap_position__616af0(
     pos_x: f32,
     pos_y: f32,
@@ -1057,6 +1069,11 @@ pub fn c_movement__update_spline_path__7c5490_look_param(
 /// the forward is `frame_row2` row-multiplied by the Rodrigues rotation
 /// of the clamped turn about `axis` (axis normalized by the rotation
 /// builder, as in the source).
+// The eleven parameters are the 0x7c5490 argument list: the rotation axis, the
+// three 2-D vectors and the frame row, and the six scalar constants the stock
+// body holds in separate slots. The turn sign keeps the source's
+// `!(cross >= zero)` polarity, which differs from `cross < zero` on a NaN cross.
+#[allow(clippy::too_many_arguments, clippy::neg_cmp_op_on_partial_ord)]
 pub fn c_movement__update_spline_path__7c5490_turn_forward(
     axis: [f32; 3],
     dir2d: [f32; 2],
@@ -1396,6 +1413,11 @@ mod tests_c_movement__update_spline_path__7c5490 {
 /// `this`, hoisted by the adapter (invariant across this call — it reads only
 /// `this` state, never the mutated translate distance — so the up-to-three
 /// stock calls collapse to one).
+// Both epsilon gates are written `!(|v| < eps)` because the stock `JNP` arms
+// divert only on an ordered strictly-less compare: `|v| >= eps` would route the
+// `== eps` and NaN cases the other way, flipping the combined-normal swap and
+// the divide-versus-saturate choice.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn c_movement__compute_slope_climb_delta__635c00(
     dir: [f32; 3],
     dist_in: f32,
@@ -1683,6 +1705,10 @@ mod tests_c_movement__compute_slope_climb_delta__635c00 {
 /// compare is unordered** — stock `FCOMP; TEST AH,0x41; JNP` skips only on
 /// ordered `<=` (a NaN facing value falls through to processing). Port as
 /// `!(z <= thr)`, never "normalize" to `>`.
+// The negation is the gate, not a spelling of `z > thr`: an unordered compare
+// has to process, so normalizing it away would drop the NaN contact records the
+// stock code lets through.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn ground_normal_process__637140(z: f32, thr: f32) -> bool {
     !(z <= thr)
 }
@@ -1772,6 +1798,9 @@ mod tests_compute_ground_normal__637140 {
 /// `facing + base` folded wide, then wrapped into `[low, 2π)` — subtract `2π`
 /// when the sum is STRICTLY greater (ordered), add `2π` when it is below `low`
 /// OR unordered (NaN), else pass through. One narrow at the return.
+// `!(sum >= low)` differs from `sum < low` when the folded sum is NaN, and the
+// unordered case has to take the add-`2pi` arm the stock compare selects.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn interpolate_facing__7c4ae0(facing: f32, base: f32, two_pi: f32, low: f32) -> f32 {
     let sum = f64::from(facing) + f64::from(base);
     let tp = f64::from(two_pi);

@@ -16,6 +16,8 @@
 //! stack; the product of two f32 values is exact in f64 and the reductions are
 //! short, so accumulating in f64 (the [`super`] convention for tracking an x87
 //! original) reproduces the result to within ≤1 int16 LSB.
+// Adapter and kernel names mirror the host's C++ symbols verbatim, with `__`
+// standing in for the `::`, so the whole module is non-snake-case by construction.
 #![allow(non_snake_case)]
 
 /// Round a synthesized sample to clamped 16-bit PCM.

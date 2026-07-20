@@ -1,13 +1,7 @@
 //! `matrix33` family kernels.
-#![allow(
-    non_snake_case,
-    // intentional NaN-reject via `!(a >= b)`
-    // (differs from `a < b` on NaN), bit-exact source constants kept verbatim,
-    // and ABI-dictated parameter counts.
-    clippy::neg_cmp_op_on_partial_ord,
-    clippy::excessive_precision,
-    clippy::too_many_arguments
-)]
+// Adapter and kernel names mirror the host's C++ symbols verbatim, with `__`
+// standing in for the `::`, so the whole module is non-snake-case by construction.
+#![allow(non_snake_case)]
 
 // --- Euler composition helpers (per-axis row-major rotations; the host builds
 // three single-axis matrices, multiplies them in the named order, and stores
@@ -36,6 +30,11 @@ fn transpose3(m: &[f32; 9]) -> [f32; 9] {
 }
 
 /// 3x3 matrix determinant (rule of Sarrus) of row-major elements `m00..m22`.
+// The nine row-major elements arrive one per stack slot — that is the client's
+// own parameter list at `0x7bc040`, a fact about its calling convention rather
+// than a design choice, so folding them into a matrix struct would take the
+// signature off the shape the caller passes.
+#[allow(clippy::too_many_arguments)]
 pub fn c33_matrix__determinant__7bc040(
     m00: f32,
     m01: f32,

@@ -1,13 +1,7 @@
 //! `plane` family kernels.
-#![allow(
-    non_snake_case,
-    // intentional NaN-reject via `!(a >= b)`
-    // (differs from `a < b` on NaN), bit-exact source constants kept verbatim,
-    // and ABI-dictated parameter counts.
-    clippy::neg_cmp_op_on_partial_ord,
-    clippy::excessive_precision,
-    clippy::too_many_arguments
-)]
+// Adapter and kernel names mirror the host's C++ symbols verbatim, with `__`
+// standing in for the `::`, so the whole module is non-snake-case by construction.
+#![allow(non_snake_case)]
 
 /// Builds a `C4Plane` (`[Nx, Ny, Nz, D]`) from a triangle's three corners.
 ///
@@ -325,6 +319,10 @@ mod tests_plane_intersect_ray_param__7c22b0 {
 /// The `count` guard and the two OOB/uninitialised-stack quirks noted above are
 /// the stock behaviour; only the latent stack-OOB write is neutralised (we use an
 /// in-bounds bucket), and it is never *read*, so results are identical.
+// The z gate is written `!(dz < EPS)` so a NaN `dz` takes the reject branch, as
+// the original's `FCOMP`/`JP` pair does; the suggested `dz >= EPS` is false for
+// NaN and would let such a point through.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn geometry__reduce_planar_points_to_representative__636610(
     pts: &[[f32; 4]],
     count: u32,

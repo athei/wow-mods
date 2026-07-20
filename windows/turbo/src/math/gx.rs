@@ -1,13 +1,7 @@
 //! `gx` family kernels.
-#![allow(
-    non_snake_case,
-    // intentional NaN-reject via `!(a >= b)`
-    // (differs from `a < b` on NaN), bit-exact source constants kept verbatim,
-    // and ABI-dictated parameter counts.
-    clippy::neg_cmp_op_on_partial_ord,
-    clippy::excessive_precision,
-    clippy::too_many_arguments
-)]
+// Adapter and kernel names mirror the host's C++ symbols verbatim, with `__`
+// standing in for the `::`, so the whole module is non-snake-case by construction.
+#![allow(non_snake_case)]
 
 /// Returns the selected 16-float (4x4) matrix unchanged.
 ///
@@ -78,6 +72,10 @@ mod tests_c_gx_device__copy_current_matrix__592730 {
 ///
 /// The clamp sentinels (`0.0`/`255.0`) and the in-range remap `v*255.0 + 0.5`
 /// are the reference `.rdata` constants; `threshold` is injected by the caller.
+// `!(threshold <= m)` and `!(0.0 < v)` send a `NaN` operand to the early-out and
+// to the zero arm. The positive forms `m < threshold` and `v <= 0.0` take the
+// other branch on `NaN`, so the negation is the original's ordered polarity.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn gx_light_clamp_color_component_to_byte__71ca80(
     rgb: &[f32; 3],
     baseline: f32,
@@ -193,6 +191,9 @@ mod tests_gx_light_clamp_color_component_to_byte__71ca80 {
 /// inequality) from the cached one. The original mirrors the x87 `FCOMP`/`JNP`
 /// skip-when-equal test, so an unordered (NaN) comparison takes the skip path
 /// and is reported as no-change.
+// Collapsing `a < b || a > b` to `a != b` inverts the NaN case: `!=` is true
+// for an unordered pair, where the ordered pair above is false and takes the
+// skip path the original takes.
 #[allow(clippy::double_comparisons)]
 pub fn c_gx_device__set_plane_float__593770(current: f32, value: f32) -> bool {
     current < value || current > value
@@ -262,6 +263,9 @@ pub fn fog_pack_color_argb__70baf0(c0: f32, c1: f32, c2: f32) -> u32 {
 /// tests, so a `NaN` lane snaps to `0`. The in-range remap runs in `f32` whereas
 /// the original keeps an 80-bit x87 intermediate before truncation, so the
 /// result can differ by at most one byte LSB — the project's beat-x87 design.
+// `!(0.0 < v)` snaps a `NaN` lane to `0`, which is the `jp` polarity documented
+// above; `v <= 0.0` is false on `NaN` and would fall through to the remap arm.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn fog_clamp_byte__70baf0(v: f32) -> u32 {
     let mapped = if !(0.0_f32 < v) {
         0.0_f32
@@ -395,6 +399,10 @@ mod tests_c_gx_device__set_viewport__592530 {
 /// `x0<x1 && y0<y1 && minZ<=maxZ && near<=minZ && maxZ<=far`; then snaps
 /// `x0/y0<=near → 0.0` and `x1/y1>=far → 1.0` (matching the stock
 /// `if (x0 <= near) x0 = 0; if (far <= x1) x1 = 1; …`).
+// Eight scalars because the six box edges and both depth-range globals arrive as
+// separate floats. The list mirrors the client's calling convention, so it is a
+// fact about the ABI rather than a shape a parameter struct is free to change.
+#[allow(clippy::too_many_arguments)]
 pub fn gx_set_viewport__58af60(
     x0: f32,
     x1: f32,

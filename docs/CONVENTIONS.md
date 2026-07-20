@@ -14,6 +14,8 @@ But a lint can only express a lint-shaped rule, and the rules a lint *can't* exp
 | The `Clone` / `Copy` derive inventory, diffed against `scripts/derive_inventory.txt` | §No default `Copy` / `Clone` |
 | The lint-suppression inventory, diffed against `scripts/allow_inventory.txt` | §Warning suppressions |
 | A lint **group** suppressed in source = 0, with no exception | §Warning suppressions |
+| Every suppression carries an argument | §Warning suppressions |
+| Module-level `#![allow]` confined to the recorded exception files | §Warning suppressions |
 | Every crate opts into the workspace lint table; no `deny` / `forbid` level | §Warning suppressions |
 | `#[inline(always)]` confined to the recorded exception file | §Inline attributes |
 | `static … : OnceLock` confined to the recorded exception files | §`LazyLock` over `OnceLock` |
@@ -104,9 +106,24 @@ The second tier is the module-level `#![allow(…)]` headers the reimplementatio
 
 Adding a lint to either tier needs the same justification as a per-site allow, plus an argument that it applies across the whole reimplementation surface rather than at one site. Removing one — by fixing its findings — needs nothing but the work.
 
+### A suppression goes on the item, not the file
+
+`#![allow(...)]` at the top of a module silences its lint for everything in the file — including every item added to it later. That is the same unbounded budget the enumerated table exists to avoid, one level down, and it is why twenty-three reimplementation modules each carried an identical four-lint header covering functions that triggered none of them.
+
+So a suppression belongs on the smallest item that triggers it, naming only the lints that item actually raises. `make audit` confines module-level suppressions to a recorded set of files, and the set is short because a file-level allow has to be a property of the *whole file* to earn its place:
+
+- **The reimplementation naming convention.** Adapter and kernel names mirror the host's C++ symbols with `__` marking the `::`, so `non_snake_case` fires on essentially every name in those modules. 1,539 items would each need an attribute to say one thing about all of them. That is a convention, not an exception, and per-item annotation would obscure it rather than sharpen it.
+- **Machine-written code.** The generated symbol table is non-idiomatic throughout, by construction.
+
+### Every suppression carries an argument
+
+Not a formality — the audit checks it. The argument may sit inside the attribute (the shape a multi-lint module header uses, a line of prose per lint) or directly above it; an intervening `#[cfg(...)]` does not break the association.
+
+`clippy::allow_attributes_without_reason` is deliberately **not** enabled. It demands `reason = "..."`, which rejects both shapes this codebase uses, and it is satisfied by moving the same words inside a string literal. What is worth enforcing is that an argument exists, not where it is spelled.
+
 ### Per-site allows
 
-Every per-site `#[allow]` is recorded in `scripts/allow_inventory.txt` as a file / lint / count row, and the audit diffs it, so a new file, a new lint in a listed file, one more site, and a row that has gone stale all fail. Each allow carries a comment naming why the structural fix does not apply. The recurring legitimate classes are:
+Every `#[allow]` is recorded in `scripts/allow_inventory.txt` as a file / lint / count row, and the audit diffs it, so a new file, a new lint in a listed file, one more site, and a row that has gone stale all fail. The recurring legitimate classes are:
 
 1. **A lint whose suggestion changes machine behaviour.** `clippy::double_comparisons` rewriting a NaN-aware pair into `!=`; `clippy::assign_op_pattern` reassociating an accumulate that has to stay in the original's order; `clippy::manual_clamp` where `clamp`'s NaN handling differs.
 2. **A dead item on one target.** Code reached only from the 32-bit hook path compiles with no caller in a host test build. Use `#[cfg_attr(not(...), allow(dead_code))]` so the allow disappears on the target that does use it, rather than a blanket one.

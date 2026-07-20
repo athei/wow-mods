@@ -1,13 +1,6 @@
-//! `light` family kernels.
-#![allow(
-    non_snake_case,
-    // intentional NaN-reject via `!(a >= b)`
-    // (differs from `a < b` on NaN), bit-exact source constants kept verbatim,
-    // and ABI-dictated parameter counts.
-    clippy::neg_cmp_op_on_partial_ord,
-    clippy::excessive_precision,
-    clippy::too_many_arguments
-)]
+// Adapter and kernel names mirror the host's C++ symbols verbatim, with `__`
+// standing in for the `::`, so the whole module is non-snake-case by construction.
+#![allow(non_snake_case)]
 
 /// Inverse of 255, the host's constant at `0x8026c8`.
 ///
@@ -104,6 +97,10 @@ mod tests_unpack_bgra_scaled {
 /// `p` holds the seven rows of source parameters (27 contiguous floats). The
 /// scale arguments name their reference-DLL global by suffix: `c4`, `c0`, `bc`,
 /// `b8`, `b4`, `b0`, `ac`, `a8`. The last output lane is the homogeneous 1.0.
+// The 27-float source block and the eight per-column scale globals are the
+// stock routine's own argument list, fixed by the convention it is called
+// through. Folding them into a params struct would misdescribe the ABI.
+#[allow(clippy::too_many_arguments)]
 pub fn gx_light_pack_fog_gradient_block__71c4e0(
     p: &[f32; 27],
     c4: f32,
@@ -225,6 +222,10 @@ mod tests_gx_light_pack_fog_gradient_block__71c4e0 {
 /// skipped, `k_inv` the normalize numerator (1.0 in the reference), `scale_a`
 /// and `scale_b` the two per-frame light scales. Returns
 /// `(ambient_dir, light_dir0, accum_out)`.
+// Three vectors, a row-major 3x3 orientation and five loose float scales: the
+// parameter list is the stock routine's, dictated by its calling convention
+// rather than chosen, so there is no grouping to add without leaving the ABI.
+#[allow(clippy::too_many_arguments)]
 pub fn gx_light_prepare_ambient_and_light_dirs__71c2f0(
     dir: &[f32; 3],
     m: &[f32; 9],
@@ -352,6 +353,10 @@ mod tests_gx_light_prepare_ambient_and_light_dirs__71c2f0 {
 /// byte 1 = `+0x9d`, byte 2 = `+0x9e`), top byte zero. `snap` is true when no
 /// channel moved and the object is not in manual mode — the caller then writes
 /// the host default dword to both the live and target color slots.
+// The ten parameters are the fields the stock body reads off the light object
+// and the frame state, passed positionally so the kernel stays free of the
+// object layout. The count is a fact about the call, not a design choice.
+#[allow(clippy::too_many_arguments)]
 pub fn light_animate_color_and_intensity__69e770(
     color: [u8; 3],
     target_color: [u8; 3],
@@ -635,6 +640,10 @@ mod tests_light_animate_color_and_intensity__69e770 {
 ///
 /// The caller decides *whether* to encode (the `|fog| >= eps` gate at 0x71c910);
 /// this leaf only performs the encode and is what makes the tail host-testable.
+// The low clamp is written `!(0.0 < v)` so an unordered compare takes the
+// zero branch, matching the stock ordered test; a `v <= 0.0` rewrite would
+// route NaN into the remap instead. NaN polarity is load-bearing here.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn encode_fog_color__71c730(channels: &[f32; 3]) -> u32 {
     // Per-channel clamp+remap+truncate matching the stock x87 path: the low
     // clamp `!(0.0 < v)` (TEST AH,0x41/JP at 0x71c930) snaps to `0.0` on
@@ -662,6 +671,10 @@ mod tests_encode_fog_color__71c730 {
     use super::encode_fog_color__71c730 as encode;
 
     /// Reference per-lane encode lifted from the stock per-channel math.
+    // Transcribes the kernel's `!(0.0 < v)` low clamp verbatim, NaN polarity
+    // included; an ordered rewrite would leave the reference disagreeing with
+    // the code it exists to check on exactly the input that distinguishes them.
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
     fn ref_byte(v: f32) -> u32 {
         let mapped = if !(0.0 < v) {
             0.0_f32

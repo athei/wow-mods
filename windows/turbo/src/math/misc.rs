@@ -1,13 +1,7 @@
 //! `misc` family kernels.
-#![allow(
-    non_snake_case,
-    // intentional NaN-reject via `!(a >= b)`
-    // (differs from `a < b` on NaN), bit-exact source constants kept verbatim,
-    // and ABI-dictated parameter counts.
-    clippy::neg_cmp_op_on_partial_ord,
-    clippy::excessive_precision,
-    clippy::too_many_arguments
-)]
+// Adapter and kernel names mirror the host's C++ symbols verbatim, with `__`
+// standing in for the `::`, so the whole module is non-snake-case by construction.
+#![allow(non_snake_case)]
 
 /// Builds a 2x2 CCW rotation matrix from `angle` (radians), row-major: `[cos, sin, -sin, cos]`.
 pub fn build_rotation_matrix2x2__7c42f0(angle: f32) -> [f32; 4] {
@@ -421,6 +415,9 @@ mod tests_cloud_gradient_sample__6cf6c0 {
 /// `atan2(dy, dx)` (range `(-pi, pi]`) as the original x87 `FPATAN`.
 pub fn heading_from_delta2_d__47f220(from: &[f32; 2], to: &[f32; 2]) -> f64 {
     // f32 epsilon == 2^-22, the original near-axis snap threshold.
+    // Written as the full binary expansion of 2^-22 rather than a shorter
+    // literal that merely rounds to it, so the snap boundary is bit-exact.
+    #[allow(clippy::excessive_precision)]
     const EPS: f32 = 2.384_185_791_015_625e-7;
     const PI: f64 = 3.141_592_741_012_573_2; // pi rounded to f32, then widened.
 
@@ -1654,6 +1651,11 @@ fn lane(dif: f32, base: f32, d0: f32, d1: f32, w: f32, v: f32, u: f32) -> f32 {
 /// Hermite blend of four already-blended lanes picked from a 16-lane pass output.
 ///
 /// Start `base`, end `end`, endpoint derivatives `d0`/`d1`.
+// The eight are the operands of one transcribed expression: the 16-lane pass
+// output, four lane indices into it, and the three Hermite basis weights. Every
+// caller passes a different index quadruple and shares no field with the next,
+// so a params struct would be built and destructured again at each call site.
+#[allow(clippy::too_many_arguments)]
 fn blend(
     o: &[f32; 16],
     base: usize,
@@ -1675,6 +1677,11 @@ fn blend(
 /// ramps. Two 16-lane Hermite passes (x, then z) plus a y-blend tail produce
 /// the scalar and its three partial derivatives; the scalar is remapped
 /// through `m = n * scale + bias` and smoothstep `m^2 * (3 - 2m)`.
+// The trailing tables and float constants are the `.data` operands the original
+// read in place. The hook adapter for `0x452960` loads them from the client
+// image and passes them in, which keeps this kernel pure and host-testable; the
+// list is the original's operand set, not a design choice.
+#[allow(clippy::too_many_arguments)]
 pub fn perlin_noise3_d__452960(
     x: f64,
     y: f64,

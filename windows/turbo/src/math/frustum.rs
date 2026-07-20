@@ -1,15 +1,11 @@
-//! `frustum` family kernels.
-#![allow(
-    non_snake_case,
-    // intentional NaN-reject via `!(a >= b)`
-    // (differs from `a < b` on NaN), bit-exact source constants kept verbatim,
-    // and ABI-dictated parameter counts.
-    clippy::neg_cmp_op_on_partial_ord,
-    clippy::excessive_precision,
-    clippy::too_many_arguments
-)]
+// Adapter and kernel names mirror the host's C++ symbols verbatim, with `__`
+// standing in for the `::`, so the whole module is non-snake-case by construction.
+#![allow(non_snake_case)]
 
 /// Plane-distance epsilon baked into `Wow.exe` (`.rdata` @0x8101b4).
+// Transcribed bit-exactly from the client's `.rdata` word; dropping digits to
+// the shortest `f32` round-trip would compare against a different value.
+#[allow(clippy::excessive_precision)]
 const FRUSTUM_PLANE_EPS: f32 = -0.019_444_443_3;
 
 /// Classifies a point against six frustum planes, producing a clip outcode.

@@ -1,13 +1,6 @@
-//! `world` family kernels.
-#![allow(
-    non_snake_case,
-    // intentional NaN-reject via `!(a >= b)`
-    // (differs from `a < b` on NaN), bit-exact source constants kept verbatim,
-    // and ABI-dictated parameter counts.
-    clippy::neg_cmp_op_on_partial_ord,
-    clippy::excessive_precision,
-    clippy::too_many_arguments
-)]
+// Adapter and kernel names mirror the host's C++ symbols verbatim, with `__`
+// standing in for the `::`, so the whole module is non-snake-case by construction.
+#![allow(non_snake_case)]
 
 /// Builds a 9x9 grid of vertex positions for a terrain chunk cell block.
 ///
@@ -150,6 +143,11 @@ pub struct LiquidGridLookup {
 /// index, and the row/bit indices into the chunk's 64x64 liquid bitfield. The
 /// caller performs the (live, mutable) grid and chunk dereferences and the final
 /// bit test.
+// The eight scalars are the reference's argument list, not a design choice. The
+// band tests are written `!(d >= lo_bound)` / `!(d < hi_bound)` so a NaN
+// coordinate rejects exactly as the x87 compare chain did; the positive forms
+// would accept it.
+#[allow(clippy::too_many_arguments, clippy::neg_cmp_op_on_partial_ord)]
 pub fn c_world__point_in_liquid_grid__69b350(
     px: f32,
     py: f32,
@@ -339,6 +337,10 @@ mod tests_c_world__point_in_liquid_grid__69b350 {
 ///
 /// Gates it against the inclusive `[lo, hi]` bounds. `None` when outside the
 /// viewport.
+// The cursor pair, the four viewport edges and the two NDC bounds are the
+// reference's argument list. The gate is written as negated ordered compares so
+// a NaN cursor or viewport rejects, which the positive forms would not.
+#[allow(clippy::too_many_arguments, clippy::neg_cmp_op_on_partial_ord)]
 pub fn c_world_frame__unproject_cursor_to_world_ray__4813b0(
     screen_x: f32,
     screen_y: f32,
@@ -1076,6 +1078,9 @@ mod tests_height_bucket_insert_node_at_pos__6818b0 {
 ///
 /// `Some(0..=31)` is the destination bucket; `None` means the node projects past
 /// the far bucket and must be dropped (no relink).
+// The ten scalars are the object position, the plane row, the base, the scale
+// and the bias the reference passes individually.
+#[allow(clippy::too_many_arguments)]
 pub fn height_bucket_insert_node_from_object__6816f0(
     px: f32,
     py: f32,
@@ -1415,6 +1420,9 @@ pub fn height_bucket__project_vert__681b50(
 /// to (the smaller of the two endpoint depths). Returns `None` when either
 /// endpoint's raw `eye_z` fails the near-plane test (`near_z`), so the edge is
 /// skipped.
+// `!(near_z <= eye_z)` keeps an unordered endpoint on the reject side, where
+// `eye_z < near_z` would let a NaN depth through.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn height_bucket__edge_span__681b50(
     a: ProjectedVert,
     b: ProjectedVert,
@@ -1659,6 +1667,10 @@ mod tests_height_bucket_test_box {
 /// matrix. `center` is projected by `view`; the screen-space radius comes from
 /// transforming `(radius, radius, 0)` by `radius_mat`. Returns `None` on a
 /// too-small radius, near-clip rejection, or an out-of-buffer span.
+// The ten parameters are the reference's argument list. The radius and
+// near-plane gates are negated ordered compares, so a NaN radius or depth
+// rejects as the original's compares did.
+#[allow(clippy::too_many_arguments, clippy::neg_cmp_op_on_partial_ord)]
 pub fn height_bucket__test_sphere__686000(
     center: &[f32; 3],
     radius: f32,
@@ -1834,6 +1846,9 @@ mod tests_terrain_height_cache_cell {
 /// lands in the float mantissa, and the raw IEEE-754 bits are shifted. Returns
 /// `None` when the position is below the grid origin or maps outside the 32x32
 /// page; otherwise the flat `row*0x20 + col` value index.
+// The eight parameters are the client's argument list. `!(lo_bound <= f)`
+// rejects a NaN coordinate, where `f < lo_bound` would accept it.
+#[allow(clippy::too_many_arguments, clippy::neg_cmp_op_on_partial_ord)]
 pub fn terrain_height_cache_sample_at_pos__67c820(
     pos_x: f32,
     pos_y: f32,
@@ -2100,6 +2115,9 @@ pub struct QueryRadiusRect {
 /// `round(radius * radius_scale)`, recovered through the host's add-`bias` /
 /// shift-`14` / mask-`0xff` reinterpret. `ret` mirrors the reference's leftover
 /// return: `0` whenever the row span is non-empty, else the clamped low row.
+// The point, radius, origin, scale, half-cell, radius scale and bias are the
+// reference's argument list, not a design choice.
+#[allow(clippy::too_many_arguments)]
 pub fn c_map_chunk_grid__query_radius__68b0d0(
     px: f32,
     py: f32,
@@ -2132,6 +2150,9 @@ pub fn c_map_chunk_grid__query_radius__68b0d0(
 /// `cell_x`/`cell_y` are the cell's world base; `sub_row`/`sub_col` index the 8x8
 /// sub-grid at `sub_spacing`; `lo`/`hi` are the candidate's Z extent averaged by
 /// `z_mid`. Returns `[dx, dy, dz, dist2]`.
+// The nine values are what the enclosing routine passes positionally at the
+// candidate site; the count is a fact about that call, not a design choice.
+#[allow(clippy::too_many_arguments)]
 pub fn query_radius_candidate(
     cell_x: f32,
     cell_y: f32,
@@ -2155,6 +2176,9 @@ mod tests_c_map_chunk_grid__query_radius__68b0d0 {
     use super::{c_map_chunk_grid__query_radius__68b0d0 as rect, query_radius_candidate};
 
     const ORIGIN: f32 = 17066.666;
+    // Written as the decimal expansion of the constant the client stores, so it
+    // reads as that float rather than a rounder one; the bits are unchanged.
+    #[allow(clippy::excessive_precision)]
     const SCALE: f32 = 0.029999999;
     const HALF: f32 = 0.5;
     const RADIUS_SCALE: f32 = 0.24000001;
@@ -2844,6 +2868,10 @@ pub fn world_scene__deferred_fade_bases__683f80(
 /// fade input is the horizontal camera distance minus the radius. Alphas
 /// above `one` clamp to 1.0; only `alpha > min_alpha` submits (a NaN alpha
 /// skips, matching the reference's comparison chain).
+// The ten parameters are the reference's argument list. The cutoff tests are
+// written `!(radius <= cut)` so a NaN radius takes the fully-visible branch,
+// matching the original's compare chain.
+#[allow(clippy::too_many_arguments, clippy::neg_cmp_op_on_partial_ord)]
 pub fn world_scene__deferred_fade_alpha__683f80(
     center_xy: [f32; 2],
     cam_xy: [f32; 2],
@@ -3093,6 +3121,9 @@ mod tests_world_sample_surface_height__6b7070 {
         assert_eq!(l.chunk_index, 0xe * 16 + 0xe);
     }
 
+    // The scale literal is the decimal expansion of the constant the client
+    // stores; it sits in a `let`, so the allow goes on the enclosing test fn.
+    #[allow(clippy::excessive_precision)]
     #[test]
     fn world_constants_shape() {
         // Realistic constants: origin 17066.666, scale 1/533.33333 * 16 ~= 0.03.
@@ -3214,6 +3245,9 @@ mod tests_c_map_chunk__decompress_vertex_normals__6aff10 {
 /// arg2[axis+3])` — STRICT separation with **unordered-CONTINUE**, deliberately
 /// NOT the inclusive `<=`/unordered-reject idiom of `aabb__min_less_than_max__6acb40`
 /// (reusing that would invert both boundary and NaN routing — the crash class).
+// Both compares are negated so an unordered operand continues rather than
+// rejects, matching the strict `jnp` / `je` routing the doc above decodes.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn c_world_bsp__node_overlaps_box__6bc1c0_leaf(
     arg1: &[f32; 6],
     arg2: &[f32; 6],
@@ -3398,6 +3432,9 @@ pub fn link_entity_tile_indices(ix: i32, iy: i32) -> (usize, usize) {
 /// popcount parity: GT proceeds, LT skips, EQ proceeds, NaN/unordered proceeds.
 /// Net `proceed = !(ztop < thresh)`, keeping NaN on the proceed side (inverting
 /// this mask was the root of three prior in-world crashes).
+// `!(ztop < thresh)` keeps NaN on the proceed side, which `ztop >= thresh`
+// does not; that polarity is load-bearing here.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn link_entity_ztop_passes_tile(ztop: f32, thresh: f32) -> bool {
     !(ztop < thresh)
 }
@@ -4122,6 +4159,9 @@ pub mod draw_bucket_classify__707680 {
     /// 0x7079df and the cloud mirror 0x7084d8 to set the front-facing flag from
     /// the transformed depth `a` versus the (possibly `fchs`-negated)
     /// screen-radius term `b`.
+    // `!(a <= b)` is the point of the helper: unordered operands answer `true`,
+    // which `a > b` would not.
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
     #[inline]
     #[must_use]
     pub fn greater_or_unordered(a: f32, b: f32) -> bool {
@@ -4177,6 +4217,9 @@ pub mod draw_bucket_classify__707680 {
     /// `fcomp` vs threshold then `test ah,0x1; jne`: the non-opaque branch is
     /// taken iff `v < threshold` strictly (C0==1). Returns `true` when the OPAQUE
     /// path should be taken (`v >= threshold`, eq, or unordered).
+    // `!(v < OPAQUE_THRESHOLD)` keeps an unordered value on the opaque side, as
+    // the `test ah,0x1; jne` routing does.
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
     #[inline]
     #[must_use]
     pub fn cloud_is_opaque(v: f32) -> bool {
@@ -4393,6 +4436,9 @@ pub fn fistp_round_ties_even(x: f64) -> i32 {
 ///   so the one-past-end pair is emitted like stock. A tail
 ///   `(desc[3], desc[2])` pair closes the list when the last index never
 ///   reached `desc[3]`. All index compares are integer — no NaN polarity.
+// Seven of the eight parameters are the reference's argument list; the eighth
+// is the emit callback standing in for its inline stores.
+#[allow(clippy::too_many_arguments)]
 pub fn world_rasterize_trace_line_cells__69c780(
     p1: [f32; 2],
     p2: [f32; 2],
@@ -5137,6 +5183,9 @@ pub struct ChunkVertsAndBounds {
 /// and square-roots it) produces the value narrowed to f32 at `+0x68`; the
 /// `f64` sum + `f64::sqrt` here matches except for astronomically-rare
 /// double-rounding ties in the 3-term sum. Everything else is bit-exact.
+// The cell indices, height block, origin, scale, base and cell divisors are the
+// reference's argument list, not a design choice.
+#[allow(clippy::too_many_arguments)]
 pub fn c_map_chunk__build_vertices_and_bounds__6b0e50(
     col: i32,
     row: i32,
@@ -6036,6 +6085,9 @@ mod tests_anim_scroll_param__711fe0 {
 ///
 /// The 4-term plane dot `m60·p60 + m64·p64 + m5c·p5c + c − w`, folded wide with
 /// one narrow at the `FSTP` into the object's `+0x78` slot.
+// The eight scalars are the matrix row and point components the original passes
+// individually; the count is a fact about that call.
+#[allow(clippy::too_many_arguments)]
 pub fn depth_bucket_project__681a40(
     m60: f32,
     m64: f32,
@@ -6060,6 +6112,9 @@ pub fn depth_bucket_project__681a40(
 /// The second plane dot stays 80-bit (never stored), so `scale × proj2` narrows
 /// only after the full wide fold, then `round(narrow − bias)` picks the
 /// 0x20-slot bucket.
+// The ten scalars are the matrix row, point components, scale and bias the
+// original passes individually; the count is a fact about that call.
+#[allow(clippy::too_many_arguments)]
 pub fn depth_bucket_index__681a40(
     m60: f32,
     m64: f32,

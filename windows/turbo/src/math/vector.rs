@@ -1,20 +1,13 @@
 //! `C3Vector` family kernels.
 //!
-//! These are the predictable lints for hand-reconstructed vector/matrix
-//! arithmetic that mirrors a fixed reference; allowing them module-wide (rather
-//! than per line across every assembled kernel) keeps the family files readable
-//! while leaving every other lint live. `suboptimal_flops` in particular is
-//! deliberate: the baseline has no hardware FMA, so `mul_add` lowers to a slow
-//! libm call and changes rounding versus the scalar reference.
-#![allow(
-    non_snake_case,
-    // intentional NaN-reject via `!(a >= b)`
-    // (differs from `a < b` on NaN), bit-exact source constants kept verbatim,
-    // and ABI-dictated parameter counts.
-    clippy::neg_cmp_op_on_partial_ord,
-    clippy::excessive_precision,
-    clippy::too_many_arguments
-)]
+//! The adapter names mirror the host's C++ symbols verbatim, with `__` standing
+//! in for `::`, so `non_snake_case` is allowed for the file; nothing else is
+//! suppressed here. `suboptimal_flops` is exempt workspace-wide, and that is
+//! deliberate in these kernels: the baseline has no hardware FMA, so `mul_add`
+//! lowers to a slow libm call and changes rounding versus the scalar reference.
+// Adapter and kernel names mirror the host's C++ symbols verbatim, with `__`
+// standing in for the `::`, so the whole module is non-snake-case by construction.
+#![allow(non_snake_case)]
 
 use super::f64_to_f32;
 
@@ -757,6 +750,10 @@ mod tests_scale_stored_vec3_by_factor__7c4ed0 {
         assert_eq!(f(&[-1.0, 2.0, -3.0], -2.0, 1.5), [3.0, -6.0, 9.0]);
     }
 
+    // The magnitude is written out in full so the last-ULP case reads as a
+    // deliberate constant rather than a second copy of the `0.3` below it; the
+    // shortened form is the same `f32`, so the digits are documentation.
+    #[allow(clippy::excessive_precision)]
     #[test]
     fn grouping_matches_oracle() {
         // A fractional case where (scale*base)*mag vs scale*(base*mag) could

@@ -1,13 +1,6 @@
-//! `boundsfit` family kernels.
-#![allow(
-    non_snake_case,
-    // intentional NaN-reject via `!(a >= b)`
-    // (differs from `a < b` on NaN), bit-exact source constants kept verbatim,
-    // and ABI-dictated parameter counts.
-    clippy::neg_cmp_op_on_partial_ord,
-    clippy::excessive_precision,
-    clippy::too_many_arguments
-)]
+// Adapter and kernel names mirror the host's C++ symbols verbatim, with `__`
+// standing in for the `::`, so the whole module is non-snake-case by construction.
+#![allow(non_snake_case)]
 
 /// Accumulate a point delta into a bounds-fit accumulator.
 ///
@@ -147,6 +140,10 @@ type MomentAccum = ([f32; 12], [f32; 3], [f32; 9], [f32; 9], [f32; 9]);
 /// w{x,y,z}*k1 * band[k]` over the 9 real SH basis values of `v`). Returns the
 /// updated blocks. `sh_dc`, `k` (band-2 scales K2..K7), `c3`, `one`, `k1`, and
 /// `wq_c` are host constants.
+// The parameters enumerate the accumulator blocks and the host constants the
+// original reached through its object pointer and static data. The count is
+// set by what the original touches, not by a design choice here.
+#[allow(clippy::too_many_arguments)]
 pub fn bounds_fit__accumulate_moment__71bce0(
     weight: &[f32; 3],
     vec: &[f32; 3],
@@ -229,6 +226,9 @@ pub fn bounds_fit__accumulate_moment__71bce0(
 mod tests_bounds_fit__accumulate_moment__71bce0 {
     use super::bounds_fit__accumulate_moment__71bce0 as f;
 
+    // The SH band scale the client passes in, reproduced bit-exactly; trimming
+    // digits changes the value the reimplementation is tested against.
+    #[allow(clippy::excessive_precision)]
     const K1: f32 = 2.956_793_1_f32;
     const K2: f32 = 0.546_274_24_f32;
     const K3: f32 = 0.315_391_6_f32;
@@ -239,10 +239,17 @@ mod tests_bounds_fit__accumulate_moment__71bce0 {
     const SH_DC: f32 = 0.282_094_8_f32;
     const C3: f32 = 3.0_f32;
     const ONE: f32 = 1.0_f32;
+    // The host's `wq` recombination weights, reproduced bit-exactly; trimming
+    // digits changes the value the reimplementation is tested against.
+    #[allow(clippy::excessive_precision)]
     const WQ_C: [f32; 3] = [0.072_168_998_f32, 0.212_671_f32, 0.715_16_f32];
     const K: [f32; 6] = [K2, K3, K4, K5, K6, K7];
     const ID3: [f32; 9] = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
 
+    // Wrapper over the reimplementation: the parameters are the subset of that
+    // function's ABI-sized signature the tests vary, so the count is inherited
+    // from the item under test rather than chosen here.
+    #[allow(clippy::too_many_arguments)]
     fn call(
         weight: &[f32; 3],
         vec: &[f32; 3],
@@ -453,6 +460,10 @@ pub struct FarHeap {
 /// replaces the root only if `dist_sq` is strictly less than the current maximum
 /// (`keys[0]`), then sifts down toward the larger child while `dist_sq` is
 /// strictly less than that child. Returns the updated heap.
+// The sift-up guard is written `!(dist_sq > keys[parent])` to keep the
+// original's ordered test: a NaN key stops the loop, where `dist_sq <=
+// keys[parent]` would let it run on. The NaN polarity is load-bearing.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn bounds_fit__add_object__71bf90(heap: &FarHeap, dist_sq: f32, object: u32) -> FarHeap {
     let mut objs = heap.objs;
     let mut keys = heap.keys;

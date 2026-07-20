@@ -1,13 +1,6 @@
-//! `aabb` family kernels.
-#![allow(
-    non_snake_case,
-    // intentional NaN-reject via `!(a >= b)`
-    // (differs from `a < b` on NaN), bit-exact source constants kept verbatim,
-    // and ABI-dictated parameter counts.
-    clippy::neg_cmp_op_on_partial_ord,
-    clippy::excessive_precision,
-    clippy::too_many_arguments
-)]
+// Adapter and kernel names mirror the host's C++ symbols verbatim, with `__`
+// standing in for the `::`, so the whole module is non-snake-case by construction.
+#![allow(non_snake_case)]
 
 /// AABB overlap half-test.
 ///
@@ -190,6 +183,10 @@ mod tests_c_aa_box__from_points__7c1450 {
 /// clip branches imply `end` and `start` are strictly ordered, and the f32
 /// difference of distinct values is never zero), so the divide is
 /// unconditional here.
+// The slab test is written `!(mx < s)` so an unordered compare counts as inside,
+// which is the sense the original clips with; the structural rewrite `mx >= s`
+// is false on NaN and would change which axes get clipped.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn c_aa_box__intersect_segment__6dc5a0(
     box6: &[f32; 6],
     seg_start: &[f32; 3],
@@ -502,6 +499,10 @@ mod tests_c_aa_box__transform_by3x3__6dc470 {
 /// (neither bit set, even parity) and unordered/NaN (both bits set, even parity)
 /// while passing strictly-less (`C0`) and equal (`C3`) — i.e. it requires
 /// `point <= max`, modelled as `!(point[i] <= max[i])`.
+// The bounds tests are written `!(p >= min)` / `!(p <= max)` so an unordered
+// compare rejects, which is what the original's `C0` and parity branches do;
+// `p < min` / `p > max` are false on NaN and would report the point inside.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn c_aa_box__contains_point__637350(bx: &[f32; 6], point: &[f32; 3]) -> u32 {
     let min = [bx[0], bx[1], bx[2]];
     let max = [bx[3], bx[4], bx[5]];

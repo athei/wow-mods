@@ -7,6 +7,8 @@
 //! integer code instead. Shared here because both the wow_turbo reimpls (where
 //! it doubles as the faithful CRT `__ftol` replacement) and any i686
 //! code needing a float→int cast without the x87 tax use it.
+// The entry point keeps the CRT's `__ftol` spelling so the shim reads as the
+// symbol it replaces.
 #![allow(non_snake_case)]
 
 /// CRT float-to-i64 truncation (`__ftol`).

@@ -1,13 +1,7 @@
 //! `m2` family kernels.
-#![allow(
-    non_snake_case,
-    // intentional NaN-reject via `!(a >= b)`
-    // (differs from `a < b` on NaN), bit-exact source constants kept verbatim,
-    // and ABI-dictated parameter counts.
-    clippy::neg_cmp_op_on_partial_ord,
-    clippy::excessive_precision,
-    clippy::too_many_arguments
-)]
+// Adapter and kernel names mirror the host's C++ symbols verbatim, with `__`
+// standing in for the `::`, so the whole module is non-snake-case by construction.
+#![allow(non_snake_case)]
 
 /// Heap-sort comparator for indexed batch elements.
 ///
@@ -648,6 +642,10 @@ mod tests_m2_track__sample_float_lerp__71af20 {
 /// row 2 = row0 × row1, the first two scaled to `num` length when the
 /// pre-scale length clears `eps`), mode 3 delegates to the
 /// basis-from-direction builder, other modes leave the rotation as is.
+// The eight parameters are the client's own emitter-transform inputs — translation,
+// axis-angle, mode flags, direction and the three float constants the caller supplies.
+// Folding them into a params struct would hide the original's argument order.
+#[allow(clippy::too_many_arguments)]
 pub fn cm2_model__build_emitter_transform__7106c0(
     translate: &[f32; 3],
     rot_angle: f32,
@@ -720,6 +718,9 @@ pub fn cm2_model__build_emitter_transform__7106c0(
 /// lerp pulls the working matrix toward a fresh basis built from `dir`
 /// over `basis_seed` (whose translation row and fourth column
 /// survive). Rows are finally scaled by `scale`.
+// `!(duration > zero_k)` reproduces the original's ordered compare: a NaN duration
+// takes the zero-phase arm, which the `duration <= zero_k` clippy suggests would not.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn cm2_model__build_emitter_transform_finish__7106c0(
     m: &[f32; 16],
     basis_seed: &[f32; 16],
@@ -1131,6 +1132,10 @@ pub fn seq_ticks(delta: i32, rate: f32) -> i32 {
 /// `> end - start` to `end`. A clamp-mode element whose end clock is still in
 /// the future re-enters the wrap path, sampling at `clock_a` when even the
 /// start clock is in the future.
+// The eight parameters are the sequence record's own fields in the client's order:
+// clocks, range, the clamp flag bit, rate and offset. The count is a fact about the
+// original's argument list, not a shape a params struct is free to change.
+#[allow(clippy::too_many_arguments)]
 pub fn m2_seq_time__714260(
     now: u32,
     clock_a: u32,
@@ -1238,6 +1243,9 @@ mod tests_m2_seq_time__714260 {
 /// `max_w` poisons even the clamped arms). The comparisons keep the x87
 /// unordered behavior: a NaN `f` falls through both clamps into the
 /// smoothstep arm.
+// `!(f < 0.0)` and `!(f > 1.0)` keep the original's unordered compare: a NaN `f` falls
+// through both clamps into the smoothstep arm, which `f >= 0.0` / `f <= 1.0` would not.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn m2_crossfade_weight__714260(remaining: i32, rate: f32, max_w: f32) -> f32 {
     let f = (f64::from(remaining) * f64::from(rate)) as f32;
     if !(f < 0.0) {
@@ -2156,6 +2164,9 @@ pub fn cm2_shadow__outcode6__7137c0(v: &[f32; 3], bounds: &[f32; 6]) -> u32 {
 /// exactly like stock. Arithmetic is `f64` matching the x87 double-precision
 /// intermediates (the hooked SquaredMagnitude already narrowed `mag²` to
 /// `f32`), narrowed per element at the `FSTP m32` points.
+// `!(len.abs() < eps)` is the original's `FCOMP`/`JNP` skip test: a NaN length enters
+// the scale arm and poisons the row, which `len.abs() >= eps` would not.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn cm2_shadow__normalize_basis3__7137c0(basis: &mut [f32; 9], k: f32, eps: f32) {
     for r in 0..3 {
         let row = [basis[r * 3], basis[r * 3 + 1], basis[r * 3 + 2]];

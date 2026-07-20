@@ -1,13 +1,7 @@
 //! `weather` family kernels.
-#![allow(
-    non_snake_case,
-    // intentional NaN-reject via `!(a >= b)`
-    // (differs from `a < b` on NaN), bit-exact source constants kept verbatim,
-    // and ABI-dictated parameter counts.
-    clippy::neg_cmp_op_on_partial_ord,
-    clippy::excessive_precision,
-    clippy::too_many_arguments
-)]
+// Adapter and kernel names mirror the host's C++ symbols verbatim, with `__`
+// standing in for the `::`, so the whole module is non-snake-case by construction.
+#![allow(non_snake_case)]
 
 /// Scales three packed color bytes (each `0..=255`) by a normalization factor.
 ///
@@ -95,6 +89,11 @@ fn cloud_rsqrt_seed__456330(x: f32) -> f32 {
 /// clamp to `limit`, then pack to 8 bits through the
 /// `value * pack_scale + pack_bias` float-bit trick (mantissa bits 14..22 of
 /// the stored f32). Alpha carries the density byte.
+// The thirteen parameters are the operands the original reads from registers
+// and stack, including the float constants (`inv255`, `one`, `zero`, `limit`,
+// the pack pair) it is handed rather than materializing. That is the client's
+// calling convention, so a params struct would misdescribe the signature.
+#[allow(clippy::too_many_arguments)]
 pub fn cloud_shade_layer__6cfb00(
     density: u8,
     grad: [f32; 2],
@@ -317,6 +316,11 @@ pub fn doodad_raycast_segment__6b7790(
 /// reach the segment end and its Z minimum must stay below the segment start.
 /// Written as negated strict compares so unordered (NaN) operands pass,
 /// matching the stock x87 chain.
+// Each of the six bounds tests is written `!(a < b)` or `!(a > b)` rather than
+// the direct compare, because the two differ when an operand is NaN and the
+// original's x87 chain lets unordered operands through. The polarity is
+// load-bearing: rewriting it would cull nodes the client accepts.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn doodad_raycast_segment_node_overlaps__6b7790(
     bounds_min: [f32; 3],
     bounds_max: [f32; 3],
@@ -479,6 +483,11 @@ mod tests_weather_build_patter_geometry__6753c0 {
 /// `zero`=0.0, `scale_399`=3.99, `bias_512`=512.0, `mul_4`=4.0. Output is `None`
 /// when the drop is culled, else the computed scalars the caller threads into the
 /// six-vertex streak.
+// The ten parameters are the caller's operands one for one, down to the float
+// constants (`one`, `zero`, `scale_399`, `bias_512`, `mul_4`) the original
+// passes in rather than materializing. That is the client's calling
+// convention, a fact about the ABI rather than a design choice.
+#[allow(clippy::too_many_arguments)]
 pub fn weather_raindrop_vertex__675ac0(
     now: f32,
     birth: f32,
@@ -572,6 +581,10 @@ mod tests_weather_raindrop_vertex__675ac0 {
 
     const ONE: f32 = 1.0;
     const ZERO: f32 = 0.0;
+    // The source constant reproduced bit-exactly: these are the digits of the
+    // stored `f32` the original is handed, and trimming them changes the value
+    // under test.
+    #[allow(clippy::excessive_precision)]
     const S399: f32 = 3.990_000_009_536_743;
     const B512: f32 = 512.0;
     const M4: f32 = 4.0;

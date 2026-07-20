@@ -10,15 +10,9 @@
 
 // The adapter names mirror the host C++ symbols verbatim (`C3Vector::Normalize`
 // -> `c3_vector__normalize`, `__` marking the `::`), as in the generated table.
-#![allow(
-    non_snake_case,
-    // As in the math kernels: NaN-aware ordered compares written `!(a >= b)` /
-    // `x < lo || x >= hi` (which differ from `<`/`Range::contains` on NaN, matching
-    // the originals' x87 ordered tests), and ABI-dictated parameter counts.
-    clippy::neg_cmp_op_on_partial_ord,
-    clippy::manual_range_contains,
-    clippy::too_many_arguments
-)]
+// Adapter names mirror the host's C++ symbols verbatim, with `__` standing in for
+// the `::`, so the whole module is non-snake-case by construction.
+#![allow(non_snake_case)]
 
 /// `C3Vector::Normalize`'s scale constant `K` (`v *= K / |v|`, stock 1.0).
 ///
@@ -230,6 +224,9 @@ pub fn c33_matrix__scale_by_scalar__672d80(
 /// `C33Matrix::Determinant` — `__cdecl(m00, m01, m02, m10, m11, m12, m20, m21, m22)`.
 ///
 /// Returns the 3×3 determinant (rule of Sarrus) of the row-major scalars.
+// The nine elements arrive as nine separate `__cdecl` stack scalars; folding them
+// into a `[f32; 9]` would change the frame the thunk calls with.
+#[allow(clippy::too_many_arguments)]
 pub fn c33_matrix__determinant__7bc040(
     m00: f32,
     m01: f32,
@@ -1095,6 +1092,9 @@ pub fn c4_plane__from_triangle__637480(
 ///
 /// Builds the inner SQUAD tangents at `q_cur`, writing `out_tangent_in` and
 /// `out_tangent_out`, void.
+// `__fastcall(ecx, edx)` plus the nine-slot stack tail, both out-pointers
+// included: the list is the stock argument frame, not a design choice.
+#[allow(clippy::too_many_arguments)]
 pub fn c4_quaternion__compute_squad_tangents__7c0b60(
     q_prev: *const f32,
     q_cur: *const f32,
@@ -3598,6 +3598,9 @@ unsafe fn write_sprite_vertex(out: *mut u8, lanes: [u32; 6]) {
 /// LLVM inlines its SSE body in place of the stock per-vertex x87 call, and the
 /// color byte-order flag (`device+0x258`, the `GetFormatDesc` result the original
 /// re-reads every vertex) is read once before the loops.
+// The two color arrays, the scale/offset pair, the two mode bytes and the index
+// range each take their own stock argument slot. That is the client's ABI.
+#[allow(clippy::too_many_arguments)]
 pub fn c_gx_batch__fill_sprite_quads__5c8710(
     this: *mut u8,
     out_verts: *mut u8,
@@ -4309,6 +4312,9 @@ pub fn c_gx_font__measure_text_run__5c7300(
 /// The tail splits wide/narrow: the full-line width multiplies the WIDE
 /// units-per-pixel quotient, the break-rewind width multiplies the
 /// FST-narrowed copy.
+// `__fastcall(ecx = font, edx = text)` plus the eight stack args the doc lists,
+// `inoutWordBreak` included; `ret 0x20` pops exactly that frame.
+#[allow(clippy::too_many_arguments)]
 pub fn c_gx_font__fit_text_to_width__5c7470(
     font: *mut u8,
     text: *mut u8,
@@ -4679,6 +4685,10 @@ fn glyph_width_probe(
 /// the stock passes from uninitialized stack are zero-initialized here
 /// (deterministic; the EmitLineQuads hook writes them before any status-2 close
 /// consumes them — same knowing deviation as its hit-test pads).
+// The block-height budget and the sentinel width test are negated so an unordered
+// operand ends the walk as the stock ordered compares did; the un-negated `>=` /
+// `<=` rewrite would let it continue.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn c_gx_string__build_geometry__5cdc20(this: *mut u8) {
     let thisu = this as usize;
     const BASE: usize = crate::win::EXPECTED_IMAGE_BASE;
@@ -7016,6 +7026,9 @@ pub fn c_movement__is_position_finite__616bf0(this: *mut core::ffi::c_void) -> i
 /// state flags allow) and a submerged arm (the secondary handler). Own math is
 /// the surface/ripple/ offset level scaling; every event callee is a delegate.
 /// All FCOMP polarities pinned (NaN routing preserved per branch).
+// The ripple-level crossing and the event-offset threshold negate `>=` to keep the
+// stock polarity, so an unordered operand takes the same arm; `<` would not.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn cg_unit_c__update_water_interaction__6030c0(
     this: *mut u8,
     param1: u32,
@@ -7581,6 +7594,9 @@ pub fn cg_unit_c__get_state_dependent_scalar__617430(this: *mut u8) -> f32 {
 /// the stock accessor at `0x617430` applied to `this`, delegated once via
 /// `transmute` — a pure read-only getter of `this` state, invariant across this
 /// call, so the stock's up-to-three repeated calls collapse to one.
+// The plane normal arrives as three loose scalars rather than a vector pointer,
+// which is what pushes the stock frame past the threshold. A fact about the ABI.
+#[allow(clippy::too_many_arguments)]
 pub fn c_movement__compute_slope_climb_delta__635c00(
     this: *mut core::ffi::c_void,
     out_vec: *mut f32,
@@ -9067,6 +9083,10 @@ pub fn collision_plane_box_clearance_test__6335d0(plane_idx: i32, world_pos: *co
 /// polygon against the nine bounding planes when the cheap pass is inconclusive.
 /// Writes the closer distance to `*best_dist` and returns 1 on a hit, else 0.
 /// The polygon is mutated in place.
+// The bound check is written `v < 0 || v >= 9` to mirror the original's two
+// ordered compares; `(0..9).contains(&v)` reads the same for an integer but
+// hides that the pair is the shape being reproduced.
+#[allow(clippy::manual_range_contains)]
 pub fn collision_ray_polygon_sweep_distance__632830(
     polygon: *mut u8,
     ray_origin: *const f32,
@@ -9156,6 +9176,13 @@ pub fn collision_ray_polygon_sweep_distance__632830(
 /// the winning face index into `*out_face_flags`. Returns 1 if any hit was
 /// recorded. The trailing two stack dwords are unused by the original (popped by
 /// its `ret 0x20`).
+// The parameter list is the stock argument frame `ret 0x20` pops, down to the two
+// trailing dwords the original never reads.
+#[allow(clippy::too_many_arguments)]
+// Same shape as the sweep-distance entry: the bound pair is written as two
+// ordered compares because that is what the original does, and `contains`
+// would fold the two into one and read as a different test.
+#[allow(clippy::manual_range_contains)]
 pub fn collision_sweep_polygon_against_faces__632700(
     face_set: *const u8,
     sweep_dir: *const f32,
@@ -9726,6 +9753,9 @@ pub fn height_bucket__rasterize_cell_occluder__6c15d0(node: i32) {
 /// host occlusion-enable byte and a depth band. Reads the view matrix, focal,
 /// near-plane, column scale/bias and writes the shared horizon buffer by fixed
 /// absolute address (client non-DYNAMICBASE).
+// The depth band is two negated ordered compares, so an unordered depth rejects
+// the edge as stock did; the un-negated `>` rewrite would admit it.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn height_bucket__rasterize_edges__681b50(
     verts: i32,
     indices: *const i32,
@@ -9833,6 +9863,9 @@ pub fn height_bucket__rasterize_edges__681b50(
 /// when the box is fully occluded, else 0 (visible). Reads the same occlusion gate,
 /// view matrix and projection globals as the rasterizer and reads (never writes)
 /// the shared horizon buffer.
+// The depth band is two negated ordered compares, so an unordered depth rejects
+// the box as stock did; the un-negated `>` rewrite would admit it.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn height_bucket__test_box__686180(aabb: *const f32, flags: u32) -> u32 {
     if aabb.is_null() {
         return 0;
@@ -9913,6 +9946,9 @@ pub fn height_bucket__test_box__686180(aabb: *const f32, flags: u32) -> u32 {
 /// and tests the sphere's top height against every covered column. Returns 2 when
 /// fully occluded, else 0 (visible). Reads the occlusion gate, both matrices and
 /// the projection globals, and reads the shared horizon buffer.
+// The radius gate and the depth band are negated ordered compares, so an unordered
+// operand rejects the sphere as stock did; the un-negated `>` rewrite would admit it.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn height_bucket__test_sphere__686000(center: *const f32, flags: u32, radius: f32) -> u32 {
     if center.is_null() {
         return 0;
@@ -13067,6 +13103,9 @@ pub fn c_map_chunk__update__6afad0(chunk: i32) {
 /// hit triangle's facet dot from the host hit vertex/index tables (pure
 /// kernel); after the loop the dot is normalised by the facet-normal length.
 /// Returns 1 when any group was hit.
+// Segment ends, flags, skip mask, hit state and the two out-slots are each their
+// own stock stack argument; grouping them would not be the frame stock calls with.
+#[allow(clippy::too_many_arguments)]
 pub fn c_map_obj__trace_line_groups__6a37b0(
     this: *mut u8,
     ctx: *mut u8,
@@ -14137,6 +14176,10 @@ pub fn collide_bsp_node_trace_segment__6bc370(
 /// when the new distance is NOT ordered-greater-or-equal than the running
 /// fraction (a NaN distance stores, matching `TEST AH,5; JP`). Returns
 /// whether any hit was recorded (outMapObj non-zero).
+// The closest-hit gate stores when the distance is not ordered-greater-or-equal
+// than the running fraction, so a NaN distance stores, as the doc above pins;
+// the plain `<` rewrite would drop it.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn c_world__intersect_map_obj_segment__6a8840(
     start: *const f32,
     end: *const f32,
@@ -21742,6 +21785,9 @@ unsafe fn pq_heap_reserve_one() {
 /// per-particle path). With sort flag `0x10` clear, emits in array order; with it set, builds a
 /// binary max-heap on each particle's view-space Z and emits far-to-near. Finally stores the
 /// emitted-quad count (`vertexStream[8] / *(this+0x9c)`) at `this+0x1c`.
+// The heap sift negates `>=` to keep the stock polarity, so an unordered
+// view-space Z sifts the way it did; the plain `<` rewrite would swap it.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn c_particle_emitter__render_particles__7b3a10(
     this: *mut core::ffi::c_void,
     vertex_stream: *mut f32,
@@ -24653,6 +24699,8 @@ unsafe fn trace_clear_all(this: *mut u8) {
 ///
 /// Both are grown to hold `count` instances (stock 0x708ac3..0x708b68). Frees the old buffers and
 /// reallocates at the next power-of-two capacity; never shrinks.
+// The grow path writes the record and index buffers in one unrolled run; a
+// block per store would repeat one comment for every field of the same record.
 #[allow(clippy::multiple_unsafe_ops_per_block)]
 unsafe fn trace_grow_candidate_bufs(this: *mut u8, count: u32) {
     // SAFETY: `this+0x134`/`+0x138` hold the (possibly null) `SMemAlloc` record
@@ -24692,6 +24740,8 @@ unsafe fn trace_grow_candidate_bufs(this: *mut u8, count: u32) {
 ///
 /// The capacity dword is at base-4; it grows to `need` vertices (stock 0x70967c / 0x709104).
 /// Returns the (zeroed) entry base, or null if the allocation failed.
+// The grow path writes the record and index buffers in one unrolled run; a
+// block per store would repeat one comment for every field of the same record.
 #[allow(clippy::multiple_unsafe_ops_per_block)]
 unsafe fn trace_grow_vertex_scratch(this: *mut u8, need: u32, line: u32) -> *mut u8 {
     // SAFETY: `this+0x140` holds the (possibly null) scratch entry base (with a
@@ -24734,6 +24784,9 @@ unsafe fn trace_grow_vertex_scratch(this: *mut u8, need: u32, line: u32) -> *mut
 ///
 /// On pass ≥ 1 a new batch (`record[3] != best[3]`) or a missing best wins unconditionally;
 /// otherwise the nearer `t` wins (`!(t > best.t)`, NaN-faithful).
+// The nearer-`t` test is written `!(t > best.t)` so a NaN `t` still wins, exactly
+// as the stock ordered compare did; the plain `<=` rewrite would drop it.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 unsafe fn trace_accept(record: *mut u8, t: f32, pass: u32, best: &mut TraceBest) {
     let same_key = !best.hit.is_null()
         // SAFETY: `best.hit+0xc` is the in-bounds u32 batch key of the current best candidate
@@ -24754,7 +24807,12 @@ unsafe fn trace_accept(record: *mut u8, t: f32, pass: u32, best: &mut TraceBest)
 /// Project every collision vertex (`shared+0xf8`, stride 0xc) through the model matrix into the ray
 /// frame, then test each `u16` index triple (`shared+0xf0`, count `shared+0xec`) with the projected
 /// barycentric hit.
+// The grow path writes the record and index buffers in one unrolled run; a
+// block per store would repeat one comment for every field of the same record.
 #[allow(clippy::multiple_unsafe_ops_per_block)]
+// This narrow phase is a transcribed range of the caller's body, so its list is
+// the register and stack state the stock code held live across that range.
+#[allow(clippy::too_many_arguments)]
 unsafe fn trace_collision_mesh(
     this: *mut u8,
     inst: *mut u8,
@@ -24821,7 +24879,13 @@ unsafe fn trace_collision_mesh(
 /// Walk the geoset batches (`[shared+0x50]+0x24`, stride 0x18), gate each on
 /// flags/visibility/alpha, bone-blend + transform + project its vertices, then test the geoset's
 /// triangle range with the projected barycentric hit.
+// A direct transcription of the stock body: one unsafe block per operation
+// would mean a comment every second line, and the block-wide comment naming
+// the offset families it walks says more than any of them would.
 #[allow(clippy::multiple_unsafe_ops_per_block)]
+// This narrow phase is a transcribed range of the caller's body, so its list is
+// the register and stack state the stock code held live across that range.
+#[allow(clippy::too_many_arguments)]
 unsafe fn trace_skinned_submesh(
     this: *mut u8,
     inst: *mut u8,
@@ -24971,7 +25035,14 @@ unsafe fn trace_skinned_submesh(
 /// `p_scene`/`start_local` are the ray origin/end; `end_local` is the in/out hit fraction (in: max
 /// search fraction; out: `(1/seg_len)·t` on a hit); `p_max_dist` non-null enables the second pass.
 /// Returns the hit instance's id (`*(record[0]+0x41c)`) or 0.
+// A direct transcription of the stock body: one unsafe block per operation
+// would mean a comment every second line, and the block-wide comment naming
+// the offset families it walks says more than any of them would.
 #[allow(clippy::multiple_unsafe_ops_per_block)]
+// The first-pass scan stops when a candidate's near distance is not ordered-less
+// than the running best, so an unordered distance ends the scan as stock did; the
+// un-negated `>=` rewrite would keep walking.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn cm2_scene__trace_line__7089c0(
     this: *mut core::ffi::c_void,
     p_scene: *const f32,
@@ -25534,6 +25605,9 @@ fn advance_event_track_seq(inst: *mut u8, hdr: *const u8, seq_idx: u32, delta: u
 /// C-fwd 0x719724 / C-rev 0x719844), and fires the 9-arg per-segment callback (`0x70a400`,
 /// ret 0x24). The forward arm increments the segment cursor and uses `window_hi - acc`; the reverse
 /// arm decrements and uses `acc - window_hi`.
+// The list is the state the stock sweep runs on, down to the window bounds it
+// forwards to the 9-arg per-segment callback (`0x70a400`). It mirrors that frame.
+#[allow(clippy::too_many_arguments)]
 fn sweep_event_track(
     inst: *mut u8,
     hdr: *const u8,
@@ -25837,6 +25911,10 @@ fn fire_segment(
     clippy::undocumented_unsafe_blocks,
     clippy::cognitive_complexity
 )]
+// The fog-magnitude gate is negated against the client's 0.0 constant, so an
+// unordered magnitude picks mode 0 as stock did; the un-negated `>=` rewrite
+// would send it to the other mode.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn c_gx_batch__update_fog_state__70baf0(this: *mut u8) {
     if this.is_null() {
         return;
@@ -26527,6 +26605,9 @@ pub fn c_gx_batch__update_fog_state__70baf0(this: *mut u8) {
 /// `crate::math::particle`. One-unsafe-op-per-block would fragment each strided
 /// field read into noise, so a single per-fn allow with inline offset comments
 /// is used here, mirroring the liquid-query driver.
+// The branch count is the stock body's, not a structure this code chose;
+// splitting it into helpers would move the transcription away from the shape
+// it has to be checked against.
 #[allow(clippy::cognitive_complexity)]
 pub fn c_particle_emitter__apply_render_state__70c190(this: *mut core::ffi::c_void) {
     if this.is_null() {
@@ -29832,6 +29913,9 @@ pub fn c_world_view__build_draw_list__707680(
 /// The per-batch geometry classification inner loop, then the cloud/particle
 /// fill and the sky fill. Returns `None` when a record reserve yields a null
 /// slot (the stock fail-`ret`).
+// The branch count is the stock body's, not a structure this code chose;
+// splitting it into helpers would move the transcription away from the shape
+// it has to be checked against.
 #[allow(clippy::cognitive_complexity, clippy::multiple_unsafe_ops_per_block)]
 fn bdl_process_spatial_node(base: *mut u8, node: *const u8, draw_idx: &mut u32) -> Option<()> {
     use crate::math::world::draw_bucket_classify__707680 as bucket;
@@ -30517,6 +30601,9 @@ fn bdl_process_spatial_node(base: *mut u8, node: *const u8, draw_idx: &mut u32) 
 /// Process one visible child view (0x7083dc..0x708674).
 ///
 /// The facing test, then the ribbon/cloud fill over the child's `[0x13c]` entries.
+// The branch count is the stock body's, not a structure this code chose;
+// splitting it into helpers would move the transcription away from the shape
+// it has to be checked against.
 #[allow(clippy::cognitive_complexity, clippy::multiple_unsafe_ops_per_block)]
 fn bdl_process_child_view(base: *mut u8, child: *const u8, draw_idx: &mut u32) -> Option<()> {
     use crate::math::world::draw_bucket_classify__707680 as bucket;
@@ -31597,6 +31684,10 @@ pub fn world_rasterize_trace_line_cells__69c780(p1: *const f32, p2: *const f32, 
 /// branch polarities pinned: an unordered `absDy` takes the
 /// same-row path, an unordered `absDx` the same-column path, and an
 /// unordered major-axis compare routes to the X-major cell walker.
+// The two degenerate-span gates and the major-axis compare are negated, which is
+// what routes the unordered cases to the paths the doc above names; the un-negated
+// `<` / `<=` rewrite would send them elsewhere.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn world_trace_line_against_terrain__69c320(
     start_pos: *const f32,
     end_pos: *const f32,
@@ -32621,6 +32712,9 @@ pub fn c_map__load_wdl__6944a0() {
 /// All packed-M2 reads (u16 triples at stride 6 — 2 of 3 misaligned — plus
 /// verts/normals) use unaligned raw-pointer accesses; no slices over game
 /// memory. Not diffable: the append + heap grow cannot be double-run.
+// A direct transcription of the stock body: one unsafe block per operation
+// would mean a comment every second line, and the block-wide comment naming
+// the offset families it walks says more than any of them would.
 #[allow(clippy::multiple_unsafe_ops_per_block)]
 pub fn cm2_shadow__project_collision_quads__7137c0(
     this: *mut u8,
@@ -34060,6 +34154,9 @@ pub fn world_compute_vertex_outcode__686d20(out: *mut u32, v: *const u32) -> u32
 /// (the stock body's `MOV EAX,ECX` survives to RET). Maps a tracked object's
 /// world-XY delta from the minimap center into the blip's 2-float local offset;
 /// arg 3 (`ctr_z`) is dead in the stock body. Pure leaf, zero callees.
+// `__thiscall(ECX = out, 8 stack f32)`: the eight scalars are separate stock
+// arguments, one of them (`ctr_z`) dead in the stock body. The list is the ABI.
+#[allow(clippy::too_many_arguments)]
 pub fn minimap__project_blip_delta__4eaa30(
     out: *mut f32,
     ctr_x: f32,
@@ -34231,6 +34328,9 @@ pub fn cg_object_c__update_selection_circle_transform__614cd0(
 /// All FNSTSW-bit compare polarities live in the `math::collision` sweep
 /// kernels; the heavy sub-queries are delegated (three of them land in
 /// already-native hooks via their patched VAs).
+// Every sweep input and out-slot is its own stock stack argument; the list is the
+// frame the patched call site pushes, not a design choice.
+#[allow(clippy::too_many_arguments)]
 pub fn collision_sweep_volume_against_world_planes__632ba0(
     ctx: *mut core::ffi::c_void,
     plane_set: *const u8,
@@ -34507,6 +34607,9 @@ pub fn collision_sweep_volume_against_world_planes__632ba0(
 /// (`CImVector__ScaleRGB` @0x6d12c1) and then overwrites that copy with the
 /// glow-target pack result (0x6d139d) before anything reads it — dead code
 /// stock's compiler could not remove; the port skips the call.
+// The channel floor negates `>=` to keep the stock polarity, so an unordered
+// channel takes the clamped arm; the plain `<` rewrite would send it the other way.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn sky_dome__compute_vertex_colors__6d0f50(dome: *mut core::ffi::c_void) {
     const BASE: usize = crate::win::EXPECTED_IMAGE_BASE;
     const GLOW_STOPS: *const [[f32; 2]; 6] = (BASE + 0x8e_9b2c) as *const [[f32; 2]; 6];
@@ -35014,6 +35117,9 @@ pub fn c_gx_aabb16__test_float_box__6b4d10(aabb16: *const i16) -> u8 {
 /// `*(this+0x30)` is the world face-set pair whose two dwords stock forwards as
 /// the trailing sweep args its callee never reads (ret 0x20 pops them unread) —
 /// we read them faithfully but null-guard the pointer.
+// Twelve slots because that is the stock argument frame, including the trailing
+// sweep args the callee never reads (`ret 0x20` pops them unread).
+#[allow(clippy::too_many_arguments)]
 pub fn collision_sweep_box_faces__632280(
     this: *mut core::ffi::c_void,
     world_ctx: *const u8,
@@ -36934,6 +37040,9 @@ pub fn cg_object_c__update_selection_circle_and_visuals__614a90(
 ///   precedent).
 /// - Blend weight kernel `light_blend_weight__6d2d00` (1.0 inside
 ///   falloffStart, NaN keeps 1.0, raw unguarded divide).
+// The insertion compare negates `>=` so an unordered distance lands where the
+// stock ordered test put it; the plain `<` rewrite would move it.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn day_night_blend_nearby_lights__6d2d00(out_params: *mut u8, use_water_set: i32) {
     if out_params.is_null() {
         return;
@@ -38905,6 +39014,10 @@ pub fn c_movement__build_swept_bounds_and_query_world__633840(
 /// `pd−1 >= 0` OR unordered; and the hover lift clamps to `1 − downT`
 /// wide with a NaN lift taking the clamp. The plane/table bases
 /// (`0xc4e534/544/530`) are re-read at every use site exactly as stock.
+// The slide-iteration, step-up limit, ground-stick, hover-overshoot and lift-clamp
+// gates are negated ordered compares, which is what gives the OR-unordered routing
+// the doc pins above; the un-negated rewrite would drop it at every one of them.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn c_movement__step_ground_move__6367b0(
     this: *mut core::ffi::c_void,
     _timestamp_ms: i32,

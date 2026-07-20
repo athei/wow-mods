@@ -1,13 +1,6 @@
-//! `collision` family kernels.
-#![allow(
-    non_snake_case,
-    // intentional NaN-reject via `!(a >= b)`
-    // (differs from `a < b` on NaN), bit-exact source constants kept verbatim,
-    // and ABI-dictated parameter counts.
-    clippy::neg_cmp_op_on_partial_ord,
-    clippy::excessive_precision,
-    clippy::too_many_arguments
-)]
+// Adapter and kernel names mirror the host's C++ symbols verbatim, with `__`
+// standing in for the `::`, so the whole module is non-snake-case by construction.
+#![allow(non_snake_case)]
 
 /// `CWorldBsp::AabbTriangleOverlap` separating-axis test along the three coordinate axes.
 ///
@@ -399,6 +392,9 @@ mod tests_collide_box_box__7c3780 {
 /// barycentrics `u` and `u + v` (not the ray parameter `t`) stay within the
 /// tolerance band, and the returned `t = dot(qvec, edge2) / det` is left
 /// unclamped. Returns `None` on a miss.
+// The band tests stay negated — `!(v >= lo)` and `!(u + v <= hi)` — so a NaN
+// barycentric misses as in the original; `v < lo` / `u + v > hi` would hit.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn collide_line_triangle_indexed16__7c29f0(
     segment: &[f32; 6],
     v0: &[f32; 3],
@@ -758,6 +754,9 @@ mod tests_collide_line_triangle_indexed32__7c2c40 {
 /// register. Returns `Some([t, u, v])` on a hit and `None` on a miss, matching
 /// the reference's boolean result; `t`,`u`,`v` are the values the original
 /// writes to its `outT`/`outUV` out-parameters.
+// Same negated band tests as the reference — `!(v >= lo)`, `!(u + v <= hi)` —
+// so a NaN barycentric misses; `v < lo` / `u + v > hi` would report a hit.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn collide_line_triangle__7c27d0(
     segment: &[f32; 6],
     tri: &[f32; 9],
@@ -1106,6 +1105,9 @@ pub fn collision_build_quad_face_clip_planes__632f80(
 ) -> Option<[[f32; 4]; 5]> {
     // Degenerate-area epsilon at `0x8026bc` (2^-20) and orientation threshold
     // at `0x7ffd74` (0.0), folded in as binary-exact literals.
+    // The digit string is what makes the literal land on `0x35800000`; a shorter
+    // one is a different f32 and a different degeneracy threshold.
+    #[allow(clippy::excessive_precision)]
     const AREA_EPS: f32 = 9.536_743_16e-7; // 0x35800000
     const FLIP_THRESH: f32 = 0.0;
 
@@ -1668,6 +1670,9 @@ mod tests_sphere_test_cell_direction__7c2040 {
 /// `p0` is the query point and `p1` is the triangle's anchor vertex; `edge_a` and `edge_b`
 /// are the two triangle edges emanating from that vertex. Solves the 2x2 Gram system and
 /// branches across the seven Voronoi regions, returning the region's squared distance.
+// The Voronoi region tests stay `!(x >= 0.0)` so a NaN Gram intermediate picks
+// the branch the original's ordered compare picks; `x < 0.0` picks the other.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn sq_dist_point_triangle_edges__6dc900(
     p0: &[f32; 3],
     p1: &[f32; 3],
@@ -2012,6 +2017,9 @@ pub fn collision_build_face_edge_planes__632460(
 mod tests_collision_build_face_edge_planes__632460 {
     use super::collision_build_face_edge_planes__632460 as build;
 
+    // The oracle repeats the kernel's degeneracy epsilon at full precision so both
+    // land on the same stored f32; trimming digits would test a different value.
+    #[allow(clippy::excessive_precision)]
     const AREA_EPS: f32 = 9.5367431640625e-7;
 
     fn dot4(plane: &[f32; 4], p: &[f32; 3]) -> f32 {
@@ -2099,6 +2107,10 @@ mod tests_collision_build_face_edge_planes__632460 {
 /// (count `0`) when its near side never reaches `eps_neg` or its far side never
 /// reaches `eps_pos` (the `+/-1/720` band), or when fewer than 3 vertices
 /// survive. Returns the new vertex count.
+// Both band tests stay negated so a NaN distance takes the early return the
+// original takes; `min_dist > eps_neg` / `max_dist < eps_pos` would instead
+// fall through into the clip loop.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn collision_clip_polygon_by_plane__6318c0(
     verts: &mut [f32; 45],
     tags: &mut [f32; 15],
@@ -2190,7 +2202,12 @@ fn clip_emit_vertex(
 mod tests_collision_clip_polygon_by_plane__6318c0 {
     use super::collision_clip_polygon_by_plane__6318c0 as clip;
 
+    // The negative half of the kernel's `+/-1/720` clip band, reproduced
+    // bit-exactly; a shorter literal is a different f32 and a different test.
+    #[allow(clippy::excessive_precision)]
     const EN: f32 = -0.0013888889225199819;
+    // The positive half of the same band, likewise reproduced bit-exactly.
+    #[allow(clippy::excessive_precision)]
     const EP: f32 = 0.0013888889225199819;
 
     fn make(verts: &[[f32; 3]]) -> ([f32; 45], [f32; 15], usize) {
@@ -2390,6 +2407,10 @@ fn sweep_finish(best: &mut f32, best_so_far: f32) -> u32 {
 /// re-clip. `best` is the running best distance (lowered on a closer hit). The
 /// two separation epsilons gate the cheap and re-clip "all outside" tests; the
 /// clip epsilons feed the folded clip. Returns `1` on a hit, else `0`.
+// The eleven parameters are the original's calling convention: polygon storage,
+// ray origin, plane set with its base index, the running best and four
+// epsilons. That is an ABI fact, not a signature that wants a params struct.
+#[allow(clippy::too_many_arguments)]
 pub fn collision_ray_polygon_sweep_distance__632830(
     verts: &mut [f32; 45],
     tags: &mut [f32; 15],
@@ -2527,6 +2548,12 @@ mod tests_collision_ray_polygon_sweep_distance__632830 {
 /// `<= best` wins, updating `best` and writing that face's index to `out_face`.
 /// Returns `1` if any hit was recorded. All epsilons are the host band /
 /// separation constants.
+// The thirteen parameters are the original's calling convention: face set, clip
+// plane set, sweep basis, the two out-params and five band constants — an ABI
+// fact, not a signature that wants a params struct. The front-face test also
+// stays `!(dot <= front_eps)`, so a NaN dot processes the face as it does in
+// the original, where `dot > front_eps` would skip it.
+#[allow(clippy::too_many_arguments, clippy::neg_cmp_op_on_partial_ord)]
 pub fn collision_sweep_polygon_against_faces__632700(
     faces: &[[f32; 13]],
     sweep_dir: &[f32; 3],
@@ -2600,6 +2627,9 @@ pub fn collision_sweep_polygon_against_faces__632700(
 mod tests_collision_sweep_polygon_against_faces__632700 {
     use super::collision_sweep_polygon_against_faces__632700 as sweep_faces;
 
+    // The front-face epsilon repeats the host's stored constant at full precision;
+    // trimming digits would change the value under test.
+    #[allow(clippy::excessive_precision)]
     const FRONT: f32 = -9.999_999_7e-6;
     const SEP_FAR: f32 = -9.536_743e-7;
     const SEP_NEAR: f32 = -0.027_777_778;
@@ -3139,6 +3169,8 @@ pub fn collision_build_sweep_prism_verts__631be0(
 ) -> [f32; 27] {
     // Constant at `0x80c740` = `0x3fecb91b`. Full precision so the literal
     // round-trips to the exact stored f32 (a shorter form lands one ULP low).
+    // Those digits are the value, so the literal cannot be shortened.
+    #[allow(clippy::excessive_precision)]
     const K: f32 = 1.849_398_970_603_942_9;
 
     let cx = center[0];
@@ -3204,6 +3236,9 @@ mod tests_collision_build_sweep_prism__631be0 {
     /// `(sign_x, sign_y, z)` selectors rather than the kernel's hand-unrolled
     /// layout, so a transposed component or wrong sign diverges.
     fn oracle(center: &[f32; 3], height: f32, radius: f32) -> [f32; 27] {
+        // The oracle repeats the kernel's `0x3fecb91b` at full precision so both land
+        // on the same stored f32; a shorter literal lands one ULP low.
+        #[allow(clippy::excessive_precision)]
         const K: f32 = 1.849_398_970_603_942_9;
         let [cx, cy, cz] = *center;
         let lz = ((f64::from(radius) * f64::from(K)) + f64::from(cz)) as f32;
@@ -3380,6 +3415,10 @@ unsafe fn poly_clip_copy_vertex(src: *const f32, i: usize, dst: *mut f32, j: usi
 /// is no capacity check anywhere, so an oversized `count` (or a
 /// crossing-heavy emit pass) walks past the region ends exactly as the
 /// original overflows its static globals.
+// The eight parameters are the original's calling convention: vertex pointer
+// and count, plane pointer, the band pair, the scratch regions and the two
+// out-params. That is an ABI fact, not a signature that wants a params struct.
+#[allow(clippy::too_many_arguments)]
 pub unsafe fn poly_clip_to_screen_rect__6b4a80(
     verts: *const f32,
     count: u32,
@@ -3910,6 +3949,9 @@ pub fn sweep_volume_motion_scale__632ba0(dist: f32, floor: f32) -> f32 {
 /// unordered — the stock `TEST AH,0x41; JNP skip` skips on `<` and `==` (odd
 /// parity) and processes on `>` and NaN (even parity). The dot folds in the
 /// exact x87 order `(mz·pz + my·py) + mx·px` at extended precision (f64 here).
+// `!(dot <= thr)` is the `TEST AH,0x41; JNP` polarity documented above: a NaN
+// dot processes the face, where the `dot > thr` rewrite would skip it.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn sweep_face_is_front__632ba0(plane: &[f32; 4], motion: &[f32; 3], thr: f32) -> bool {
     let dot = f64::from(motion[2]) * f64::from(plane[2])
         + f64::from(motion[1]) * f64::from(plane[1])
@@ -4058,6 +4100,9 @@ mod tests_sweep_volume__632ba0 {
 /// compare is unordered**: stock `FCOMP; TEST AH,0x41; JNP` (0x6322f7) skips
 /// only on ordered `<=`, so a NaN dot falls through to processing. Port as
 /// `!(dot <= thr)` — never "normalize" to `>`.
+// The negation is the `TEST AH,0x41; JNP` polarity documented above: a NaN dot
+// falls through to processing, which the `dot > thr` rewrite would drop.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn sweep_box_face_is_front__632280(normal: &[f32; 3], dir: &[f32; 3], thr: f32) -> bool {
     let dot = (f64::from(normal[2]) * f64::from(dir[2]) + f64::from(normal[0]) * f64::from(dir[0]))
         + f64::from(normal[1]) * f64::from(dir[1]);
@@ -4643,6 +4688,9 @@ pub fn ground_muladd__6367b0(a: f32, b: f32, c: f32) -> f32 {
 /// `|len2d| >= eps2d` OR the compare is unordered (`TEST AH,0x5; JNP`
 /// skips exclusively on ordered less). Returns
 /// `(new_move, len, dir_norm, len2d, dir2d_opt)`.
+// `!(|len2d| < eps2d)` is the `TEST AH,0x5; JNP` polarity documented above: a
+// NaN 2D length still renormalizes, where `|len2d| >= eps2d` would skip it.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn ground_new_move__6367b0(
     md: [f32; 3],
     rem: f32,
@@ -4784,6 +4832,9 @@ pub fn ground_ceiling_scale__6367b0(allowed: f64, nmz: f32, remaining: f32) -> f
 /// `|mag| >= eps` OR the compare is unordered (`TEST AH,0x5; JNP` skips only
 /// on ordered less) the direction normalizes through the wide `1/mag`
 /// reciprocal. Returns `(speed_per_sec, Some(dir))`.
+// `!(|mag| < eps)` is the `TEST AH,0x5; JNP` polarity documented above: a NaN
+// magnitude still normalizes, where `|mag| >= eps` would skip it.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn step_speed_and_dir__634040(
     delta: [f32; 3],
     delta_ms: u32,

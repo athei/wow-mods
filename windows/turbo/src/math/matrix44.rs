@@ -1,13 +1,6 @@
-//! `C44Matrix` family kernels (4×4, 16 floats, row-major).
-#![allow(
-    non_snake_case,
-    // intentional NaN-reject via `!(a >= b)`
-    // (differs from `a < b` on NaN), bit-exact source constants kept verbatim,
-    // and ABI-dictated parameter counts.
-    clippy::neg_cmp_op_on_partial_ord,
-    clippy::excessive_precision,
-    clippy::too_many_arguments
-)]
+// Adapter and kernel names mirror the host's C++ symbols verbatim, with `__`
+// standing in for the `::`, so the whole module is non-snake-case by construction.
+#![allow(non_snake_case)]
 
 /// 4×4 row-major matrix product `out = a · b`.
 ///
@@ -1553,6 +1546,12 @@ mod tests_c44_matrix__translate__7bdc40 {
 /// 4x4, the `arg4` element value, the `centered` selector, and the source float
 /// constants (`eps`, `one`, `half`, `rot_angle`) are likewise injected so the
 /// kernel stays pure and host-testable. `aabb` is `min.{x,y,z}` then `max.{x,y,z}`.
+// The nine parameters are the original's own arguments plus the image globals and
+// source float constants it read, lifted out so the kernel stays pure and testable;
+// bundling them into a struct would hide which values come from the image. The extent
+// guard is written `!(a >= b)` so a NaN width or height rejects, which the `a < b`
+// clippy suggests would not.
+#[allow(clippy::neg_cmp_op_on_partial_ord, clippy::too_many_arguments)]
 pub fn build_box_projection_matrix__6d6fa0(
     origin: &[f32; 3],
     aabb: &[f32; 6],
@@ -2169,6 +2168,9 @@ pub fn bb_row_lengths__714260(m: &[f32; 16]) -> [f32; 3] {
 /// Skipped only when `|sqrt(sqmag)|` is strictly below the 2⁻²² epsilon (an
 /// unordered compare — NaN — still normalizes, poisoning the row like the
 /// original).
+// `!(s.abs() < EPS)` keeps the unordered case on the normalize arm; the `>=` form
+// clippy suggests would send NaN to the skip arm and lose the original's poisoning.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn bb_normalize_row__714260(row: [f32; 3], sqmag: f32) -> [f32; 3] {
     const EPS: f32 = f32::from_bits(0x3480_0000);
     let s = sqmag.sqrt();
@@ -2897,6 +2899,10 @@ mod tests_c44_matrix__scale_rotation3x3__7bdd00 {
 ///
 /// On `false` the caller raises Storm error 0x57; do NOT normalize these
 /// comparisons — the IEEE `!=`/`<` forms reproduce all three polarities.
+// The eight parameters are the original's argument list at this entry point — the `out`
+// matrix and the seven frustum scalars. That count is a fact about the client's ABI,
+// not a design choice.
+#[allow(clippy::too_many_arguments)]
 pub fn build_ortho_proj_matrix__5c3d90(
     out: &mut [f32; 16],
     left: f32,
@@ -3001,6 +3007,9 @@ mod tests_build_ortho_proj_matrix__5c3d90 {
     }
 
     #[test]
+    // `0.30000001` is a source constant reproduced bit-exactly; trimming it to `0.3`
+    // would move the rounded denominator this test exists to pin down.
+    #[allow(clippy::excessive_precision)]
     fn reuses_denominator_bit_exactly() {
         // The scale and translation of each axis share the *same* rounded
         // denominator (single f32 subtract), matching the x87 `FSUB`+leftover.

@@ -35,6 +35,37 @@ windows/turbo/src/win/hooks.rs'
 
 INLINE_ALWAYS_SITES='unix/shared/src/crumb.rs'
 
+# Files permitted a module-level `#![allow(...)]`. Everything else puts the
+# suppression on the item that triggers it — see the check below for why.
+MODULE_ALLOW_SITES='unix/shared/src/ftol.rs
+windows/turbo/build.rs
+windows/turbo/src/math/aabb.rs
+windows/turbo/src/math/boundsfit.rs
+windows/turbo/src/math/collision.rs
+windows/turbo/src/math/fmod_mixer.rs
+windows/turbo/src/math/frustum.rs
+windows/turbo/src/math/gx.rs
+windows/turbo/src/math/light.rs
+windows/turbo/src/math/lua.rs
+windows/turbo/src/math/m2.rs
+windows/turbo/src/math/matrix33.rs
+windows/turbo/src/math/matrix34.rs
+windows/turbo/src/math/matrix44.rs
+windows/turbo/src/math/misc.rs
+windows/turbo/src/math/movement.rs
+windows/turbo/src/math/object.rs
+windows/turbo/src/math/particle.rs
+windows/turbo/src/math/plane.rs
+windows/turbo/src/math/quaternion.rs
+windows/turbo/src/math/spline.rs
+windows/turbo/src/math/ui.rs
+windows/turbo/src/math/vector.rs
+windows/turbo/src/math/weather.rs
+windows/turbo/src/math/world.rs
+windows/turbo/src/win/diff.rs
+windows/turbo/src/win/hooks.rs
+windows/turbo/src/win/symbols.rs'
+
 # Suppressing a lint GROUP in source is banned outright, with no exception file
 # and no inventory row that could legitimise it. This is the shape of the one
 # regression this whole layer exists to prevent: a single `#![allow(...)]` naming
@@ -188,6 +219,49 @@ derive_scan() {
             }
         }
     ' "$@" | LC_ALL=C sort
+}
+
+# Every suppression must say why the structural fix does not apply. The argument
+# is either a comment inside the attribute (the shape a multi-lint module header
+# uses, one line of prose per lint) or a comment directly above it.
+#
+# clippy has `allow_attributes_without_reason` for this, but it demands
+# `reason = "..."` and so rejects both of those shapes; it would fire on every
+# attribute in the tree and be satisfied by moving the same words inside a string.
+# The rule worth enforcing is that an argument EXISTS, not where it is spelled.
+allow_argued() {
+    awk '
+        function check() {
+            if (!argued && buf !~ /\/\//)
+                printf "%s:%d: suppression with no argument; say why the structural fix does not apply\n", \
+                    FILENAME, attrline
+            buf = ""
+        }
+        FNR == 1 { lastc = 0; inattr = 0; buf = "" }
+        {
+            if (inattr) {
+                buf = buf $0
+                if ($0 ~ /\)\]/) { inattr = 0; check() }
+                next
+            }
+            if ($0 ~ /^[ \t]*#!?\[(allow|expect)\(/) {
+                buf = $0
+                argued = lastc
+                attrline = FNR
+                if ($0 ~ /\)\]/) check(); else inattr = 1
+                next
+            }
+            # A sibling attribute between the comment and the allow does not
+            # break the association: `#[cfg(test)]` routinely sits between them.
+            if ($0 ~ /^[ \t]*#!?\[/) next
+            if ($0 ~ /^[ \t\r]*$/) { lastc = 0; next }
+            # A plain `//` note, not `///` or `//!`. A doc comment documents the
+            # item; it is not an argument for suppressing a lint on it, and
+            # accepting one would let every module header pass on its `//!`
+            # header alone.
+            lastc = ($0 ~ /^[ \t]*\/\//) && ($0 !~ /^[ \t]*\/\/[\/!]/)
+        }
+    ' "$@"
 }
 
 # Every lint suppression in the tree, as `path lint count`. Covers the outer
@@ -367,6 +441,12 @@ case "${1:-}" in
         'restricted visibility' "$file"
     banned "$LINT_GROUPS" 'Warning suppressions' \
         'a lint group suppressed in source; name the individual lints' "$file"
+    findings=$(allow_argued "$file")
+    [ -z "$findings" ] || report 'Warning suppressions' \
+        'suppression without an argument' "$findings"
+    confined '^[ \t]*#!\[(allow|expect)\(' 'Warning suppressions' \
+        'module-level suppression outside the recorded exception files; put it on the item' \
+        "$MODULE_ALLOW_SITES" "$file"
     confined 'inline\(always\)' 'Inline attributes' \
         '#[inline(always)] outside the recorded exception file' "$INLINE_ALWAYS_SITES" "$file"
     confined "$ONCELOCK_PATTERN" 'LazyLock over OnceLock' \
@@ -423,6 +503,25 @@ fi
 
 banned "$LINT_GROUPS" 'Warning suppressions' \
     'a lint group suppressed in source; name the individual lints' "$@"
+
+findings=$(allow_argued "$@")
+if [ -n "$findings" ]; then
+    report 'Warning suppressions' \
+        "suppression without an argument: $(printf '%s\n' "$findings" | wc -l | tr -d ' ') findings" \
+        "$findings"
+fi
+
+# A module-level `#![allow(...)]` silences its lint for the whole file, including
+# every item added to it later — the same unbounded budget the enumerated table
+# exists to avoid, one level down. Suppressions belong on the item that triggers
+# them. The files below are the recorded exceptions, and each one is a whole-file
+# property rather than a property of any item in it: the reimplementation naming
+# convention marks the host C++ `::` with `__`, so `non_snake_case` fires on
+# essentially every name in those files, and the generated symbol table is
+# machine-written throughout.
+confined '^[ \t]*#!\[(allow|expect)\(' 'Warning suppressions' \
+    'module-level suppression outside the recorded exception files; put it on the item' \
+    "$MODULE_ALLOW_SITES" "$@"
 
 banned 'impl( *<[^>]*>)? *(Clone|Copy) for ' 'No default Copy / Clone on aggregate structs' \
     'hand-written Clone/Copy impl — the derive inventory cannot see it' "$@"

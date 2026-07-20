@@ -1,13 +1,7 @@
 //! `quaternion` family kernels.
-#![allow(
-    non_snake_case,
-    // intentional NaN-reject via `!(a >= b)`
-    // (differs from `a < b` on NaN), bit-exact source constants kept verbatim,
-    // and ABI-dictated parameter counts.
-    clippy::neg_cmp_op_on_partial_ord,
-    clippy::excessive_precision,
-    clippy::too_many_arguments
-)]
+// Adapter and kernel names mirror the host's C++ symbols verbatim, with `__`
+// standing in for the `::`, so the whole module is non-snake-case by construction.
+#![allow(non_snake_case)]
 
 // Hamilton product a (x) b for quaternions stored `[x, y, z, w]`.
 fn qmul(a: &[f32; 4], b: &[f32; 4]) -> [f32; 4] {
@@ -43,6 +37,11 @@ fn qadd(a: &[f32; 4], b: &[f32; 4]) -> [f32; 4] {
 ///
 /// `tension`/`continuity`/`bias` are TCB-style spline parameters. Returns `(tangent_in,
 /// tangent_out)`, each `tangent = q_cur (x) Exp(weighted log-combination)`.
+// Nine parameters because that is the original's argument list at this call:
+// three keyframe quaternions, their three times and the three TCB weights, in
+// the order the client pushes them. Regrouping them into structs would drop
+// the correspondence to the routine this replaces.
+#[allow(clippy::too_many_arguments)]
 pub fn c4_quaternion__compute_squad_tangents__7c0b60(
     q_prev: &[f32; 4],
     q_cur: &[f32; 4],
