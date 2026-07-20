@@ -3461,3 +3461,16 @@ abi  = "fastcall"
 ret  = "i32"
 args = ["u32", "*const u8", "u32", "*mut u32", "*mut u32", "*mut u32", "*mut u8"]
 preserve = []
+
+# Lua's private small-object pool (size-classed, 6 buckets; state at *(G+0)).
+# The stock free/realloc resolves a block's owning chunk by LINEARLY scanning
+# every chunk of every class; the reimpl resolves it through a sorted span
+# index. Sole stock caller is luaM_irealloc, so this covers every Lua
+# allocation including gameplay-time table growth reallocs.
+[functions.SmallBlockPool__Realloc__6fae90]
+rva  = 0x2fae90
+sig  = "55 8B EC 83 EC 0C 85 C9 53 56 8B F2"
+abi  = "fastcall"
+ret  = "*mut u8"
+args = ["i32", "u32", "u32"]
+preserve = []

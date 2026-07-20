@@ -20600,11 +20600,22 @@ fn lua_gc_count_marked_by_tag(g: usize) -> [u32; 12] {
 struct GcChunkIndex {
     spans: Vec<crate::math::lua_gc::ChunkSpan>,
     counts: [u32; 6],
+    /// Pool descriptor per class (grow calls need them).
+    pools: [usize; 6],
+    /// Element size per class (immutable once a pool is initialized).
+    elem_sizes: [u32; 6],
 }
 
 thread_local! {
     static GC_CHUNK_INDEX: core::cell::RefCell<GcChunkIndex> =
-        const { core::cell::RefCell::new(GcChunkIndex { spans: Vec::new(), counts: [0; 6] }) };
+        const {
+            core::cell::RefCell::new(GcChunkIndex {
+                spans: Vec::new(),
+                counts: [0; 6],
+                pools: [0; 6],
+                elem_sizes: [0; 6],
+            })
+        };
 }
 
 /// Refresh the chunk index from the pools table at `*(G+0)`.
@@ -20624,6 +20635,9 @@ fn gc_chunk_index_refresh(g: usize, idx: &mut GcChunkIndex) -> bool {
     for (i, c) in counts.iter_mut().enumerate() {
         // SAFETY: the pools table is six pool pointers.
         let pool = unsafe { *((pools + i * 4) as *const usize) };
+        idx.pools[i] = pool;
+        // SAFETY: pool element size at `+0x10` (immutable after init).
+        idx.elem_sizes[i] = unsafe { *((pool + 0x10) as *const u32) };
         // SAFETY: pool chunk count at `+0x4`.
         *c = unsafe { *((pool + 0x4) as *const u32) };
     }
@@ -20632,8 +20646,7 @@ fn gc_chunk_index_refresh(g: usize, idx: &mut GcChunkIndex) -> bool {
     }
     idx.spans.clear();
     for (i, &n) in counts.iter().enumerate() {
-        // SAFETY: see above.
-        let pool = unsafe { *((pools + i * 4) as *const usize) };
+        let pool = idx.pools[i];
         // SAFETY: pool chunk-pointer array at `+0x8`.
         let arr = unsafe { *((pool + 0x8) as *const usize) };
         for j in 0..n as usize {
@@ -20644,7 +20657,7 @@ fn gc_chunk_index_refresh(g: usize, idx: &mut GcChunkIndex) -> bool {
             // SAFETY: chunk payload byte length at `+0x8`.
             let len = unsafe { *((chunk + 0x8) as *const usize) };
             if base != 0 {
-                idx.spans.push(ChunkSpan { base, end: base + len, chunk });
+                idx.spans.push(ChunkSpan { base, end: base + len, chunk, class: i as u8 });
             }
         }
     }
@@ -20678,6 +20691,129 @@ fn gc_pool_free_fast(idx: &GcChunkIndex, ptr: usize) -> bool {
     true
 }
 
+
+/// Free a block through Storm's `SMemFree`, stock file/line arguments.
+///
+/// The oversize-block path: blocks above the largest pool class never live
+/// in a chunk, and stock routes them here after its chunk scan misses.
+fn gc_smem_free(block: u32) {
+    const FILE_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x47_1b30;
+    const SMEM_FREE_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x24_6430;
+    // SAFETY: image base verified at load; `stdcall(ptr, file, line, flags)`
+    // per `ret 0x10`.
+    let smem_free: extern "stdcall" fn(u32, usize, u32, u32) =
+        unsafe { core::mem::transmute(SMEM_FREE_VA) };
+    smem_free(block, FILE_VA, 0x137, 0);
+}
+
+/// `SmallBlockPool__Realloc` — `__fastcall(ecx = L, edx = block)` + new size
+/// on the stack, block pointer out.
+///
+/// Full reimpl of the client's six-class small-object pool entry point with
+/// the owning-chunk lookup done through the sorted span index instead of the
+/// stock linear scan over every chunk of every class. Semantics per the
+/// `0x6fae90` disasm, byte-for-byte: `L == 0` → raw `SMemReAlloc`; free →
+/// freelist push on the owning chunk or `SMemFree` for oversize blocks;
+/// alloc → first class whose element size fits (freelist pop / chunk grow
+/// via stock `0x6fb1f0`) or `SMemAlloc`; realloc → in place when the new
+/// size fits the current class, else grow-copy-free (copying the OLD class's
+/// full element size, exactly like stock) with `SMemAlloc` above the largest
+/// class, and `SMemReAlloc` for blocks no chunk owns. Storm calls keep the
+/// stock file/line arguments (leak-tracking strings).
+///
+/// The index cell is `try_borrow`ed: if the sweep holds it (stock `freeobj`
+/// for threads/protos re-enters here mid-sweep), the call delegates to the
+/// unhooked original — rare and correct. Lazy pool-table init also delegates.
+pub fn small_block_pool__realloc__6fae90(l: i32, block: u32, new_size: u32) -> *mut u8 {
+    const FILE_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x47_1b30;
+    const SMEM_ALLOC_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x24_62e0;
+    const SMEM_REALLOC_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x24_6320;
+    const POOL_GROW_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x2f_b1f0;
+    // SAFETY: image base verified at load; `stdcall(size, file, line, flags)`
+    // per `ret 0x10`.
+    let smem_alloc: extern "stdcall" fn(u32, usize, u32, u32) -> *mut u8 =
+        unsafe { core::mem::transmute(SMEM_ALLOC_VA) };
+    // SAFETY: `stdcall(ptr, size, file, line, flags)` per `ret 0x14`.
+    let smem_realloc: extern "stdcall" fn(u32, u32, usize, u32, u32) -> *mut u8 =
+        unsafe { core::mem::transmute(SMEM_REALLOC_VA) };
+    // SAFETY: `fastcall(ecx = pool)` per the disasm; returns the block.
+    let pool_grow: extern "fastcall" fn(usize) -> *mut u8 =
+        unsafe { core::mem::transmute(POOL_GROW_VA) };
+    let original = super::symbols::originals::small_block_pool__realloc__6fae90();
+
+    if l == 0 {
+        return smem_realloc(block, new_size, FILE_VA, 0x118, 0);
+    }
+    // SAFETY: `L + 0x10` is the global_State; `*(G+0)` the pools table.
+    let g = unsafe { *(((l as usize) + 0x10) as *const usize) };
+    // SAFETY: see above.
+    if g == 0 || unsafe { *(g as *const usize) } == 0 {
+        // Lazy pool-table init (first allocation ever): stock builds it.
+        return original(l, block, new_size);
+    }
+    GC_CHUNK_INDEX.with(|cell| {
+        let Ok(mut idx) = cell.try_borrow_mut() else {
+            // The sweep holds the index (freeobj re-entry): stock path.
+            return original(l, block, new_size);
+        };
+        if !gc_chunk_index_refresh(g, &mut idx) {
+            return original(l, block, new_size);
+        }
+        let ptr = block as usize;
+        // Free.
+        if new_size == 0 {
+            if ptr != 0 && !gc_pool_free_fast(&idx, ptr) {
+                gc_smem_free(block);
+            }
+            return core::ptr::null_mut();
+        }
+        // Alloc.
+        if ptr == 0 {
+            for (i, &es) in idx.elem_sizes.iter().enumerate() {
+                if new_size <= es {
+                    let out = pool_grow(idx.pools[i]);
+                    return out;
+                }
+            }
+            return smem_alloc(new_size, FILE_VA, 0x17b, 0);
+        }
+        // Realloc.
+        let Some(span) = crate::math::lua_gc::chunk_owning_span(&idx.spans, ptr) else {
+            return smem_realloc(block, new_size, FILE_VA, 0x16a, 0);
+        };
+        let (chunk, class) = (span.chunk, span.class as usize);
+        let old_size = idx.elem_sizes[class];
+        if new_size <= old_size {
+            return block as *mut u8;
+        }
+        let mut new_block = core::ptr::null_mut::<u8>();
+        for k in class + 1..6 {
+            if new_size <= idx.elem_sizes[k] {
+                new_block = pool_grow(idx.pools[k]);
+                break;
+            }
+        }
+        if new_block.is_null() {
+            new_block = smem_alloc(new_size, FILE_VA, 0x15e, 0);
+        }
+        // SAFETY: stock copies the OLD class's full element size between the
+        // two distinct blocks, then frees the old block into its chunk.
+        unsafe {
+            core::ptr::copy_nonoverlapping(ptr as *const u8, new_block, old_size as usize);
+        }
+        // SAFETY: freelist push on the pre-resolved owning chunk — identical
+        // state transition to stock's rescan-and-push.
+        let head = unsafe { *((chunk + 0x4) as *const u32) };
+        // SAFETY: see above.
+        unsafe { *(ptr as *mut u32) = head };
+        // SAFETY: see above.
+        unsafe { *((chunk + 0x4) as *mut u32) = ptr as u32 };
+        // SAFETY: see above.
+        unsafe { *((chunk + 0x10) as *mut u32) += 1 };
+        new_block
+    })
+}
+
 /// Native replacement for the stock sweep phase of a normal collect.
 ///
 /// Reproduces `luaC_sweep(L, 0)` (`0x6f71d0`) exactly — sweep the userdata
@@ -20701,14 +20837,12 @@ fn gc_pool_free_fast(idx: &GcChunkIndex, ptr: usize) -> bool {
 fn lua_gc_sweep_native(l: i32) {
     use crate::math::lua_gc::{GcHeader, sweep_list};
     const FREEOBJ_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x2f_7260;
-    const POOL_REALLOC_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x2f_ae90;
     // SAFETY: image base verified at load; `fastcall(ecx = L, edx = object)`
     // per the stock sweeplist call site.
     let free_obj: extern "fastcall" fn(i32, u32) = unsafe { core::mem::transmute(FREEOBJ_VA) };
-    // SAFETY: image base verified at load; `fastcall(ecx = L, edx = block)`
-    // plus the new size on the stack (`ret 0x4`), per the luaM_irealloc tail.
-    let pool_realloc: extern "fastcall" fn(i32, u32, u32) -> u32 =
-        unsafe { core::mem::transmute(POOL_REALLOC_VA) };
+    // The pool VA is hooked (our reimpl); the sweep's rare fallback
+    // (oversize blocks, pools-not-built) goes to the UNHOOKED stock body.
+    let pool_realloc = super::symbols::originals::small_block_pool__realloc__6fae90();
 
     // SAFETY: `L + 0x10` is the lua_State's global_State pointer.
     let g = unsafe { *(((l as usize) + 0x10) as *const usize) };
@@ -20716,6 +20850,7 @@ fn lua_gc_sweep_native(l: i32) {
         return;
     }
     let nblocks = (g + 0x28) as *mut u32;
+    let mut deferred: Vec<usize> = Vec::new();
     GC_CHUNK_INDEX.with_borrow_mut(|idx| {
     let have_index = gc_chunk_index_refresh(g, idx);
     // Stock `luaM_irealloc` order per block: debit nblocks (even for the
@@ -20726,8 +20861,17 @@ fn lua_gc_sweep_native(l: i32) {
         let debited = unsafe { *nblocks }.wrapping_sub(size);
         // SAFETY: see above.
         unsafe { *nblocks = debited };
-        if ptr != 0 && !(have_index && gc_pool_free_fast(idx, ptr)) {
-            pool_realloc(l, ptr as u32, 0);
+        if ptr != 0 {
+            if have_index {
+                if !gc_pool_free_fast(idx, ptr) {
+                    // The index covers every chunk, so a miss is conclusive:
+                    // the block is oversize and stock would SMemFree it.
+                    gc_smem_free(ptr as u32);
+                }
+            } else {
+                // Pools not built (never observed mid-sweep): full stock path.
+                pool_realloc(l, ptr as u32, 0);
+            }
         }
     };
     let mut free = |o: *mut GcHeader| {
@@ -20771,7 +20915,13 @@ fn lua_gc_sweep_native(l: i32) {
                 let size = if is_c { (nup + 1) * 0x10 } else { nup * 4 + 0x24 };
                 free_block(addr, size);
             }
-            _ => free_obj(l, addr as u32),
+            // Threads and protos free through stock freeobj, whose helpers
+            // re-enter the (hooked) allocator. Mid-sweep that would hit the
+            // index-borrow contention path and fall back to the stock chunk
+            // scan — a dying proto is six-plus blocks. Defer them until the
+            // borrow is released so they take the indexed path too; the
+            // object is already unlinked, only free timing shifts.
+            _ => deferred.push(addr),
         }
     };
 
@@ -20800,6 +20950,9 @@ fn lua_gc_sweep_native(l: i32) {
         sweep_list((g + 0x10) as *mut *mut GcHeader, 0, &mut free);
     }
     });
+    for o in deferred {
+        free_obj(l, o as u32);
+    }
 }
 
 /// `luaC_collectgarbage` — `__fastcall(ecx = L)`, per-phase pause gauge.

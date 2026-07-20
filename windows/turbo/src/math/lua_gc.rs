@@ -113,6 +113,8 @@ pub struct ChunkSpan {
     pub end: usize,
     /// The chunk descriptor (freelist head at `+0x4`, free count at `+0x10`).
     pub chunk: usize,
+    /// The size class (0..6) this chunk belongs to.
+    pub class: u8,
 }
 
 /// Find the chunk span owning `ptr`, if any.
@@ -122,12 +124,18 @@ pub struct ChunkSpan {
 /// pool chunk owns (oversize blocks the stock path routes to `SMemFree`).
 #[must_use]
 pub fn chunk_owning(spans: &[ChunkSpan], ptr: usize) -> Option<usize> {
+    chunk_owning_span(spans, ptr).map(|s| s.chunk)
+}
+
+/// Find the full span owning `ptr` (the realloc path also needs the class).
+#[must_use]
+pub fn chunk_owning_span(spans: &[ChunkSpan], ptr: usize) -> Option<&ChunkSpan> {
     let i = spans.partition_point(|s| s.base <= ptr);
     if i == 0 {
         return None;
     }
     let s = &spans[i - 1];
-    (ptr < s.end).then_some(s.chunk)
+    (ptr < s.end).then_some(s)
 }
 
 #[cfg(test)]
@@ -236,9 +244,9 @@ mod tests_lua_gc {
     fn chunk_owning_finds_only_in_bounds() {
         use super::{ChunkSpan, chunk_owning};
         let spans = [
-            ChunkSpan { base: 0x1000, end: 0x2000, chunk: 1 },
-            ChunkSpan { base: 0x3000, end: 0x3800, chunk: 2 },
-            ChunkSpan { base: 0x8000, end: 0x9000, chunk: 3 },
+            ChunkSpan { base: 0x1000, end: 0x2000, chunk: 1, class: 0 },
+            ChunkSpan { base: 0x3000, end: 0x3800, chunk: 2, class: 1 },
+            ChunkSpan { base: 0x8000, end: 0x9000, chunk: 3, class: 5 },
         ];
         assert_eq!(chunk_owning(&spans, 0x1000), Some(1));
         assert_eq!(chunk_owning(&spans, 0x1fff), Some(1));
