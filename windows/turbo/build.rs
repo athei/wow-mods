@@ -348,9 +348,9 @@ fn render(m: &Manifest) -> String {
         // across the call — the in-world crash was a caller `fmul`ing through an ECX
         // it expected to survive `Determinant`. Our Rust reimpl uses the volatiles
         // as scratch, so for each register the original leaves intact (the
-        // per-function `preserve` set, machine-checked against the binary by
-        // `abi_audit.py`) the thunk captures the incoming value, calls the reimpl,
-        // and restores it before returning. The capture `asm!` is the FIRST
+        // per-function `preserve` set, machine-checked against the binary) the
+        // thunk captures the incoming value, calls the reimpl, and restores it
+        // before returning. The capture `asm!` is the FIRST
         // statement: the only code the compiler emits before it is the prologue
         // (`push ebp; mov ebp, esp`), which never writes a volatile, so the captured
         // value is the incoming one. Everything else — arg forwarding, the call, the

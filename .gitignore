@@ -3,3 +3,10 @@ target/
 
 # `make bundle` release-archive staging
 /dist/
+
+# Local analysis tooling. Kept out of the tree deliberately: it describes how
+# the client was studied rather than what this repository builds, and half of
+# it does not stand alone anyway.
+ghidra/
+__pycache__/
+*.pyc
