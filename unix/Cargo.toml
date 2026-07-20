@@ -74,7 +74,8 @@ cast_possible_truncation = "allow"      # 13
 must_use_candidate = "allow"            # 7
 cast_sign_loss = "allow"                # 2
 cast_possible_wrap = "allow"            # 2
-missing_const_for_fn = "allow"          # 1
+missing_const_for_fn = "allow"          # 2
 float_cmp = "allow"                     # 1
-# Debt, not policy — cleared by the doc sweep.
+# Debt, not policy. Three identifiers want backticks; nothing here argues for
+# keeping the allow, so clear them and delete this line.
 doc_markdown = "allow"                  # 3
