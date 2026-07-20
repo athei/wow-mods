@@ -515,7 +515,7 @@ banned_anywhere '[Tt]urtle|TURTLE|[Ww]orld[ _-][Oo]f[ _-][Ww]arcraft|WORLD OF WA
 # POSIX ERE has no \b and the bare letters sit inside VALIDATE and CANDIDATE;
 # `leaked` is qualified because an x87 register-stack leak is a real thing this
 # codebase describes.
-banned_in_comments '[Gg]hidra|GHIDRA|[Dd]ecompil|[Dd]isassembl|[Dd]isasm|(^|[^A-Za-z])IDA([^A-Za-z]|$)|[Rr]everse[ -]engineer|[Rr]eversed from|[Ll]eaked (symbol|build|binar|client|pdb|source|debug)' \
+banned_in_comments "[Gg]hidra|GHIDRA|[Dd]ecompil|[Dd]isassembl|[Dd]isasm|(^|[^A-Za-z])IDA([^A-Za-z]|\$)|[Rr]everse[ -]engineer|[Rr]eversed from|(^|[^A-Za-z])RE'(d|ed)([^A-Za-z]|\$)|[Ll]eaked (symbol|build|binar|client|pdb|source|debug)" \
     'Release hygiene' \
     'names a decompiler, a disassembler, or the workflow — keep the fact, drop the provenance' "$@"
 

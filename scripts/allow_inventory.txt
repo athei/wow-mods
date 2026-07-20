@@ -102,11 +102,11 @@ windows/turbo/src/math/world.rs non_upper_case_globals 1
 windows/turbo/src/win/diff.rs dead_code 1
 windows/turbo/src/win/hooks.rs clippy::cognitive_complexity 4
 windows/turbo/src/win/hooks.rs clippy::manual_range_contains 1
-windows/turbo/src/win/hooks.rs clippy::multiple_unsafe_ops_per_block 19
+windows/turbo/src/win/hooks.rs clippy::multiple_unsafe_ops_per_block 12
 windows/turbo/src/win/hooks.rs clippy::neg_cmp_op_on_partial_ord 1
 windows/turbo/src/win/hooks.rs clippy::too_many_arguments 1
 windows/turbo/src/win/hooks.rs clippy::type_complexity 2
-windows/turbo/src/win/hooks.rs clippy::undocumented_unsafe_blocks 10
+windows/turbo/src/win/hooks.rs clippy::undocumented_unsafe_blocks 1
 windows/turbo/src/win/hooks.rs non_snake_case 1
 windows/turbo/src/win/symbols.rs clippy::too_many_arguments 1
 windows/turbo/src/win/symbols.rs clippy::unnecessary_operation 1

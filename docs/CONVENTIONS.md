@@ -163,12 +163,18 @@ That shape is stable under rustfmt and satisfies the lint; a comment above the `
 
 Each dereference, each transmute, each FFI call gets its own block with its own comment. Two reasons: a search for `SAFETY:` returns a focused answer per operation, and refactoring half the block to be safe doesn't strand the comment on the other half.
 
-Two exceptions, both recorded as per-site allows:
+Four exceptions, all recorded as per-site allows:
 
 - **A tight loop where every iteration performs the same operation.** One block, one comment.
+- **An unrolled run of identical record writes.** Eleven consecutive stores initialising one packed record say the same thing eleven times; a comment per store is noise, and the strided field reads feeding them read as one act.
 - **A long verbatim transcription.** Three bodies in `hooks.rs` carry sixty or more unsafe operations in one block — `trace_skinned_submesh` (60), `cm2_scene__trace_line__7089c0` (80) and `cm2_shadow__project_collision_quads__7137c0` (106). Each is a direct transcription of a stock routine, where one-op-per-block would mean a comment every two or three lines and the block-wide comment enumerating the offset families is genuinely more useful. Named rather than numbered by line, because line numbers drift and names do not.
+- **An operand inside a short-circuit.** A change-detection chain of the form `unsafe { rd(a) } != unsafe { rd(b) } && …` cannot be split by hoisting: that evaluates reads the original skipped. It *can* be split by wrapping each operand in a block expression that keeps the laziness, but doing so turns a six-line transcribed compare chain into thirty, and the fog-state driver has several. The chain keeps one comment.
 
-**The rest is debt, and it is measured.** It stands at 620 findings: 345 blocks carrying no `// SAFETY:` comment, and 275 blocks carrying more than one operation — of which 258 carry two to four and would split cleanly, 14 carry six to twenty-one, and 3 are the transcriptions above. All but one are in `hooks.rs`, behind 19 `#[allow]` attributes naming `multiple_unsafe_ops_per_block` and 10 naming `undocumented_unsafe_blocks`.
+**Do not take an exception without reading the item's own argument first.** Where one of these applies, the reason is written above the `#[allow]` — `c_gx_batch__update_fog_state__70baf0` names its cohorts, copy loop and mode dispatch explicitly. A pass that splits those blocks is undoing a decision, not paying down debt.
+
+**What remains is almost all exception, not debt.** 85 findings sit behind 13 attributes — 12 in `hooks.rs`, one in `world.rs`. 51 are multi-operation blocks: 3 transcriptions, 11 tight loops and unrolled record-init runs, and 37 short-circuit operands. 34 are blocks whose enclosing run is one of those exceptions and carries a single block-wide comment.
+
+The burnable remainder is small enough that the next person to touch one of these functions should clear it in passing rather than as a campaign. It came down from 941 by writing the comments and splitting what split cleanly; what is left is the part where a machine-checkable rule and a readable transcription genuinely disagree.
 
 Splitting is **semantics-preserving and codegen-identical**: `unsafe {}` is a compile-time permission scope with no MIR or codegen representation, so re-bracketing cannot reorder evaluation. Narrow in place rather than hoisting, so a short-circuit stays one:
 
