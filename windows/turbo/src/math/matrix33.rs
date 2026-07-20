@@ -36,7 +36,6 @@ fn transpose3(m: &[f32; 9]) -> [f32; 9] {
 }
 
 /// 3x3 matrix determinant (rule of Sarrus) of row-major elements `m00..m22`.
-#[allow(clippy::too_many_arguments)]
 pub fn c33_matrix__determinant__7bc040(
     m00: f32,
     m01: f32,

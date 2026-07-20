@@ -85,9 +85,9 @@ mod tests_c_particle_emitter__set_alpha__7b7b10 {
 /// squaring, low byte kept) before being placed in the high byte.
 ///
 /// Layout matches the original register packing
-/// `(alpha << 24) | (c0 << 16) | (c1 << 8) | c2` and the SiliconPatch SSE
-/// replacement (`cvttss2si` truncation, identical byte placement). The 255.0
-/// scale lives at host global 0x7ffe58 and the 0.5 round bias at 0x7ffa24.
+/// `(alpha << 24) | (c0 << 16) | (c1 << 8) | c2`, with `cvttss2si` truncation
+/// and that byte placement. The 255.0 scale lives at host global 0x7ffe58 and
+/// the 0.5 round bias at 0x7ffa24.
 pub fn c_particle_emitter__set_color__7b7a80(alpha_byte: u8, c0: f32, c1: f32, c2: f32) -> u32 {
     // alpha: requantize the stored byte through *255*255, keep low 8 bits.
     let a = ((f32::from(alpha_byte) * 255.0 * 255.0 + 0.5) as i32 & 0xff) as u32;
@@ -168,8 +168,8 @@ mod tests_c_particle_emitter__set_color__7b7a80 {
 /// Returns `gravity` when `gravity > 0.0`, else `0.0`.
 ///
 /// Matches the original's `FLD gravity; FCOMP 0.0; if 0.0 < gravity keep else
-/// store 0` (the SiliconPatch SSE replacement is the branchless
-/// `cmpless`/`andps` clamp against the same zero constant). A NaN input
+/// store 0`, which is equivalently a branchless `cmpless`/`andps` clamp
+/// against the same zero constant. A NaN input
 /// compares false and is therefore flushed to `0.0`, exactly as the x87
 /// `FCOMP`/`TEST AH,0x41` path does.
 pub fn c_particle_emitter__set_gravity__7b4bf0(gravity: f32) -> f32 {

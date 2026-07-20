@@ -6,11 +6,9 @@
 //! through to the original `UnitXP` (the pointer `MinHook` hands back).
 //!
 //! Only the three subcommands the live addon issues are reimplemented (per
-//! a grep against
-//! `wow-translate/Interface/AddOns/WoWTranslate/WoWTranslate_API.lua`):
-//! `ping`, `translate_async`, `poll`. Unknown subcommands log once and
-//! return `error|unknown subcommand`, matching the legacy C++ behaviour at
-//! `wow-translate/dll/src/lua_interface.cpp:262`.
+//! a grep of the addon's API module): `ping`, `translate_async`, `poll`.
+//! Unknown subcommands log once and return `error|unknown subcommand`, which
+//! is what the C++ implementation this replaces did.
 
 use core::ffi::c_void;
 use std::sync::OnceLock;

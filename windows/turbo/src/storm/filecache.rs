@@ -1,6 +1,6 @@
 //! Filename-resolution memo-cache backing the `StormArchive__FindFileEntry` hook.
 //!
-//! (weirdperformance parity). The stock resolver re-derives every answer
+//! The stock resolver re-derives every answer
 //! from scratch — per-character normalize, the Storm `0x7FED7FED` crypt-table
 //! hash, an open-addressing probe over the archive hash table, and a walk (or
 //! chain fan-out) across the open-archive list — all under two critical

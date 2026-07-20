@@ -195,7 +195,7 @@ pub unsafe fn install(target_va: usize, detour: *mut c_void, label: &str) -> Opt
     }
 }
 
-/// Whether the bytes at `va` match the IDA-style signature `sig`.
+/// Whether the bytes at `va` match the wildcard byte pattern `sig`.
 ///
 /// Space-separated hex bytes where `??` is a wildcard, e.g.
 /// `"55 8B EC ?? E8 ?? ?? ?? ??"`.

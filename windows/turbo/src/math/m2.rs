@@ -1115,7 +1115,7 @@ mod tests_m2_fixed16_to_f32__714260 {
 /// rounded once to single precision (the host runs with a 24-bit-significand
 /// control word); the `f64` intermediate reproduces that single rounding for
 /// every product needing <= 53 bits.
-pub(crate) fn seq_ticks(delta: i32, rate: f32) -> i32 {
+pub fn seq_ticks(delta: i32, rate: f32) -> i32 {
     let prod = (f64::from(delta) * f64::from(rate)) as f32;
     crate::math::misc::ftol__40a2b0(f64::from(prod)) as i32
 }

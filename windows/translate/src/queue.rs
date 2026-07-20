@@ -15,7 +15,7 @@
 //!
 //! No drop path: at process exit the receiver-held thread is reaped by the
 //! OS. The `LazyLock` holding the `SyncSender` never drops, so the channel stays
-//! open. Matches `[[feedback_no_terminateprocess_in_release]]`.
+//! open. Nothing calls `TerminateProcess` to shut it down.
 
 use std::sync::{LazyLock, Mutex, mpsc};
 

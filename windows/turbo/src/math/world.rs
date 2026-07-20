@@ -4332,7 +4332,7 @@ mod tests_c_world_view__compute_sort_hash_fold__70a600 {
 /// truncates toward zero; this one rounds to nearest, ties to even).
 /// `pub(crate)`: shared by the sibling biased-FISTP idioms in other kernel
 /// families (e.g. `light`).
-pub(crate) fn fistp_round_ties_even(x: f64) -> i32 {
+pub fn fistp_round_ties_even(x: f64) -> i32 {
     let bits = x.to_bits();
     let exp = ((bits >> 52) & 0x7ff) as i32;
     if exp == 0x7ff {

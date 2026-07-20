@@ -1782,7 +1782,7 @@ pub fn c_particle_emitter__set_gravity__7b4bf0(this: *mut core::ffi::c_void, gra
     }
 }
 
-/// Cubic-spline position eval (SiliconPatch hook).
+/// Cubic-spline position eval.
 ///
 /// The receiver holds, at byte offset 0x10, a pointer to the basis-coefficient
 /// table; `segment` selects a 4-row block (3 floats/row) within it.
@@ -11830,7 +11830,7 @@ static CLOCK_BIAS: core::sync::atomic::AtomicI64 = core::sync::atomic::AtomicI64
 /// ≥32 bits of precision. The origin is anchored to `GetTickCount` — the shared
 /// clock base of stock `OsGetTimeMs` and the direct GetTickCount readers — so
 /// absolute timestamps stay mutually comparable.
-pub(crate) fn init_engine_clock(hz: u64) {
+pub fn init_engine_clock(hz: u64) {
     // kernel32 import; resolves against the xwin SDK import lib on the link path.
     #[link(name = "kernel32")]
     unsafe extern "system" {
@@ -19882,8 +19882,8 @@ fn storm_record_result(
 /// chain-container query fans out per sub-archive through this same VA (so
 /// sub-queries re-enter this hook and memoize individually).
 ///
-/// The reimpl is a memo in front of the stock body (weirdperformance parity,
-/// with the locking its version lacks): a cached scoped-positive replays the
+/// The reimpl is a memo in front of the stock body, under a lock: a cached
+/// scoped-positive replays the
 /// success epilogue (revalidate-and-ref both handles, rebuild the block-entry
 /// pointer); a cached global-negative replays "not found" (zero the outs,
 /// Storm error 2, return 0). EVERY other case — cold names, uncacheable
@@ -20128,7 +20128,7 @@ fn gc_traverse_table(s: &mut GcParSink, t: usize) {
     if flags & 0x8 == 0 {
         const GETTM_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x2f_7ba0;
         // SAFETY: image base verified at load; `fastcall(ecx = mt,
-        // edx = event)` + name on the stack (`ret 0x4`), per the disasm.
+        // edx = event)` + name on the stack (`ret 0x4`), per the original.
         let gettm: extern "fastcall" fn(usize, i32, usize) -> usize =
             unsafe { core::mem::transmute(GETTM_VA) };
         // SAFETY: `G+0x8c` is `tmname[TM_MODE]`.
@@ -20392,7 +20392,7 @@ struct GcParShared {
 
 /// A mark participant's view of the collect: local stack + shared routing.
 ///
-/// Object layout the traversers rely on (verified on the disasm): GC header
+/// Object layout the traversers rely on (verified against the original): GC header
 /// `next+0x0/tt+0x4/marked+0x5`; `TObject = {tt, shadow, value}` (16 bytes —
 /// the `+0x4` shadow word is a client addition whose canonical nil value
 /// lives at `0xceeac0`); table `flags+0x6/lsizenode+0x7/metatable+0x8/
@@ -20695,7 +20695,7 @@ fn gc_pool() -> &'static GcParShared {
 fn lua_gc_mark_parallel(l: i32, g: usize, shared: &GcParShared) {
     use core::sync::atomic::Ordering;
     const SEPARATEUDATA_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x2f_6ff0;
-    // SAFETY: image base verified at load; `fastcall(ecx = L)` per the disasm.
+    // SAFETY: image base verified at load; `fastcall(ecx = L)` per the original.
     let separateudata: extern "fastcall" fn(i32) =
         unsafe { core::mem::transmute(SEPARATEUDATA_VA) };
     shared.g.store(g, Ordering::Relaxed);
@@ -20815,7 +20815,7 @@ thread_local! {
 /// Refresh the chunk index from the pools table at `*(G+0)`.
 ///
 /// Returns false when the pools don't exist yet (nothing allocated — the
-/// caller falls back to the stock free). Layout per the `0x6fae90` disasm:
+/// caller falls back to the stock free). Layout per the `0x6fae90` original:
 /// pools table = six pool pointers; pool `+0x4` = chunk count, `+0x8` =
 /// chunk-pointer array; chunk `+0x0` = payload base, `+0x8` = payload bytes.
 fn gc_chunk_index_refresh(g: usize, idx: &mut GcChunkIndex) -> bool {
@@ -20899,7 +20899,7 @@ fn gc_smem_free(block: u32) {
 /// Full reimpl of the client's six-class small-object pool entry point with
 /// the owning-chunk lookup done through the sorted span index instead of the
 /// stock linear scan over every chunk of every class. Semantics per the
-/// `0x6fae90` disasm, byte-for-byte: `L == 0` → raw `SMemReAlloc`; free →
+/// `0x6fae90` byte-for-byte: `L == 0` → raw `SMemReAlloc`; free →
 /// freelist push on the owning chunk or `SMemFree` for oversize blocks;
 /// alloc → first class whose element size fits (freelist pop / chunk grow
 /// via stock `0x6fb1f0`) or `SMemAlloc`; realloc → in place when the new
@@ -20925,7 +20925,7 @@ pub fn small_block_pool__realloc__6fae90(l: i32, block: u32, new_size: u32) -> *
     // SAFETY: `stdcall(ptr, size, file, line, flags)` per `ret 0x14`.
     let smem_realloc: extern "stdcall" fn(u32, u32, usize, u32, u32) -> *mut u8 =
         unsafe { core::mem::transmute(SMEM_REALLOC_VA) };
-    // SAFETY: `fastcall(ecx = pool)` per the disasm; returns the block.
+    // SAFETY: `fastcall(ecx = pool)` per the original; returns the block.
     let pool_grow: extern "fastcall" fn(usize) -> *mut u8 =
         unsafe { core::mem::transmute(POOL_GROW_VA) };
     let original = super::symbols::originals::small_block_pool__realloc__6fae90();
@@ -21013,7 +21013,7 @@ pub fn small_block_pool__realloc__6fae90(l: i32, block: u32, new_size: u32) -> *
 /// `deadmask = 0` is implemented; the free-everything close path never runs
 /// through the collect hook.
 ///
-/// Layout (verified on the disasm): `strt.hash/nuse/size` at `G+0x4/0x8/0xc`,
+/// Layout (verified against the original): `strt.hash/nuse/size` at `G+0x4/0x8/0xc`,
 /// `rootgc` at `G+0x10`, `rootudata` at `G+0x14`, `nblocks` at `G+0x28`;
 /// object tag at `+0x4`; string/userdata length at `+0xc` with allocation
 /// sizes `len+0x11` / `len+0x10`; upvalues are `0x20` bytes (all three from
@@ -21042,7 +21042,7 @@ fn lua_gc_sweep_native(l: i32) {
             // (every object IS a pool allocation) — delegate to stock wholesale.
             const LUAC_SWEEP_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x2f_71d0;
             // SAFETY: image base verified at load; `fastcall(ecx = L,
-            // edx = all-flag)` per the disasm.
+            // edx = all-flag)` per the original.
             let stock_sweep: extern "fastcall" fn(i32, i32) =
                 unsafe { core::mem::transmute(LUAC_SWEEP_VA) };
             stock_sweep(l, 0);
@@ -21208,9 +21208,9 @@ pub fn lua_c_collectgarbage__6f7340(l: i32) {
     // [`lua_gc_sweep_native`].
     const CHECK_SIZES_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x2f_7370;
     const CALL_GCTM_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x2f_7080;
-    // SAFETY: image base verified at load; `fastcall(ecx = L)` per the disasm.
+    // SAFETY: image base verified at load; `fastcall(ecx = L)` per the original.
     let check_sizes: extern "fastcall" fn(i32) = unsafe { core::mem::transmute(CHECK_SIZES_VA) };
-    // SAFETY: image base verified at load; `fastcall(ecx = L)` per the disasm.
+    // SAFETY: image base verified at load; `fastcall(ecx = L)` per the original.
     let call_gctm: extern "fastcall" fn(i32) = unsafe { core::mem::transmute(CALL_GCTM_VA) };
 
     // SAFETY: `L + 0x10` is the lua_State's global_State pointer.

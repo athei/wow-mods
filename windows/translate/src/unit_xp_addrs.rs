@@ -2,13 +2,13 @@
 //!
 //! Each is paired with the prologue bytes it is expected to carry.
 //!
-//! All values are in-process VAs as observed by the running client, lifted
-//! verbatim from the reference C++ implementation at
-//! `wow-translate/dll/src/lua_interface.cpp:34-47`. These are 1.12-only —
+//! All values are in-process VAs as observed by the running client, carried
+//! over verbatim from the C++ implementation this replaces. These are
+//! 1.12-only —
 //! the addon they pair with (`WoWTranslate`) is itself 1.12-only, so this
 //! module is gated `cfg(target_arch = "x86")` at the parent level.
 //!
-//! The signatures are entry-anchored IDA-style byte patterns matched against
+//! The signatures are entry-anchored wildcard byte patterns matched against
 //! each VA before the `UnitXP` patch goes in (see `hook::install`); `??`
 //! wildcards the address-bearing bytes of a relative branch. A VA that carries
 //! neither its captured prologue nor an inline detour is not the function these

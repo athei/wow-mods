@@ -3449,8 +3449,8 @@ preserve = []
 # MPQ filename -> hash/block-table resolution; every archive file open funnels
 # here (and the chain fan-out re-enters per sub-archive through this same VA).
 # The reimpl is a memo-cache in front of the stock body: scoped-positive +
-# global-negative replay, delegate on every miss (weirdperformance parity, done
-# with locking). Not golden-diffable by the generic harness: the success path
+# global-negative replay, delegate on every miss, done under a lock. Not
+# golden-diffable by the generic harness: the success path
 # bumps live archive refcounts ([handle+0x38]) and the miss path delegates to
 # the original, so a double-run double-refs — the adapter carries its own
 # cfg(wow_turbo_diff) shadow-validate (pure probe vs original outs, no refs).
