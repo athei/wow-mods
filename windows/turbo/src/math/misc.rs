@@ -844,7 +844,7 @@ mod tests_object_test_value_threshold__6a4670 {
 /// (indices 4..=12) are all `fill`, and the center (index 3) is derived from the
 /// bounds as `(extent[1] + extent[0]) * K - extent[2]`.
 ///
-/// `K` is the host `.rdata` constant `DAT_007ffd74`, which is `0.0` in the stock
+/// `K` is the host `.rdata` constant at `0x7ffd74`, which is `0.0` in the stock
 /// image; keeping it as a named factor mirrors the original's read-back-then-
 /// derive sequence (the center is computed from the just-written bound floats, so
 /// `(fill + fill) * 0.0 - fill == -fill`).
@@ -1479,7 +1479,7 @@ pub fn set_clamped_value01__453480(value: f32, zero_lo: f32, one_hi: f32) -> f32
 mod tests_set_clamped_value01__453480 {
     use super::set_clamped_value01__453480 as clamp;
 
-    // Stock saturation thresholds from the image (`DAT_007ffd74` / `_DAT_007ff9d8`).
+    // Stock saturation thresholds from the image (`0x7ffd74` / `0x7ff9d8`).
     const ZERO_LO: f32 = 0.0;
     const ONE_HI: f32 = 1.0;
 

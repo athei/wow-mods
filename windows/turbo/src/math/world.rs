@@ -3532,7 +3532,7 @@ pub fn c_world__query_liquid_grid_map__69b6d0(
     }
 }
 
-/// Squared Euclidean distance between two vec3 (`FUN_0069be70`).
+/// Squared Euclidean distance between two vec3, at `0x69be70`.
 ///
 /// Stock body (0x69be70): `(a.x-b.x)^2 + (a.y-b.y)^2 + (a.z-b.z)^2` to ST0 with
 /// `ret 4`; ECX = `&a`, the single stack arg = `&b` (fastcall-with-one-reg-arg,
@@ -3827,8 +3827,8 @@ pub fn tile_collect_vertex_to_world__6aadc0(v: &[f32; 3], origin: &[f32; 3]) -> 
 
 /// Builds the face plane `[nx, ny, nz, d]` for one emitted triangle.
 ///
-/// Uses the raw SSE `rsqrtss` approximation (the `DAT_00c9e388 != 0` fast path,
-/// 0x6ab2bb..0x6ab375), which has NO Newton-Raphson refinement.
+/// Uses the raw SSE `rsqrtss` approximation (the fast path for a nonzero flag
+/// at `0xc9e388`, 0x6ab2bb..0x6ab375), which has NO Newton-Raphson refinement.
 ///
 /// `n = cross(v1 - v0, v2 - v0)` with the stock fadd/fsub grouping; the length
 /// is `len2 = (nx*nx + ny*ny) + nz*nz`; `inv = rsqrtss(len2)`; the normal is
@@ -3837,8 +3837,8 @@ pub fn tile_collect_vertex_to_world__6aadc0(v: &[f32; 3], origin: &[f32; 3]) -> 
 ///
 /// This is kept SEPARATE from `c4_plane__from_triangle__637480` (which uses a
 /// full `1.0/sqrt`) so neither precision regresses: the stock takes the
-/// `0x637480` path only when `DAT_00c9e388 == 0`. `rsqrtss` is replicated via
-/// `_mm_rsqrt_ss`; `libm`'s reciprocal sqrt would NOT bit-match.
+/// `0x637480` path only when that flag at `0xc9e388` is zero. `rsqrtss` is
+/// replicated via `_mm_rsqrt_ss`; `libm`'s reciprocal sqrt would NOT bit-match.
 #[must_use]
 pub fn tile_collect_triangle_plane__6aadc0(
     v0: &[f32; 3],
@@ -5700,7 +5700,7 @@ mod tests_update_visibility__6838f0 {
 /// the stack before `C3Vector__Set`), the squared magnitude is the hooked
 /// 0x4549f0 kernel (f32 `x·x + y·y + z·z` — stock already calls our hook at
 /// 0x6836b4), and the compare is `FCOMP; TEST AH,0x5; JP` against the LOD
-/// threshold (`DAT_00810178`): near = strictly less; `>=` AND unordered (NaN)
+/// threshold at `0x810178`: near = strictly less; `>=` AND unordered (NaN)
 /// both give far.
 pub fn cull_lod_is_near__6834e0(center: &[f32; 3], camera: &[f32; 3], thresh: f32) -> bool {
     let d = [

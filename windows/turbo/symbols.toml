@@ -2563,7 +2563,7 @@ abi  = "thiscall"
 ret  = "void"
 args = ["*mut u8", "*const f32"]
 preserve = []
-# No .diff: the result is written by the delegated setter `FUN_007c0190` through
+# No .diff: the result is written by the delegated setter at `0x7c0190` through
 # `this` (a call-out with side effects), not by this fn into an owned pointer arg,
 # so the differential double-run is not side-effect free / cleanly golden-diffable.
 
@@ -2662,7 +2662,7 @@ mode = "out"
 
 # Not golden-diffable: all three pointer args are inputs; the result is the
 # (perp, major) i32-pair stream appended to the GLOBAL cell list (base pointer
-# DAT_00c962c8) through the GLOBAL dword cursor DAT_00c89f40 — no pointer-arg
+# at 0xc962c8) through the GLOBAL dword cursor at 0xc89f40 — no pointer-arg
 # out region for the harness to snapshot, and the double-run would double-bump
 # the cursor. Host-tested; validate in-game.
 [functions.World_RasterizeTraceLineCells__69c780]
@@ -3160,8 +3160,8 @@ double_run_safe = true
 # walks the segment's major axis appending (major, minor) i32 pairs to the same
 # global cell list. Zero callees; pure leaf over the list globals.
 # Not golden-diffable for the same reason as 0x69c780: all three pointer args
-# are inputs; the result streams into the GLOBAL list (base DAT_00c962c8,
-# cursor DAT_00c89f40) — no out region, and a double-run would double-bump the
+# are inputs; the result streams into the GLOBAL list (base at 0xc962c8,
+# cursor at 0xc89f40) — no out region, and a double-run would double-bump the
 # cursor. Host-tested (hand-traced walks + FISTP tie + NaN flow); validate
 # in-game.
 [functions.Rasterizer_EmitSlopedLineDDA__69c600]
@@ -3388,7 +3388,7 @@ args = ["*mut u8", "u32"]
 preserve = []
 
 # Per-substep swept-bounds builder + world query (movement cluster head):
-# builds the capsule world AABB in DAT_00c4e5a0.., extends per mode arm
+# builds the capsule world AABB at 0xc4e5a0.., extends per mode arm
 # (falling/swimming/ground), queries via CollectGeometryInBoxFiltered, and
 # pulls the returned planes into the context local frame. Direct calls into
 # our TransformVertexInPlace/Union/vector/Invert hooks (3+ crossings per
@@ -3423,7 +3423,8 @@ preserve = []
 # flags 0x200f (swept bounds via our 0x633840 hook -> dispatch our ground
 # stepper / free-move / fall-vertical delegates), flag/speed/leftover
 # bookkeeping; tail ground normal = our hook. ABI pin: StepFallVertical
-# consumed via extraout_EAX -> transmuted u32-returning. Un-diffable:
+# returns its result in `eax` although the stock prototype is void, so the
+# declaration here is transmuted u32-returning to pick it up. Un-diffable:
 # position/flag state through the whole cluster. Host-tested kernels;
 # validate in-game (all movement).
 [functions.CMovement__StepMovement__634040]

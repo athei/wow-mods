@@ -825,10 +825,10 @@ mod tests_frustum_compute_c3_vector__699250 {
 /// The `|w|` underflow replacement for the portal perspective divide.
 ///
 /// The raw dword `0x3727c5ac` (~1.0000000e-5) MOV'd over the clipped vertex's
-/// `w` when `|w| < DAT_00801360` (0x6b49bf / 0x6b49d3). Note it is NOT the
-/// usual `0x801360` epsilon itself and it is unsigned — a small negative `w`
-/// is replaced by the positive constant, flipping the vertex across the origin
-/// exactly as stock does.
+/// `w` when `|w| <` the epsilon at `0x801360` (0x6b49bf / 0x6b49d3). Note it is
+/// NOT the usual `0x801360` epsilon itself and it is unsigned — a small negative
+/// `w` is replaced by the positive constant, flipping the vertex across the
+/// origin exactly as stock does.
 const PORTAL_W_REPLACEMENT: f32 = f32::from_bits(0x3727_c5ac);
 
 /// Portal plane normal from the portal's first three world verts.
@@ -844,7 +844,7 @@ const PORTAL_W_REPLACEMENT: f32 = f32::from_bits(0x3727_c5ac);
 ///   `nz = e2y*e1x - e1y*e2x` (each FSUBP's ST1 - ST0), narrowed at each FSTP.
 /// - `len² = (nz² + ny²) + nx²` (0x6b4868..0x6b487c) over the reloaded f32
 ///   components.
-/// - `use_rsqrt` mirrors the `DAT_00c9e388` SSE toggle: non-zero spills `len²`
+/// - `use_rsqrt` mirrors the SSE toggle at `0xc9e388`: non-zero spills `len²`
 ///   to f32 and takes raw `RSQRTSS` (12-bit approximation, no refinement,
 ///   0x6b4880..0x6b48a5); zero takes `FSQRT` + `FDIVR one` (0x6b48aa..0x6b48c7,
 ///   `one` is the 1.0 constant at 0x7ff9d8, read live by the adapter).
@@ -887,8 +887,8 @@ pub fn c_map_obj__portal_plane_normal__6b46f0(
 ///
 /// Plane `d = -((nnx*v0.x + nnz*v0.z) + nny*v0.y)` (FCHS then FSTP f32
 /// @0x6b48fe), then `dist = |((nnz*cam.z + nny*cam.y) + nnx*cam.x) + d|` kept
-/// on the x87 stack (never narrowed) and FCOMP'd against `eps`
-/// (`_DAT_008029d0`).
+/// on the x87 stack (never narrowed) and FCOMP'd against `eps`, the constant
+/// at `0x8029d0`.
 ///
 /// NaN polarity (0x6b4925 `TEST AH,0x41; JP`): the full-screen-force arm is
 /// entered only on the ORDERED `dist <= eps` (C0-only or C3-only ⇒ odd parity ⇒
@@ -940,7 +940,7 @@ pub fn c3_vector__dominant_axis__7bf680(v: &[f32; 3]) -> u32 {
 /// Returns the divided `[x', y', w']` the adapter writes back into the
 /// clipper's static buffer, exactly as stock mutates it in place.
 ///
-/// - `w` clamp (`FABS; FCOMP DAT_00801360; TEST AH,0x5; JP`): the replacement
+/// - `w` clamp (`FABS; FCOMP [0x801360]; TEST AH,0x5; JP`): the replacement
 ///   store happens only on the ORDERED strict `|w| < w_eps`; a NaN `w` skips
 ///   the clamp and propagates NaN through the divide.
 /// - `inv = one / w` stays on the x87 stack (f64 here, `one` = the 1.0 at

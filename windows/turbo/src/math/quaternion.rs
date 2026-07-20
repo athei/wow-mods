@@ -586,9 +586,9 @@ mod tests_d3dx_quaternion_slerp__74d11a {
 ///   ordered `>` (a tie **or** NaN keeps the earlier index — `if a > b`, never a
 ///   NaN-naive `<`).
 ///
-/// Constants from the original: threshold `_DAT_007ffd74` = `0.0`,
-/// `_DAT_007ff9d8` = `1.0`, `_DAT_007ffa24` = `0.5`, and the `NEXT` index table
-/// `&DAT_0081d994` = `[1, 2, 0]`. Pure leaf: no callees, writes only the quat.
+/// Constants from the original: the threshold `0.0` at `0x7ffd74`, `1.0` at
+/// `0x7ff9d8`, `0.5` at `0x7ffa24`, and the `NEXT` index table `[1, 2, 0]` at
+/// `0x81d994`. Pure leaf: no callees, writes only the quat.
 pub fn c4_quaternion__from_matrix33__7c0190(m: &[f32; 9]) -> [f32; 4] {
     // x87 accumulation order: FLD m11; FADD m00; FADD m22.
     let trace = m[4] + m[0] + m[8];

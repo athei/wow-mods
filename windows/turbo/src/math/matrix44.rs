@@ -2878,7 +2878,7 @@ mod tests_c44_matrix__scale_rotation3x3__7bdd00 {
 /// `BuildOrthoProjMatrix` (VA 0x5c3d90).
 ///
 /// Off-center **orthographic** 4×4 row-major projection matrix built into `out`.
-/// `k` is the runtime scale constant `_DAT_00801628` (2.0 in the shipped image);
+/// `k` is the runtime scale constant at `0x801628` (2.0 in the shipped image);
 /// read live by the adapter so the kernel stays value-faithful.
 ///
 /// Diagonal scales `k/(r−l)`, `k/(t−b)`, `k/(f−n)`; the translation row
@@ -2964,7 +2964,7 @@ mod tests_build_ortho_proj_matrix__5c3d90 {
 
     #[test]
     fn builds_expected_cells_k2() {
-        // K = 2.0 (the shipped `_DAT_00801628`) ⇒ a symmetric [-1,1] box maps to
+        // K = 2.0 (the shipped value at `0x801628`) ⇒ a symmetric [-1,1] box maps to
         // the OpenGL-style ortho: scale 1 on each axis, zero translation.
         let mut out = [f32::NAN; 16];
         assert!(ortho(&mut out, -1.0, 1.0, -1.0, 1.0, -1.0, 1.0, 2.0));

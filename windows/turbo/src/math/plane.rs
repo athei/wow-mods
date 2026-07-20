@@ -313,7 +313,7 @@ mod tests_plane_intersect_ray_param__7c22b0 {
 /// Collapse, keyed on `count`:
 /// * `1` — the point itself.
 /// * `2` — `(p0 + p1) * K` per component, where `K = 0x3f237868` (≈0.6385560, the
-///   raw `_DAT_0080e024` factor — *not* an exact 0.5 midpoint). The x87 sums in
+///   raw factor at `0x80e024` — *not* an exact 0.5 midpoint). The x87 sums in
 ///   80-bit then applies one `FMUL`; tracked in `f64` and narrowed once.
 /// * `3` — bucket each of the three points: `|y| < EPS` ⇒ y-bucket, else
 ///   `|x| < EPS` ⇒ x-bucket, else ignored (NaN falls to the `else` arm, matching
@@ -329,11 +329,11 @@ pub fn geometry__reduce_planar_points_to_representative__636610(
     pts: &[[f32; 4]],
     count: u32,
 ) -> Option<[f32; 3]> {
-    // _DAT_0080e014 = -0.4756366 (plane z reference).
+    // Plane z reference at 0x80e014: -0.4756366.
     const Z_REF: f32 = f32::from_bits(0xbef3_86a4);
-    // _DAT_008026bc = 2^-20 (z / axis tolerance).
+    // z / axis tolerance at 0x8026bc: 2^-20.
     const EPS: f32 = f32::from_bits(0x3580_0000);
-    // _DAT_0080e024 = 0.6385560 (case-2 scale factor).
+    // Case-2 scale factor at 0x80e024: 0.6385560.
     const K: f32 = f32::from_bits(0x3f23_7868);
 
     // count guard: valid only for 1..=4 (stock JZ on 0, JA on >4 -> reject).

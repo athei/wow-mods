@@ -726,12 +726,12 @@ pub fn cloud_layer_bilerp_cell__6cffc0(
     let wa = f64::from(wa);
     let wb = f64::from(wb);
 
-    // fVar7 = wu*a1 + a0 ; fVar8 = wu*c1 + c0 (stored to local_8).
+    // f7 = wu*a1 + a0 ; f8 = wu*c1 + c0 (the latter spilled to the stack).
     let f7 = wu * f64::from(a1) + f64::from(a0);
     let f8 = wu * f64::from(c1) + f64::from(c0);
-    // fVar7' = ((wu*b1 + b0) - fVar7) * wa + fVar7
+    // f7p = ((wu*b1 + b0) - f7) * wa + f7
     let f7p = ((wu * f64::from(b1) + f64::from(b0)) - f7) * wa + f7;
-    // tail = ((((wu*d1 + d0) - fVar8) * wa + fVar8) - fVar7') * wb + fVar7'
+    // tail = ((((wu*d1 + d0) - f8) * wa + f8) - f7p) * wb + f7p
     let tail = (((wu * f64::from(d1) + f64::from(d0)) - f8) * wa + f8 - f7p) * wb + f7p;
     // acc' = tail * scale + acc
     (tail * f64::from(scale) + f64::from(acc)) as f32
@@ -740,10 +740,10 @@ pub fn cloud_layer_bilerp_cell__6cffc0(
 /// Velocity/derivative deltas written when the octave column index reaches its midpoint.
 ///
 /// `s` is `(1 << (shift - 7))` as an integer (the stock `fild` argument);
-/// `prev` is the previous depth-cell accumulator (`fVar4`), `acc` the
+/// `prev` is the previous depth-cell accumulator, `acc` the
 /// current accumulator, `stored` the value already held in the `+0x5c` buffer.
 /// Returns `((prev - acc) * s, (stored - acc) * s)` for the `+8*edx`/`+8*edx+4`
-/// slots; the caller then copies `acc` into both `fVar4` and the `+0x5c` buffer.
+/// slots; the caller then copies `acc` into both `prev` and the `+0x5c` buffer.
 pub fn cloud_layer_cross_term__6cffc0(prev: f32, acc: f32, stored: f32, s: i32) -> (f32, f32) {
     let sf = s as f32;
     let d0 = ((f64::from(prev) - f64::from(acc)) * f64::from(sf)) as f32;

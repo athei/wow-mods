@@ -513,7 +513,7 @@ pub fn c_particle_emitter__compute_vertex_color_uv__7b9b10(
 mod tests_c_particle_emitter__compute_vertex_color_uv__7b9b10 {
     use super::c_particle_emitter__compute_vertex_color_uv__7b9b10 as f;
 
-    // The host's magic bias constant `_DAT_008029cc` = 512.0. Adding it places a
+    // The host's magic bias constant at `0x8029cc` = 512.0. Adding it places a
     // channel's integer result in the f32 mantissa at the 2^14 scale, and the
     // original extracts that integer by reading the float's BIT PATTERN and
     // shifting right 14 — so for an integer payload `c < 512` the output byte is
@@ -649,7 +649,7 @@ mod tests_c_particle_emitter__compute_vertex_color_uv__7b9b10 {
 ///
 /// `fade = clamp(rate_num * age, 0.0, 255.0)`, then the LOD-array slot is
 /// `((bits(fade + bias) >> 14) + (addr >> 5)) & 0x7f`. `bias` is the host
-/// magic constant `512.0` (`_DAT_008029cc`): the original computes
+/// magic constant `512.0` at `0x8029cc`: the original computes
 /// `FADD bias; FSTP [f32]; MOV; SHR 14` — a bit-pattern read of `fade + bias`,
 /// NOT a numeric float→int cast (the same magic-bias trap that, mis-coded as an
 /// `as u32` cast, once blanked particles). `addr` is the particle record's host
@@ -679,7 +679,7 @@ pub fn c_particle_emitter__build_particle_quad_fade_index(
 mod tests_c_particle_emitter__build_particle_quad_fade_index {
     use super::c_particle_emitter__build_particle_quad_fade_index as f;
 
-    // The host magic-bias constant `_DAT_008029cc`.
+    // The host magic-bias constant at `0x8029cc`.
     const BIAS: f32 = 512.0;
 
     /// Closed form of the bit-pattern extract the original performs.
@@ -796,7 +796,7 @@ pub fn c_particle_emitter__spawn_particle__7ba200(
 
     let mut vel = [vx - pos[0], vy - pos[1], vz - pos[2]];
 
-    // Folded first integration step (the original `FUN_007ba380`): integrate the
+    // Folded first integration step (the original at `0x7ba380`): integrate the
     // velocity into the position over `life`, with the half-g·t² z correction, and
     // bleed `accel_z·life` off the z velocity. The global x/y gravity terms are
     // zero in stock data, kept explicit for exactness.
@@ -2117,12 +2117,12 @@ mod tests_c_particle_emitter__spawn_particle__7b8890 {
     /// Host-global stand-ins the adapter injects.
     ///
     /// The kernels are fully parameterized, so these are MOCK values for the
-    /// tests; the live image holds `_DAT_00801628 = 2.0f` (CENTER here is
+    /// tests; the live image holds `2.0f` at `0x801628` (CENTER here is
     /// deliberately different to exercise the fold generically),
-    /// `_DAT_007ff9d8 = 1.0f`, `_DAT_007ffa24 = 0.5f`.
-    const CENTER: f32 = 1.5; // mock; live _DAT_00801628 is 2.0f
-    const BASE: f32 = 1.0; // _DAT_007ff9d8
-    const HALF: f32 = 0.5; // _DAT_007ffa24
+    /// `1.0f` at `0x7ff9d8`, `0.5f` at `0x7ffa24`.
+    const CENTER: f32 = 1.5; // mock; live 0x801628 is 2.0f
+    const BASE: f32 = 1.0; // 0x7ff9d8
+    const HALF: f32 = 0.5; // 0x7ffa24
 
     /// Independent mantissa oracle: `1 + (r & 0x7fffff) / 2^23`, exact in f64.
     fn mantissa_oracle(r: u32) -> f32 {
@@ -2861,7 +2861,7 @@ mod tests_set_relative_transform_scale__7b5160 {
 ///
 /// Per-component `FSUB`+`FSTP` narrows each delta,
 /// squared magnitude via the shared 0x4549f0 kernel, then `FSQRT` with one
-/// narrow into the `_DAT_00cf58e8` store (double rounding through f64 is
+/// narrow into the store at `0xcf58e8` (double rounding through f64 is
 /// innocuous for a square root, 53 >= 2*24+2).
 pub fn substep_camera_distance__7b5230(p: [f32; 3], q: [f32; 3]) -> f32 {
     let d = [

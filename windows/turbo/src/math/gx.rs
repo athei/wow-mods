@@ -387,7 +387,7 @@ mod tests_c_gx_device__set_viewport__592530 {
 /// Validates a normalized viewport box and snaps its near-edges to 0/1,
 /// returning the sanitized box or `None` (⇒ caller raises
 /// STORM_ERROR_INVALID_PARAMETER). `near`/`far` are the device depth-range
-/// globals (`DAT_007ffd74`=0.0, `_DAT_007ff9d8`=1.0), read live.
+/// globals at `0x7ffd74` (0.0) and `0x7ff9d8` (1.0), read live.
 ///
 /// Every predicate is ordered — the stock x87 `FCOMP` chain routes greater/less/
 /// unordered to the error path — so plain IEEE `<`/`<=` reproduce the NaN→reject
@@ -692,7 +692,7 @@ pub fn c_gx_device_d3d__i_xform_set_projection__5a11d0(
 mod tests_c_gx_device_d3d__i_xform_set_projection__5a11d0 {
     use super::c_gx_device_d3d__i_xform_set_projection__5a11d0 as xform;
 
-    /// `_DAT_008029d4` in the shipped image: bits 0x34800000 = 2^-22.
+    /// The constant at `0x8029d4` in the shipped image: bits 0x34800000 = 2^-22.
     const EPS: f32 = f32::from_bits(0x3480_0000);
 
     /// GL-convention row-vector perspective (v' = v·M).
@@ -1264,7 +1264,7 @@ pub fn text_advance__5ccbe0(kerning_px: f32, units_per_pixel: f32) -> f32 {
 
 /// Screen-space pen-advance rounding (0x5cd040..0x5cd05b).
 ///
-/// `FADD` the bias (`DAT_007ffa24`, 0.5 in the shipped image), truncate via
+/// `FADD` the bias at `0x7ffa24` (0.5 in the shipped image), truncate via
 /// `__ftol`, keep EAX only and zero the high dword, `FILD` the qword back and
 /// store f32 — i.e. `f32(u64(u32(trunc(advance + bias))))`. A negative sum
 /// wraps through the u32 reinterpretation to a huge positive float, exactly
@@ -1314,9 +1314,9 @@ pub fn text_glyph_quad_y__5ccbe0(
 
 /// Pre-run glyph-height adjust (0x5cccb1..0x5ccccd).
 ///
-/// Font flag 0x8 (outline) adds `DAT_0080306c`, else flag 0x1 (shadow) adds
-/// `DAT_00801628`; neither leaves the snapped height untouched (bit-exact
-/// passthrough, no `+ 0.0`).
+/// Font flag 0x8 (outline) adds the constant at `0x80306c`, else flag 0x1
+/// (shadow) adds the constant at `0x801628`; neither leaves the snapped
+/// height untouched (bit-exact passthrough, no `+ 0.0`).
 pub fn text_glyph_height_adjust__5ccbe0(
     snapped: f32,
     font_flags: u32,

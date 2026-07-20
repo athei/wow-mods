@@ -9,7 +9,7 @@
     clippy::too_many_arguments
 )]
 
-/// Inverse of 255, the host's `_DAT_008026c8`.
+/// Inverse of 255, the host's constant at `0x8026c8`.
 ///
 /// Normalises a 0..255 colour byte to 0.0..1.0.
 const INV_255: f32 = 1.0 / 255.0;
@@ -752,7 +752,7 @@ mod tests_encode_fog_color__71c730 {
 ///
 /// Each channel reproduces the stock magic-bias fast-round **bit-exactly**:
 /// `fild(end-start) · fmul frac · fiadd start · fadd 512.0`, then the raw f32 bits
-/// are `>> 14 & 0xff` (`_DAT_008029cc == 512.0f`, read at 0x6d6372). The
+/// are `>> 14 & 0xff` (the 512.0f constant at `0x8029cc`, read at 0x6d6372). The
 /// `+512.0` biases the value into `[512, 1024)`, whose f32 mantissa is exactly
 /// `channel << 14`; the shift extracts the **truncated** integer (a floor, not a
 /// rounded `as`-cast). Intermediates run in `f64` narrowed once to f32, which is

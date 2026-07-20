@@ -426,8 +426,8 @@ mod tests_c_movement__integrate_arc_flat_turn__7c52c0 {
 /// `speed` (`+0x84`); `fwd` is the resolved forward speed; `rate` the resolved
 /// turn rate; `cur_pitch` is `+0x54`; `cf`/`sf` are the yaw cos/sin
 /// (`+0x68`/`+0x6c`); `p0`/`p1` the pitch basis (`+0x70`/`+0x74`). `num`
-/// (`_DAT_007ff9d8`) is the inverse-rate numerator, `upper`/`lower` the pitch
-/// clamp bounds, `eps` the bottom-out epsilon, `kx` (`_DAT_007ffa24`) the yaw
+/// (at `0x7ff9d8`) is the inverse-rate numerator, `upper`/`lower` the pitch
+/// clamp bounds, `eps` the bottom-out epsilon, `kx` (at `0x7ffa24`) the yaw
 /// cross-coupling scale. The pitch is advanced by `rate*dt` and clamped; when it
 /// crosses a bound the leftover `overshoot` is spliced back into the vertical
 /// component. Returns the local displacement `[dx, dy, dz]`.
@@ -556,7 +556,7 @@ mod tests_c_movement__integrate_arc_fwd_turn_pitch__7c4fd0 {
 ///
 /// `speed` is `+0x84`; `rate` is the resolved turn rate; `cur_pitch` is `+0x54`;
 /// `cf`/`sf` are the yaw cos/sin (`+0x68`/`+0x6c`); `p0`/`p1` are the pitch basis
-/// (`+0x70`/`+0x74`). `num` (`_DAT_007ff9d8`) is the inverse-rate numerator,
+/// (`+0x70`/`+0x74`). `num` (at `0x7ff9d8`) is the inverse-rate numerator,
 /// `upper`/`lower` the pitch clamp bounds, `eps` the bottom-out epsilon. The
 /// pitch is advanced by `rate*dt` and clamped; the leftover `overshoot` is
 /// spliced back into the vertical component. Returns the local displacement
@@ -1392,9 +1392,10 @@ mod tests_c_movement__update_spline_path__7c5490 {
 /// x87 80-bit stack; each memory-store point narrows through
 /// [`super::f64_to_f32`].
 ///
-/// `step_height` is the stock `FUN_00617430(this)` result, hoisted by the
-/// adapter (invariant across this call — it reads only `this` state, never the
-/// mutated translate distance — so the up-to-three stock calls collapse to one).
+/// `step_height` is the result of the stock helper at `0x617430` called on
+/// `this`, hoisted by the adapter (invariant across this call — it reads only
+/// `this` state, never the mutated translate distance — so the up-to-three
+/// stock calls collapse to one).
 pub fn c_movement__compute_slope_climb_delta__635c00(
     dir: [f32; 3],
     dist_in: f32,
@@ -1404,9 +1405,9 @@ pub fn c_movement__compute_slope_climb_delta__635c00(
     step_up_mode: bool,
     step_height: f32,
 ) -> ([f32; 3], f32) {
-    // _DAT_0080dffc ≈ 0.6427876 (cos 50°, steep-plane threshold).
+    // The constant at 0x80dffc ≈ 0.6427876 (cos 50°, steep-plane threshold).
     const STEEP_THRESH: f32 = f32::from_bits(0x3f24_8dbb);
-    // _DAT_008029d4 = 2^-22 ≈ 2.384e-7 (shared |cn|² and |n.z| epsilon).
+    // The constant at 0x8029d4 = 2^-22 ≈ 2.384e-7 (shared |cn|² and |n.z| epsilon).
     const EPS: f32 = f32::from_bits(0x3480_0000);
     // Saturation sentinels: 0xff7fffff = -FLT_MAX, 0x7f7fffff = +FLT_MAX.
     const NEG_FLT_MAX: f32 = f32::from_bits(0xff7f_ffff);
@@ -1433,19 +1434,19 @@ pub fn c_movement__compute_slope_climb_delta__635c00(
         n = [-combined_n[0], -combined_n[1], -combined_n[2]];
     }
 
-    // fVar1 = -dot(n, dir) * dist, accumulated in the x87 term order:
+    // dz_num = -dot(n, dir) * dist, accumulated in the x87 term order:
     // `((-n.z*dir.z) + (-n.y*dir.y)) + (-n.x*dir.x)`, then `* dist`.
     let tz = -(n[2] as f64) * dir[2] as f64;
     let ty = -(n[1] as f64) * dir[1] as f64;
     let tx = -(n[0] as f64) * dir[0] as f64;
     let f_var1 = ((tz + ty) + tx) * dist_in as f64;
 
-    // dz = fVar1 / n.z, narrowed to f32 (stock stores it to a f32 slot and all
+    // dz = dz_num / n.z, narrowed to f32 (stock stores it to a f32 slot and all
     // downstream uses reload that f32). The `|n.z| < eps` saturation:
     //   @0x635cb4 `FCOMP eps; JNP` diverts to the saturate branch only on
     //     `|n.z| < eps` strictly (`== eps` and NaN divide normally).
-    //   @0x635cd0 `FCOMP 0.0; JNP`: keep -FLT_MAX only on `fVar1 < 0` strictly;
-    //     `fVar1 >= 0` and NaN both fall through to +FLT_MAX.
+    //   @0x635cd0 `FCOMP 0.0; JNP`: keep -FLT_MAX only on `dz_num < 0` strictly;
+    //     `dz_num >= 0` and NaN both fall through to +FLT_MAX.
     let dz: f32 = if !((n[2] as f64).abs() < EPS as f64) {
         super::f64_to_f32(f_var1 / n[2] as f64)
     } else if f_var1 < 0.0 {
@@ -1518,7 +1519,7 @@ mod tests_c_movement__compute_slope_climb_delta__635c00 {
     #[test]
     fn clamp_high_rescales_distance() {
         // dz > stepHeight → dz clamps to +stepHeight; dist rescales by
-        // stepHeight/dz. `dir.x < 0` vs `n.x > 0` makes dot < 0 → fVar1 > 0 →
+        // stepHeight/dz. `dir.x < 0` vs `n.x > 0` makes dot < 0 → dz_num > 0 →
         // dz > 0.
         let dir = [-1.0, 0.0, 0.0];
         let n = [0.9, 0.0, 0.05]; // steep-ish: large -n.x*dir.x / small n.z
@@ -1535,7 +1536,7 @@ mod tests_c_movement__compute_slope_climb_delta__635c00 {
     #[test]
     fn clamp_low_rescales_and_negates() {
         // dz < -stepHeight → dz clamps to -stepHeight; dist = -(stepHeight/dz)*dist.
-        // `dir.x > 0` vs `n.x > 0` makes dot > 0 → fVar1 < 0 → dz < 0.
+        // `dir.x > 0` vs `n.x > 0` makes dot > 0 → dz_num < 0 → dz < 0.
         let dir = [1.0, 0.0, 0.0];
         let n = [0.9, 0.0, 0.05];
         let dist = 4.0_f32;
@@ -1550,16 +1551,16 @@ mod tests_c_movement__compute_slope_climb_delta__635c00 {
 
     #[test]
     fn near_zero_nz_saturates_by_sign() {
-        // |n.z| < eps → dz saturates to ±FLT_MAX by sign(fVar1). fVar1 =
-        // -dot(n,dir)*dist. With n.x>0, dir.x>0, dist>0 → dot>0 → fVar1<0 →
+        // |n.z| < eps → dz saturates to ±FLT_MAX by sign(dz_num). dz_num =
+        // -dot(n,dir)*dist. With n.x>0, dir.x>0, dist>0 → dot>0 → dz_num<0 →
         // -FLT_MAX; flip dir.x → +FLT_MAX. Then the ±FLT_MAX drives the clamp:
         // dz beyond ±stepHeight so out[2] = ∓stepHeight.
         let n = [0.5, 0.0, 1e-9];
         let sh = 2.0_f32;
-        // fVar1 < 0 → dz = -FLT_MAX → dz < -sh → clamp low → out[2] = -sh.
+        // dz_num < 0 → dz = -FLT_MAX → dz < -sh → clamp low → out[2] = -sh.
         let (out_neg, _) = climb([1.0, 0.0, 0.0], 3.0, n, false, [0.0; 3], false, sh);
         assert_eq!(out_neg[2], -sh);
-        // fVar1 > 0 → dz = +FLT_MAX → dz > sh → clamp high → out[2] = +sh.
+        // dz_num > 0 → dz = +FLT_MAX → dz > sh → clamp high → out[2] = +sh.
         let (out_pos, _) = climb([-1.0, 0.0, 0.0], 3.0, n, false, [0.0; 3], false, sh);
         assert_eq!(out_pos[2], sh);
         // Direct sentinel check with `stepHeight = FLT_MAX` (so the ±FLT_MAX dz
@@ -1573,8 +1574,8 @@ mod tests_c_movement__compute_slope_climb_delta__635c00 {
 
     #[test]
     fn saturate_zero_fvar1_takes_positive() {
-        // |n.z| < eps and fVar1 == 0 (dir ⟂ n horizontally) → +FLT_MAX (the
-        // `fVar1 < 0` test is strict; 0 falls through to +FLT_MAX). Use
+        // |n.z| < eps and dz_num == 0 (dir ⟂ n horizontally) → +FLT_MAX (the
+        // `dz_num < 0` test is strict; 0 falls through to +FLT_MAX). Use
         // `stepHeight = FLT_MAX` so the clamp does not swallow the sentinel.
         let n = [0.0, 0.0, 1e-9];
         let (out, _) = climb([1.0, 0.0, 0.0], 3.0, n, false, [0.0; 3], false, f32::MAX);
@@ -1584,7 +1585,7 @@ mod tests_c_movement__compute_slope_climb_delta__635c00 {
     #[test]
     fn step_up_downward_short_circuits() {
         // Step-up mode + dz < 0 → dist zeroed, dz = stepHeight (upward).
-        let dir = [1.0, 0.0, 0.0]; // dot>0 → fVar1<0 → dz<0
+        let dir = [1.0, 0.0, 0.0]; // dot>0 → dz_num<0 → dz<0
         let n = [0.2, 0.0, 0.98];
         let sh = 2.0_f32;
         assert!(oracle_dz(n, dir, 3.0) < 0.0, "precondition dz<0");
@@ -1597,7 +1598,7 @@ mod tests_c_movement__compute_slope_climb_delta__635c00 {
     fn step_up_upward_takes_general_path() {
         // Step-up mode but dz >= 0 → general clamp path (not short-circuited).
         // Here dz is small positive and in range → dz kept, dist unchanged.
-        let dir = [-1.0, 0.0, 0.0]; // dot<0 → fVar1>0 → dz>0
+        let dir = [-1.0, 0.0, 0.0]; // dot<0 → dz_num>0 → dz>0
         let n = [0.2, 0.0, 0.98];
         let sh = 2.0_f32;
         let dz = oracle_dz(n, dir, 3.0);
@@ -1651,7 +1652,7 @@ mod tests_c_movement__compute_slope_climb_delta__635c00 {
 
     #[test]
     fn nan_dz_keeps_dz_through_clamps() {
-        // A NaN dz (fVar1 NaN via NaN dir) must survive both clamp compares
+        // A NaN dz (dz_num NaN via NaN dir) must survive both clamp compares
         // (`stepHeight < dz` and `-stepHeight > dz` are both false for NaN →
         // keep). out[2] is NaN; out.xy = 0*NaN = NaN.
         let dir = [f32::NAN, 0.0, 0.0];

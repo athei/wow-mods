@@ -794,8 +794,8 @@ mod tests_c33_matrix__from_euler_zxy__7bf330 {
 
 /// `C33Matrix::SetTransposed`.
 ///
-/// The pure transpose the x87 body performs before it forwards to the setter
-/// `FUN_007c0190`. Reads `m` as a row-major 3x3 (`m[3*r + c]`) and returns its
+/// The pure transpose the x87 body performs before it forwards to the setter at
+/// `0x7c0190`. Reads `m` as a row-major 3x3 (`m[3*r + c]`) and returns its
 /// transpose `t[3*r + c] = m[3*c + r]`. This is a straight memory shuffle — no
 /// arithmetic, hence no float compares and no NaN polarity to reproduce (any NaN
 /// lane is copied through bit-for-bit).

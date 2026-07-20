@@ -1104,8 +1104,8 @@ pub fn collision_build_quad_face_clip_planes__632f80(
     cap_normal: &[f32; 3],
     face_offset: &[f32; 3],
 ) -> Option<[[f32; 4]; 5]> {
-    // Degenerate-area epsilon (_DAT_008026bc = 2^-20) and orientation threshold
-    // (DAT_007ffd74 = 0.0), folded in as binary-exact literals.
+    // Degenerate-area epsilon at `0x8026bc` (2^-20) and orientation threshold
+    // at `0x7ffd74` (0.0), folded in as binary-exact literals.
     const AREA_EPS: f32 = 9.536_743_16e-7; // 0x35800000
     const FLIP_THRESH: f32 = 0.0;
 
@@ -3128,7 +3128,7 @@ mod tests_collide_leaf_ray_triangle_mesh__6b88e0 {
 /// Vertex 0 is `center` verbatim. The lower ring (vertices 1-4) sits at
 /// `center.z + radius * K` and the upper ring (vertices 5-8) at
 /// `center.z + height`; both rings span `center.xy +/- radius`. `K` is the
-/// `.rdata` constant `_DAT_0080c740` (`0x3fecb91b`). The stock keeps the
+/// `.rdata` constant at `0x80c740` (`0x3fecb91b`). The stock keeps the
 /// `radius * K` product on the x87 stack un-narrowed across the whole lower
 /// ring and rounds only once after adding `center.z`, so the lower-ring `z` is
 /// computed in `f64` and narrowed; every other component is a single `f32` add.
@@ -3137,8 +3137,8 @@ pub fn collision_build_sweep_prism_verts__631be0(
     height: f32,
     radius: f32,
 ) -> [f32; 27] {
-    // _DAT_0080c740 = 0x3fecb91b. Full precision so the literal round-trips to
-    // the exact stored f32 (a shorter form lands one ULP low).
+    // Constant at `0x80c740` = `0x3fecb91b`. Full precision so the literal
+    // round-trips to the exact stored f32 (a shorter form lands one ULP low).
     const K: f32 = 1.849_398_970_603_942_9;
 
     let cx = center[0];

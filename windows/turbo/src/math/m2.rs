@@ -1684,12 +1684,12 @@ mod tests_cm2_model__update_particles_and_children__718960 {
 // owns all pointer/struct traversal, allocation and candidate bookkeeping.
 // ---------------------------------------------------------------------------
 
-/// `_DAT_0080c5c8` — the ~1e-5 degeneracy epsilon.
+/// The ~1e-5 degeneracy epsilon, at `0x80c5c8`.
 ///
 /// (Segment-length and triangle signed-area reject.) Kept as exact source bits.
 const TRACE_EPS: f32 = f32::from_bits(0x3727_c5ac);
 
-/// `_DAT_008026c8` — the 1/255 byte→weight scale for the skin blend, exact bits.
+/// The 1/255 byte→weight scale for the skin blend, at `0x8026c8`, exact bits.
 const WEIGHT_SCALE: f32 = f32::from_bits(0x3b80_8081);
 
 /// Broad-phase bounding-sphere reject (stock 0x708d4c..0x708e88).
