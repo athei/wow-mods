@@ -4,7 +4,7 @@ Code-organisation and style rules enforced across the codebase. New code follows
 
 ## Mechanical audit
 
-Most of this document is enforced by `make check`: `cargo +nightly fmt --check`, then clippy with `nursery` + `pedantic` enabled workspace-wide, then `make audit`, then `make doc`. Lint levels are `warn` in the Cargo manifests so a plain `cargo clippy` (or an editor) reports without blocking a build; the `check` legs pass cargo's `build.warnings = "deny"` config, which fails the run if any warning was emitted — so `make check` is the hard gate, and it shares the build cache with plain invocations because no compiler flags change.
+Most of this document is enforced by `make check` — formatting, clippy with `nursery` + `pedantic` enabled workspace-wide, the audit, the docs, the annotated lint counts, and the tests, over every target and every `cfg` (see §One gate, no lighter subset). Lint levels are `warn` in the Cargo manifests so a plain `cargo clippy` (or an editor) reports without blocking a build; the check legs pass cargo's `build.warnings = "deny"` config, which fails the run if any warning was emitted. The default-`cfg` legs change no compiler flags and so share the build cache with plain invocations; the rest keep their own.
 
 But a lint can only express a lint-shaped rule, and the rules a lint *can't* express are exactly the ones that drift — nothing runs them, so they decay into prose nobody rereads. `make audit` (`scripts/audit.sh`) closes that gap, and `make check` runs it, so a violation fails the same gate as a clippy warning. It covers:
 
