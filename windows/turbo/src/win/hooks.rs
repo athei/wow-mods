@@ -4064,15 +4064,15 @@ pub fn c_gx_font__get_kerned_advance__5ca2d0(font: *mut u8, glyph: u32, next_gly
 /// fastcall(ecx = prevCodepoint, edx = font; stack: lineHeight f32, flags,
 /// text*), RET 0xC, ST0 return. The first arg is the previous CODEPOINT, not a
 /// `uint*` (the glyph-cache find-or-insert consumes it as a cp, matching
-/// EmitLineQuads' pinned proto).
+/// `EmitLineQuads`' pinned proto).
 ///
 /// prevCp 0 returns the layout sentinel float (`0x7ffd74`). Otherwise the
 /// escape-token parser walks `text` for the next printable codepoint (class
 /// 6; class 2 or a NUL ends the walk), the pair advance comes from
-/// LookupCharPairWidth (flags & 0x10) or OUR GetKernedAdvance, and the
+/// `LookupCharPairWidth` (flags & 0x10) or OUR `GetKernedAdvance`, and the
 /// `TEST AH,0x44; JP` sentinel gate returns any result that is NOT equal to
 /// the sentinel — unordered/NaN RETURNS, only exact equality falls through
-/// to the fallback: glyph-cache find-or-insert, OUR SubPixelAdvance, plus
+/// to the fallback: glyph-cache find-or-insert, OUR `SubPixelAdvance`, plus
 /// the signed glyph width (`FIADD` of `glyph+0x48`).
 pub fn c_gx_font__compute_glyph_advance__5c6b70(
     prev_cp: u32,
@@ -4163,13 +4163,13 @@ pub fn c_gx_font__compute_glyph_advance__5c6b70(
 /// path (no caller consumes it) — declared and returned as such on every
 /// path.
 ///
-/// Entry gate is the same `TEST AH,0x44; JP` shape as ComputeGlyphAdvance:
+/// Entry gate is the same `TEST AH,0x44; JP` shape as `ComputeGlyphAdvance`:
 /// reqHeight EQUAL to the layout sentinel zeroes the three outs (in
 /// bytes/width/next order) and returns; NaN measures. The token walk skips
 /// markup classes 0/1/4/5, stops on class 2 or NUL, and for each printable
 /// codepoint (glyph-cache hit) accumulates the pair kern — the FIRST glyph
 /// adds the sentinel VALUE itself (prevCp 0 loads it in place of a lookup) —
-/// then re-measures the trailing advance via OUR ComputeGlyphAdvance against
+/// then re-measures the trailing advance via OUR `ComputeGlyphAdvance` against
 /// the text after the token. Width = `(kernAccum + lastAdvance) ×
 /// (reqHeight / pixelHeight)`, pixel height inlined from `font+0x24c`
 /// (the bare 0x5cae90 getter). The whitespace skip walks UTF-8 codepoints
@@ -4677,13 +4677,13 @@ fn glyph_width_probe(
 /// 0x5c7260 dispatcher (world strings MEASURE the run, screen strings LINE-FIT;
 /// sub-sentinel height / non-positive width zero the outs), justification snap
 /// (center = width×half negated wide, right = exact negate), OUR
-/// EmitLineQuads, hyperlink-region carry (status 2 closes via the 0x5cd310
+/// `EmitLineQuads`, hyperlink-region carry (status 2 closes via the 0x5cd310
 /// delegate taking the 8-dword region block by value), pen steps down by the
 /// line advance until the block height budget (`this+0x40`, STRICT less-than;
 /// NaN stops) or a single-line flag ends the walk. Screen strings pre-scale the
 /// line spacing through the biased-__ftol seed. The four trailing region dwords
 /// the stock passes from uninitialized stack are zero-initialized here
-/// (deterministic; the EmitLineQuads hook writes them before any status-2 close
+/// (deterministic; the `EmitLineQuads` hook writes them before any status-2 close
 /// consumes them — same knowing deviation as its hit-test pads).
 // The block-height budget and the sentinel width test are negated so an unordered
 // operand ends the walk as the stock ordered compares did; the un-negated `>=` /
@@ -7149,7 +7149,7 @@ pub fn cg_unit_c__update_water_interaction__6030c0(
 ///
 /// fastcall(ecx = posArray f32*, edx = offsetArray f32*; color, uvBase f32*[8],
 /// uvScale f32*[2]), RET 0xC, void. Resizes the device vertex buffer for four
-/// 0x30-byte vertices (GxResizeBuffer, returns the buffer; the lock vtable call
+/// 0x30-byte vertices (`GxResizeBuffer`, returns the buffer; the lock vtable call
 /// returns the vertex cursor — both returned in `EAX`), then per
 /// vertex copies the position triple + color and computes four UV coordinates
 /// `uvBase[k] × uvScale + offset[vertex]`, and finally commits and submits the
@@ -7225,13 +7225,13 @@ pub fn c_gx_ui__emit_textured_quad_batch__6cd750(
 ///
 /// No-op unless the object has a shadow render-entity at `this+0xe0`. Builds
 /// the shadow transform from identity: translate by the world position (vtable
-/// +0x14 GetPosition), rotate about +Z by the facing (vtable +0x18 GetFacing),
+/// +0x14 `GetPosition`), rotate about +Z by the facing (vtable +0x18 `GetFacing`),
 /// uniform-scale by `s94 × s90 × (model ? s9c : s98)`. If a ready model is
 /// present, derives a bounds-center bias from its bounding box (halved via the
 /// Scale hook). Submits the transform, the +0xc0 bias vector, and the derived
-/// center to the shadow entity's UpdateTransform (our hook).
-/// Translate/ScaleRotation3x3/Scale/ UpdateTransform are our hooks;
-/// RotateAxisAngle and the model load/copy callees stay delegates,
+/// center to the shadow entity's `UpdateTransform` (our hook).
+/// Translate/ScaleRotation3x3/Scale/ `UpdateTransform` are our hooks;
+/// `RotateAxisAngle` and the model load/copy callees stay delegates,
 /// GetPosition/GetFacing are live vtable calls.
 pub fn cg_object_c__update_shadow_transform__613ef0(this: *mut u8, force_update: i32) {
     let thisu = this as usize;
@@ -7326,7 +7326,7 @@ pub fn cg_object_c__update_shadow_transform__613ef0(this: *mut u8, force_update:
 /// `CMovement::InterpolatePositionTowardPathNode`.
 ///
 /// thiscall(ecx = this; timeMs, inoutPos f32*[3]), RET 8, u32. Fetches the next
-/// valid path node (TSList at `this+0x150`, delegate); if none, or its time has
+/// valid path node (`TSList` at `this+0x150`, delegate); if none, or its time has
 /// already passed (`node.time − timeMs < 0`), clears `this+0x14c` and returns
 /// 0. Otherwise lerps `inoutPos` toward the node point (`node+0x10`) by
 /// `(node.time − timeMs) / period` and returns 1. On return `EDX` is just the
@@ -7373,7 +7373,7 @@ pub fn c_movement__interpolate_position_toward_path_node__6191c0(
 ///
 /// When no turn is active (mover GUID at `this+0x38/+0x3c` both zero) returns
 /// the input unchanged; otherwise adds the active turn delta from the mover
-/// (GetFacingAngle 0x630b70 delegate) and wraps the sum into `[low, 2π)`.
+/// (`GetFacingAngle` 0x630b70 delegate) and wraps the sum into `[low, 2π)`.
 pub fn c_movement__interpolate_facing__7c4ae0(this: *mut u8, base_orientation: f32) -> f32 {
     let thisu = this as usize;
     const BASE: usize = crate::win::EXPECTED_IMAGE_BASE;
@@ -7402,7 +7402,7 @@ pub fn c_movement__interpolate_facing__7c4ae0(this: *mut u8, base_orientation: f
 /// A leaf (no callees): projects the object position at `this+0x5c` through two
 /// plane rows (the first cached to `this+0x78`, the second rounded to a
 /// `[0, 31]` bucket index — an index of 32+ EARLY-RETURNS without relinking),
-/// then unlinks the object from its current tagged TSList bucket and relinks it
+/// then unlinks the object from its current tagged `TSList` bucket and relinks it
 /// at the head of `bucket[index]` in the array at `0xc7bda0` (0x6c stride).
 /// Reuses [`ts_link_unlink`] for the unlink.
 pub fn obj__reinsert_into_projected_depth_bucket__681a40(this: *mut u8) {
@@ -7586,7 +7586,7 @@ pub fn cg_unit_c__get_state_dependent_scalar__617430(this: *mut u8) -> f32 {
 /// planeNz, useCombinedNormal, combinedNormal) -> *mut f32`
 /// (returns `outVec` in EAX). Computes the vertical slope-climb delta
 /// `dz = -dot(n, dir) * dist / n.z` with the steep-plane combined-normal swap,
-/// `|n.z|~0` → ±FLT_MAX saturation, and the ±stepHeight clamp (rescaling
+/// `|n.z|~0` → ±`FLT_MAX` saturation, and the ±stepHeight clamp (rescaling
 /// `*distInOut`), then writes `outVec = (0, 0, dz)`.
 ///
 /// `combinedNormal` is dereferenced unconditionally, matching the stock body
@@ -10809,7 +10809,7 @@ fn run_lua_error(l: i32, msg: *const u8) {
 /// `memcmp`, the hot cost for long collision-heavy strings. `buckets` is
 /// `strt.hash` (the `TString*` array base), `size` its power-of-two length; `hash`
 /// selects `buckets[(size - 1) & hash]`. Returns the matching `TString*`, or null
-/// on a miss. TString layout: `next` +0x00, cached hash +0x08, `len` +0x0c, data
+/// on a miss. `TString` layout: `next` +0x00, cached hash +0x08, `len` +0x0c, data
 /// +0x10.
 fn lua_s_intern_probe(buckets: *const *mut u8, size: u32, bytes: &[u8], hash: u32) -> *mut u8 {
     if buckets.is_null() || size == 0 {
@@ -11838,10 +11838,10 @@ static CLOCK_BIAS: core::sync::atomic::AtomicI64 = core::sync::atomic::AtomicI64
 /// Called once (blocking) from `attach_process` **before** `install_all`, so
 /// [`os_get_time_ms__42b790`] never observes a zero magic. The `Relaxed` stores pair
 /// with the `Relaxed` loads in the hook; the publish barrier is the `DllMain` return +
-/// the MinHook install that follows. `hz.max(1)` guards a degenerate zero calibration.
+/// the `MinHook` install that follows. `hz.max(1)` guards a degenerate zero calibration.
 /// Fixed `CLOCK_SHIFT` keeps `magic` in `u64` for any realistic `hz` (~1e6..1e12) with
 /// ≥32 bits of precision. The origin is anchored to `GetTickCount` — the shared
-/// clock base of stock `OsGetTimeMs` and the direct GetTickCount readers — so
+/// clock base of stock `OsGetTimeMs` and the direct `GetTickCount` readers — so
 /// absolute timestamps stay mutually comparable.
 pub fn init_engine_clock(hz: u64) {
     // kernel32 import; resolves against the xwin SDK import lib on the link path.
@@ -11869,7 +11869,7 @@ pub fn init_engine_clock(hz: u64) {
 /// tick-count-import mode switch at `0x42b750`) and folds it to milliseconds against
 /// live calibration doubles a background controller thread maintains. We bypass all
 /// of it: read `rdtsc` inline (the same instruction Rosetta emulates for the stock
-/// `0x4293d0` branch — no call crossing to `0x42b750`, no selector branch, no WoW
+/// `0x4293d0` branch — no call crossing to `0x42b750`, no selector branch, no `WoW`
 /// globals) and fold with the fixed-point scale + `GetTickCount`-anchored origin
 /// precomputed once at attach. The fold is integer only:
 /// `((rdtsc * magic) >> CLOCK_SHIFT) + bias` — no x87, no float convert, no
@@ -13549,7 +13549,7 @@ pub fn c_movement__update_spline_path__7c5490(
 /// `CParticleEmitter::DrawBatch` — `__thiscall(ecx = this, stack = billboardVec)`.
 ///
 /// Prepares the batch geometry and pushes render state through the stock
-/// GfxDevice helpers, copies the device's row-major 4x4 world matrix from
+/// `GfxDevice` helpers, copies the device's row-major 4x4 world matrix from
 /// `*(this+0x40)+0x9c`, advances its translation row by `billboardVec` resolved
 /// through the matrix's upper-3x3 column basis (the pure kernel), then sets the
 /// world matrix and submits the indexed draw. Every non-pure step forwards to a
@@ -14170,8 +14170,8 @@ pub fn collide_bsp_node_trace_segment__6bc370(
 ///
 /// Walks the world's tagged map-obj instance list; for each instance whose
 /// bounds the segment crosses it transforms both endpoints into instance-
-/// local space (OUR TransformPoint hook) and walks the instance's sub-part
-/// list, running the group BSP trace (OUR TraceSegment hook) against each
+/// local space (OUR `TransformPoint` hook) and walks the instance's sub-part
+/// list, running the group BSP trace (OUR `TraceSegment` hook) against each
 /// culled sub-part and keeping the closest hit. The closest-hit gate stores
 /// when the new distance is NOT ordered-greater-or-equal than the running
 /// fraction (a NaN distance stores, matching `TEST AH,5; JP`). Returns
@@ -14324,7 +14324,7 @@ pub fn c_world__intersect_map_obj_segment__6a8840(
 ///
 /// thiscall(ecx = this; start f32*[3], end f32*[3], filterCtx, facetSink,
 /// outHitPoint f32*[3], outFrac f32*), RET 0x18, bool in AL. Transforms both
-/// endpoints into group-local space (OUR TransformPoint hook, matrix at
+/// endpoints into group-local space (OUR `TransformPoint` hook, matrix at
 /// `this+0xd4`), delegates the local trace to the group BSP walker 0x6a3a40
 /// (stateful — kept a delegate), and on a hit lerps the WORLD hit point
 /// `(end − start) × *outFrac + start` into `outHitPoint` and returns 1. Miss
@@ -14392,7 +14392,7 @@ pub fn c_map_obj__trace_segment_against_group__6a2600(
 ///
 /// Builds a ~0x58-byte trace descriptor on the stack (group liquid/geom
 /// pointers, the segment start+end copied twice, the normalized ray
-/// direction, `len × dist`, `1/len`, the mask ORed with 0x80, and a global
+/// direction, `len × dist`, `1/len`, the mask `ORed` with 0x80, and a global
 /// context word), runs the BSP segment trace (OUR hook), emits the collision
 /// facets, optionally intersects liquid, then clears the per-trace visited
 /// marks (byte array at `group+0xc4`, indices in the global stack
@@ -15362,8 +15362,8 @@ pub fn c_world_bsp__traverse_node__6bc1c0(
 /// 1 = linked into >= 1 tile).
 ///
 /// Quantizes the entity world-space AABB (fields at `this+0x44/0x48/0x50/0x54`)
-/// into inclusive tile-index loop bounds (pure kernel; field@0x50 -> ix_lo,
-/// field@0x44 -> ix_hi, field@0x54 -> iy_lo, field@0x48 -> iy_hi, matching the
+/// into inclusive tile-index loop bounds (pure kernel; field@0x50 -> `ix_lo`,
+/// field@0x44 -> `ix_hi`, field@0x54 -> `iy_lo`, field@0x48 -> `iy_hi`, matching the
 /// stack spill order), then for each tile that exists in the live grid and
 /// passes the top-Z clip (`!(this[0x58] < tile[0x4c])`) splices a freshly
 /// allocated link node into one of the tile's two intrusive draw-lists (selected
@@ -19646,11 +19646,11 @@ thread_local! {
         core::cell::RefCell::new(Box::new(miniz_oxide::inflate::core::DecompressorOxide::new()));
 }
 
-/// `Storm::DecompressBlock` (SCompDecompress).
+/// `Storm::DecompressBlock` (`SCompDecompress`).
 ///
 /// `__stdcall(out, *inoutOutSize, in, inSize, extra) -> 1/0`. The MPQ per-sector
 /// codec dispatcher; `in[0]` is a compression-method bitmask. Fast-paths the
-/// pure-zlib sector (`mask == 0x02`) through the reused miniz_oxide decompressor,
+/// pure-zlib sector (`mask == 0x02`) through the reused `miniz_oxide` decompressor,
 /// eliminating the stock per-sector `inflateInit_`/`inflateEnd` + pool-allocator
 /// churn, and defers every other shape (raw passthrough, PKWARE/ADPCM/stacked
 /// masks, validation failures, any inflate error) to the stock original, which
@@ -20338,7 +20338,7 @@ fn gc_clear_keys(tables: &[usize]) {
 
 /// Shared node walk for the weak clears.
 ///
-/// Test the TObject at `node + probe_off`, remove the entry when its referent died.
+/// Test the `TObject` at `node + probe_off`, remove the entry when its referent died.
 fn gc_clear_nodes(t: usize, probe_off: usize) {
     // SAFETY: node part pointer at `+0x10`, count `1 << lsizenode`.
     let node = unsafe { *((t + 0x10) as *const usize) };
@@ -20477,7 +20477,7 @@ impl GcParSink<'_> {
     }
 }
 
-/// Drain a stock-filled GCState shim.
+/// Drain a stock-filled `GCState` shim.
 ///
 /// Threads to the coordinator queue, everything else into `local`. Stock already claimed these
 /// objects.
@@ -20799,7 +20799,7 @@ fn lua_gc_mark_native(l: i32) {
     lua_gc_mark_parallel(l, g, gc_pool());
 }
 
-/// Cached, sorted chunk index over the client's six SmallBlockPool classes.
+/// Cached, sorted chunk index over the client's six `SmallBlockPool` classes.
 ///
 /// The stock pool free resolves a block's owning chunk by LINEARLY scanning
 /// every chunk of every class — O(total chunks) per free, hundreds of probes
@@ -21200,7 +21200,7 @@ fn lua_gc_sweep_native(l: i32) {
 /// Threshold pacing is deliberately NOT touched: `checkSizes` tails into the
 /// client's own `luaM_adjustGC` (`0x6fae00`), which sets `GCthreshold =
 /// nblocks + max(min(carry-over headroom, per-pool committed-capacity metric),
-/// nblocks/4)` — pacing tied to the SmallBlockPool footprint, many small
+/// nblocks/4)` — pacing tied to the `SmallBlockPool` footprint, many small
 /// collects. An earlier release overwrote that with `4 * nblocks`, letting up
 /// to ~12x the stock garbage pile up per cycle; on raid-scale heaps the
 /// (non-incremental, stop-the-world) collect then ran for seconds. The gauge
@@ -22168,13 +22168,13 @@ unsafe fn read_strided_f32(base: *const u8, vidx: usize, extra_off: usize) -> f3
     unsafe { p.cast::<f32>().read() }
 }
 
-/// Kind-1 (box-corner) / kind-2 (cylinder) radius arms of QueryLiquidAtPoint.
+/// Kind-1 (box-corner) / kind-2 (cylinder) radius arms of `QueryLiquidAtPoint`.
 ///
 /// Dispatched on `*(face+0x14)` AFTER the bilinear gate; both compute a
 /// squared-distance vs squared-radius test against a per-kind center sub-struct
 /// (`*(face+0x18)`) and, on success, write a per-kind contact vector to
-/// `surface_vec3_out` via the already-hooked C3Vector siblings. Returns whether
-/// the arm declared a hit. Edge_arm==0 (kind 0, plain bilinear) never reaches here.
+/// `surface_vec3_out` via the already-hooked `C3Vector` siblings. Returns whether
+/// the arm declared a hit. `Edge_arm==0` (kind 0, plain bilinear) never reaches here.
 ///
 /// # Safety
 /// `base`/`face`/`surface_vec3_out`/`height_io` are the live, validated pointers
@@ -22877,7 +22877,7 @@ fn emit_spawn_one__7b5550(this: *mut u8, arg2: u32, ctx: *mut u8) {
 ///   the first clamp compares the wide value vs 0.25 (`FST` keeps ST0),
 ///   the second the narrowed store vs 1.0 — NaN routes to 1.0 (kernel
 ///   [`crate::math::particle::emit_fade_clamp__7b5550`]). The rate is the
-///   0x7ae000 WowGlobals getter (`FLD [0x87d5fc]; RET` — inlined as a live
+///   0x7ae000 `WowGlobals` getter (`FLD [0x87d5fc]; RET` — inlined as a live
 ///   global read) × `+0xa8` × fade, one narrowing.
 /// - Flag-0x20 burst arm: `__ftol(rate)` spawns with birth arg2 = 0,
 ///   leaves the accumulator alone, always clears the flag (flag word
@@ -22887,7 +22887,7 @@ fn emit_spawn_one__7b5550(this: *mut u8, arg2: u32, ctx: *mut u8) {
 ///   `+0.5 __ftol` count consumes the WIDE sum (kernel returns both).
 /// - Flag-0x1000 path-interp arm: saves the ctx position raw, narrows the
 ///   three deltas vs the emitter base `+0x248`, and per spawn draws
-///   SRand::AdvanceState (0x4531e0, table-mixing RNG — delegate), builds
+///   `SRand::AdvanceState` (0x4531e0, table-mixing RNG — delegate), builds
 ///   the mantissa fraction, rewrites the ctx position with the
 ///   interpolated point (base and the 1.0 global re-read per spawn), then
 ///   spawns with arg2 = dt bits; the original position is restored after
@@ -23033,7 +23033,7 @@ pub fn c_particle_emitter__emit_particles__7b5550(this: *mut u8, dt: f32, ctx: *
 /// body pins).
 ///
 /// Statement-faithful notes (0x7b3d20–0x7b44d7):
-/// - Entry: identity-seeded GetCurrentMatrix fetch, identity world push;
+/// - Entry: identity-seeded `GetCurrentMatrix` fetch, identity world push;
 ///   the local matrix is identity with the NEGATED emitter pivot as its
 ///   translation row (kernel). Flag 0x100 selects `emitterMtx × neg`,
 ///   else `parent × neg` (parent non-null) or just `neg`; each product
@@ -23053,7 +23053,7 @@ pub fn c_particle_emitter__emit_particles__7b5550(this: *mut u8, dt: f32, ctx: *
 ///   in EAX — the extraout pair), the 9-dword stream context (stream 3
 ///   is the zeroed `0xcf5860` triple + one-time init when bit0 is
 ///   clear; offsets from the 0x8097a8 state table, a 3-instruction
-///   lookup inlined), RenderParticles, unlock, preset batch.
+///   lookup inlined), `RenderParticles`, unlock, preset batch.
 /// - Mode `6`/`0xc`: the respective index-buffer global (re-read at every
 ///   use like stock) is probed, filled through the 0x7b3c50 builder when
 ///   the probe fails, and flushed. Prim count `+0x1c × +0xa0` → `+0x20`;
@@ -23530,7 +23530,7 @@ pub fn c_object_placement__set_relative_transform__7b5160(
 /// Faithful shape notes (0x7b5230–0x7b54cd): the camera delta reads
 /// `p2+0x30..0x38 − p3[0..2]` with per-component narrows and writes
 /// the global at `0xcf58e8` (kernel `substep_camera_distance__7b5230`, which routes
-/// through the shared 0x4549f0 SqMag kernel). SetRelativeTransform
+/// through the shared 0x4549f0 `SqMag` kernel). `SetRelativeTransform`
 /// (0x7b5160) — OUR hook, called directly — runs for `this` and every
 /// child; the child count at `+0x7c` is re-read EVERY iteration and the
 /// children are POINTERS at `+0x80`. The |dt| gate (`FABS; FCOMP eps; TEST AH,0x5; JP`) sets flag
@@ -23753,7 +23753,7 @@ pub fn c_particle_emitter__update_with_substeps__7b5230(
 /// from the PRE-physics particle position `pre_pos`), runs the per-particle position eval
 /// (`0x7b5550`, the SECOND call site), then restores the saved transform. Walks `parent+0x7c`
 /// children at `parent+0x80`. Impure-driver helper; kept out of the kernel module because it is all
-/// in-place pointer mutation plus a transmute_va call-out.
+/// in-place pointer mutation plus a `transmute_va` call-out.
 fn update_child_emitters_7b5a10(
     parent_base: *mut u8,
     particle: *mut u8,
@@ -30699,8 +30699,10 @@ fn bdl_process_child_view(base: *mut u8, child: *const u8, draw_idx: &mut u32) -
         // SAFETY: `+0x164` is an in-bounds dword of that 0x16c-byte record.
         let valid = unsafe { bdl_rd32(state, 0x164) };
         if valid != 0 {
-            // SAFETY: the same live child view; `+0x19c` is its alpha `f32`,
-            // the field `bdl_process_spatial_node` reads at the same offset.
+            // SAFETY: the same live child view dereferenced throughout this
+            // body; `+0x19c` is read as an `f32` because the value feeds
+            // `bucket::alpha_proceeds` and the sky fill below writes 1.0 to the
+            // record slot it ends up in.
             let cloud_val = unsafe { bdl_rdf(child, 0x19c) };
             // 0x708530: proceed only for strictly-positive ordered value.
             if bucket::alpha_proceeds(cloud_val) {
@@ -31159,7 +31161,7 @@ pub fn scale_stored_vec3_by_factor__7c4ed0(
 ///
 /// `__fastcall(ecx = pts, edx = count, stack = out)`, returns `1` on success or
 /// `0` on reject. Validates that the `count` (1..=4) input points — a stride-0x10
-/// array of C3Vectors (`x,y,z` at +0/+4/+8, `+0xc` unused) — all lie on the fixed
+/// array of `C3Vectors` (`x,y,z` at +0/+4/+8, `+0xc` unused) — all lie on the fixed
 /// `z = -0.4756366` plane within ±`2^-20` (out-of-tolerance or NaN rejects), then
 /// collapses them to one representative point keyed on `count`: identity (1),
 /// `(p0+p1)*0x3f237868` per component (2), an axis-select among the three (3), or
@@ -31255,7 +31257,7 @@ pub fn build_ortho_proj_matrix__5c3d90(
 /// Validates/clamps the normalized viewport box against the device depth-range
 /// globals and forwards to `CGxDevice::SetViewport` (our own hook, called
 /// directly) on the global device singleton; on a bad box raises
-/// STORM_ERROR_INVALID_PARAMETER (0x57) via the stock Storm helper, delegated by
+/// `STORM_ERROR_INVALID_PARAMETER` (0x57) via the stock Storm helper, delegated by
 /// VA.
 pub fn gx_set_viewport__58af60(x0: f32, x1: f32, y0: f32, y1: f32, min_z: f32, max_z: f32) {
     const BASE: usize = crate::win::EXPECTED_IMAGE_BASE;
@@ -33346,7 +33348,7 @@ pub fn c_map_chunk__build_vertices_and_bounds__6b0e50(this: *mut u8) {
 
 /// Unaligned guest-memory loads/stores for `c_gx_string__emit_line_quads__5ccbe0`.
 ///
-/// The emitter reads/writes WoW's packed heap structs through addresses computed
+/// The emitter reads/writes `WoW`'s packed heap structs through addresses computed
 /// with the stock 32-bit wrapping arithmetic, so every access is by integer
 /// address, unaligned-tolerant, and re-read at exactly the points stock re-reads.
 ///
@@ -34192,7 +34194,7 @@ pub fn minimap__project_blip_delta__4eaa30(
 /// static VA.
 ///
 /// NOTE (corrects the wave-3 brief): the facing vfunc `+0x44` takes NO stack
-/// args — the three pointers pushed before it are BuildEmitterTransform's
+/// args — the three pointers pushed before it are `BuildEmitterTransform`'s
 /// args 4-6, matching the already-hooked callee's 6-parameter stanza.
 pub fn cg_object_c__update_selection_circle_transform__614cd0(
     this: *mut core::ffi::c_void,
@@ -34364,8 +34366,8 @@ pub fn collision_sweep_volume_against_world_planes__632ba0(
     const LIQUID_PLANE_SET: usize = BASE + 0x84_e564;
     /// Stock delegate (VA).
     ///
-    /// BuildSweepPrism / BuildQuadFaceClipPlanes / SweepPolygonAgainstFaces /
-    /// SweepBoxFaces / GatherWorldTriangles are our own hooks and are called
+    /// `BuildSweepPrism` / `BuildQuadFaceClipPlanes` / `SweepPolygonAgainstFaces` /
+    /// `SweepBoxFaces` / `GatherWorldTriangles` are our own hooks and are called
     /// directly as Rust fns below (no detour).
     const DOWNWARD_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x23_2a30;
 
@@ -34600,8 +34602,8 @@ pub fn collision_sweep_volume_against_world_planes__632ba0(
 /// one final fog vertex. Per channel the stock does `u8 → FILD →
 /// Math_LerpFloat → FSUB bias → FISTP → (char)` — the kernels in math/light.rs
 /// reproduce that chain; the gradient/lerp leaves are called as native Rust
-/// (no guest crossings); the integer color helpers (LerpRGB /
-/// ScaleColorValue / SetRGBKeepAlpha) are delegated by VA.
+/// (no guest crossings); the integer color helpers (`LerpRGB` /
+/// `ScaleColorValue` / `SetRGBKeepAlpha`) are delegated by VA.
 ///
 /// Note: the sun-side branch scales a stack copy of the ring color
 /// (`CImVector__ScaleRGB` @0x6d12c1) and then overwrites that copy with the
@@ -35039,7 +35041,7 @@ pub fn c_map__update_map_objs__698720(enable_flagged_pass: u32) {
 
 /// `CObjectWrapper__GetPosition` — `__thiscall(ECX = this, stack = float* out)`, RET 0x4.
 ///
-/// One-line getter: `obj = *this`, then copy the C3Vector at `obj+0x8/0xc/0x10`
+/// One-line getter: `obj = *this`, then copy the `C3Vector` at `obj+0x8/0xc/0x10`
 /// into `out`. Stock shuttles the 12 bytes through the x87 stack (three
 /// FLD/FSTP pairs — the entire profile cost); ported as raw dword copies, which
 /// are bit-preserving (incl. NaN payloads) where FLD/FSTP m32 would quietize a
@@ -35290,7 +35292,7 @@ pub fn collision_sweep_box_faces__632280(
 /// global triangle lists, optional secondary-list winding flip (flags bit
 /// 0x200000), cache writeback, then the hot per-triangle transform into the
 /// object's local frame. The EXACT ordering of the shared-global writes (lists,
-/// cache box) is load-bearing — the parent SweepVolume driver consumes them
+/// cache box) is load-bearing — the parent `SweepVolume` driver consumes them
 /// immediately after; do not reorder. Stock's list-reset call 0x61e9c0 is a
 /// bare `RET` (`EmptyStub`) and is omitted here.
 pub fn collision_gather_world_triangles__631e70(
@@ -35302,7 +35304,7 @@ pub fn collision_gather_world_triangles__631e70(
     const BASE: usize = crate::win::EXPECTED_IMAGE_BASE;
     /// Frame-coherence cached query box (`0xc4e5a0`, 6 f32).
     const CACHE_BOX: *mut f32 = (BASE + 0x84_e5a0) as *mut f32;
-    /// Primary gather list object (`0xc4e52c`, TSGrowableArray).
+    /// Primary gather list object (`0xc4e52c`, `TSGrowableArray`).
     const LIST1_KEY: *mut u32 = (BASE + 0x84_e52c) as *mut u32;
     /// Primary triangle count / base (`0xc4e530` / `0xc4e534`).
     const LIST1_COUNT: *const u32 = (BASE + 0x84_e530) as *const u32;
@@ -35520,7 +35522,7 @@ pub fn collision_gather_world_triangles__631e70(
 /// is forwarded verbatim in EDX to the clip callee (stock later reuses
 /// its spent stack slot as f32 scratch, which misled the brief).
 ///
-/// The 0xF4-byte clip descriptor is zeroed ONCE (stock: 15×Vec3__SetAll
+/// The 0xF4-byte clip descriptor is zeroed ONCE (stock: `15×Vec3__SetAll`
 /// over the first 45 floats; bytes 0xC0..0xEF are stack garbage in stock —
 /// zeroed here) and then reused across records exactly like stock: only
 /// the 9 polygon floats + the three 0xFFFFFFFF masks + the count 3 are
@@ -35720,7 +35722,7 @@ pub fn c_map_obj_group_node__query_children_overlap__6a3dc0(
 /// 0x18-byte blip record (guid, projected XY via OUR `ProjectBlipDelta` kernel,
 /// other-zone flag) to the per-category growable array at 0xbc82b0. The two
 /// AL-only tracker predicates are delegated as `u8`; the two polymorphic vfuncs
-/// (+0x14 GetPosition, zoom vfunc +0x1c returning ST0) go through the LIVE
+/// (+0x14 `GetPosition`, zoom vfunc +0x1c returning ST0) go through the LIVE
 /// vtable.
 pub fn minimap__unit_blip_enum_callback__4eaa90(
     this: *mut core::ffi::c_void,
@@ -36280,7 +36282,7 @@ pub fn c_world_obj_list__update_visibility__6838f0(this: *mut core::ffi::c_void)
 /// node ptr; `link[1]` = prev encoding: odd or null tags a direct slot
 /// (`prev & !1`), otherwise the predecessor's forward slot is
 /// `link + (prev − *(next+4))` in plain integer arithmetic (offset-based
-/// TSLink — never `ptr::add`). No-op when `link[0]` is 0; every deref stock
+/// `TSLink` — never `ptr::add`). No-op when `link[0]` is 0; every deref stock
 /// trusts stays unguarded.
 fn ts_link_unlink(link: *mut u32) {
     // SAFETY: caller passes the live 8-byte TSLink pair; next-field dword.
@@ -36541,22 +36543,22 @@ pub fn world_scene__cull_and_bucket_nodes__6834e0(
 ///   `*( *0xca803c + node + 4 )`, computed and saved BEFORE the node is
 ///   processed (the tail may free it). `*0xca803c` is re-read every
 ///   iteration.
-/// - Per node: ModulateEntryColorsByFade (0x6b4090, delegate), then the
+/// - Per node: `ModulateEntryColorsByFade` (0x6b4090, delegate), then the
 ///   inner entry list (head `node+0x1ec`, advance
 ///   `*( *(node+0x1e4) + entry + 4 )`, base re-read per iteration): the two
 ///   span-node slots age `ptr+8` by the frame delta (kernel
 ///   `transient_span_timer__6b3890`; the expiry re-reads the slot AND the
 ///   NARROWED store, strict `< 0` ordered, NaN survives) and free through
-///   the pool singletons 0xce26ac/0xce2660 (MemPool::FreeSpanNodes
+///   the pool singletons 0xce26ac/0xce2660 (`MemPool::FreeSpanNodes`
 ///   delegate — allocator, never inlined); the model timer at
 ///   `entry+0x15c` uses the WIDE `<= 0` gate (kernel
 ///   `transient_life_timer__6b3890`) and, when expired with `entry+0x150`
-///   set, runs ModelResource::Destroy (0x6b98c0, delegate) FIRST and then
+///   set, runs `ModelResource::Destroy` (0x6b98c0, delegate) FIRST and then
 ///   the exact [`ts_link_unlink`] splice on the `entry+0x168` pair.
 /// - Node lifetime: only when `node+0x1c8 == 0`; same wide `<= 0` gate on
 ///   `node+0x1cc`; when expired, the `node+0xc` guard gates BOTH pair
 ///   unlinks (`node+8`, `node+0x10` — [`ts_link_unlink`] ×2) and
-///   Object::DestroyAndFreeToHeap (0x6a0330, delegate) runs regardless of
+///   `Object::DestroyAndFreeToHeap` (0x6a0330, delegate) runs regardless of
 ///   that guard.
 /// - The frame-delta global `0xc62510` and zero threshold `0x7ffd74` are
 ///   re-read at every timer site, as the stock memory operands are.
@@ -36768,11 +36770,11 @@ pub fn scene_transient_mgr__tick_and_reap__6b3890() {
 /// `CGObject_C::UpdateSelectionCircleAndVisuals`.
 ///
 /// `__thiscall(this, dt: f32)`, `RET 0x4`, void; `dt` is never read (stock
-/// never touches `[ebp+8]`). Vtable slot shared by six CGObject_C subclasses,
-/// also called directly from OnFrameUpdate. Four stages, statement-faithful to
+/// never touches `[ebp+8]`). Vtable slot shared by six `CGObject_C` subclasses,
+/// also called directly from `OnFrameUpdate`. Four stages, statement-faithful to
 /// 0x614a90–0x614cc9:
 /// - Selection gate: descriptor guid vs the selection globals
-///   `0xb4e2d8/dc`, GetActivePlayer (0x468550, delegate) must differ, CVar
+///   `0xb4e2d8/dc`, `GetActivePlayer` (0x468550, delegate) must differ, `CVar`
 ///   `*0xc4daf8 + 0x28` non-zero -> LIVE vtable call `vfunc+0x30`.
 /// - `now` = low dword of [`os_get_time_ms__42b790`] — our hook, called
 ///   directly (stock reaches it through the 0x42c010 JMP thunk).
@@ -36780,7 +36782,7 @@ pub fn scene_transient_mgr__tick_and_reap__6b3890() {
 ///   into `+0xf4` (kernel [`crate::math::object::selection_fade__614a90`];
 ///   past-the-end snaps `+0xf4 = +0xfc` as a raw dword and zeroes the
 ///   duration), then ALWAYS sets circle alpha = `+0x100 · +0xf4` (kernel
-///   `circle_alpha__614a90`) through SetField0x180 (0x710cb0, delegate) on
+///   `circle_alpha__614a90`) through `SetField0x180` (0x710cb0, delegate) on
 ///   the re-picked model (`+0xdc`, else a FRESH re-read of `+0xd8`).
 /// - Scale pulse: armed while `+0xa0 != 0 && now > +0xa0` (unsigned);
 ///   under 2000ms blends the recorded `+0xa4` toward the LIVE vtable
@@ -36791,11 +36793,11 @@ pub fn scene_transient_mgr__tick_and_reap__6b3890() {
 ///   arm stores `+0x90`.
 /// - Spell visuals: the kill loop frees the head while
 ///   `(i32)(now − head[0x50]) >= 0`, RE-READING the head after every
-///   SpellVisual_FreeInstance (0x61ccd0, delegate); the survivor loop walks
+///   `SpellVisual_FreeInstance` (0x61ccd0, delegate); the survivor loop walks
 ///   `+0x84` links fading each node's model (kernel
 ///   `visual_fade__614a90`; the remaining time FILDs as a ZERO-EXTENDED
 ///   u32, so an expired tail node wraps to full alpha) through
-///   SetField0x180 when the model pointer is non-null.
+///   `SetField0x180` when the model pointer is non-null.
 pub fn cg_object_c__update_selection_circle_and_visuals__614a90(
     this: *mut core::ffi::c_void,
     _dt: f32,
@@ -37007,14 +37009,14 @@ pub fn cg_object_c__update_selection_circle_and_visuals__614a90(
 /// `__fastcall(ecx = outParams: *mut u8, edx = useWaterSet: i32)`, plain `RET`,
 /// void. Distance-blends every in-range light zone into `outParams`: scans the
 /// light table keeping in-range lights in a 1-based binary MAX-heap keyed on
-/// camera distance (backing storage = a stack DynArray8 — ctor/PushN/PopBack/dtor
+/// camera distance (backing storage = a stack `DynArray8` — ctor/PushN/PopBack/dtor
 /// are DELEGATED allocator calls, the sift arithmetic is stock-inline and ported
 /// native), then pops farthest-first, sampling and storm-blending each light's
 /// parameter set and lerping it into `outParams` so the nearest light paints
 /// last.
 ///
 /// Statement-faithful notes (0x6d2d00–0x6d3063):
-/// - CObjectWrapper::GetPosition (0x6d6a90) is OUR hook — direct call; the
+/// - `CObjectWrapper::GetPosition` (0x6d6a90) is OUR hook — direct call; the
 ///   distance fold keeps the deltas wide (kernel
 ///   [`crate::math::light::light_camera_distance__6d2d00`]) and the
 ///   in-range gate is `dist < falloffEnd` ordered (NaN skips). Table base
@@ -37024,10 +37026,10 @@ pub fn cg_object_c__update_selection_circle_and_visuals__614a90(
 ///   the RIGHT child on `right >= left` ordered ties; the sift-down
 ///   descends while `last < child` OR unordered. The heap data pointer is
 ///   re-read from the array struct around every store, exactly where
-///   stock reloads `[ebp-0x28]` (PushN may reallocate).
+///   stock reloads `[ebp-0x28]` (`PushN` may reallocate).
 /// - Each pop re-constructs the 0x90-byte sampled record on the stack:
 ///   two zeroed dwords, three 4-stride ctor loops + one 8-stride ctor
-///   loop through CallMethodOnArrayElements (0x404130, callee-cleanup),
+///   loop through `CallMethodOnArrayElements` (0x404130, callee-cleanup),
 ///   three more zeroed dwords — offsets +0/+4, +8(4×6), +0x20(4×5),
 ///   +0x34(4×4), +0x4c, +0x78(8×2), +0x88/+0x8c. The record buffers are
 ///   zero-initialized here where stock had stack garbage (never
@@ -37035,7 +37037,7 @@ pub fn cg_object_c__update_selection_circle_and_visuals__614a90(
 /// - Sample index = biased-FISTP of `time · scale − bias` (kernel
 ///   `light_time_index__6d2d00`); the storm arm runs on
 ///   `storm > 0x7ffd74` ordered strict and re-derives everything
-///   (ClearLightRecord, second sample at set +2, BlendLightColors). The
+///   (`ClearLightRecord`, second sample at set +2, `BlendLightColors`). The
 ///   per-record 0x6d3070 'destructor' is a bare RET — OMITTED (0x61e9c0
 ///   precedent).
 /// - Blend weight kernel `light_blend_weight__6d2d00` (1.0 inside
@@ -37326,7 +37328,7 @@ pub fn day_night_blend_nearby_lights__6d2d00(out_params: *mut u8, use_water_set:
 /// - The per-entry clear loop calls the bare-RET stub 0x6741d0 and has no
 ///   other effect (its count re-read cannot change) — OMITTED, like the
 ///   0x61e9c0 precedent. `resultArray[1] = 0` stays.
-/// - CollectGeometryFromNodes (0x6aaab0) — OUR hook, called directly —
+/// - `CollectGeometryFromNodes` (0x6aaab0) — OUR hook, called directly —
 ///   returning 0 short-circuits to 0; the early-out global `0xc9e384`
 ///   non-zero returns 1 (READ only — there is no `= 0` store).
 /// - The four bounds guards PASS on NaN, and the first compares the WIDE
@@ -37444,7 +37446,7 @@ pub fn c_world__collect_geometry_in_box__6aa8b0(
 /// `CWorld::CollectGeometryFromNodes`.
 ///
 /// `__fastcall(ecx = box: *mut f32, edx = resultArray: *mut u32, stack =
-/// [queryFlags, outHitFlags])`, `RET 0x8`, bool in AL. CollectGeometryInBox's
+/// [queryFlags, outHitFlags])`, `RET 0x8`, bool in AL. `CollectGeometryInBox`'s
 /// scene-node sibling: walks the tagged map-obj instance list (head `0xca7da4`,
 /// links through the `0xca7d9c` container) and per overlapping instance
 /// transforms the recentered query box to instance-local space and runs the
@@ -37458,27 +37460,27 @@ pub fn c_world__collect_geometry_in_box__6aa8b0(
 ///   recentered on the negated midpoint (kernel
 ///   [`crate::math::world::collect_nodes_negate_center__6aaab0`];
 ///   `C3Vector::Set` 0x4549a0 is a trivial store pack, inlined) with OUR
-///   AddInPlace ×2.
+///   `AddInPlace` ×2.
 /// - Per instance: skipped on flag bit `+0xd & 1`, a null geometry pointer
-///   `+0x118`, or either box gate failing (OUR MinLessThanMax /
-///   GreaterEqualAll). An overlapping instance whose enable byte
+///   `+0x118`, or either box gate failing (OUR `MinLessThanMax` /
+///   `GreaterEqualAll`). An overlapping instance whose enable byte
 ///   (`geom+0x1d4`) is zero, or whose sub-chunk head (`+0x138`) is tagged
 ///   or empty, aborts the WHOLE walk with 0 — stock polarity.
-/// - Box transform: OUR TransformPoint on the midpoint; the 3x3 row pick
+/// - Box transform: OUR `TransformPoint` on the midpoint; the 3x3 row pick
 ///   (`C33Matrix::Set` 0x5f8d20, a store pack) and its 9-dword shadow copy
 ///   collapse to one local (neither address escapes past the delegated
-///   ZeroAndTransformBy3x3 0x6dc3f0); the midpoint is added back with OUR
-///   AddInPlace ×2.
+///   `ZeroAndTransformBy3x3` 0x6dc3f0); the midpoint is added back with OUR
+///   `AddInPlace` ×2.
 /// - On a threshold pass (OUR TestValueThreshold): `flags & 0xf0` resets
-///   the five hit-state globals, runs OUR QueryOverlappingBoxes +
-///   BuildMeshTrianglePlanes (a scratch dword rides the stock
+///   the five hit-state globals, runs OUR `QueryOverlappingBoxes` +
+///   `BuildMeshTrianglePlanes` (a scratch dword rides the stock
 ///   uninitialized `EBP-0x20` slot by address through both calls) and ORs
 ///   `0xc63258` into `outHitFlags`; `flags & 0xf0000` runs the delegated
-///   QueryChildrenOverlappingBox 0x6a3c20.
+///   `QueryChildrenOverlappingBox` 0x6a3c20.
 /// - Sub-chunk walk (head RE-READ exactly where stock re-reads it): per
 ///   entry the two box gates against the ORIGINAL query box, the delegated
 ///   per-chunk filter 0x6a42b0 (zero aborts the walk with 0), OUR
-///   QueryWmoGroups (zero aborts with 0) and OUR QueryDoodadSets; next =
+///   `QueryWmoGroups` (zero aborts with 0) and OUR `QueryDoodadSets`; next =
 ///   `*([node+0x130] + cur + 4)`.
 /// - The outer advance is `Container::ElementPtrOrHeader` (0x687b40)
 ///   inlined: `next = *(*(0xca7d9c) + node + 4)` — its zero-arm is
@@ -37724,15 +37726,15 @@ pub fn c_world__collect_geometry_from_nodes__6aaab0(
 ///   non-negative signed delta vs `+0xc18`; nameplate (0x60f600) always,
 ///   with the ORIGINAL param dword.
 /// - Highlight: when the 0xb4e2d8 target guid matches `[this+0x8]`, the
-///   active player resolves through GetActivePlayer + ObjectPtr (token
+///   active player resolves through `GetActivePlayer` + `ObjectPtr` (token
 ///   0x85f948, mask 0x10, tail dword 0x90) and HasTarget/IsHostileTo gate
 ///   the `+0xc58` bit-0x10 set; the 500ms blink flips `0xc4daa4` and
 ///   re-stamps `0xc4daa0`, and the byte kernel
 ///   [`crate::math::object::blink_byte__607ed0`] lands in bits 8..15 of
 ///   `0xc4d8c8`. Both arms (set, or clear-when-was-set) mark `+0xc7c`
 ///   dirty via 0x6c77f0.
-/// - **UpdateSelectionCircleAndVisuals (0x614a90) stays a VA delegate:
-///   SuperWoWhook owns its prologue in the live process, so the LIVE
+/// - **`UpdateSelectionCircleAndVisuals` (0x614a90) stays a VA delegate:
+///   `SuperWoWhook` owns its prologue in the live process, so the LIVE
 ///   (mod-patched) body must run — NEVER our dormant adapter (the callout
 ///   audit exempts this mod-owned rva from the self-hook rule).** It
 ///   receives the ORIGINAL param dword, still live in the `[ebp+8]` slot
@@ -38311,7 +38313,7 @@ pub fn cg_player_c__on_frame_update__607ed0(this: *mut u8, param: u32) {
 ///
 /// Active-player arm (descriptor guid == `0xc4da98/9c`): snaps the
 /// orientation to the target field and syncs the two turn bits in
-/// `+0xd58` from CGInputControl state (GetActive/CanPitch/IsCompletedTap
+/// `+0xd58` from `CGInputControl` state (GetActive/CanPitch/IsCompletedTap
 /// delegates); the turn timestamp `+0xcb0` takes the LOW dword of our
 /// [`os_get_time_ms__42b790`] hook (stock goes through the 0x42c010 JMP
 /// thunk).
@@ -38322,7 +38324,7 @@ pub fn cg_player_c__on_frame_update__607ed0(this: *mut u8, param: u32) {
 /// 0x2000 clear), or movement flag 0x40000 all keep the stored target
 /// (`+0x9c4`); `+0xc58` bit0 reads the `+0xcac` field; otherwise the
 /// click-to-move/selection guid chain resolves the target object
-/// (ObjectPtr 0x468460 with the 0x860c0c token, mask 8, tag 0x142b) and
+/// (`ObjectPtr` 0x468460 with the 0x860c0c token, mask 8, tag 0x142b) and
 /// the heading comes from [`heading_from_delta2_d__47f220`] — OUR hook,
 /// called directly, its f64 return feeding the tail UNNARROWED exactly
 /// like the stock ST0.
@@ -38363,7 +38365,7 @@ pub fn cg_unit_c__update_facing_interpolation__600cd0(unit: *mut core::ffi::c_vo
     const GET_CTM_GUID_VA: usize = BASE + 0x21_26f0;
     const ACTIVE_PLAYER_VA: usize = BASE + 0x06_8550;
     const OBJ_PTR_VA: usize = BASE + 0x06_8460;
-    /// `.data` token ObjectPtr receives in EDX (stock `MOV EDX,0x860c0c`).
+    /// `.data` token `ObjectPtr` receives in EDX (stock `MOV EDX,0x860c0c`).
     const OBJ_PTR_TOKEN: u32 = (BASE + 0x46_0c0c) as u32;
 
     let base = unit.cast::<u8>();
@@ -38620,15 +38622,15 @@ pub fn cg_unit_c__update_facing_interpolation__600cd0(unit: *mut core::ffi::c_vo
 /// the stock Filtered collector, and pulls the returned planes into the context
 /// local frame.
 ///
-/// Direct calls into our hooks: TransformVertexInPlace, CAaBox::Union (×3),
-/// C3Vector Add/Subtract/AddInPlace/Negate/IsValid, InvertWithScale — the
+/// Direct calls into our hooks: `TransformVertexInPlace`, `CAaBox::Union` (×3),
+/// `C3Vector` Add/Subtract/AddInPlace/Negate/IsValid, `InvertWithScale` — the
 /// stock crossed the detour for every one of them (3+ per plane in the
 /// pull-back loop). `C3Vector::Set` (0x4549a0) is a trivial store pack,
 /// inlined; the 0x61e9c0 stub is a bare RET, omitted. Delegates:
-/// BuildWorldTransform (0x630ac0), the falling drop getter (0x7c6140, ST0
-/// f32 return), GetStateDependentScalar (0x617430, ST0 — called TWICE in
-/// each max-pick exactly like stock), ComputeCollisionQueryFlags
-/// (0x6315f0 — it calls IsAirborneOrSwimming, not trivial), and the
+/// `BuildWorldTransform` (0x630ac0), the falling drop getter (0x7c6140, ST0
+/// f32 return), `GetStateDependentScalar` (0x617430, ST0 — called TWICE in
+/// each max-pick exactly like stock), `ComputeCollisionQueryFlags`
+/// (0x6315f0 — it calls `IsAirborneOrSwimming`, not trivial), and the
 /// Filtered collector (0x6721b0).
 ///
 /// Faithful-shape notes (0x633840–0x63401e): the optional world transform
@@ -38989,16 +38991,16 @@ pub fn c_movement__build_swept_bounds_and_query_world__633840(
 /// redirect → renormalize → re-sweep, then the ground-stick tail and the
 /// hover-float adjustment.
 ///
-/// Direct calls into our hooks: Collision_SweepVolumeAgainstWorldPlanes
-/// (SIX call sites — the hot path), ComputeSlopeClimbDelta (both arms),
-/// and Geometry::ReducePlanarPointsToRepresentative (both arms).
-/// HitRecord::InitUnitZ is a `{0,0,1,0}` store pack, inlined;
-/// C3Vector::Set likewise. Delegates: StartFalling (0x7c61f0),
-/// StepOntoGroundPlane (0x6334a0), ProbeStepUpOver (0x636100, both
-/// sites), ComputeWallSlidePushout (0x635d80), CommitTransform
-/// (0x7c5cd0), TrySetFacingTargetGuarded (0x6173b0, both sites),
-/// IsAirborneOrSwimming (0x5fa550, on `*(this+0x15c)`), the hover rise
-/// getter (0x7c61b0, ST0), and GetStateDependentScalar (0x617430, ST0 —
+/// Direct calls into our hooks: `Collision_SweepVolumeAgainstWorldPlanes`
+/// (SIX call sites — the hot path), `ComputeSlopeClimbDelta` (both arms),
+/// and `Geometry::ReducePlanarPointsToRepresentative` (both arms).
+/// `HitRecord::InitUnitZ` is a `{0,0,1,0}` store pack, inlined;
+/// `C3Vector::Set` likewise. Delegates: `StartFalling` (0x7c61f0),
+/// `StepOntoGroundPlane` (0x6334a0), `ProbeStepUpOver` (0x636100, both
+/// sites), `ComputeWallSlidePushout` (0x635d80), `CommitTransform`
+/// (0x7c5cd0), `TrySetFacingTargetGuarded` (0x6173b0, both sites),
+/// `IsAirborneOrSwimming` (0x5fa550, on `*(this+0x15c)`), the hover rise
+/// getter (0x7c61b0, ST0), and `GetStateDependentScalar` (0x617430, ST0 —
 /// every double-call of the stock max/limit patterns preserved).
 ///
 /// Polarity/fold pins (0x6367b0–0x637132, all from the FNSTSW shapes):
@@ -39658,7 +39660,7 @@ pub fn c_movement__step_ground_move__6367b0(
 /// [`c_movement__compute_box_ground_normal__6332a0`] + the anchored-point
 /// delegate.
 ///
-/// ABI pin: StepFallVertical (0x635b00) returns its ms result in EAX despite
+/// ABI pin: `StepFallVertical` (0x635b00) returns its ms result in EAX despite
 /// a void-looking prototype — transmuted as
 /// u32-returning. Polarity pins: the |mag| normalize gate skips only on
 /// ordered less (kernel `step_speed_and_dir__634040`); the falling-with-

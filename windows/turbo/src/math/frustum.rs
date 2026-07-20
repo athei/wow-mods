@@ -980,7 +980,7 @@ mod tests_c_map_obj__compute_portal_ndc_rect__6b46f0 {
         c3_vector__dominant_axis__7bf680,
     };
 
-    /// Stock rect init bit patterns: min lanes +FLT_MAX, max lanes -FLT_MAX.
+    /// Stock rect init bit patterns: min lanes +`FLT_MAX`, max lanes -`FLT_MAX`.
     fn fresh_rect() -> [f32; 4] {
         [
             f32::from_bits(0x7f7f_ffff),

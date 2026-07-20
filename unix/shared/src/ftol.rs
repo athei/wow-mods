@@ -4,7 +4,7 @@
 //! (or the fnstcw/fistp control-word dance) plus a saturation clamp — under
 //! Rosetta each x87 op expands ~20×, so every such cast in a hot path shows up
 //! as a profiler row. This kernel truncates from the raw IEEE bits in pure
-//! integer code instead. Shared here because both the wow_turbo reimpls (where
+//! integer code instead. Shared here because both the `wow_turbo` reimpls (where
 //! it doubles as the faithful CRT `__ftol` replacement) and any i686
 //! code needing a float→int cast without the x87 tax use it.
 // The entry point keeps the CRT's `__ftol` spelling so the shim reads as the
@@ -24,7 +24,7 @@
 /// `|x| >= 2^63` case collapses to one return.
 ///
 /// The `__40a2b0` suffix is the WoW.exe VA of the CRT `__ftol` this kernel
-/// faithfully replaces (wow_turbo hooks that address and re-exports this fn).
+/// faithfully replaces (`wow_turbo` hooks that address and re-exports this fn).
 pub fn ftol__40a2b0(x: f64) -> i64 {
     let bits = x.to_bits();
     let exp = ((bits >> 52) & 0x7ff) as i32;

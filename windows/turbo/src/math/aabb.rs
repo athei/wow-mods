@@ -10,7 +10,7 @@
 /// *unordered* — `TEST AH,0x41; JP` continues on both `C0` (less) and `C3`
 /// (equal) — so touching boxes (`box_min == query_max`, ubiquitous with
 /// grid-aligned terrain cells) count as overlapping. A NaN axis returns
-/// `false`. (The symbol name says "LessThan", but the comparison is inclusive.)
+/// `false`. (The symbol name says "`LessThan`", but the comparison is inclusive.)
 pub fn aabb__min_less_than_max__6acb40(box_min: &[f32; 3], query_max: &[f32; 3]) -> bool {
     box_min[0] <= query_max[0] && box_min[1] <= query_max[1] && box_min[2] <= query_max[2]
 }

@@ -58,7 +58,7 @@ pedantic = { level = "warn", priority = -1 }
 # Length is a poor proxy for complexity; allow long procedural functions
 # (per-opcode dispatchers, codegen templates) where the structural alternative
 # is fragmented helpers threading the same state.
-too_many_lines = "allow"                # 64
+too_many_lines = "allow"                # 65
 # A separate multiply and add is what the originals compiled to, and the
 # differential harness compares against that — fusing them changes the rounding
 # and the comparison fails. It is also faster on the default baseline: nehalem
@@ -99,8 +99,8 @@ undocumented_unsafe_blocks = "warn"
 items_after_statements = "allow"        # 864
 cast_ptr_alignment = "allow"            # 911 — reads are already `read_unaligned`
 unreadable_literal = "allow"            # 364 — addresses and bit masks, verbatim
-similar_names = "allow"                 # 199
-semicolon_if_nothing_returned = "allow" # 158
+similar_names = "allow"                 # 208
+semicolon_if_nothing_returned = "allow" # 156
 many_single_char_names = "allow"        # 36
 
 # Numeric conversions that must truncate, wrap and round exactly as the
@@ -146,8 +146,3 @@ derive_partial_eq_without_eq = "allow"  # 1
 while_float = "allow"                   # 9
 decimal_bitwise_operands = "allow"      # 3
 
-# Debt, not policy: an ordinary finding that nothing about the domain justifies.
-# Backticking the identifiers is its own change and has not been done — the doc
-# sweep reshaped blocks, it did not touch their markup. Clear it and delete
-# this line; nothing here argues for keeping it.
-doc_markdown = "allow"                  # 151

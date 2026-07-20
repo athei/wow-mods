@@ -1,7 +1,7 @@
 //! Branchless single-precision sine/cosine, tuned to the game's accuracy.
 //!
 //! Lives in `wow-shared` because two i686 consumers need libcall-free trig:
-//! the wow_turbo math kernels (Euler/axis-angle/quaternion/movement-arc, which
+//! the `wow_turbo` math kernels (Euler/axis-angle/quaternion/movement-arc, which
 //! re-export this module as `math::trig`) and the d3d9 fixed-function state
 //! builder (spotlight cone cosines). `f32::sin`/`f32::cos` lower to a scalar
 //! *C*-libm call whose result lands in the x87 `ST0` register — opaque to the

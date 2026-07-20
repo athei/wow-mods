@@ -1695,7 +1695,7 @@ pub fn blink_byte__607ed0(remaining: i32, phase: u32, k_inv: f32, one: f32, k_by
 /// Turn-assist wrap argument of `CGPlayer_C::OnFrameUpdate` (0x6080c2..0x6080d1).
 ///
 /// `(c98 − c94) + step` folds entirely wide and narrows ONCE into the
-/// NormalizeAngleToPi stack argument (a per-op f32 model would round the
+/// `NormalizeAngleToPi` stack argument (a per-op f32 model would round the
 /// intermediate difference a second time). `step` arrives pre-negated by the
 /// parity select (`FCHS`, exact).
 #[must_use]
@@ -1706,7 +1706,7 @@ pub fn facing_assist_arg__607ed0(c98: f32, c94: f32, step: f32) -> f32 {
 /// Turn-assist blend of `CGPlayer_C::OnFrameUpdate` (0x6080db..0x6080e8).
 ///
 /// The wrapped delta × the quarter constant + the current facing, wide,
-/// one narrow into the second NormalizeAngleToPi argument.
+/// one narrow into the second `NormalizeAngleToPi` argument.
 #[must_use]
 pub fn facing_assist_blend__607ed0(wrapped: f32, quarter: f32, c94: f32) -> f32 {
     super::f64_to_f32(f64::from(wrapped) * f64::from(quarter) + f64::from(c94))

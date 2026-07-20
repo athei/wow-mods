@@ -884,7 +884,7 @@ mod tests_color_track__sample_argb__6d62e0 {
 /// narrowed once is bit-identical (53 ≥ 2·24+2, so double rounding through
 /// f64 — like the stock's through 80-bit — cannot move the f32). Degenerate
 /// 0/0 (a wrapping segment whose raw span is exactly −0xb40, only possible
-/// with out-of-period table values) yields the x87 real-indefinite QNaN
+/// with out-of-period table values) yields the x87 real-indefinite `QNaN`
 /// `0xffc0_0000`, not Rust's positive NaN; nonzero÷0 is the masked
 /// zero-divide ±∞, which the f64 path already matches.
 pub fn wrapped_interval_fraction__6d63e0(query: i32, lo: i32, hi: i32) -> Option<f32> {
@@ -955,7 +955,7 @@ mod tests_wrapped_interval_fraction__6d63e0 {
 
     /// Out-of-period tables can fold the span to zero.
     ///
-    /// 0/0 must be the x87 real-indefinite QNaN, n/0 the masked-zero-divide
+    /// 0/0 must be the x87 real-indefinite `QNaN`, n/0 the masked-zero-divide
     /// infinity.
     #[test]
     fn degenerate_zero_span() {

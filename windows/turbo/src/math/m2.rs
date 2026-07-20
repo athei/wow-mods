@@ -2162,7 +2162,7 @@ pub fn cm2_shadow__outcode6__7137c0(v: &[f32; 3], bounds: &[f32; 6]) -> u32 {
 /// the normalize arm runs on GREATER-OR-EQUAL **and on unordered**: a NaN
 /// length is not skipped, it scales the row by a NaN factor (row becomes NaN),
 /// exactly like stock. Arithmetic is `f64` matching the x87 double-precision
-/// intermediates (the hooked SquaredMagnitude already narrowed `mag²` to
+/// intermediates (the hooked `SquaredMagnitude` already narrowed `mag²` to
 /// `f32`), narrowed per element at the `FSTP m32` points.
 // `!(len.abs() < eps)` is the original's `FCOMP`/`JNP` skip test: a NaN length enters
 // the scale arm and poisons the row, which `len.abs() >= eps` would not.
@@ -2217,11 +2217,11 @@ pub fn cm2_shadow__quad_plane__7137c0(
 
 /// `TSGrowableArray` capacity round-up (0x674500).
 ///
-/// Inlined into the ProjectCollisionQuads grow protocol: rounds `value` up to
+/// Inlined into the `ProjectCollisionQuads` grow protocol: rounds `value` up to
 /// the next multiple of `alignment` (unchanged when already aligned). The stock
 /// `DIV` faults on
 /// `alignment == 0`; the caller protocol guarantees non-zero (`out[3]` is used
-/// only when non-zero, and ComputeGranularity returns ≥ 1). The round-up add
+/// only when non-zero, and `ComputeGranularity` returns ≥ 1). The round-up add
 /// wraps like the stock `ADD`.
 pub fn ts_growable_array__align_up__674500(value: u32, alignment: u32) -> u32 {
     let rem = value % alignment;

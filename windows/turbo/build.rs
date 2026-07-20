@@ -500,7 +500,7 @@ fn render(m: &Manifest) -> String {
     // reimpls no longer receive an injected resolver (almost none delegate); the
     // rare hook that must call through calls `originals::<snake>()` and invokes the
     // returned `{Name}Fn` directly — no `Original` enum, no `usize`, no transmute.
-    out.push_str("/// Typed accessors for the unhooked original (the MinHook trampoline) of\n");
+    out.push_str("/// Typed accessors for the unhooked original (the `MinHook` trampoline) of\n");
     out.push_str("/// every hooked function: `originals::<snake>()` returns the matching\n");
     out.push_str("/// `{Name}Fn` pointer. A reimpl that must defer to stock code (e.g. an\n");
     out.push_str("/// unreconstructed branch) calls it and invokes the result directly; the\n");

@@ -294,7 +294,7 @@ mod tests_plane_intersect_ray_param__7c22b0 {
 /// Validate up to four points against a fixed reference plane, then collapse
 /// them to one representative.
 ///
-/// `pts` is the first `count` (1..=4) input C3Vectors (`[x, y, z, _unused]`); the
+/// `pts` is the first `count` (1..=4) input `C3Vectors` (`[x, y, z, _unused]`); the
 /// return is `Some(repr_xyz)` on success or `None` when the count is out of range
 /// or any point fails the z-plane tolerance.
 ///

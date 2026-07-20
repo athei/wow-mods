@@ -1177,7 +1177,7 @@ mod tests_c_math_wrap_angle__7abbe0 {
 ///
 /// Constants are the exact image values: `HI = +PI` / `LO = -PI` as f32
 /// (`0x40490fdb` / `0xc0490fdb`), and the fmod divisor is `2*PI_f32` stored as an
-/// f64 (`0x401921fb60000000` = 6.283_185_482_025_146 — twice the *f32* PI, not
+/// f64 (`0x401921fb60000000` = `6.283_185_482_025_146` — twice the *f32* PI, not
 /// true 2*PI). The stock loads the divisor as a double and mixes the f32 angle
 /// with an f64 fmod, so we widen to f64, fmod, then narrow; the small f32-derived
 /// intermediates are exact in f64, making the reduction bit-faithful.

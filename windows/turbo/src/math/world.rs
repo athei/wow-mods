@@ -3910,7 +3910,7 @@ pub fn tile_collect_triangle_plane__6aadc0(
 ///
 /// Replicates the stock `rsqrtss xmm1,[mem]` at 0x6ab340 exactly; `libm`
 /// reciprocal sqrt would not bit-match. Available on both `x86` and `x86_64`
-/// (host tests run x86_64 under the same translation as the shipped i686 image).
+/// (host tests run `x86_64` under the same translation as the shipped i686 image).
 #[inline]
 #[must_use]
 // The three nested SSE intrinsics form one logically atomic `rsqrtss`; keeping
@@ -4118,7 +4118,7 @@ mod tests_collect_nodes_negate_center__6aaab0 {
 ///
 /// `m` packs the nine rotation entries in stock-offset order:
 /// `[0x9c,0xa0,0xa4, 0xac,0xb0,0xb4, 0xbc,0xc0,0xc4]`. `old` is the prior
-/// translation `[0xcc,0xd0,0xd4]`; `delta` is the C3Vector arg `[dx,dy,dz]`.
+/// translation `[0xcc,0xd0,0xd4]`; `delta` is the `C3Vector` arg `[dx,dy,dz]`.
 ///
 /// Axis 0 (`0xcc`): `old - ((m_ac*dy + m_bc*dz) + m_9c*dx)`.
 /// Axis 1 (`0xd0`): `old - ((m_b0*dy + m_a0*dx) + m_c0*dz)`.
@@ -4604,7 +4604,7 @@ mod tests_world_rasterize_trace_line_cells__69c780 {
         assert_eq!(got, [(5, 0), (ind, 0), (ind, 1), (ind, 2), (5, 1)]);
     }
 
-    /// desc[2]+dir wraps (end = i32::MAX, dir = +1) to exactly the start major.
+    /// desc[2]+dir wraps (end = `i32::MAX`, dir = +1) to exactly the start major.
     ///
     /// The stock pre-check then skips the whole walk after the seed pair. A
     /// checked add would panic here; stock's ADD wraps.
@@ -4668,7 +4668,7 @@ mod tests_world_rasterize_trace_line_cells__69c780 {
     /// Sweep oracle.
     ///
     /// The pure-integer helper agrees with the host's `round_ties_even` (SSE2 on
-    /// x86_64) across a dense in-range sweep including every x.5 tie and non-tie
+    /// `x86_64`) across a dense in-range sweep including every x.5 tie and non-tie
     /// fractions at several magnitudes.
     #[test]
     fn fistp_matches_round_ties_even_oracle_sweep() {
@@ -5408,7 +5408,7 @@ mod tests_c_map_chunk__build_vertices_and_bounds__6b0e50 {
         assert_eq!(out0.min[0], -32.0);
     }
 
-    /// Realistic WoW globals with far-apart grid indices.
+    /// Realistic `WoW` globals with far-apart grid indices.
     ///
     /// The two axes' f32 spans (and so steps and half-cells) differ in their low
     /// bits, which pins x-from-row/y-from-col against transposition,
@@ -6060,7 +6060,7 @@ mod tests_terrain_trace__69c320 {
 /// Anim-record scrolled parameter (0x71204a..0x712058).
 ///
 /// `ftol((counter − base) × scale) + offset`, where `counter − base` is an i32
-/// subtraction FILDed into the x87 product (80-bit) and truncated by `__ftol`,
+/// subtraction `FILDed` into the x87 product (80-bit) and truncated by `__ftol`,
 /// then the i32 offset is added. Returns the scrolled i32.
 pub fn anim_scroll_param__711fe0(delta: i32, scale: f32, offset: i32) -> i32 {
     let t = super::misc::ftol__40a2b0(f64::from(delta) * f64::from(scale)) as i32;

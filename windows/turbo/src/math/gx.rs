@@ -390,7 +390,7 @@ mod tests_c_gx_device__set_viewport__592530 {
 ///
 /// Validates a normalized viewport box and snaps its near-edges to 0/1,
 /// returning the sanitized box or `None` (⇒ caller raises
-/// STORM_ERROR_INVALID_PARAMETER). `near`/`far` are the device depth-range
+/// `STORM_ERROR_INVALID_PARAMETER`). `near`/`far` are the device depth-range
 /// globals at `0x7ffd74` (0.0) and `0x7ff9d8` (1.0), read live.
 ///
 /// Every predicate is ordered — the stock x87 `FCOMP` chain routes greater/less/
@@ -908,7 +908,7 @@ pub fn glyph_scaled_advance__5cb080(line_height: f32, px_height: i32, advance: f
 /// `[prod*sy, u30*sx, sum*sy, (u48+u30)*sx]` where `prod = a*b` is a SIGNED
 /// 32-bit wrap product (`FILD m32int`), `sum = prod + b` reloads as an
 /// UNSIGNED dword (`FILD` of a zero-extended qword slot), and `u30`/`u48`
-/// are u32 fields FILDed the same way. Each product folds `int × f32` wide
+/// are u32 fields `FILDed` the same way. Each product folds `int × f32` wide
 /// (exact through f64's 53 bits for the 2·24+2 double-rounding margin) and
 /// narrows once per store, in stock's 0x60→0x64→0x68→0x6c order.
 ///
@@ -934,7 +934,7 @@ pub fn glyph_tex_coords__5c7f80(a: i32, b: i32, u30: u32, u48: u32, sx: f32, sy:
 /// Kerned-advance fold on the miss path of the pair cache.
 ///
 /// `baseAdvance + kern × scale`, where `kern` is the clamped (≤ 0) signed
-/// kerning FILDed exactly, `scale` is the f32 at `font+0x188`, and the
+/// kerning `FILDed` exactly, `scale` is the f32 at `font+0x188`, and the
 /// FILD/FMUL/FADDP chain folds wide before the single `FSTP m32` narrow.
 pub fn kerned_advance__5ca2d0(kern: i32, scale: f32, base: f32) -> f32 {
     super::f64_to_f32(f64::from(kern) * f64::from(scale) + f64::from(base))
@@ -1022,7 +1022,7 @@ mod tests_build_geometry__5cdc20 {
 /// Line-fit pixel budget.
 ///
 /// `ceil(pxHeight / snappedHeight × maxWidth × yScale)` with the pixel height
-/// FILDed as a zero-extended u32, the device Y scale FIMULed as a SIGNED dword,
+/// `FILDed` as a zero-extended u32, the device Y scale `FIMULed` as a SIGNED dword,
 /// the whole chain wide, and the CRT-ceil (0x73fdf5) applied before the single
 /// f32 narrow.
 pub fn fit_budget__5c7470(px_height: u32, snapped: f32, max_width: f32, y_scale: i32) -> f32 {
@@ -1119,7 +1119,7 @@ mod tests_fit_text_to_width__5c7470 {
 /// Final measured-run width.
 ///
 /// `(kernAccum + lastAdvance) × (reqHeight / pixelHeight)`, with the pixel
-/// height FILDed as a zero-extended u32 and the whole sum/quotient/product
+/// height `FILDed` as a zero-extended u32 and the whole sum/quotient/product
 /// chain folded wide before the single `FSTP m32` into the caller's out slot.
 pub fn measured_width__5c7300(
     kern_accum: f32,

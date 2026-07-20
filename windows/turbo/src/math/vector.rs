@@ -559,7 +559,7 @@ mod tests_c3_vector__is_valid__6337d0 {
 /// `if src < dst { dst } else { src }`; do NOT flip this into
 /// `if dst < src { src }` (that keeps `dst` on ties/unordered — the polarity
 /// this kernel originally shipped with, caught during the
-/// BuildVerticesAndBounds review).
+/// `BuildVerticesAndBounds` review).
 pub fn c3_vector__max_in_place__6b11f0(dst: &mut [f32; 3], src: &[f32; 3]) {
     dst[0] = if src[0] < dst[0] { dst[0] } else { src[0] };
     dst[1] = if src[1] < dst[1] { dst[1] } else { src[1] };
