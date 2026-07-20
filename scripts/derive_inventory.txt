@@ -19,7 +19,7 @@ windows/turbo/src/math/world.rs OccluderSpan Clone,Copy,PartialEq,Debug
 windows/turbo/src/math/world.rs ProjectedVert Clone,Copy,PartialEq,Debug
 windows/turbo/src/math/world.rs QueryRadiusRect Clone,Copy,PartialEq,Eq,Debug
 windows/turbo/src/math/world.rs TerrainCellLookup Clone,Copy,PartialEq,Debug
-windows/turbo/src/math/world.rs TileGridBox Clone,Copy,PartialEq,Debug
+windows/turbo/src/math/world.rs TileGridBox Clone,Copy,PartialEq,Eq,Debug
 windows/turbo/src/math/world.rs WdlTileBounds Clone,Copy,Debug
 windows/turbo/src/storm/filecache.rs Bucket Clone,Copy
 windows/turbo/src/storm/filecache.rs Entry Clone,Copy

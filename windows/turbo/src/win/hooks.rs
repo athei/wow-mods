@@ -16280,12 +16280,12 @@ pub fn perlin_noise3_d__452960(grad_out: *mut f32, x: f64, y: f64, z: f64) -> f6
     }
     // SAFETY: the anchor sits 15 entries into its 31-entry ramp (hash nibble
     // differences index `-15..=15`), so the window start is in-bounds.
-    let val_start = unsafe { val_anchor.offset(-15) };
+    let val_start = unsafe { val_anchor.sub(15) };
     // SAFETY: 31 contiguous, aligned, initialized ramp floats; read-only.
     let val_tab = &unsafe { val_start.cast::<[f32; 31]>().read_unaligned() };
     // SAFETY: the anchor sits 15 entries into its 31-entry ramp (hash nibble
     // differences index `-15..=15`), so the window start is in-bounds.
-    let dif_start = unsafe { dif_anchor.offset(-15) };
+    let dif_start = unsafe { dif_anchor.sub(15) };
     // SAFETY: 31 contiguous, aligned, initialized ramp floats; read-only.
     let dif_tab = &unsafe { dif_start.cast::<[f32; 31]>().read_unaligned() };
     // SAFETY: fixed, initialized `.rdata` double in the live host image.
@@ -20451,7 +20451,7 @@ impl GcParSink<'_> {
     }
 
     /// Record a live weak table for the post-mark clear passes.
-    fn push_weak(&mut self, weak_key: bool, weak_val: bool, t: usize) {
+    fn push_weak(&self, weak_key: bool, weak_val: bool, t: usize) {
         let list = match (weak_key, weak_val) {
             (true, true) => &self.shared.wkv,
             (true, false) => &self.shared.wk,
@@ -20635,7 +20635,7 @@ fn gc_par_sweep_strt(shared: &GcParShared) {
 }
 
 /// Worker thread body: sleep between passes, propagate during them.
-fn gc_par_worker(shared: std::sync::Arc<GcParShared>) {
+fn gc_par_worker(shared: &GcParShared) {
     let mut seen = 0u64;
     loop {
         {
@@ -20646,9 +20646,9 @@ fn gc_par_worker(shared: std::sync::Arc<GcParShared>) {
             seen = *ep;
         }
         if shared.job.load(core::sync::atomic::Ordering::SeqCst) == 1 {
-            gc_par_sweep_strt(&shared);
+            gc_par_sweep_strt(shared);
         } else {
-            gc_par_propagate(&shared, false);
+            gc_par_propagate(shared, false);
         }
     }
 }
@@ -20700,7 +20700,7 @@ fn gc_pool() -> &'static GcParShared {
             std::thread::Builder::new()
                 .name(format!("wow-turbo-gc-{i}"))
                 .stack_size(256 * 1024)
-                .spawn(move || gc_par_worker(s))
+                .spawn(move || gc_par_worker(&s))
                 .expect("wow_turbo: gc worker spawn failed");
         }
         log::info!(target: "wow::gc", "gc pool: {workers} workers + coordinator");

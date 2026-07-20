@@ -117,7 +117,9 @@ float_cmp = "allow"                     # 46
 borrow_as_ptr = "allow"                 # 40
 ptr_as_ptr = "allow"                    # 24
 ptr_cast_constness = "allow"            # 12
-ptr_offset_by_literal = "allow"         # 2
+# All five are `(a*a + b*b).sqrt()`, which clippy wants as `hypot`. `hypot` is a
+# different algorithm — it rescales operands and rounds differently — so it does
+# not reproduce the transcribed `mul, mul, add, sqrt` the harness compares.
 imprecise_flops = "allow"               # 5
 
 # Style preferences that fight the transcription: restructuring control flow to
@@ -127,22 +129,38 @@ missing_const_for_fn = "allow"          # 82
 useless_let_if_seq = "allow"            # 19
 if_not_else = "allow"                   # 12
 suspicious_operation_groupings = "allow" # 12
+# The tail `match` of a transcribed function: the arms ARE the original's branch
+# structure, and four of the five sites are installed hook adapters.
 option_if_let_else = "allow"            # 5
+# Each site destructures a fixed-size array just read out of the client's memory,
+# and the index literals are that record's field map.
 tuple_array_conversions = "allow"       # 4
+# The duplicated statement is a raw field read whose branch condition calls into
+# the client's own input controller; hoisting it would reorder the two.
 branches_sharing_code = "allow"         # 3
+# `if cond { 1 } else { 0 }` transcribes a stock branch/`setcc` that stores an
+# int, not an idiom anyone reached for.
 bool_to_int_with_if = "allow"           # 3
+# `flags & 3` is the original's flag test, and the mask is the function's
+# vocabulary — `& 0x200f`, `& 0x200000` and `& 0x200` follow in the same body.
 verbose_bit_mask = "allow"              # 1
+# The parameters mirror the pointers the stock routine holds, so the signature is
+# ABI-shaped: see §"An argument list that mirrors a calling convention".
 trivially_copy_pass_by_ref = "allow"    # 1
+# The house shape for this surface: a `math::` kernel returns `Option`, the hook
+# forwards the accepted value or takes the stock error arm.
 single_match_else = "allow"             # 1
+# The `else` is one half of a matched pair of `ZERO <= s` splits transcribing the
+# original's Voronoi-region cascade; dropping it hides the symmetry.
 redundant_else = "allow"                # 1
-needless_pass_by_value = "allow"        # 1
-needless_pass_by_ref_mut = "allow"      # 1
-derive_partial_eq_without_eq = "allow"  # 1
 
 # Test idioms. The kernel tests sweep an input range by stepping a float and
 # compare against an independent oracle, and they mask expected values with the
 # same decimal quantities the comment above each one derives — rewriting either
 # to satisfy the lint makes the test harder to read against its own reasoning.
 while_float = "allow"                   # 9
+# The masked operands are decimal quantities, not bit patterns: `65025` is
+# `255 * 255` as the comment above derives it, `50`/`33` are the test's own
+# coordinates. Hex would sever each literal from the arithmetic it comes from.
 decimal_bitwise_operands = "allow"      # 3
 

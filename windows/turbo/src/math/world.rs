@@ -1913,7 +1913,7 @@ mod tests_terrain_height_cache_pos {
 /// inclusive block-index ranges the caller iterates. The returned `coords` are
 /// the four tile coordinates in the order the per-block query consumes them:
 /// `[from_max_x, from_max_y, from_min_x, from_min_y]`.
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct TileGridBox {
     pub coords: [i32; 4],
     pub block_x_lo: i32,
