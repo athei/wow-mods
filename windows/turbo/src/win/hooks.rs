@@ -20375,7 +20375,15 @@ fn gc_pool() -> Option<&'static std::sync::Arc<GcParShared>> {
             epoch: std::sync::Mutex::new(0),
             cv: std::sync::Condvar::new(),
         });
-        let workers = std::thread::available_parallelism().map_or(2, |p| p.get().saturating_sub(1)).clamp(1, 3);
+        // Bench lever (not user-facing): override the worker count while
+        // tuning; the winner gets hardcoded.
+        let workers = std::env::var("WOW_TURBO_GC_WORKERS")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .map_or_else(
+                || std::thread::available_parallelism().map_or(2, |p| p.get().saturating_sub(1)).clamp(1, 3),
+                |n| n.clamp(1, 8),
+            );
         let mut spawned = 0usize;
         for i in 0..workers {
             let s = std::sync::Arc::clone(&shared);
@@ -20580,6 +20588,96 @@ fn lua_gc_count_marked_by_tag(g: usize) -> [u32; 12] {
     count
 }
 
+/// Cached, sorted chunk index over the client's six SmallBlockPool classes.
+///
+/// The stock pool free resolves a block's owning chunk by LINEARLY scanning
+/// every chunk of every class — O(total chunks) per free, hundreds of probes
+/// at raid-scale heaps, the dominant sweep cost. Frees never create or
+/// release chunks, so the chunk set is stable across a sweep (it only grows,
+/// on allocation), making a sorted-span binary search index safe; it is
+/// rebuilt only when a class's chunk count changes. Collects run on the Lua
+/// thread only, so the cache is thread-local.
+struct GcChunkIndex {
+    spans: Vec<crate::math::lua_gc::ChunkSpan>,
+    counts: [u32; 6],
+}
+
+thread_local! {
+    static GC_CHUNK_INDEX: core::cell::RefCell<GcChunkIndex> =
+        const { core::cell::RefCell::new(GcChunkIndex { spans: Vec::new(), counts: [0; 6] }) };
+}
+
+/// Refresh the chunk index from the pools table at `*(G+0)`.
+///
+/// Returns false when the pools don't exist yet (nothing allocated — the
+/// caller falls back to the stock free). Layout per the `0x6fae90` disasm:
+/// pools table = six pool pointers; pool `+0x4` = chunk count, `+0x8` =
+/// chunk-pointer array; chunk `+0x0` = payload base, `+0x8` = payload bytes.
+fn gc_chunk_index_refresh(g: usize, idx: &mut GcChunkIndex) -> bool {
+    use crate::math::lua_gc::ChunkSpan;
+    // SAFETY: `G+0x0` is the SmallBlockPool pools-table pointer.
+    let pools = unsafe { *(g as *const usize) };
+    if pools == 0 {
+        return false;
+    }
+    let mut counts = [0u32; 6];
+    for (i, c) in counts.iter_mut().enumerate() {
+        // SAFETY: the pools table is six pool pointers.
+        let pool = unsafe { *((pools + i * 4) as *const usize) };
+        // SAFETY: pool chunk count at `+0x4`.
+        *c = unsafe { *((pool + 0x4) as *const u32) };
+    }
+    if counts == idx.counts && !idx.spans.is_empty() {
+        return true;
+    }
+    idx.spans.clear();
+    for (i, &n) in counts.iter().enumerate() {
+        // SAFETY: see above.
+        let pool = unsafe { *((pools + i * 4) as *const usize) };
+        // SAFETY: pool chunk-pointer array at `+0x8`.
+        let arr = unsafe { *((pool + 0x8) as *const usize) };
+        for j in 0..n as usize {
+            // SAFETY: `j < n` indexes the chunk-pointer array.
+            let chunk = unsafe { *((arr + j * 4) as *const usize) };
+            // SAFETY: chunk payload base at `+0x0`.
+            let base = unsafe { *(chunk as *const usize) };
+            // SAFETY: chunk payload byte length at `+0x8`.
+            let len = unsafe { *((chunk + 0x8) as *const usize) };
+            if base != 0 {
+                idx.spans.push(ChunkSpan { base, end: base + len, chunk });
+            }
+        }
+    }
+    idx.spans.sort_unstable_by_key(|s| s.base);
+    idx.counts = counts;
+    true
+}
+
+/// O(log chunks) pool free: binary-search the owning chunk, push its
+/// freelist — byte-identical to the stock free's writes. Returns false for
+/// pointers no chunk owns (oversize blocks; caller delegates to stock).
+fn gc_pool_free_fast(idx: &GcChunkIndex, ptr: usize) -> bool {
+    let Some(chunk) = crate::math::lua_gc::chunk_owning(&idx.spans, ptr) else {
+        return false;
+    };
+    // SAFETY: stock free order — link the block into the chunk's freelist
+    // (head at `+0x4`), bump the free count (`+0x10`).
+    let head = unsafe { *((chunk + 0x4) as *const u32) };
+    // SAFETY: see above.
+    unsafe {
+        *(ptr as *mut u32) = head;
+    }
+    // SAFETY: see above.
+    unsafe {
+        *((chunk + 0x4) as *mut u32) = ptr as u32;
+    }
+    // SAFETY: see above.
+    unsafe {
+        *((chunk + 0x10) as *mut u32) += 1;
+    }
+    true
+}
+
 /// Native replacement for the stock sweep phase of a normal collect.
 ///
 /// Reproduces `luaC_sweep(L, 0)` (`0x6f71d0`) exactly — sweep the userdata
@@ -20618,6 +20716,8 @@ fn lua_gc_sweep_native(l: i32) {
         return;
     }
     let nblocks = (g + 0x28) as *mut u32;
+    GC_CHUNK_INDEX.with_borrow_mut(|idx| {
+    let have_index = gc_chunk_index_refresh(g, idx);
     let mut free = |o: *mut GcHeader| {
         let addr = o as usize;
         // SAFETY: `o` is a dead, unlinked GC object; the tag is at `+0x4`.
@@ -20637,7 +20737,10 @@ fn lua_gc_sweep_native(l: i32) {
         let debited = unsafe { *nblocks }.wrapping_sub(size);
         // SAFETY: see above.
         unsafe { *nblocks = debited };
-        pool_realloc(l, addr as u32, 0);
+        if !(have_index && gc_pool_free_fast(idx, addr)) {
+            // Oversize block (or pools not built yet): stock free path.
+            pool_realloc(l, addr as u32, 0);
+        }
     };
 
     // SAFETY: `G+0x14` anchors the userdata list; layout per the doc comment.
@@ -20664,6 +20767,7 @@ fn lua_gc_sweep_native(l: i32) {
     unsafe {
         sweep_list((g + 0x10) as *mut *mut GcHeader, 0, &mut free);
     }
+    });
 }
 
 /// `luaC_collectgarbage` — `__fastcall(ecx = L)`, per-phase pause gauge.

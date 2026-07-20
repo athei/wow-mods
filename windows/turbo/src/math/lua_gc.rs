@@ -98,6 +98,38 @@ pub unsafe fn sweep_list(
     freed
 }
 
+/// One `SmallBlockPool` chunk span: `[base, end)` plus the chunk descriptor.
+///
+/// Built by the sweep adapter from the client's six pool classes; sorted by
+/// `base`. Frees resolve their owning chunk by binary search instead of the
+/// stock allocator's linear scan over every chunk of every class — the scan
+/// that makes stock frees O(total chunks) and dominates sweep pauses on
+/// large heaps.
+#[derive(Clone, Copy)]
+pub struct ChunkSpan {
+    /// First byte of the chunk's payload.
+    pub base: usize,
+    /// One past the last payload byte.
+    pub end: usize,
+    /// The chunk descriptor (freelist head at `+0x4`, free count at `+0x10`).
+    pub chunk: usize,
+}
+
+/// Find the chunk span owning `ptr`, if any.
+///
+/// `spans` must be sorted by `base` and non-overlapping (they are distinct
+/// allocations). Returns the descriptor address, or `None` for pointers no
+/// pool chunk owns (oversize blocks the stock path routes to `SMemFree`).
+#[must_use]
+pub fn chunk_owning(spans: &[ChunkSpan], ptr: usize) -> Option<usize> {
+    let i = spans.partition_point(|s| s.base <= ptr);
+    if i == 0 {
+        return None;
+    }
+    let s = &spans[i - 1];
+    (ptr < s.end).then_some(s.chunk)
+}
+
 #[cfg(test)]
 mod tests_lua_gc {
     use super::{GcHeader, sweep_list};
@@ -198,6 +230,25 @@ mod tests_lua_gc {
         assert_eq!(freed_ids, vec![0, 2]);
         assert_eq!(collect_list(head), vec![1]);
         assert_eq!(objs[1].hdr.marked, 0x04);
+    }
+
+    #[test]
+    fn chunk_owning_finds_only_in_bounds() {
+        use super::{ChunkSpan, chunk_owning};
+        let spans = [
+            ChunkSpan { base: 0x1000, end: 0x2000, chunk: 1 },
+            ChunkSpan { base: 0x3000, end: 0x3800, chunk: 2 },
+            ChunkSpan { base: 0x8000, end: 0x9000, chunk: 3 },
+        ];
+        assert_eq!(chunk_owning(&spans, 0x1000), Some(1));
+        assert_eq!(chunk_owning(&spans, 0x1fff), Some(1));
+        assert_eq!(chunk_owning(&spans, 0x2000), None);
+        assert_eq!(chunk_owning(&spans, 0x2fff), None);
+        assert_eq!(chunk_owning(&spans, 0x3400), Some(2));
+        assert_eq!(chunk_owning(&spans, 0x8fff), Some(3));
+        assert_eq!(chunk_owning(&spans, 0x9000), None);
+        assert_eq!(chunk_owning(&spans, 0xfff), None);
+        assert_eq!(chunk_owning(&[], 0x1000), None);
     }
 
     #[test]
