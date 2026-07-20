@@ -162,12 +162,7 @@ pub unsafe fn chunk_free_push(chunk: usize, block: usize) {
     loop {
         // SAFETY: `block` is dead; its first word is ours to use as a link.
         unsafe { *(block as *mut u32) = h };
-        match head.compare_exchange_weak(
-            h,
-            block as u32,
-            Ordering::Release,
-            Ordering::Relaxed,
-        ) {
+        match head.compare_exchange_weak(h, block as u32, Ordering::Release, Ordering::Relaxed) {
             Ok(_) => break,
             Err(cur) => h = cur,
         }
@@ -332,9 +327,24 @@ mod tests_lua_gc {
     fn chunk_owning_finds_only_in_bounds() {
         use super::{ChunkSpan, chunk_owning};
         let spans = [
-            ChunkSpan { base: 0x1000, end: 0x2000, chunk: 1, class: 0 },
-            ChunkSpan { base: 0x3000, end: 0x3800, chunk: 2, class: 1 },
-            ChunkSpan { base: 0x8000, end: 0x9000, chunk: 3, class: 5 },
+            ChunkSpan {
+                base: 0x1000,
+                end: 0x2000,
+                chunk: 1,
+                class: 0,
+            },
+            ChunkSpan {
+                base: 0x3000,
+                end: 0x3800,
+                chunk: 2,
+                class: 1,
+            },
+            ChunkSpan {
+                base: 0x8000,
+                end: 0x9000,
+                chunk: 3,
+                class: 5,
+            },
         ];
         assert_eq!(chunk_owning(&spans, 0x1000), Some(1));
         assert_eq!(chunk_owning(&spans, 0x1fff), Some(1));
