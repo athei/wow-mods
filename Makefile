@@ -57,7 +57,7 @@ GAME_MODS = $(dir $(WOW_EXE))mods
 
 MAKEFLAGS += --silent
 
-.PHONY: all windows windows-avx unix install bundle test fmt clippy audit doc check check-all \
+.PHONY: all windows windows-avx unix install bundle test fmt clippy audit doc check \
         lint-counts lint-counts-update update-inventories \
         upgrade upgrade-incompat clean require-wow-exe require-wine-sdk
 
@@ -226,9 +226,25 @@ fmt:
 	cd windows && cargo +$(FMT_TOOLCHAIN) fmt
 	cd unix && cargo +$(FMT_TOOLCHAIN) fmt
 
-# One command to run before every commit: formatting, the full clippy sweep, the
-# conventions audit, and the doc build. fmt-check first (fast, fails early on
-# the cheapest mistake).
+# One command, run before every commit. Everything the tree can check without a
+# running client: formatting, the clippy sweep over every target and every
+# `cfg`, the conventions audit, the doc build, the annotated lint counts, and
+# the tests. fmt-check first — fastest leg, cheapest mistake.
+#
+# There is deliberately no faster subset. A second, lighter gate is the one that
+# gets run, and the fuller one then rots: the `cfg` legs below were added after
+# `CRUMB=1` turned up three findings that had been invisible since the day the
+# breadcrumb ring was written, because nothing ever compiled it. Splitting the
+# gate would recreate exactly that.
+#
+# It costs around forty seconds against warm target dirs. Most of that is the
+# legs that cannot share a build cache — each `cfg` and the force-warn counts
+# compile under different flags, so cargo fingerprints them separately.
+#
+# Still NOT covered, and not coverable here: the differential harness itself.
+# `DIFF=1 make install`, then exercise the touched arms against a live client.
+# docs/CONVENTIONS.md § The reimplementation contract — that comparison is the
+# definition of done, and no amount of static checking substitutes for it.
 check:
 	cd windows && cargo +$(FMT_TOOLCHAIN) fmt --check
 	cd unix && cargo +$(FMT_TOOLCHAIN) fmt --check
@@ -240,29 +256,9 @@ check:
 	$(MAKE) clippy
 	$(MAKE) audit
 	$(MAKE) doc
-
-# Everything the tree can check without a running client. `check` is the fast
-# pre-commit gate and deliberately stays seconds; this is the one to run before
-# a release, after touching a lint table, or after touching anything behind a
-# `cfg`. It is minutes, because each leg below compiles under different flags
-# and so cannot share check's build cache.
-#
-# What it adds, and why none of it belongs in `check`:
-#   - the `cfg`-gated code. `check` compiles neither the differential harness
-#     nor the breadcrumb ring, so ~455 lines of unsafe mmap/FFI and every
-#     generated `*_diff` capture function are invisible to it. That is not
-#     hypothetical: this leg was added after `CRUMB=1` turned up three findings
-#     the gate had never seen.
-#   - the annotated lint counts, which need a force-warn run per leg.
-#   - the tests, which `check` leaves out because a green build and a green test
-#     say nothing about whether a reimplementation still matches the original.
-#     They are still worth running before a release.
-#
-# Still NOT covered, and not coverable here: the differential harness itself.
-# `DIFF=1 make install`, then exercise the touched arms against a live client.
-# docs/CONVENTIONS.md § The reimplementation contract — that comparison is the
-# definition of done, and no amount of static checking substitutes for it.
-check-all: check
+	# The code behind a `cfg`: the breadcrumb ring (~455 lines of unsafe mmap and
+	# Win32 FFI) and the differential harness, including every generated `*_diff`
+	# capture function. A default build compiles neither.
 	CRUMB=1 $(MAKE) clippy
 	CRUMB=1 $(MAKE) doc
 	DIFF=1 $(MAKE) clippy

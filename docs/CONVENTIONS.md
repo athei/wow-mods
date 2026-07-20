@@ -31,13 +31,15 @@ Lint suppressions do **not** use that shape, and the difference is the point. A 
 
 `scripts/audit.sh --file <path>` runs the per-file subset — doc shape, `pub(crate)`, the lint-group ban and the confined patterns — for an editor hook that wants feedback at edit time. It deliberately skips the release-hygiene rules, which are scoped by exclusion sets (the vendored addon, the licence texts, this document) that a lone path cannot reconstruct, and the inventory diffs, which are whole-tree by definition. It is edit-time feedback, not a substitute for `make audit`.
 
-### `make check-all`
+### One gate, no lighter subset
 
-`make check` compiles the tree one way. Code behind a `cfg` is therefore invisible to it — neither the differential harness nor the breadcrumb ring is built, so around 455 lines of unsafe mmap and Win32 FFI, plus every generated `*_diff` capture function, are linted by nothing. That is not a theoretical hole: the first `CRUMB=1` run turned up three findings the gate had never seen, two of them functions carrying a panic path their own comments argued could not be reached.
+`make check` is everything the tree can check without a running client, and there is deliberately no faster variant to run instead.
 
-`make check-all` is the complete gate — `check`, then the same legs under `CRUMB=1` and `DIFF=1`, then the lint counts, then the tests. It takes about forty seconds against warm target dirs rather than the handful of seconds `check` costs, because each `cfg` compiles under different flags and so keeps its own cache. Run it before a release, after touching a lint table, and after touching anything behind a `cfg`.
+The reason is a hole it used to have. A default build compiles the tree one way, so code behind a `cfg` was invisible to it — neither the differential harness nor the breadcrumb ring gets built, leaving around 455 lines of unsafe mmap and Win32 FFI, plus every generated `*_diff` capture function, linted by nothing. The first run with `CRUMB=1` turned up three findings that had been sitting there since the day that code was written, two of them functions carrying a panic path their own comments argued could not be reached.
 
-`check` stays the fast pre-commit gate. Splitting them is deliberate: a gate nobody runs because it is slow protects nothing.
+Those legs briefly lived in a separate, fuller target. That is the arrangement that produced the hole in the first place: the lighter gate is the one that gets run, and whatever sits outside it stops being true. So they are in `check`, and `check` is what runs before a commit.
+
+It costs around forty seconds against warm target dirs. Most of that is the legs that cannot share a build cache — each `cfg`, and the force-warn counts, compile under different flags, so cargo fingerprints them separately.
 
 Two of its legs are also useful alone:
 
