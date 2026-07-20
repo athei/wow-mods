@@ -1,6 +1,6 @@
 # Architecture
 
-Two mods that share nothing at runtime but share a build system and a hook substrate. `wow_turbo.dll` is an incremental replace-in-place host for the 1.12 client: 335 manifest entries and as many Rust adapters, everything else runs stock. `wow_translate.dll` is a `UnitXP` extension that reaches macOS translation through Wine's unix-call boundary.
+Two mods that share nothing at runtime but share a build system and a hook substrate. `wow_turbo.dll` is an incremental replace-in-place host for the 1.12 client: one manifest entry and one Rust adapter per replaced function (a few hundred and growing), everything else runs stock. `wow_translate.dll` is a `UnitXP` extension that reaches macOS translation through Wine's unix-call boundary.
 
 ```
 Wow.exe ──▶ wow_turbo.dll        MinHook detours over Wow.exe's .text
@@ -89,11 +89,11 @@ The consequence is worth stating loudly: `make test` builds and runs those kerne
 
 Numeric convention: kernels compute in `f32`, matching the SSE lane width, unless a function has to track an 80-bit x87 original — then it computes in `f64` and narrows through `f64_to_f32`. Every float-to-int conversion routes through `wow_shared::ftol`, because a compiler-lowered `f64 as i64` on i686 re-emits its own control-word dance and rounds differently from what the client did.
 
-`windows/turbo/src/win/hooks.rs` is a single very large module holding all 334 adapters. Paths are written fully qualified inline with no top-level `use` block, so appended adapters compose cleanly and an import edit cannot desync them.
+`windows/turbo/src/win/hooks.rs` is a single very large module holding every adapter (the only non-adapter top-level `pub fn` is `init_engine_clock`). Paths are written fully qualified inline with no top-level `use` block, so appended adapters compose cleanly and an import edit cannot desync them.
 
 ## The differential harness
 
-Two switches. Compile-time `WOW_TURBO_DIFF=1` (`DIFF=1 make install`) sets `cfg(wow_turbo_diff)`; runtime `WOW_TURBO_DIFF_ARM=all|Name1,Name2` arms individual hooks at launch. Only 25 of the 335 entries carry a `diff` table, and every other entry emits a byte-identical thunk either way, so the shipped DLL pays nothing for the harness existing.
+Two switches. Compile-time `WOW_TURBO_DIFF=1` (`DIFF=1 make install`) sets `cfg(wow_turbo_diff)`; runtime `WOW_TURBO_DIFF_ARM=all|Name1,Name2` arms individual hooks at launch. Only a minority of entries carry a `diff` table — arithmetic-heavy functions where a rounding difference is hardest to catch by eye — and every other entry emits a byte-identical thunk either way, so the shipped DLL pays nothing for the harness existing. A hook without a table has no diff path: arming it proves nothing about it.
 
 The ordering is the safety property: the compare path runs the **original** on the live arguments, so the game always proceeds on ground truth, then re-runs the reimplementation against snapshots of those same inputs and compares only the annotated region. Comparisons cover `ins`, `out`, `float` and `ulp` tolerances; an `expected` annotation demotes a known divergence from warn to debug, for the reimplementations that are deliberately more precise than the x87 original.
 

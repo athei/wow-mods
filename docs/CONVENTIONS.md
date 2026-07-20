@@ -22,14 +22,15 @@ But a lint can only express a lint-shaped rule, and the rules a lint *can't* exp
 | `static … : OnceLock` confined to the recorded exception files | §`LazyLock` over `OnceLock` |
 | `pub(crate)` and `pub(in …)` = 0 | §No `pub(crate)` |
 | Hand-written `Clone` / `Copy` impls = 0 | §No default `Copy` / `Clone` |
+| Block (`/** … */`) and attribute (`#[doc = …]`) doc comments = 0 | §Doc comments |
 | `mod.rs` files = 0 | §Module style |
-| Release hygiene | §Release hygiene |
+| Release hygiene (the pattern-matchable rules) | §Release hygiene |
 
 Every finding names the section it came from. The confined-pattern checks compare **sets of files**, not counts, so moving an exception to a new file fails even though the count is unchanged — and a recorded file that stops matching fails too, because a permission that has outlived its last use silently re-grants itself to whatever gets added next.
 
 Lint suppressions do **not** use that shape, and the difference is the point. A set of files can only answer "may this file hold a suppression at all", which hands every file already on the list an unbounded budget — and the file holding most of them is the largest in the tree. `scripts/allow_inventory.txt` records the file, the lint **and** the count, so one more site is a diff line somebody has to look at.
 
-`scripts/audit.sh --file <path>` runs the per-file subset — doc shape, `pub(crate)`, the lint-group ban and the confined patterns — for an editor hook that wants feedback at edit time. It deliberately skips the release-hygiene rules, which are scoped by exclusion sets (the vendored addon, the licence texts, this document) that a lone path cannot reconstruct, and the inventory diffs, which are whole-tree by definition. It is edit-time feedback, not a substitute for `make audit`.
+`scripts/audit.sh --file <path>` runs the per-file subset — doc shape, `pub(crate)`, the lint-group ban, the suppression-argument check and the confined patterns — for an editor hook that wants feedback at edit time. It deliberately skips the release-hygiene rules, which are scoped by exclusion sets (the vendored addon, the licence texts, this document) that a lone path cannot reconstruct, and the inventory diffs, which are whole-tree by definition. It is edit-time feedback, not a substitute for `make audit`.
 
 ### One gate, no lighter subset
 
@@ -41,10 +42,10 @@ Those legs briefly lived in a separate, fuller target. That is the arrangement t
 
 It costs around forty seconds against warm target dirs. Most of that is the legs that cannot share a build cache — each `cfg`, and the force-warn counts, compile under different flags, so cargo fingerprints them separately.
 
-Two of its legs are also useful alone:
+One of its legs is also useful alone, and one target feeds it without being part of it:
 
-- **`make lint-counts`** re-measures the finding count annotated against every exempted lint in the workspace manifests, and fails if one has moved. `make lint-counts-update` rewrites them.
-- **`make update-inventories`** regenerates both committed inventories after a deliberate change.
+- **`make lint-counts`** re-measures the finding count annotated against every exempted lint in the workspace manifests, and fails if one has moved (it is a leg of `check`). `make lint-counts-update` rewrites them.
+- **`make update-inventories`** regenerates both committed inventories after a deliberate change. It is not a leg of `check` — `check` only *diffs* the inventories; this is what you run to update them first.
 
 **What no target covers**, and what none can: the differential harness itself. `DIFF=1 make install`, then exercise the touched arms against a live client. See §The reimplementation contract — that comparison is the definition of done, and nothing static substitutes for it.
 
@@ -78,9 +79,11 @@ None of this licenses sloppiness elsewhere. It applies to the reimplementation s
 
 **Verifying a change here means running the harness, not just a green build.** `DIFF=1 make install`, then exercise the touched paths with the relevant arm enabled. A build that compiles and a test that passes say nothing about whether the replacement still matches.
 
+**But first check that the entry you touched even has a harness.** Only the entries carrying a `[diff]` table in `symbols.toml` are armable — a minority, and only those with a `*mut` out region or a scalar return can carry one at all; `build.rs` refuses the rest. A hook without a table has no diff path, so an armed run over it is *silent by construction* — it proves nothing about your change, however green it looks. If yours has no table, add one when the signature admits it; otherwise the verification is in-game observation, and say so in the change rather than implying the harness covered it.
+
 ## Release hygiene
 
-The repository is public. Source should read as the engineering itself — not as a diary of how the engineering got written, and not as a document that assumes the reader has access to things they do not. `make audit` enforces the rules below.
+The repository is public. Source should read as the engineering itself — not as a diary of how the engineering got written, and not as a document that assumes the reader has access to things they do not. `make audit` enforces most of the rules below by pattern — the private server's name, decompiler/disassembler words, tool-generated identifiers, dates, commit hashes, absolute paths, by-line source citations. What it cannot pattern-match is *tool names in general* and *workflow narration*: naming a build-side script the reader cannot open is against the rule but slips the grep, so those two bullets are on the author to honour.
 
 Do not write, anywhere in first-party source:
 
@@ -95,7 +98,7 @@ Do not write, anywhere in first-party source:
 - **Incident provenance**: a date, a commit hash, "until commit `abc1234`", "the bug that bit us". State the invariant and why it holds. If a comment only makes sense to someone who knows what changed, restate the change as prose.
 - **A tooling signal**, or an absolute `/Users/...` path.
 
-The two `Cargo.lock` files and the verbatim licence texts are out of scope. `THIRD-PARTY-LICENSES.md` reproduces MinHook's BSD notice, which names a disassembler engine and must keep doing so.
+Several files are out of scope, and the audit excludes them by name: the two `Cargo.lock` files, `LICENSE`, `THIRD-PARTY-LICENSES.md`, the vendored addon's `LICENSE`, and — because they quote the patterns they ban in order to state the rule — `scripts/audit.sh` and this document. `THIRD-PARTY-LICENSES.md` reproduces MinHook's BSD notice, which names a disassembler engine and must keep doing so.
 
 ## Warning suppressions
 
@@ -127,6 +130,9 @@ So a suppression belongs on the smallest item that triggers it, naming only the 
 
 - **The reimplementation naming convention.** Adapter and kernel names mirror the host's C++ symbols with `__` marking the `::`, so `non_snake_case` fires on essentially every name in those modules. 1,539 items would each need an attribute to say one thing about all of them. That is a convention, not an exception, and per-item annotation would obscure it rather than sharpen it.
 - **Machine-written code.** The generated symbol table is non-idiomatic throughout, by construction.
+- **A lint whose trigger is the file's role in code generation, not any item in it.** `build.rs` emits Rust source as string literals, so the generated code's format args read as this script's (`literal_string_with_formatting_args`). `diff.rs`'s reporting API is driven by the manifest's diff annotations, so which of its items a given build references is not something the file can state per item (`dead_code`).
+
+Each recorded file carries its own argument in place; the list is the set the audit enforces, not an exhaustive taxonomy of what could ever qualify.
 
 ### Every suppression carries an argument
 

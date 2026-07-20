@@ -53,8 +53,10 @@ version_loader-<version>/
    under, then copy `wow_mods.fake.dll` into your prefix as
    `drive_c/windows/syswow64/wow_mods.dll`. Wine resolves builtins by name
    through the prefix, not `lib/wine` — the fake DLL is a tiny placeholder
-   that points Wine at the real bridge. (`make install` does all of this for
-   a source build.)
+   that points Wine at the real bridge. (`make install` stages the `wine/`
+   half for a source build, but the prefix copy is yours to do — the Makefile
+   deliberately never writes into a Wine prefix, since the prefix belongs to
+   whatever launches the game.)
 3. Load the mods with whatever mod loader you already use — **after your
    other mods**, so `wow_turbo` yields on anything they already hooked (see
    [Playing with other mods](#playing-with-other-mods)). If you don't have
@@ -135,9 +137,12 @@ About 330 functions, grouped roughly like this:
 | UI, minimap, splines, misc | 30 | minimap blips, rect clamping, cubic splines |
 | One-offs | 3 | MPQ decompression, the engine clock, the FMOD MP3 mixer |
 
-Each hook is a faithful port validated against the original — the project
-ships a differential test mode that runs reimplementation and original side by
-side on live game data and reports any divergence.
+Each hook is a faithful port. Every patch site is verified byte-for-byte
+before it is applied, and the project ships a differential test mode that runs
+reimplementation and original side by side on live game data and reports any
+divergence — for the entries annotated with a `[diff]` table in
+`windows/turbo/symbols.toml` (a minority, chosen for the arithmetic-heavy
+functions where a subtle rounding difference would be hardest to spot by eye).
 
 ### Text rendering in crowds
 
@@ -283,7 +288,8 @@ WoWTranslate is Wine-on-macOS only while `wow_turbo` runs anywhere.
 ## Building
 
 Requires the Wine-on-macOS cross toolchain (`WINE_SDK`, `xwin`/`lld-link`,
-`winebuild`, `swiftc`) and a rustup toolchain: stable 1.97 or newer, per
+`winebuild`, `swiftc`), `cargo-nextest` (the runner both `make test` and
+`make check` invoke), and a rustup toolchain: stable 1.97 or newer, per
 `rust-version` in the Cargo manifests, plus nightly for `make fmt`
 (`rustfmt.toml` uses nightly-only options). Two workspaces:
 
@@ -301,16 +307,27 @@ into a local setup. Destinations come from the environment, not the Makefile:
 it) and `WINE_SDK` — plus an optional `WINE_INSTALL_DIR` — names the Wine
 trees the builtins install into.
 
-The development conventions — the reimplementation contract, doc-comment shape,
-unsafe discipline, warning suppressions, release hygiene — live in
-[`docs/CONVENTIONS.md`](docs/CONVENTIONS.md).
+How the pieces fit — the hook manifest and its codegen, `preserve` and the x87
+ABIs, the hook lifecycle, the PE↔unix bridge — is in
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). The development conventions — the
+reimplementation contract, doc-comment shape, unsafe discipline, warning
+suppressions, release hygiene — live in
+[`docs/CONVENTIONS.md`](docs/CONVENTIONS.md). Read both before a first change.
 
-Run **`make check`** before every commit: `cargo fmt --check`, the clippy sweep
-with `nursery` and `pedantic` enabled, `make audit` (the rules clippy cannot
-express), and `make doc` (rustdoc, so doc links have to resolve). The check legs
-deny every warning via cargo's `build.warnings = "deny"`; normal builds and a
-plain `cargo clippy` only warn. Each audit finding names the section of
-`docs/CONVENTIONS.md` it comes from. `make test` runs the unit tests.
+Run **`make check`** before every commit. It is the whole gate and there is
+deliberately no lighter subset: `cargo fmt --check` (promoting rustfmt's silent
+`Unknown configuration option` warning to a failure), the clippy sweep with
+`nursery` and `pedantic` over every target *and* every `cfg` (`CRUMB=1`,
+`DIFF=1` — code behind a `cfg` was once linted by nothing), `make audit` (the
+rules clippy cannot express), `make doc` (rustdoc, so doc links have to
+resolve), `make lint-counts` (the annotated exemption counts), and `make test`
+(the unit tests, via `cargo-nextest`). The clippy and doc legs deny every
+warning via cargo's `build.warnings = "deny"`; normal builds and a plain
+`cargo clippy` only warn. Each audit finding names the section of
+`docs/CONVENTIONS.md` it comes from. There is no CI — pushing a `v*` tag only
+opens a draft release — so this is the only gate. **`make check` says nothing
+about whether a reimplementation still matches the original; see the
+reimplementation contract in `docs/CONVENTIONS.md`.**
 
 Releases: pushing a `v*` tag opens a draft release through the GitHub
 workflow; upload the `dist/` zips from a local `make bundle`, generate the

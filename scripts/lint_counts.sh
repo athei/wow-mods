@@ -12,10 +12,10 @@
 # unknown behind a group name. Nothing else in the tree recomputes them, and a
 # count nobody recomputes is prose. This is the recomputation.
 #
-# Deliberately NOT part of `make check`. Each leg force-warns the exempted lints,
-# which changes the compiler flags and so cannot share `check`'s build cache —
-# it is minutes, not the ~5s the rest of the gate costs. Run it when you touch a
-# lint table; `make check` stays cheap enough to run on every commit.
+# A leg of `make check`, and useful alone when you touch a lint table. Each leg
+# force-warns the exempted lints, which changes the compiler flags and so cannot
+# share the build cache with check's default-cfg legs — cargo fingerprints it
+# separately. See docs/CONVENTIONS.md §"One gate, no lighter subset".
 #
 # Counts come from `--force-warn`, which overrides a source-level `#![allow]` as
 # well as the manifest one. That is intended: the number is what the lint finds,
@@ -44,8 +44,8 @@ lints_of() {
 }
 
 # Count findings per lint in one leg. One clippy run with every exempted lint
-# force-warned, JSON output keyed by lint name — 35 separate runs would rebuild
-# the crate 35 times for the same answer.
+# force-warned, JSON output keyed by lint name — a run per lint would rebuild
+# the crate that many times for the same answer.
 counts_of() {
     ws=$1
     flags=''

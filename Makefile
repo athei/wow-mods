@@ -32,8 +32,8 @@ PE_i386     := i686-pc-windows-msvc
 # The unix `.so` must be x86_64 Mach-O (Wine's unix-call boundary), so shipped
 # artifacts are always built for x86_64.
 UNIX_RELEASE_TARGET := x86_64-apple-darwin
-# Native host target for unit tests + clippy (aarch64 on Apple Silicon) — no Rosetta.
-UNIX_NATIVE_TARGET  := $(shell rustc -vV | sed -n 's/^host: //p')
+# The unix host-target legs (tests + clippy) reach the native host — aarch64 on
+# Apple Silicon, no Rosetta — by omitting `--target`, per unix/.cargo/config.toml.
 
 OUT_i386 := windows/target/$(PE_i386)/$(PROFILE)
 OUT_avx  := windows/target/avx/$(PE_i386)/$(PROFILE)
@@ -57,7 +57,7 @@ GAME_MODS = $(dir $(WOW_EXE))mods
 
 MAKEFLAGS += --silent
 
-.PHONY: all windows windows-avx unix install bundle test fmt clippy audit doc check \
+.PHONY: all windows windows-avx unix install bundle test fmt clippy audit doc check unsafe-debt \
         lint-counts lint-counts-update update-inventories \
         upgrade upgrade-incompat clean require-wow-exe require-wine-sdk
 
@@ -184,9 +184,9 @@ audit:
 	./scripts/audit.sh
 
 # The finding counts annotated against each exempted lint in the workspace
-# manifests. Deliberately outside `check`: force-warning those lints changes the
-# compiler flags, so this cannot share check's build cache and costs minutes
-# rather than seconds. Run it when you change a lint table.
+# manifests. A leg of `check`, and useful alone when you change a lint table.
+# Force-warning those lints changes the compiler flags, so this leg cannot share
+# the build cache with the default-cfg legs; cargo fingerprints it separately.
 lint-counts:
 	./scripts/lint_counts.sh
 

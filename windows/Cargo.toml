@@ -114,6 +114,12 @@ cast_possible_wrap = "allow"            # 99
 cast_precision_loss = "allow"           # 107
 cast_lossless = "allow"                 # 59
 float_cmp = "allow"                     # 46
+
+# Pointer casts in the transcription — these convert no numbers, so the
+# narrowing/rounding argument above does not reach them. The client's records
+# are read through raw pointers held as the stock routine held them; `&raw const`
+# and `.cast()` are bit-identical rewrites, but they re-spell every access site
+# and move the code away from the original it has to be checked against.
 borrow_as_ptr = "allow"                 # 40
 ptr_as_ptr = "allow"                    # 24
 ptr_cast_constness = "allow"            # 12
