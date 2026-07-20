@@ -29321,18 +29321,13 @@ pub fn world_rasterize_trace_line_cells__69c780(p1: *const f32, p2: *const f32, 
     );
 }
 
-/// `Rasterizer_EmitSlopedLineDDA` — `__fastcall(ecx = p0: *const f32 {x0,y0},
-/// edx = p1: *const f32 {x1,y1}, stack = seg: *const i32 {start minor, start
-/// major, end minor, end major})`, `RET 0x4`, void. Sibling of
-/// [`world_rasterize_trace_line_cells__69c780`]: DDA-walks the segment's
-/// major axis (the walk lives in
-/// `math::world::rasterizer_emit_sloped_line_dda__69c600`) and appends each
-/// emitted `(major, minor)` i32 pair to the SAME global list — base at
-/// `World_TraceLineAgainstTerrain` — fastcall(ecx = startPos f32*[2..],
-/// edx = endPos f32*[2..]; inoutHitFraction f32*, flags, outHitChunk i32*),
-/// RET 0xC, void. Sets up the world→grid recentre and cell indices, resets
-/// the trace cursor, dispatches to one of four DDA span walkers by the
-/// major-axis / same-row-or-column tests, then runs the chunk worker.
+/// `World_TraceLineAgainstTerrain` — the terrain trace-line entry point.
+///
+/// `fastcall(ecx = startPos f32*[2..], edx = endPos f32*[2..];
+/// inoutHitFraction f32*, flags, outHitChunk i32*)`, `RET 0xC`, void. Sets up
+/// the world→grid recentre and cell indices, resets the trace cursor,
+/// dispatches to one of four DDA span walkers by the major-axis /
+/// same-row-or-column tests, then runs the chunk worker.
 ///
 /// Two of the four walkers are OURS (the X-major cell rasterizer 0x69c780
 /// and the Y-major sloped DDA 0x69c600) — called directly; the two
@@ -29427,6 +29422,14 @@ pub fn world_trace_line_against_terrain__69c320(
     chunk_worker(start_pos, end_pos, inout_hit_fraction, flags, out_hit_chunk);
 }
 
+/// `Rasterizer_EmitSlopedLineDDA` — the sloped-span DDA emitter.
+///
+/// `__fastcall(ecx = p0: *const f32 {x0,y0}, edx = p1: *const f32 {x1,y1},
+/// stack = seg: *const i32 {start minor, start major, end minor, end major})`,
+/// `RET 0x4`, void. Sibling of [`world_rasterize_trace_line_cells__69c780`]:
+/// DDA-walks the segment's major axis (the walk lives in
+/// `math::world::rasterizer_emit_sloped_line_dda__69c600`) and appends each
+/// emitted `(major, minor)` i32 pair to the SAME global list — base at
 /// `DAT_00c962c8`, dword write cursor `DAT_00c89f40`, two `INC`-bumped dword
 /// stores per pair, NO bounds check (raw pointer + wrapping offset, never a
 /// slice — the buffer's sizing is the caller's contract). Zero callees; the
