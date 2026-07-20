@@ -8,6 +8,7 @@
 
 #[cfg(wow_turbo_diff)]
 mod diff;
+mod events;
 mod fmod;
 mod hooks;
 mod symbols;

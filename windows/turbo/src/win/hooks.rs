@@ -11890,7 +11890,7 @@ pub fn os_get_time_ms__42b790() -> i64 {
 /// engine-clock scale, without the bias. Returns 0 before
 /// [`init_engine_clock`] publishes the magic (never observed: attach runs it
 /// before `install_all`).
-fn clock_ticks_to_ms(ticks: u64) -> u64 {
+pub fn clock_ticks_to_ms(ticks: u64) -> u64 {
     let magic = CLOCK_MAGIC.load(core::sync::atomic::Ordering::Relaxed);
     ((u128::from(ticks) * u128::from(magic)) >> CLOCK_SHIFT) as u64
 }
@@ -40406,4 +40406,57 @@ pub fn c_gx_device__apply_texture_stage_state__5a29d0(
         // SAFETY: the stage's dirty-slot dword in the state block, as stock.
         unsafe { (dirty_addr as *mut u32).write_unaligned(0) };
     }
+}
+
+/// `SignalEvent` — paramless event dispatch, `__fastcall(ecx = event id)`.
+///
+/// Observation wrapper for the `wow::events` gauge: the original always runs;
+/// when the gauge is armed the whole dispatch (listener walk included) is
+/// timed and attributed to the event. Inert delegate otherwise.
+pub fn signal_event__703e50(event_id: i32) {
+    crate::win::events::signal_event(event_id);
+}
+
+/// `SignalEventParam` — parameterized event dispatch, variadic `cdecl`.
+///
+/// `tap` entry: the shim hands over the argument area (argument 0 = event id)
+/// and tail-jumps to the original. When the `wow::events` gauge is armed this
+/// stores the current event for the per-listener attribution in
+/// [`frame_script_invoke_handler_formatted_v__702710`]; no-op otherwise.
+pub fn signal_event_param__703f50(args: *const u32) {
+    crate::win::events::signal_event_param_tap(args);
+}
+
+/// `FrameScript_InvokeHandler` — one paramless handler call, `__thiscall`.
+///
+/// `ecx` = the frame, one stack argument (the frame's handler slot at
+/// frame+0xc), `RET 0x4`. Observation wrapper for the `wow::events` gauge:
+/// the original always runs; armed, the call is timed and attributed to the
+/// frame's name and (under `SignalEvent`) to the current event.
+pub fn frame_script_invoke_handler__702690(frame: *mut core::ffi::c_void, handler_slot: *mut u32) {
+    crate::win::events::invoke_handler(frame, handler_slot);
+}
+
+/// `FrameScript_InvokeHandler` (formatted) — variadic `cdecl` UI wrapper.
+///
+/// `tap` entry marking a boundary: every handler reached from here is a UI
+/// invoke (`OnUpdate`, `OnClick`, ...), not an event dispatch, so the armed
+/// gauge clears the current-event slot. No-op otherwise.
+pub fn frame_script_invoke_handler_formatted__7026f0(args: *const u32) {
+    crate::win::events::invoke_formatted_tap(args);
+}
+
+/// `FrameScript_InvokeHandlerFormattedV` — one formatted handler call.
+///
+/// `cdecl(frame, handlerSlot, format, va_list)`, the fixed-arity core with
+/// exactly two callers (`SignalEventParam` per listener, the variadic UI
+/// wrapper). Observation wrapper for the `wow::events` gauge: the original
+/// always runs; armed, the call is timed and attributed.
+pub fn frame_script_invoke_handler_formatted_v__702710(
+    frame: *mut core::ffi::c_void,
+    handler_slot: *mut u32,
+    format: *const u8,
+    args: *const u32,
+) {
+    crate::win::events::invoke_handler_formatted_v(frame, handler_slot, format, args);
 }

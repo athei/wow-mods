@@ -279,6 +279,10 @@ fn render(m: &Manifest) -> String {
             emit_x87pow(&mut out, &mut install_body, name, &snake, &screaming, f);
             continue;
         }
+        if f.abi == "tap" {
+            emit_tap(&mut out, &mut install_body, name, &snake, &screaming, f);
+            continue;
+        }
         let abi = abi_str(&f.abi, name);
         // `void` → no return arrow at all (an explicit `-> ()` trips
         // `clippy::unused_unit`); any other type is emitted verbatim. A function
@@ -1133,6 +1137,135 @@ fn emit_x87pow(
     );
     let _ = writeln!(install_body, "        {name:?},");
     let _ = writeln!(install_body, "        |trampoline| {{");
+    let _ = writeln!(
+        install_body,
+        "            // SAFETY: the trampoline runs the displaced prologue then continues"
+    );
+    let _ = writeln!(
+        install_body,
+        "            // into the unhooked original, carrying its ABI."
+    );
+    let _ = writeln!(install_body, "            let original = unsafe {{");
+    let _ = writeln!(
+        install_body,
+        "                ::core::mem::transmute::<*mut ::core::ffi::c_void, {name}Fn>(trampoline)"
+    );
+    let _ = writeln!(install_body, "            }};");
+    let _ = writeln!(
+        install_body,
+        "            let _ = {screaming}_ORIGINAL.set(original);"
+    );
+    let _ = writeln!(install_body, "        }},");
+    let _ = writeln!(install_body, "    ));");
+}
+
+/// Emit the hook plumbing for an `abi = "tap"` entry.
+///
+/// An observation shim for a variadic `cdecl` function no named convention can
+/// express. The naked thunk hands the adapter a pointer to the caller's
+/// argument area, then tail-jumps into the original through the trampoline —
+/// the original ALWAYS runs, and the stack, return address and argument area
+/// reach it untouched, so the shim is transparent to both sides. The adapter
+/// observes the leading (fixed) arguments and must not mutate them.
+/// Constraints: exactly one `*const u32` arg (the argument-area base), a
+/// `void` return, no `preserve` (the shim saves/restores `ecx`/`edx` around
+/// the adapter call itself; `eax` carries no state into a function entry),
+/// and no differential harness (nothing is replaced, so there is nothing to
+/// compare). Crumb builds skip recording here like the x87 shims — the thunk
+/// has no generated Rust body to host the cfg'd call.
+fn emit_tap(
+    out: &mut String,
+    install_body: &mut String,
+    name: &str,
+    snake: &str,
+    screaming: &str,
+    f: &Function,
+) {
+    assert!(
+        f.args == ["*const u32"] && f.ret == "void",
+        "{name}: tap supports exactly (*const u32) -> void, got {:?} -> {}",
+        f.args,
+        f.ret
+    );
+    assert!(
+        f.preserve.is_empty(),
+        "{name}: tap handles register preservation itself, got {:?}",
+        f.preserve
+    );
+    assert!(
+        f.diff.is_none(),
+        "{name}: tap entries cannot carry a [diff] table"
+    );
+
+    // Opaque trampoline handle for the `originals` accessor contract, plus the
+    // raw cell the naked shim tail-jumps through (published before enable, so
+    // the shim can never read it unset).
+    let _ = writeln!(out, "pub type {name}Fn = unsafe extern \"C\" fn();");
+    let _ = writeln!(
+        out,
+        "static {screaming}_ORIGINAL: ::std::sync::OnceLock<{name}Fn> = ::std::sync::OnceLock::new();"
+    );
+    let _ = writeln!(
+        out,
+        "static {screaming}_TRAMPOLINE: ::core::sync::atomic::AtomicUsize = \
+         ::core::sync::atomic::AtomicUsize::new(0);"
+    );
+
+    // Ordinary-ABI inner the asm shim calls: its one argument is the address of
+    // the hooked call's first stack argument.
+    let _ = writeln!(
+        out,
+        "extern \"C\" fn {snake}_tap_inner(args: *const u32) {{"
+    );
+    let _ = writeln!(out, "    super::hooks::{snake}(args);");
+    let _ = writeln!(out, "}}");
+
+    let _ = writeln!(out, "#[unsafe(naked)]");
+    let _ = writeln!(out, "extern \"C\" fn {snake}_thunk() {{");
+    let _ = writeln!(
+        out,
+        "    // SAFETY: at entry ESP points at the hooked call's return address, so\n    \
+         // ESP+4 is the first stack argument; after the two saves that address is\n    \
+         // ESP+12, passed to the cdecl inner and popped again. ECX/EDX are restored\n    \
+         // so even a caller keeping them live across the call sees them intact, and\n    \
+         // the tail-jump reaches the trampoline with the original stack layout —\n    \
+         // the variadic tail is never copied, only left in place."
+    );
+    let _ = writeln!(
+        out,
+        "    ::core::arch::naked_asm!(\n        \
+         \"push ecx\",\n        \
+         \"push edx\",\n        \
+         \"lea eax, [esp + 12]\",\n        \
+         \"push eax\",\n        \
+         \"call {{inner}}\",\n        \
+         \"add esp, 4\",\n        \
+         \"pop edx\",\n        \
+         \"pop ecx\",\n        \
+         \"jmp dword ptr [{{tramp}}]\",\n        \
+         inner = sym {snake}_tap_inner,\n        \
+         tramp = sym {screaming}_TRAMPOLINE,\n    \
+         )"
+    );
+    let _ = writeln!(out, "}}");
+    out.push('\n');
+
+    // Install step: like the named-convention path, plus publishing the raw
+    // trampoline address the naked shim jumps through.
+    let _ = writeln!(install_body, "    queued += usize::from(install_thunk(");
+    let _ = writeln!(install_body, "        image_base,");
+    let _ = writeln!(install_body, "        {:#010x},", f.rva);
+    let _ = writeln!(install_body, "        {:?},", f.sig);
+    let _ = writeln!(
+        install_body,
+        "        {snake}_thunk as *mut ::core::ffi::c_void,"
+    );
+    let _ = writeln!(install_body, "        {name:?},");
+    let _ = writeln!(install_body, "        |trampoline| {{");
+    let _ = writeln!(
+        install_body,
+        "            {screaming}_TRAMPOLINE.store(trampoline as usize, ::core::sync::atomic::Ordering::Release);"
+    );
     let _ = writeln!(
         install_body,
         "            // SAFETY: the trampoline runs the displaced prologue then continues"

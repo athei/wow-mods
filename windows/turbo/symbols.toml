@@ -3475,3 +3475,71 @@ abi  = "fastcall"
 ret  = "*mut u8"
 args = ["i32", "u32", "u32"]
 preserve = []
+
+# --- FrameScript event-dispatch gauge (`wow::events`) ---
+# Observation-only hooks: every adapter runs the original and replaces nothing;
+# the whole gauge is inert unless `wow::events` debug logging is enabled.
+# Event registry: base *(0xceef68), count *(0xceef64), stride 0x10 — entry+0x0
+# is the event name, entry+0xc the intrusive listener list (node+0x4 next
+# tagged low-bit-terminated, node+0x8 the listening frame). A frame's name
+# comes from its vtable slot 1 (`thiscall`, may return null).
+
+# Paramless event dispatch: walks the listener list and invokes each frame's
+# handler via 0x702690. Early-outs when the event has no listeners.
+[functions.SignalEvent__703e50]
+rva  = 0x303e50
+sig  = "8B 15 ?? ?? ?? ?? C1 E1 04"
+abi  = "fastcall"
+ret  = "void"
+args = ["i32"]
+preserve = []
+
+# Parameterized event dispatch — variadic `cdecl(eventId, format, ...)`, so it
+# carries the `tap` shim: the adapter observes the argument area (arg 0 = event
+# id) and the original always runs. Its per-listener work is timed downstream
+# in 0x702710, which this function is one of exactly two callers of.
+[functions.SignalEventParam__703f50]
+rva  = 0x303f50
+sig  = "55 8B EC 8B 15 ?? ?? ?? ?? 57"
+abi  = "tap"
+ret  = "void"
+args = ["*const u32"]
+preserve = []
+
+# Paramless handler invoke: `thiscall(ecx = frame)` + one stack arg (the
+# frame's handler slot at frame+0xc: {funcRef, refOwner}), `RET 0x4`. Called
+# per listener by SignalEvent and directly by many UI paths (show/hide,
+# cursor, tooltip), which the gauge buckets separately from event dispatch.
+[functions.FrameScript_InvokeHandler__702690]
+rva  = 0x302690
+sig  = "55 8B EC A1 ?? ?? ?? ?? 40 56 8B 35 ?? ?? ?? ?? A3 ?? ?? ?? ?? 8B 45 08"
+abi  = "thiscall"
+ret  = "void"
+args = ["*mut core::ffi::c_void", "*mut u32"]
+preserve = []
+
+# Formatted handler invoke, variadic `cdecl(frame, handlerSlot, format, ...)`
+# — the va_start wrapper every argument-carrying UI handler goes through
+# (OnUpdate, OnClick, OnValueChanged, ...). Tapped only to mark the boundary:
+# a handler reached from here is a UI invoke, not an event dispatch, which
+# keeps the downstream 0x702710 attribution exact.
+[functions.FrameScript_InvokeHandlerFormatted__7026f0]
+rva  = 0x3026f0
+sig  = "55 8B EC 8B 4D 10 8B 55 0C 8D 45 14 50 8B 45 08 51 52 50 E8"
+abi  = "tap"
+ret  = "void"
+args = ["*const u32"]
+preserve = []
+
+# Formatted handler invoke core, fixed-arity `cdecl(frame, handlerSlot,
+# format, va_list)` — exactly two callers: SignalEventParam (per listener) and
+# the 0x7026f0 wrapper. The gauge times each call here; the format/argument
+# marshalling into Lua happens per listener below this frame, so a handler's
+# measured time includes it.
+[functions.FrameScript_InvokeHandlerFormattedV__702710]
+rva  = 0x302710
+sig  = "55 8B EC A1 ?? ?? ?? ?? 40 56 8B 35 ?? ?? ?? ?? A3 ?? ?? ?? ?? 8B 45 0C"
+abi  = "cdecl"
+ret  = "void"
+args = ["*mut core::ffi::c_void", "*mut u32", "*const u8", "*const u32"]
+preserve = []
