@@ -20718,28 +20718,60 @@ fn lua_gc_sweep_native(l: i32) {
     let nblocks = (g + 0x28) as *mut u32;
     GC_CHUNK_INDEX.with_borrow_mut(|idx| {
     let have_index = gc_chunk_index_refresh(g, idx);
-    let mut free = |o: *mut GcHeader| {
-        let addr = o as usize;
-        // SAFETY: `o` is a dead, unlinked GC object; the tag is at `+0x4`.
-        let size = match unsafe { (*o).tt } {
-            // SAFETY: the string length lives at `+0xc`.
-            4 => unsafe { *((addr + 0xc) as *const u32) }.wrapping_add(0x11),
-            // SAFETY: the userdata length lives at `+0xc`.
-            7 => unsafe { *((addr + 0xc) as *const u32) }.wrapping_add(0x10),
-            10 => 0x20,
-            _ => {
-                free_obj(l, addr as u32);
-                return;
-            }
-        };
-        // SAFETY: `G+0x28` is nblocks; stock `luaM_irealloc` order — debit
-        // it, then free the block into the client's pool allocator.
+    // Stock `luaM_irealloc` order per block: debit nblocks (even for the
+    // null/zero blocks stock passes through), then free non-null blocks —
+    // through the chunk index, or the stock path for oversize blocks.
+    let free_block = |ptr: usize, size: u32| {
+        // SAFETY: `G+0x28` is the live-byte count (nblocks).
         let debited = unsafe { *nblocks }.wrapping_sub(size);
         // SAFETY: see above.
         unsafe { *nblocks = debited };
-        if !(have_index && gc_pool_free_fast(idx, addr)) {
-            // Oversize block (or pools not built yet): stock free path.
-            pool_realloc(l, addr as u32, 0);
+        if ptr != 0 && !(have_index && gc_pool_free_fast(idx, ptr)) {
+            pool_realloc(l, ptr as u32, 0);
+        }
+    };
+    let mut free = |o: *mut GcHeader| {
+        let addr = o as usize;
+        // SAFETY: `o` is a dead, unlinked GC object; the tag is at `+0x4`.
+        match unsafe { (*o).tt } {
+            4 => {
+                // SAFETY: the string length lives at `+0xc`.
+                let len = unsafe { *((addr + 0xc) as *const u32) };
+                free_block(addr, len.wrapping_add(0x11));
+            }
+            7 => {
+                // SAFETY: the userdata length lives at `+0xc`.
+                let len = unsafe { *((addr + 0xc) as *const u32) };
+                free_block(addr, len.wrapping_add(0x10));
+            }
+            10 => free_block(addr, 0x20),
+            // Stock `luaH_free`: node array (`lsizenode == 0` is the shared
+            // dummy node, never freed), array part, then the Table struct.
+            5 => {
+                // SAFETY: `lsizenode` byte at `+0x7`.
+                let lsize = unsafe { *((addr + 0x7) as *const u8) };
+                if lsize != 0 {
+                    // SAFETY: node part pointer at `+0x10`.
+                    let nodes = unsafe { *((addr + 0x10) as *const usize) };
+                    free_block(nodes, (1u32 << (lsize & 0x1f)) * 0x28);
+                }
+                // SAFETY: array part pointer at `+0xc`, count at `+0x1c`.
+                let array = unsafe { *((addr + 0xc) as *const usize) };
+                // SAFETY: see above.
+                let size_array = unsafe { *((addr + 0x1c) as *const u32) };
+                free_block(array, size_array << 4);
+                free_block(addr, 0x20);
+            }
+            // Stock `luaF_freeclosure`: one block, C vs Lua size formula.
+            6 => {
+                // SAFETY: `isC` byte at `+0x6`, `nupvalues` byte at `+0x7`.
+                let is_c = unsafe { *((addr + 0x6) as *const u8) } != 0;
+                // SAFETY: see above.
+                let nup = u32::from(unsafe { *((addr + 0x7) as *const u8) });
+                let size = if is_c { (nup + 1) * 0x10 } else { nup * 4 + 0x24 };
+                free_block(addr, size);
+            }
+            _ => free_obj(l, addr as u32),
         }
     };
 
