@@ -202,9 +202,11 @@ Four exceptions, all recorded as per-site allows:
 
 **Do not take an exception without reading the item's own argument first.** Where one of these applies, the reason is written above the `#[allow]` — `c_gx_batch__update_fog_state__70baf0` names its cohorts, copy loop and mode dispatch explicitly. A pass that splits those blocks is undoing a decision, not paying down debt.
 
-**What remains is almost all exception, not debt.** 85 findings sit behind 13 attributes — 12 in `hooks.rs`, one in `world.rs`. 51 are multi-operation blocks: 3 transcriptions, 11 tight loops and unrolled record-init runs, and 37 short-circuit operands. 34 are blocks whose enclosing run is one of those exceptions and carries a single block-wide comment.
+**What remains is exception, not debt.** 85 findings sit behind 13 attributes — 12 in `hooks.rs`, one in `world.rs`. 51 are multi-operation blocks: 3 transcriptions, 11 tight loops and unrolled record-init runs, and 37 short-circuit operands. 34 are blocks whose enclosing run is one of those exceptions and carries a single block-wide comment.
 
-The burnable remainder is small enough that the next person to touch one of these functions should clear it in passing rather than as a campaign. It came down from 941 by writing the comments and splitting what split cleanly; what is left is the part where a machine-checkable rule and a readable transcription genuinely disagree.
+Every one of the 85 sits behind an attribute whose argument names it. That is worth stating precisely, because "the attribute is argued" and "this lint is argued" are different claims: three attributes here suppressed a lint their prose never mentioned — the fog driver argued why its blocks stay joined and said nothing about why they carry one comment per run rather than per store. An argument that covers some of what it suppresses reads exactly like one that covers all of it.
+
+It came down from 941 by writing the comments and splitting what split cleanly. What is left is the part where a machine-checkable rule and a readable transcription genuinely disagree, and each instance says which.
 
 Splitting is **semantics-preserving and codegen-identical**: `unsafe {}` is a compile-time permission scope with no MIR or codegen representation, so re-bracketing cannot reorder evaluation. Narrow in place rather than hoisting, so a short-circuit stays one:
 

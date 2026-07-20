@@ -25903,9 +25903,21 @@ fn fire_segment(
 /// so LLVM inlines their SSE bodies; the remaining device render-state shims stay transmuted leaf
 /// call-outs.
 //
-// Dense render-state driver: the change-detection cohorts, per-entry copy
-// loop, and mode dispatch transcribe the stock body directly; one-unsafe-op-per
-// -block would fragment each strided field read into noise. Allowed here only.
+// Dense render-state driver: the change-detection cohorts, per-entry copy loop
+// and mode dispatch transcribe the stock body directly. Allowed here only, and
+// one argument per lint:
+//
+// `multiple_unsafe_ops_per_block` — a cohort compare is a chain of `&&`ed field
+// pairs. Hoisting the reads out to split them would evaluate compares the
+// original short-circuits past, so the chain keeps one block.
+//
+// `undocumented_unsafe_blocks` — the remaining bare blocks are unrolled runs of
+// identical record writes (the six-dword viewport-block init, the per-entry
+// copy). The run carries one comment; repeating it per store would say the same
+// thing six times and bury the one fact that differs, the offset.
+//
+// `cognitive_complexity` — the branch count is the stock body's. Splitting it
+// into helpers moves the transcription away from the shape it is checked against.
 #[allow(
     clippy::multiple_unsafe_ops_per_block,
     clippy::undocumented_unsafe_blocks,
@@ -29913,9 +29925,13 @@ pub fn c_world_view__build_draw_list__707680(
 /// The per-batch geometry classification inner loop, then the cloud/particle
 /// fill and the sky fill. Returns `None` when a record reserve yields a null
 /// slot (the stock fail-`ret`).
-// The branch count is the stock body's, not a structure this code chose;
-// splitting it into helpers would move the transcription away from the shape
-// it has to be checked against.
+// `cognitive_complexity` — the branch count is the stock body's, not a
+// structure this code chose; splitting it into helpers would move the
+// transcription away from the shape it has to be checked against.
+//
+// `multiple_unsafe_ops_per_block` — the blocks left joined are unrolled runs of
+// identical record writes initialising one draw record. Splitting a twelve-store
+// run buys twelve comments that differ only in their offset.
 #[allow(clippy::cognitive_complexity, clippy::multiple_unsafe_ops_per_block)]
 fn bdl_process_spatial_node(base: *mut u8, node: *const u8, draw_idx: &mut u32) -> Option<()> {
     use crate::math::world::draw_bucket_classify__707680 as bucket;
@@ -30601,9 +30617,13 @@ fn bdl_process_spatial_node(base: *mut u8, node: *const u8, draw_idx: &mut u32) 
 /// Process one visible child view (0x7083dc..0x708674).
 ///
 /// The facing test, then the ribbon/cloud fill over the child's `[0x13c]` entries.
-// The branch count is the stock body's, not a structure this code chose;
-// splitting it into helpers would move the transcription away from the shape
-// it has to be checked against.
+// `cognitive_complexity` — the branch count is the stock body's, not a
+// structure this code chose; splitting it into helpers would move the
+// transcription away from the shape it has to be checked against.
+//
+// `multiple_unsafe_ops_per_block` — the blocks left joined are unrolled runs of
+// identical record writes initialising one draw record. Splitting a twelve-store
+// run buys twelve comments that differ only in their offset.
 #[allow(clippy::cognitive_complexity, clippy::multiple_unsafe_ops_per_block)]
 fn bdl_process_child_view(base: *mut u8, child: *const u8, draw_idx: &mut u32) -> Option<()> {
     use crate::math::world::draw_bucket_classify__707680 as bucket;
