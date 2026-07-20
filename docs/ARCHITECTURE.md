@@ -145,7 +145,7 @@ Generated thunks record the hook RVA, but skip recording when the *same* hook fi
 
 ## Build profiles and the shipped artifacts
 
-`release` is the everyday `make` build and deliberately keeps `debug-assertions` and `overflow-checks` on, with `debug = 1` for post-mortem symbolication — inline frame chains matter because the reimplementations lean on `#[inline(always)]`. `production` (`PROD=1`, forced for `make bundle`) turns both checks off and switches to fat LTO with one codegen unit.
+`release` is the everyday `make` build and deliberately keeps `debug-assertions` and `overflow-checks` on, with `debug = 1` for post-mortem symbolication — the inline frame chain matters because thin LTO inlines freely across the reimplementation surface, so a raw frame often lands several levels above the code that faulted. `production` (`PROD=1`, forced for `make bundle`) turns both checks off and switches to fat LTO with one codegen unit.
 
 `make bundle` produces exactly four zips, always at the production profile, and their internal layout mirrors the install destinations: `game/` merges next to `WoW.exe`, `wine/` merges into the Wine distribution.
 
