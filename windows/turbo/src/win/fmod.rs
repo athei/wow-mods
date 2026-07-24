@@ -76,6 +76,23 @@ const DCT64_SIG: &str = "81 EC 08 01 00 00 8B 84 24 14 01 00 00 8B 0D ?? ?? ?? ?
                          D9 00 D8 40 7C";
 const DCT64_LABEL: &str = "fmod::dct64";
 
+/// RVA of the long-block IMDCT (`__cdecl(inbuf, o1, o2, wintab, tsbuf)`).
+const DCT36_RVA: usize = 0x1_db00;
+/// RVA of the `cos(pi/3)`, `cos(pi/6)` pair (runtime-computed BSS).
+const DCT36_COS6_RVA: usize = 0x5_8dd0;
+/// RVA of the 3-entry `cos(pi{1,5,7}/9)` table.
+const DCT36_CA_RVA: usize = 0x6_530c;
+/// RVA of the 3-entry `cos(pi{1,11,13}/18)` table.
+const DCT36_CB_RVA: usize = 0x5_a140;
+/// RVA of the 9-entry `0.5/cos((2i+1)pi/36)` twiddle table.
+const DCT36_TF_RVA: usize = 0x5_a110;
+/// The IMDCT prologue: frame setup, `inbuf` load, first running-sum adds.
+///
+/// No relocated operands in the window, so every byte is fixed.
+const DCT36_SIG: &str = "83 EC 60 8B 44 24 64 56 D9 40 44 D8 40 40 D9 58 44 \
+                         D9 40 3C D8 40 40 D9";
+const DCT36_LABEL: &str = "fmod::dct36";
+
 /// fmod's unpacked base, resolved at attach.
 ///
 /// Read by the init detour to locate the mixer and its window-table global.
@@ -106,6 +123,13 @@ static DCT64_TRAMPOLINE: AtomicUsize = AtomicUsize::new(0);
 /// The slots hold the relocated table pointers, so the detour dereferences
 /// them per call, exactly as the original's stage loads do.
 static DCT64_PNTS: AtomicUsize = AtomicUsize::new(0);
+/// The IMDCT trampoline; read only by the compare path.
+static DCT36_TRAMPOLINE: AtomicUsize = AtomicUsize::new(0);
+/// fmod's base, republished for the IMDCT detour's table addresses.
+///
+/// The IMDCT reads four table clusters; publishing the base once (after
+/// `create_hook`, before `enable_hook`) covers all four fixed RVAs.
+static DCT36_BASE: AtomicUsize = AtomicUsize::new(0);
 
 #[link(name = "kernel32")]
 unsafe extern "system" {
@@ -235,6 +259,14 @@ fn install_fmod_hooks() {
             trampoline: Some(&DCT64_TRAMPOLINE),
             publish: publish_dct64_globals,
         },
+        FmodHook {
+            rva: DCT36_RVA,
+            sig: DCT36_SIG,
+            label: DCT36_LABEL,
+            detour: dct36_detour as *mut c_void,
+            trampoline: Some(&DCT36_TRAMPOLINE),
+            publish: publish_dct36_globals,
+        },
     ];
 
     for hook in hooks {
@@ -282,6 +314,11 @@ fn publish_antialias_globals(base: usize) {
 /// Publish the DCT detour's twiddle-slot array address.
 fn publish_dct64_globals(base: usize) {
     DCT64_PNTS.store(base + DCT64_PNTS_RVA, Ordering::Release);
+}
+
+/// Publish the IMDCT detour's base for its four table clusters.
+fn publish_dct36_globals(base: usize) {
+    DCT36_BASE.store(base, Ordering::Release);
 }
 
 /// Detour for `fmod__mixer_fpu`.
@@ -529,6 +566,136 @@ fn dct64_diff(out0: *mut f32, out1: *mut f32, samples: *const f32, pnts: &[*cons
             // ±1 ULP, as for the alias-reduction compare.
             super::diff::scalar_f32(&STATS, LABEL, false, 1, ours, orig);
         }
+    }
+    true
+}
+
+/// The IMDCT's ABI, for calling the trampoline in compare mode.
+#[cfg(wow_turbo_diff)]
+type Dct36Fn = unsafe extern "C" fn(*mut f32, *const f32, *mut f32, *const f32, *mut f32);
+
+/// Detour for the long-block IMDCT + window stage.
+///
+/// `__cdecl(inbuf, o1, o2, wintab, tsbuf)`, void; mutates `inbuf` in place
+/// (two running-sum prepasses callers rely on). The four twiddle clusters
+/// live at fixed RVAs off the published base.
+///
+/// # Safety
+///
+/// Installed only over the verified IMDCT prologue; FMOD invokes it with the
+/// original ABI, so the buffers cover the kernel's documented extents.
+unsafe extern "C" fn dct36_detour(
+    inbuf: *mut f32,
+    o1: *const f32,
+    o2: *mut f32,
+    wintab: *const f32,
+    tsbuf: *mut f32,
+) {
+    let base = DCT36_BASE.load(Ordering::Acquire);
+    let tables = crate::math::fmod_mp3::Dct36Tables {
+        cos6: (base + DCT36_COS6_RVA) as *const f32,
+        ca: (base + DCT36_CA_RVA) as *const f32,
+        cb: (base + DCT36_CB_RVA) as *const f32,
+        tf: (base + DCT36_TF_RVA) as *const f32,
+    };
+
+    #[cfg(wow_turbo_diff)]
+    if dct36_diff(inbuf, o1, o2, wintab, tsbuf, &tables) {
+        return;
+    }
+
+    // SAFETY: the detour fires only for genuine IMDCT calls, so the buffers
+    // cover the kernel's documented extents and the tables were published
+    // before the hook was enabled.
+    unsafe { crate::math::fmod_mp3::fmod_dct36__1db00(inbuf, o1, o2, wintab, tsbuf, &tables) };
+}
+
+/// Shadow-compare for the IMDCT hook (compare-mode builds).
+///
+/// When armed via `WOW_TURBO_DIFF_ARM` (`all` or `fmod__dct36__1db00`):
+/// snapshot `inbuf` (both sides mutate it), run the reimpl on the snapshot
+/// with scratch outputs, run the original on the live buffers (ground
+/// truth), then compare the mutated input, the 18 windowed outputs, and the
+/// 18 overlap-added lanes. Returns whether the call was handled.
+#[cfg(wow_turbo_diff)]
+fn dct36_diff(
+    inbuf: *mut f32,
+    o1: *const f32,
+    o2: *mut f32,
+    wintab: *const f32,
+    tsbuf: *mut f32,
+    tables: &crate::math::fmod_mp3::Dct36Tables,
+) -> bool {
+    use std::sync::LazyLock;
+
+    const LABEL: &str = "fmod__dct36__1db00";
+    /// 18 floats: the `inbuf` and `o2` extents.
+    const LINE_CAP: usize = 18 * 4;
+    /// The scratch `tsbuf` extent: 17 full 32-float strides plus one lane.
+    const TS_CAP: usize = (17 * 32 + 1) * 4;
+    static ARMED_NOTE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+    static STATS: super::diff::Stats = super::diff::Stats::new();
+    static SELECTED: LazyLock<bool> = LazyLock::new(|| {
+        std::env::var("WOW_TURBO_DIFF_ARM").ok().is_some_and(|s| {
+            s.split(',').any(|t| {
+                let t = t.trim();
+                t == "all" || t == LABEL
+            })
+        })
+    });
+
+    if !*SELECTED {
+        return false;
+    }
+    let trampoline = DCT36_TRAMPOLINE.load(Ordering::Acquire);
+    if trampoline == 0 {
+        return false;
+    }
+    super::diff::note_armed(&ARMED_NOTE, LABEL);
+
+    let mut shadow_in = super::diff::Buf::<LINE_CAP>::zeroed();
+    let mut shadow_o2 = super::diff::Buf::<LINE_CAP>::zeroed();
+    let mut shadow_ts = super::diff::Buf::<TS_CAP>::zeroed();
+    // SAFETY: `inbuf` covers 18 floats (the extent the original mutates) and
+    // the shadow buffer is exactly that large.
+    unsafe {
+        core::ptr::copy_nonoverlapping(inbuf.cast::<u8>(), shadow_in.0.as_mut_ptr(), LINE_CAP);
+    }
+    // SAFETY: the snapshot and scratch buffers cover the kernel's documented
+    // extents; `o1`/`wintab` are the original's own read-only inputs.
+    unsafe {
+        crate::math::fmod_mp3::fmod_dct36__1db00(
+            shadow_in.0.as_mut_ptr().cast::<f32>(),
+            o1,
+            shadow_o2.0.as_mut_ptr().cast::<f32>(),
+            wintab,
+            shadow_ts.0.as_mut_ptr().cast::<f32>(),
+            tables,
+        );
+    }
+    let original =
+        // SAFETY: `DCT36_TRAMPOLINE` holds the trampoline published before
+        // this hook was enabled — the original prologue with its own ABI.
+        unsafe { core::mem::transmute::<usize, Dct36Fn>(trampoline) };
+    // SAFETY: forwarding the original's own arguments under its own ABI.
+    unsafe { original(inbuf, o1, o2, wintab, tsbuf) };
+
+    // SAFETY: the original just rewrote the live 18-float `inbuf`.
+    let live_in = unsafe { core::slice::from_raw_parts(inbuf.cast::<u8>(), LINE_CAP) };
+    super::diff::region_f32(&STATS, LABEL, false, 1, &shadow_in.0, live_in);
+    // SAFETY: the original just wrote the live 18-float `o2`.
+    let live_o2 = unsafe { core::slice::from_raw_parts(o2.cast::<u8>(), LINE_CAP) };
+    super::diff::region_f32(&STATS, LABEL, false, 1, &shadow_o2.0, live_o2);
+    for lane in 0..18 {
+        let ours = f32::from_bits(u32::from_le_bytes(
+            shadow_ts.0[lane * 128..lane * 128 + 4]
+                .try_into()
+                .unwrap_or([0; 4]),
+        ));
+        // SAFETY: the original just stored this stride-32 lane.
+        let orig = unsafe { tsbuf.wrapping_add(lane * 32).read() };
+        // ±1 ULP, as for the other decode-stage compares.
+        super::diff::scalar_f32(&STATS, LABEL, false, 1, ours, orig);
     }
     true
 }

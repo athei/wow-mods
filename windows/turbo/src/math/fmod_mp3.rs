@@ -244,6 +244,173 @@ pub unsafe fn fmod_dct64__17f60(
     wr(out1, 0xf0, bdb.l);
 }
 
+/// The four twiddle-table pointers the long-block IMDCT reads.
+///
+/// All four live in fmod's BSS, computed at init as plain cosines (arguments
+/// noted per field), so the adapter publishes their resolved addresses and
+/// the kernel reads them per call.
+pub struct Dct36Tables {
+    /// 2 entries: `cos(pi/3)`, `cos(pi/6)`.
+    pub cos6: *const f32,
+    /// 3 entries: `cos(pi/9)`, `cos(5 pi/9)`, `cos(7 pi/9)`.
+    pub ca: *const f32,
+    /// 3 entries: `cos(pi/18)`, `cos(11 pi/18)`, `cos(13 pi/18)`.
+    pub cb: *const f32,
+    /// 9 entries: `0.5 / cos((2i + 1) pi/36)`.
+    pub tf: *const f32,
+}
+
+/// Reimplementation of the long-block IMDCT + window stage (fmod RVA `0x1db00`).
+///
+/// `__cdecl(inbuf, o1, o2, wintab, tsbuf)`, void. The 36-point inverse MDCT
+/// of one long-block granule channel, fused with windowing and the
+/// overlap-add against the previous block:
+///
+/// * `inbuf` (18 floats) is **mutated in place** by two running-sum
+///   prepasses (`in[i] += in[i-1]` for `i = 17..1`, then
+///   `in[i] += in[i-2]` for odd `i = 17..3`) — callers rely on the mutated
+///   contents, so the kernel reproduces the passes exactly.
+/// * two 9-point cores (even/odd prepassed lanes; the odd core's results
+///   carry the `tf` twiddles) produce 9 sum/difference pairs.
+/// * the tail writes `o2[j] = sum * wintab[18 + j]` (18 floats) and
+///   `tsbuf[32 * n] = diff * wintab[n] + o1[n]` (18 lanes at a 32-float
+///   stride).
+///
+/// Loads are `f32`, arithmetic is `f64`, stores narrow to `f32` (the
+/// [`super`] convention for tracking an x87 original; each store rounds
+/// once, as the original's `fstp` does).
+///
+/// # Safety
+///
+/// `inbuf` must be valid for 18 float reads and writes, `o1` for 18 reads,
+/// `o2` for 18 writes, `wintab` for 36 reads, `tsbuf` for writes at float
+/// indices `0, 32, .., 544`, and the [`Dct36Tables`] pointers for their
+/// documented lengths. The original performs the identical accesses.
+// The 9-point cores' temporaries deliberately pair even/odd names
+// (`es0`/`oy0`, `ep_a`/`op_a`): the two cores are the same dataflow and the
+// pairing is what makes that reviewable.
+#[allow(clippy::similar_names)]
+pub unsafe fn fmod_dct36__1db00(
+    inbuf: *mut f32,
+    o1: *const f32,
+    o2: *mut f32,
+    wintab: *const f32,
+    tsbuf: *mut f32,
+    tables: &Dct36Tables,
+) {
+    let rd = |p: *const f32, i: usize| -> f64 {
+        // SAFETY: per the contract every pointer is valid for the indices
+        // the stage reads; this reproduces one of those reads.
+        let value = unsafe { p.wrapping_add(i).read() };
+        f64::from(value)
+    };
+    let wr = |p: *mut f32, i: usize, value: f64| {
+        // SAFETY: per the contract the out pointers are valid at every index
+        // the tail stores; the original stores through the identical address.
+        unsafe { p.wrapping_add(i).write(super::f64_to_f32(value)) };
+    };
+
+    // Prepass 1: running sums, descending. The original chains these as f32
+    // adds through memory, so narrow each partial back to f32.
+    for i in (1..18).rev() {
+        wr(inbuf, i, rd(inbuf, i) + rd(inbuf, i - 1));
+    }
+    // Prepass 2: the odd lanes again, stride 2.
+    for i in (3..18).rev().step_by(2) {
+        wr(inbuf, i, rd(inbuf, i) + rd(inbuf, i - 2));
+    }
+
+    let inb = |i: usize| rd(inbuf, i);
+    let cos6_2 = rd(tables.cos6, 0);
+    let cos6_1 = rd(tables.cos6, 1);
+    let ca = [rd(tables.ca, 0), rd(tables.ca, 1), rd(tables.ca, 2)];
+    let cb = [rd(tables.cb, 0), rd(tables.cb, 1), rd(tables.cb, 2)];
+    let tf = |i: usize| rd(tables.tf, i);
+
+    // Even 9-point core, over the even prepassed lanes.
+    let e_mid = cos6_2 * inb(12);
+    let e_fold = ((inb(8) + inb(16)) - inb(4)) * cos6_2;
+    let e0 = e_mid + inb(0);
+    let e_base = (inb(0) - e_mid) - e_mid;
+    let e1 = e_base - e_fold;
+    let ep_a = (inb(8) + inb(4)) * ca[0];
+    let ep_b = (inb(8) - inb(16)) * ca[1];
+    let e2 = e_fold + e_fold + e_base;
+    let ep_c = (inb(4) + inb(16)) * ca[2];
+    let em0 = (e0 - ep_a) - ep_c;
+    let em1 = ep_a + e0 + ep_b;
+    let em2 = (ep_c - ep_b) + e0;
+    let eq_a = (inb(10) + inb(2)) * cb[0];
+    let eq_b = (inb(10) - inb(14)) * cb[1];
+    let e_six = cos6_1 * inb(6);
+    let er0 = e_six + eq_b + eq_a;
+    let es0 = em1 + er0;
+    let es8 = em1 - er0;
+    let eq_c = (inb(14) + inb(2)) * cb[2];
+    let er1 = (eq_c - e_six) + eq_a;
+    let es3 = er1 + em2;
+    let e_fold2 = ((inb(14) + inb(10)) - inb(2)) * cos6_1;
+    let es5 = em2 - er1;
+    let er2 = eq_b - (e_six + eq_c);
+    let es1 = e1 - e_fold2;
+    let es7 = e_fold2 + e1;
+    let es2 = em0 + er2;
+    let es6 = em0 - er2;
+
+    // Odd 9-point core, over the odd prepassed lanes; results carry the
+    // `tf` twiddles.
+    let o_mid = cos6_2 * inb(13);
+    let o_fold = ((inb(17) + inb(9)) - inb(5)) * cos6_2;
+    let o0 = inb(1) + o_mid;
+    let o_base = (inb(1) - o_mid) - o_mid;
+    let o1v = o_base - o_fold;
+    let op_a = (inb(9) + inb(5)) * ca[0];
+    let op_b = (inb(9) - inb(17)) * ca[1];
+    let o2v = (o_fold + o_fold + o_base) * tf(4);
+    let op_c = (inb(17) + inb(5)) * ca[2];
+    let om0 = (o0 - op_a) - op_c;
+    let om1 = op_a + o0 + op_b;
+    let om2 = (op_c - op_b) + o0;
+    let oq_a = (inb(3) + inb(11)) * cb[0];
+    let oq_b = (inb(11) - inb(15)) * cb[1];
+    let o_six = cos6_1 * inb(7);
+    let or0 = o_six + oq_b + oq_a;
+    let oy0 = (om1 + or0) * tf(0);
+    let oy8 = (om1 - or0) * tf(8);
+    let oq_c = (inb(3) + inb(15)) * cb[2];
+    let or1 = (oq_c - o_six) + oq_a;
+    let oy3 = (om2 + or1) * tf(3);
+    let o_fold2 = ((inb(15) + inb(11)) - inb(3)) * cos6_1;
+    let oy5 = (om2 - or1) * tf(5);
+    let or2 = oq_b - (o_six + oq_c);
+    let oy1 = (o1v - o_fold2) * tf(1);
+    let oy7 = (o_fold2 + o1v) * tf(7);
+    let oy2 = (om0 + or2) * tf(2);
+    let oy6 = (om0 - or2) * tf(6);
+
+    // Tail: 9 sum/difference pairs, in the original's store order. Pair `k`
+    // writes `o2[9 + k]`/`o2[8 - k]` from the sum and overlap-adds the
+    // difference into `tsbuf[32 * (8 - k)]`/`tsbuf[32 * (9 + k)]`.
+    let evens = [es0, es1, es2, es3, e2, es5, es6, es7, es8];
+    let odds = [oy0, oy1, oy2, oy3, o2v, oy5, oy6, oy7, oy8];
+    for k in 0..9 {
+        let sum = odds[k] + evens[k];
+        wr(o2, 9 + k, sum * rd(wintab, 27 + k));
+        wr(o2, 8 - k, sum * rd(wintab, 26 - k));
+        let diff = evens[k] - odds[k];
+        wr(
+            tsbuf,
+            32 * (8 - k),
+            diff * rd(wintab, 8 - k) + rd(o1, 8 - k),
+        );
+        wr(
+            tsbuf,
+            32 * (9 + k),
+            diff * rd(wintab, 9 + k) + rd(o1, 9 + k),
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests_fmod_dct64__17f60 {
     use std::f64::consts::PI;
@@ -378,6 +545,195 @@ mod tests_fmod_dct64__17f60 {
                     "out1[{i}] must be untouched"
                 );
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests_fmod_dct36__1db00 {
+    use std::f64::consts::PI;
+
+    use super::{Dct36Tables, fmod_dct36__1db00 as dct36};
+
+    // The tables the original's init computes (verified against its cosine
+    // arguments): cos(pi/3), cos(pi/6); cos(pi{1,5,7}/9); cos(pi{1,11,13}/18);
+    // 0.5/cos((2i+1)pi/36).
+    struct Tables {
+        cos6: Vec<f32>,
+        ca: Vec<f32>,
+        cb: Vec<f32>,
+        tf: Vec<f32>,
+    }
+
+    fn tables() -> Tables {
+        Tables {
+            cos6: vec![(PI / 3.0).cos() as f32, (PI / 6.0).cos() as f32],
+            ca: [1.0f64, 5.0, 7.0]
+                .iter()
+                .map(|k| ((k * PI / 9.0).cos()) as f32)
+                .collect(),
+            cb: [1.0f64, 11.0, 13.0]
+                .iter()
+                .map(|k| ((k * PI / 18.0).cos()) as f32)
+                .collect(),
+            tf: (0..9)
+                .map(|i| (0.5 / ((f64::from(2 * i + 1)) * PI / 36.0).cos()) as f32)
+                .collect(),
+        }
+    }
+
+    fn ptrs(t: &Tables) -> Dct36Tables {
+        Dct36Tables {
+            cos6: t.cos6.as_ptr(),
+            ca: t.ca.as_ptr(),
+            cb: t.cb.as_ptr(),
+            tf: t.tf.as_ptr(),
+        }
+    }
+
+    // The decoder's long-block window: the plain sine window with the
+    // odd-core twiddle folded in (which is why the kernel's raw sum/diff
+    // values are not themselves IMDCT rows).
+    fn window() -> Vec<f32> {
+        (0..36)
+            .map(|i| {
+                let i = f64::from(i);
+                (0.5 * (PI * (2.0 * i + 1.0) / 72.0).sin() / (PI * (2.0 * i + 19.0) / 72.0).cos())
+                    as f32
+            })
+            .collect()
+    }
+
+    // Deterministic LCG so the test needs no rng dependency.
+    fn lcg(state: &mut u64) -> f32 {
+        *state = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1);
+        let bits = (*state >> 40) as u32;
+        (f32::from_bits(0x3f80_0000 | (bits & 0x007f_ffff)) - 1.5) * 2.0
+    }
+
+    #[test]
+    fn matches_the_windowed_imdct() {
+        let t = tables();
+        let tp = ptrs(&t);
+        let win = window();
+        let mut state = 0xfeed_f00d_0123_4567u64;
+        for round in 0..8 {
+            let input: Vec<f32> = (0..18).map(|_| lcg(&mut state)).collect();
+            let overlap: Vec<f32> = (0..18).map(|_| lcg(&mut state)).collect();
+            let mut inbuf = input.clone();
+            let mut o2 = vec![0.0f32; 18];
+            let mut ts = vec![0.0f32; 545];
+            // SAFETY: every buffer covers the kernel's documented extent.
+            unsafe {
+                dct36(
+                    inbuf.as_mut_ptr(),
+                    overlap.as_ptr(),
+                    o2.as_mut_ptr(),
+                    win.as_ptr(),
+                    ts.as_mut_ptr(),
+                    &tp,
+                );
+            }
+            // With the true window the composite is the windowed 36-point
+            // IMDCT: lane n gets sin(pi(2n+1)/72) * V_n, where
+            // V_n = sum_k in[k] cos(pi/72 (2n+19)(2k+1)); the first half
+            // overlap-adds o1, the second half lands in o2. Tolerance well
+            // above f32 rounding noise (~2e-7), well below structural error.
+            let tol = 1e-4;
+            for n in 0..36 {
+                let nf = f64::from(n);
+                let w = (PI * (2.0 * nf + 1.0) / 72.0).sin();
+                let v: f64 = (0..18)
+                    .map(|k| {
+                        f64::from(input[k])
+                            * (PI / 72.0 * (2.0 * nf + 19.0) * f64::from(2 * k as i32 + 1)).cos()
+                    })
+                    .sum();
+                let n = usize::try_from(n).unwrap();
+                let (got, want) = if n < 18 {
+                    (f64::from(ts[32 * n]), w * v + f64::from(overlap[n]))
+                } else {
+                    (f64::from(o2[n - 18]), w * v)
+                };
+                assert!(
+                    (got - want).abs() < tol,
+                    "round {round} lane {n}: got {got}, want {want}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn mutates_inbuf_with_the_two_prepasses() {
+        let t = tables();
+        let tp = ptrs(&t);
+        let win = window();
+        let mut state = 0x5a5a_a5a5_5a5a_a5a5u64;
+        let input: Vec<f32> = (0..18).map(|_| lcg(&mut state)).collect();
+        let overlap = [0.0f32; 18];
+
+        // Independent reference for the in-place passes: pairwise sums
+        // descending, then the odd lanes again at stride 2.
+        let mut want = input.clone();
+        for i in (1..18).rev() {
+            want[i] += want[i - 1];
+        }
+        for i in (3..18).rev().step_by(2) {
+            want[i] += want[i - 2];
+        }
+
+        let mut inbuf = input;
+        let mut o2 = vec![0.0f32; 18];
+        let mut ts = vec![0.0f32; 545];
+        // SAFETY: every buffer covers the kernel's documented extent.
+        unsafe {
+            dct36(
+                inbuf.as_mut_ptr(),
+                overlap.as_ptr(),
+                o2.as_mut_ptr(),
+                win.as_ptr(),
+                ts.as_mut_ptr(),
+                &tp,
+            );
+        }
+        let got: Vec<u32> = inbuf.iter().map(|x| x.to_bits()).collect();
+        let want: Vec<u32> = want.iter().map(|x| x.to_bits()).collect();
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn writes_only_the_stride_32_lanes() {
+        let t = tables();
+        let tp = ptrs(&t);
+        let win = window();
+        let mut state = 0x0f0f_f0f0_0f0f_f0f0u64;
+        let mut inbuf: Vec<f32> = (0..18).map(|_| lcg(&mut state)).collect();
+        let overlap = [0.0f32; 18];
+        let sentinel = f32::from_bits(0x7fc0_4321);
+        let mut o2 = vec![sentinel; 18];
+        let mut ts = vec![sentinel; 545];
+        // SAFETY: every buffer covers the kernel's documented extent.
+        unsafe {
+            dct36(
+                inbuf.as_mut_ptr(),
+                overlap.as_ptr(),
+                o2.as_mut_ptr(),
+                win.as_ptr(),
+                ts.as_mut_ptr(),
+                &tp,
+            );
+        }
+        for (i, &x) in ts.iter().enumerate() {
+            if i % 32 == 0 {
+                assert_ne!(x.to_bits(), sentinel.to_bits(), "ts[{i}] must be written");
+            } else {
+                assert_eq!(x.to_bits(), sentinel.to_bits(), "ts[{i}] must be untouched");
+            }
+        }
+        for (j, &x) in o2.iter().enumerate() {
+            assert_ne!(x.to_bits(), sentinel.to_bits(), "o2[{j}] must be written");
         }
     }
 }
