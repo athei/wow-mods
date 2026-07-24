@@ -3543,3 +3543,40 @@ abi  = "cdecl"
 ret  = "void"
 args = ["*mut core::ffi::c_void", "*mut u32", "*const u8", "*const u32"]
 preserve = []
+
+# --- FrameScript ExecuteFunction fast path ---
+# The two per-listener invoke primitives every scripted handler funnels
+# through. Stock pays a fixed per-call tax that dominates raid-time Lua cost:
+# each global key ("this", "argN") is re-interned three times per call, the
+# old value round-trips through luaL_ref/luaL_unref registry churn, and the
+# object name is resolved twice and copied into a stack buffer that nothing
+# reads (a vestigial "DBG:" label; RegisterScriptObject receives NULL). The
+# reimpls intern each key once per lua_State (registry-anchored), park the
+# saved old values on the Lua stack across the pcall (equally GC-anchored),
+# and drop the dead name work. All get/set traffic stays on the stock
+# lua_gettable/lua_settable entry points, so metatable dispatch and the
+# ref-owner shadow bookkeeping at 0xceeac0 behave exactly as stock.
+
+# Paramless invoke core: `fastcall(ecx = funcRef, edx = object)`. Binds the
+# global `this` around a pcall of the ref'd function (nargs = 0; handlers
+# read globals). Sole caller is 0x702690, so the `wow::events` gauge wrapper
+# stays above this hook and times the improvement directly.
+[functions.FrameScript__ExecuteFunctionWithObject__704d50]
+rva  = 0x304d50
+sig  = "55 8B EC 83 EC 08 85 C9 53 56 57 8B FA"
+abi  = "fastcall"
+ret  = "void"
+args = ["i32", "*mut u32"]
+preserve = []
+
+# Formatted invoke core: fixed-arity `cdecl(funcRef, object, format, va)`.
+# Parses the format (cap 19 args; %d/%u/%f/%s), binds arg1..argN and (when
+# object is non-null) `this` around the pcall, restores ascending as stock.
+# Callers: 0x702710 (both dispatch and UI invokes) only.
+[functions.FrameScript__ExecuteFunctionFormattedV__704f10]
+rva  = 0x304f10
+sig  = "55 8B EC 83 EC 58 8B 45 08 85 C0 53 56 57"
+abi  = "cdecl"
+ret  = "void"
+args = ["i32", "*mut u32", "*const u8", "*const u32"]
+preserve = []

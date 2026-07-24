@@ -98,9 +98,9 @@ undocumented_unsafe_blocks = "warn"
 # behaviour it has to match.
 items_after_statements = "allow"        # 864
 cast_ptr_alignment = "allow"            # 911 — reads are already `read_unaligned`
-unreadable_literal = "allow"            # 369 — addresses and bit masks, verbatim
+unreadable_literal = "allow"            # 371 — addresses and bit masks, verbatim
 similar_names = "allow"                 # 208
-semicolon_if_nothing_returned = "allow" # 159
+semicolon_if_nothing_returned = "allow" # 161
 many_single_char_names = "allow"        # 36
 
 # Numeric conversions that must truncate, wrap and round exactly as the
@@ -109,7 +109,7 @@ many_single_char_names = "allow"        # 36
 # it is a crash. Float comparison is exact on purpose: the differential harness
 # compares bit patterns.
 cast_possible_truncation = "allow"      # 331
-cast_sign_loss = "allow"                # 221
+cast_sign_loss = "allow"                # 224
 cast_possible_wrap = "allow"            # 99
 cast_precision_loss = "allow"           # 107
 cast_lossless = "allow"                 # 59

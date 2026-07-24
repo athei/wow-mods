@@ -40460,3 +40460,384 @@ pub fn frame_script_invoke_handler_formatted_v__702710(
 ) {
     crate::win::events::invoke_handler_formatted_v(frame, handler_slot, format, args);
 }
+
+// --- FrameScript ExecuteFunction fast path ---
+//
+// Reimplementations of the two per-listener invoke primitives (0x704d50
+// paramless, 0x704f10 formatted). Stock re-interns every global key three
+// times per call, round-trips each saved old value through luaL_ref/unref,
+// and resolves the object name twice into a "DBG:"-prefixed stack buffer no
+// path reads. The reimpls keep one interned copy of each key per lua_State
+// (registry-anchored), park saved old values on the Lua stack across the
+// pcall (stack slots are GC roots, exactly as strong an anchor as a registry
+// slot), and drop the dead name work. Reads and writes of the globals stay
+// on the stock lua_gettable/lua_settable entry points, so metatable dispatch
+// and the ref-owner shadow bookkeeping at 0xceeac0/0xceeac4 are stock by
+// construction.
+
+/// Globals pseudo-index: the API resolves -10001 to the `gt` slot at `L+0x40`.
+const FS_GLOBALSINDEX: i32 = -10001;
+/// Registry pseudo-index: the API resolves -10000 to `G+0x30`.
+const FS_REGISTRYINDEX: i32 = -10000;
+/// The dispatch error handler's registry ref, a `.data` dword at `0x8722c8`.
+const FS_ERRFUNC_REF: *const i32 = (crate::win::EXPECTED_IMAGE_BASE + 0x47_22c8) as *const i32;
+
+/// Key-string bytes per cache slot, nul-terminated for interning.
+///
+/// Slot 0 is `this`; slot N is `argN`. 19 argument slots mirror the stock
+/// format-loop cap.
+const FS_KEY_NAMES: [&[u8]; 20] = [
+    b"this\0", b"arg1\0", b"arg2\0", b"arg3\0", b"arg4\0", b"arg5\0", b"arg6\0", b"arg7\0",
+    b"arg8\0", b"arg9\0", b"arg10\0", b"arg11\0", b"arg12\0", b"arg13\0", b"arg14\0", b"arg15\0",
+    b"arg16\0", b"arg17\0", b"arg18\0", b"arg19\0",
+];
+
+/// `lua_State` the key cache was interned against (0 = not built yet).
+static FS_KEY_L: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+/// Registry refs of the cached key strings, indexed like [`FS_KEY_NAMES`].
+static FS_KEY_REFS: [core::sync::atomic::AtomicI32; 20] =
+    [const { core::sync::atomic::AtomicI32::new(0) }; 20];
+
+/// `FrameScript_GetLuaState` at `0x7040d0`, no arguments, state in `eax`.
+fn fs_get_lua_state() -> i32 {
+    const VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x30_40d0;
+    // SAFETY: image base verified at load; no-argument cdecl per the stock call sites.
+    let f: extern "cdecl" fn() -> i32 = unsafe { core::mem::transmute(VA) };
+    f()
+}
+
+/// `Storm_SetLastError` at `0x64e850`, `stdcall(code)`.
+fn fs_set_last_error(code: u32) {
+    const VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x24_e850;
+    // SAFETY: image base verified at load; stdcall(u32) per the stock call sites.
+    let f: extern "stdcall" fn(u32) = unsafe { core::mem::transmute(VA) };
+    f(code);
+}
+
+/// `lua_pushstring` at `0x6f3890`, `fastcall(ecx = L, edx = s)`; interns `s`.
+fn fs_pushstring(l: i32, s: *const u8) {
+    const VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x2f_3890;
+    // SAFETY: image base verified at load; fastcall per the stock call sites.
+    let f: extern "fastcall" fn(i32, *const u8) = unsafe { core::mem::transmute(VA) };
+    f(l, s);
+}
+
+/// `lua_pushnumber` at `0x6f3810`, `fastcall(ecx = L)` with the f64 on the stack.
+fn fs_pushnumber(l: i32, n: f64) {
+    const VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x2f_3810;
+    // SAFETY: image base verified at load; fastcall + stack f64 per the stock call sites.
+    let f: extern "fastcall" fn(i32, f64) = unsafe { core::mem::transmute(VA) };
+    f(l, n);
+}
+
+/// `lua_pushvalue` at `0x6f3350`, `fastcall(ecx = L, edx = idx)`.
+fn fs_pushvalue(l: i32, idx: i32) {
+    const VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x2f_3350;
+    // SAFETY: image base verified at load; fastcall per the stock call sites.
+    let f: extern "fastcall" fn(i32, i32) = unsafe { core::mem::transmute(VA) };
+    f(l, idx);
+}
+
+/// `lua_gettable` at `0x6f3a40`, `fastcall(ecx = L, edx = idx)`; key at top.
+fn fs_gettable(l: i32, idx: i32) {
+    const VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x2f_3a40;
+    // SAFETY: image base verified at load; fastcall per the stock call sites.
+    let f: extern "fastcall" fn(i32, i32) = unsafe { core::mem::transmute(VA) };
+    f(l, idx);
+}
+
+/// `lua_settable` at `0x6f3e20`, `fastcall(ecx = L, edx = idx)`; key/value at top.
+fn fs_settable(l: i32, idx: i32) {
+    const VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x2f_3e20;
+    // SAFETY: image base verified at load; fastcall per the stock call sites.
+    let f: extern "fastcall" fn(i32, i32) = unsafe { core::mem::transmute(VA) };
+    f(l, idx);
+}
+
+/// `lua_insert` at `0x6f31a0`, `fastcall(ecx = L, edx = idx)`.
+fn fs_insert(l: i32, idx: i32) {
+    const VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x2f_31a0;
+    // SAFETY: image base verified at load; fastcall per the stock call sites.
+    let f: extern "fastcall" fn(i32, i32) = unsafe { core::mem::transmute(VA) };
+    f(l, idx);
+}
+
+/// `lua_settop` at `0x6f3080`, `fastcall(ecx = L, edx = idx)`.
+fn fs_settop(l: i32, idx: i32) {
+    const VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x2f_3080;
+    // SAFETY: image base verified at load; fastcall per the stock call sites.
+    let f: extern "fastcall" fn(i32, i32) = unsafe { core::mem::transmute(VA) };
+    f(l, idx);
+}
+
+/// `lua_rawgeti` at `0x6f3bc0`, `fastcall(ecx = L, edx = table idx) + stack(n)`.
+fn fs_rawgeti(l: i32, idx: i32, n: i32) {
+    const VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x2f_3bc0;
+    // SAFETY: image base verified at load; fastcall + one stack arg per the stock call sites.
+    let f: extern "fastcall" fn(i32, i32, i32) = unsafe { core::mem::transmute(VA) };
+    f(l, idx, n);
+}
+
+/// Protected call at `0x6f41a0`: `fastcall(ecx = L, edx = nargs) + stack(ctx, errfunc)`.
+///
+/// Calls the function at the top of the stack; nonzero return means the error
+/// handler ran and its result sits at the top.
+fn fs_pcall(l: i32, nargs: i32, errfunc: i32) -> i32 {
+    const VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x2f_41a0;
+    // SAFETY: image base verified at load; fastcall + two stack args per the stock call sites.
+    let f: extern "fastcall" fn(i32, i32, *mut core::ffi::c_void, i32) -> i32 =
+        unsafe { core::mem::transmute(VA) };
+    f(l, nargs, core::ptr::null_mut(), errfunc)
+}
+
+/// `luaL_ref` at `0x6f5310`, `fastcall(ecx = L, edx = table idx)`; pops into a ref.
+fn fs_lua_ref(l: i32, idx: i32) -> i32 {
+    const VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x2f_5310;
+    // SAFETY: image base verified at load; fastcall per the stock call sites.
+    let f: extern "fastcall" fn(i32, i32) -> i32 = unsafe { core::mem::transmute(VA) };
+    f(l, idx)
+}
+
+/// `FrameScript::RegisterScriptObject` at `0x701bd0`, `thiscall(object) + stack(name)`.
+fn fs_register_script_object(object: *mut u32, name: *const u8) {
+    const VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x30_1bd0;
+    // SAFETY: image base verified at load; thiscall + one stack arg per the stock call sites.
+    let f: extern "thiscall" fn(*mut u32, *const u8) = unsafe { core::mem::transmute(VA) };
+    f(object, name);
+}
+
+/// Intern all 20 key strings against `l` and record their registry refs.
+///
+/// Refs from a previous state are abandoned, not unref'd: they died with that
+/// state's registry.
+fn fs_build_keys(l: i32) {
+    use core::sync::atomic::Ordering;
+    for (slot, name) in FS_KEY_NAMES.iter().enumerate() {
+        fs_pushstring(l, name.as_ptr());
+        FS_KEY_REFS[slot].store(fs_lua_ref(l, FS_REGISTRYINDEX), Ordering::Relaxed);
+    }
+    FS_KEY_L.store(l as usize, Ordering::Relaxed);
+}
+
+/// Whether the value at the top of `l`'s stack is the interned string `name`.
+///
+/// Layout facts: `L->top` at `L+0x8`, 16-byte `TObject` `{tt, shadow, value}`,
+/// string tag 4, `TString` length at `+0xc` and bytes at `+0x10`.
+fn fs_top_is_key(l: i32, name: &[u8]) -> bool {
+    let want = &name[..name.len() - 1];
+    // SAFETY: `L+0x8` is the live stack-top pointer.
+    let top = unsafe { *((l as usize + 0x8) as *const usize) };
+    let val = top - 16;
+    // SAFETY: `val` is the initialized just-pushed stack slot's tag dword.
+    if unsafe { *(val as *const i32) } != 4 {
+        return false;
+    }
+    // SAFETY: tag 4 means the value dword at `+0x8` is a live `TString` pointer.
+    let ts = unsafe { *((val + 0x8) as *const usize) };
+    // SAFETY: `TString` length field at `+0xc`.
+    if unsafe { *((ts + 0xc) as *const u32) } as usize != want.len() {
+        return false;
+    }
+    // SAFETY: `TString` content bytes start at `+0x10`, `len` of them initialized.
+    let bytes = unsafe { core::slice::from_raw_parts((ts + 0x10) as *const u8, want.len()) };
+    bytes == want
+}
+
+/// Push the cached key string for `slot`, rebuilding the cache when stale.
+///
+/// The pushed value is verified to be the expected interned string. The
+/// `L`-pointer identity check alone cannot prove the refs are ours: a UI
+/// reload tears the state down, and a fresh state can land on the recycled
+/// allocation, leaving stale ref integers that index someone else's registry
+/// slots. On mismatch the stale value is popped and the cache rebuilt against
+/// the live state.
+fn fs_push_key(l: i32, slot: usize) {
+    use core::sync::atomic::Ordering;
+    if FS_KEY_L.load(Ordering::Relaxed) != l as usize {
+        fs_build_keys(l);
+    }
+    fs_rawgeti(
+        l,
+        FS_REGISTRYINDEX,
+        FS_KEY_REFS[slot].load(Ordering::Relaxed),
+    );
+    if fs_top_is_key(l, FS_KEY_NAMES[slot]) {
+        return;
+    }
+    fs_settop(l, -2);
+    fs_build_keys(l);
+    fs_rawgeti(
+        l,
+        FS_REGISTRYINDEX,
+        FS_KEY_REFS[slot].load(Ordering::Relaxed),
+    );
+}
+
+/// Bind the global `this` to `object`, leaving the old value stack-anchored.
+///
+/// Stock order: save the old value first, then register the object if its
+/// name-registration flag (`object+0x4`) is clear, then set the global from
+/// the object's registry ref (`object+0x8`). Stock parks the old value in the
+/// registry via `luaL_ref`; the stack slot used here anchors it against the
+/// collector just as strongly and costs no registry churn.
+fn fs_bind_this(l: i32, object: *mut u32) {
+    fs_push_key(l, 0);
+    fs_gettable(l, FS_GLOBALSINDEX);
+    let flag_ptr = object.wrapping_add(1);
+    // SAFETY: `object+0x4` is the registration flag the stock body tests.
+    if unsafe { flag_ptr.read() } == 0 {
+        fs_register_script_object(object, core::ptr::null());
+    }
+    fs_push_key(l, 0);
+    let ref_ptr = object.wrapping_add(2);
+    // SAFETY: `object+0x8` is the object's registry ref dword.
+    let obj_ref = unsafe { ref_ptr.read() };
+    fs_rawgeti(l, FS_REGISTRYINDEX, obj_ref.cast_signed());
+    fs_settable(l, FS_GLOBALSINDEX);
+}
+
+/// Restore the global `this` from the stack-anchored old value at the top.
+fn fs_restore_this(l: i32) {
+    fs_push_key(l, 0);
+    fs_insert(l, -2);
+    fs_settable(l, FS_GLOBALSINDEX);
+}
+
+/// Run the ref'd handler under the shared dispatch error handler.
+///
+/// Stock tail: push the errfunc from its registry ref, push the function,
+/// pcall with `nargs = 0` (handlers read globals, never stack arguments) and
+/// the errfunc at relative `-2`; on error pop the handler's message, then pop
+/// the errfunc either way.
+fn fs_pcall_func(l: i32, func_ref: i32) {
+    // SAFETY: `0x8722c8` is the dispatch error handler's registry-ref dword.
+    let errfunc = unsafe { FS_ERRFUNC_REF.read() };
+    fs_rawgeti(l, FS_REGISTRYINDEX, errfunc);
+    fs_rawgeti(l, FS_REGISTRYINDEX, func_ref);
+    if fs_pcall(l, 0, -2) != 0 {
+        fs_settop(l, -2);
+    }
+    fs_settop(l, -2);
+}
+
+/// `FrameScript::ExecuteFunctionWithObject` — `__fastcall(funcRef, object)`.
+///
+/// The paramless per-listener invoke core (sole caller 0x702690): bind the
+/// global `this` to `object`, pcall the ref'd handler, restore. Stock also
+/// resolves the object's name twice (vtable slot 1) and copies it after a
+/// "DBG:" prefix into a stack buffer nothing reads, passing NULL to
+/// `RegisterScriptObject` regardless; that dead work is dropped here. Both
+/// null-argument rejects keep stock's Storm error 0x57.
+pub fn frame_script__execute_function_with_object__704d50(func_ref: i32, object: *mut u32) {
+    if func_ref == 0 || object.is_null() {
+        fs_set_last_error(0x57);
+        return;
+    }
+    let l = fs_get_lua_state();
+    fs_bind_this(l, object);
+    fs_pcall_func(l, func_ref);
+    fs_restore_this(l);
+}
+
+/// `FrameScript::ExecuteFunctionFormattedV` — `cdecl(funcRef, object, fmt, va)`.
+///
+/// The formatted per-listener invoke core (sole caller 0x702710). Walks the
+/// format for at most 19 `%d`/`%u`/`%f`/`%s` specifiers, pushing each value
+/// and binding it to the matching `argN` global with the old value parked on
+/// the stack; a null `object` skips the `this` binding (stock allows it
+/// here, unlike the paramless core). Restores `this` first, then `argN`
+/// ascending, exactly stock's order. Format stepping is transcribed with its
+/// quirk intact: the specifier byte is re-examined as a candidate `%` by the
+/// next iteration, so `%%d` consumes one `%d` argument.
+pub fn frame_script__execute_function_formatted_v__704f10(
+    func_ref: i32,
+    object: *mut u32,
+    format: *const u8,
+    args: *const u32,
+) {
+    if func_ref == 0 || format.is_null() {
+        fs_set_last_error(0x57);
+        return;
+    }
+    let l = fs_get_lua_state();
+    let mut arg_count: i32 = 0;
+    let mut p = format;
+    let mut va = args.cast::<u8>();
+    // SAFETY: `format` is a readable nul-terminated string per the caller contract.
+    let mut c = unsafe { p.read() };
+    while c != 0 {
+        if arg_count >= 19 {
+            break;
+        }
+        // SAFETY: still inside the nul-terminated format string (`c` was not the nul).
+        p = unsafe { p.add(1) };
+        if c == b'%' {
+            // SAFETY: `p` points at the byte after `%`, at worst the terminating nul.
+            let spec = unsafe { p.read() };
+            let pushed = match spec {
+                b'd' => {
+                    // SAFETY: the caller supplied a matching argument area for the format.
+                    let v = unsafe { va.cast::<i32>().read_unaligned() };
+                    // SAFETY: 4 bytes consumed keeps `va` within the argument area.
+                    va = unsafe { va.add(4) };
+                    fs_pushnumber(l, f64::from(v));
+                    true
+                }
+                b'u' => {
+                    // SAFETY: the caller supplied a matching argument area for the format.
+                    let v = unsafe { va.cast::<u32>().read_unaligned() };
+                    // SAFETY: 4 bytes consumed keeps `va` within the argument area.
+                    va = unsafe { va.add(4) };
+                    fs_pushnumber(l, f64::from(v));
+                    true
+                }
+                b'f' => {
+                    // SAFETY: the caller supplied a matching argument area for the format.
+                    let v = unsafe { va.cast::<f64>().read_unaligned() };
+                    // SAFETY: 8 bytes consumed keeps `va` within the argument area.
+                    va = unsafe { va.add(8) };
+                    fs_pushnumber(l, v);
+                    true
+                }
+                b's' => {
+                    // SAFETY: the caller supplied a matching argument area for the format.
+                    let s = unsafe { va.cast::<*const u8>().read_unaligned() };
+                    // SAFETY: 4 bytes consumed keeps `va` within the argument area.
+                    va = unsafe { va.add(4) };
+                    fs_pushstring(l, s);
+                    true
+                }
+                _ => false,
+            };
+            if pushed {
+                arg_count += 1;
+                let slot = usize::try_from(arg_count).expect("argument count is 1..=19");
+                fs_push_key(l, slot);
+                fs_gettable(l, FS_GLOBALSINDEX);
+                fs_insert(l, -2);
+                fs_push_key(l, slot);
+                fs_insert(l, -2);
+                fs_settable(l, FS_GLOBALSINDEX);
+            }
+        }
+        // SAFETY: `p` is within the format string (a specifier byte or the next char).
+        c = unsafe { p.read() };
+    }
+    let bound = !object.is_null();
+    if bound {
+        fs_bind_this(l, object);
+    }
+    fs_pcall_func(l, func_ref);
+    if bound {
+        fs_restore_this(l);
+    }
+    for i in 1..=arg_count {
+        let slot = usize::try_from(i).expect("argument index is 1..=19");
+        fs_push_key(l, slot);
+        fs_pushvalue(l, -(arg_count - i + 2));
+        fs_settable(l, FS_GLOBALSINDEX);
+    }
+    if arg_count > 0 {
+        fs_settop(l, -arg_count - 1);
+    }
+}
