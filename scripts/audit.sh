@@ -43,6 +43,7 @@ windows/turbo/src/math/aabb.rs
 windows/turbo/src/math/boundsfit.rs
 windows/turbo/src/math/collision.rs
 windows/turbo/src/math/fmod_mixer.rs
+windows/turbo/src/math/fmod_mp3.rs
 windows/turbo/src/math/frustum.rs
 windows/turbo/src/math/gx.rs
 windows/turbo/src/math/light.rs

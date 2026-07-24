@@ -12,6 +12,7 @@ windows/turbo/src/math/collision.rs clippy::neg_cmp_op_on_partial_ord 9
 windows/turbo/src/math/collision.rs clippy::too_many_arguments 3
 windows/turbo/src/math/collision.rs non_snake_case 1
 windows/turbo/src/math/fmod_mixer.rs non_snake_case 1
+windows/turbo/src/math/fmod_mp3.rs non_snake_case 1
 windows/turbo/src/math/frustum.rs clippy::excessive_precision 1
 windows/turbo/src/math/frustum.rs non_snake_case 1
 windows/turbo/src/math/gx.rs clippy::double_comparisons 1

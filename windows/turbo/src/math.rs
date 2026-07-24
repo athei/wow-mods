@@ -44,6 +44,11 @@ pub mod world;
 // outside the assemble.py sentinels.
 pub mod fmod_mixer;
 
+// FMOD3 MPEG Layer-III decode DSP (alias reduction, filterbank DCT, IMDCT),
+// hooked at runtime in `win::fmod` like the dewindow above. Hand-maintained,
+// not generated — outside the assemble.py sentinels.
+pub mod fmod_mp3;
+
 // libm-free polynomial sin/cos shared by the trig kernels (Euler/axis-angle/
 // quaternion/movement-arc). Hand-maintained, not generated — outside the
 // assemble.py sentinels.
