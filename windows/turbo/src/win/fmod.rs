@@ -1,6 +1,6 @@
-//! Runtime hook for FMOD3's `fmod__mixer_fpu`.
+//! Runtime hooks for FMOD3's mixer and MP3-decode DSP.
 //!
-//! The one reimpl that targets a module other than `Wow.exe`.
+//! The one family of reimpls that targets a module other than `Wow.exe`.
 //!
 //! `fmod.dll` is a separate, packed module that unpacks its code into runtime
 //! memory, so the `symbols.toml` install path — RVA over `Wow.exe`'s `.text`,
@@ -129,43 +129,85 @@ unsafe extern "system" fn fsound_init_detour(mixrate: i32, max_channels: i32, fl
         unsafe { core::mem::transmute::<usize, FSoundInitFn>(original) };
     // SAFETY: forwarding `FSOUND_Init`'s own arguments under its own ABI.
     let result = unsafe { call_original(mixrate, max_channels, flags) };
-    install_mixer_hook();
+    install_fmod_hooks();
     result
 }
 
-/// Verify and install the `fmod__mixer_fpu` detour.
+/// One fmod hook: an RVA into the unpacked image plus its install collateral.
+///
+/// Entries are instantiated in a local array (the detour pointer keeps the
+/// type `!Sync`, and nothing needs the table after install).
+struct FmodHook {
+    /// Target RVA into fmod's unpacked image.
+    rva: usize,
+    /// Prologue signature, reloc-affected dwords wildcarded.
+    sig: &'static str,
+    /// Log label.
+    label: &'static str,
+    /// The detour to install.
+    detour: *mut c_void,
+    /// Slot for the created trampoline, when the detour delegates.
+    ///
+    /// Stored (`Release`) before `publish` runs and before the hook enables.
+    trampoline: Option<&'static AtomicUsize>,
+    /// Publish base-derived globals the detour reads.
+    ///
+    /// Runs after `create_hook`, before `enable_hook`, so an audio-thread call
+    /// landing the instant the patch goes live never reads a `0` slot.
+    publish: fn(base: usize),
+}
+
+/// Verify and install every fmod detour.
 ///
 /// Called once, from the `FSOUND_Init` detour, after fmod is initialized.
-fn install_mixer_hook() {
+/// Each hook verifies and installs independently: a signature mismatch skips
+/// that one hook (stock code keeps running there) and the rest proceed.
+fn install_fmod_hooks() {
     let base = FMOD_BASE.load(Ordering::Relaxed);
     if base == 0 {
         return;
     }
-    let window_global = base + WINDOW_PTR_RVA;
-    let mixer_va = base + MIXER_RVA;
 
-    // SAFETY: `mixer_va` is within fmod's mapped code; reads at most the
-    // signature's token count of bytes.
-    if !unsafe { wow_hook::signature_matches(mixer_va, MIXER_SIG) } {
-        log::warn!(
-            target: LOG_TARGET,
-            "{MIXER_LABEL} signature mismatch at {mixer_va:#010x} (base {base:#010x}) — refusing to patch",
-        );
-        return;
-    }
+    let hooks = [FmodHook {
+        rva: MIXER_RVA,
+        sig: MIXER_SIG,
+        label: MIXER_LABEL,
+        detour: mixer_detour as *mut c_void,
+        trampoline: None,
+        publish: publish_mixer_globals,
+    }];
 
-    // SAFETY: `mixer_va`'s prologue matched the signature, and `mixer_detour` is
-    // `extern "C"` matching the original `__cdecl(src, phase, out_stride, out)`.
-    let created =
-        unsafe { wow_hook::create_hook(mixer_va, mixer_detour as *mut c_void, MIXER_LABEL) };
-    if created.is_none() {
-        return;
+    for hook in hooks {
+        let va = base + hook.rva;
+        // SAFETY: `va` is within fmod's mapped code; reads at most the
+        // signature's token count of bytes.
+        if !unsafe { wow_hook::signature_matches(va, hook.sig) } {
+            log::warn!(
+                target: LOG_TARGET,
+                "{} signature mismatch at {va:#010x} (base {base:#010x}) — refusing to patch",
+                hook.label,
+            );
+            continue;
+        }
+
+        // SAFETY: `va`'s prologue matched the signature, and each table entry's
+        // detour matches its target's ABI (documented on the detour).
+        let Some(trampoline) = (unsafe { wow_hook::create_hook(va, hook.detour, hook.label) })
+        else {
+            continue;
+        };
+        if let Some(slot) = hook.trampoline {
+            slot.store(trampoline as usize, Ordering::Release);
+        }
+        (hook.publish)(base);
+        // SAFETY: `va` is the hook just created above.
+        let _ = unsafe { wow_hook::enable_hook(va, hook.label) };
     }
-    // Publish the window global before enabling so a mixer-thread call landing the
-    // instant the patch goes live never reads a `0` slot.
-    WINDOW_GLOBAL.store(window_global, Ordering::Release);
-    // SAFETY: `mixer_va` is the hook just created above.
-    let _ = unsafe { wow_hook::enable_hook(mixer_va, MIXER_LABEL) };
+}
+
+/// Publish the mixer detour's window-table global.
+fn publish_mixer_globals(base: usize) {
+    WINDOW_GLOBAL.store(base + WINDOW_PTR_RVA, Ordering::Release);
 }
 
 /// Detour for `fmod__mixer_fpu`.
