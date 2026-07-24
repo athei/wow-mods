@@ -40513,6 +40513,22 @@ fn fs_set_last_error(code: u32) {
     f(code);
 }
 
+/// `lua_checkstack` at `0x6f2f30`, `fastcall(ecx = L, edx = n)`; grows to fit.
+///
+/// Ensures `n` free stack slots (growing through `luaD_growstack` and raising
+/// the call-info ceiling); returns 0 when `n` would exceed the interpreter's
+/// hard stack cap. The invoke cores park saved old globals on the Lua stack,
+/// a deeper footprint than stock's registry round-trips, and the push APIs
+/// do not grow the stack on their own, so the headroom is reserved up front.
+/// A refusal is not an error path here: proceeding matches the unchecked
+/// pushes stock always did.
+fn fs_checkstack(l: i32, n: i32) -> i32 {
+    const VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x2f_2f30;
+    // SAFETY: image base verified at load; fastcall per the stock call sites.
+    let f: extern "fastcall" fn(i32, i32) -> i32 = unsafe { core::mem::transmute(VA) };
+    f(l, n)
+}
+
 /// `lua_pushstring` at `0x6f3890`, `fastcall(ecx = L, edx = s)`; interns `s`.
 fn fs_pushstring(l: i32, s: *const u8) {
     const VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x2f_3890;
@@ -40733,6 +40749,9 @@ pub fn frame_script__execute_function_with_object__704d50(func_ref: i32, object:
         return;
     }
     let l = fs_get_lua_state();
+    // Peak footprint above the entry top: the parked old `this`, the error
+    // handler and the function, plus one key transient.
+    let _ = fs_checkstack(l, 4);
     fs_bind_this(l, object);
     fs_pcall_func(l, func_ref);
     fs_restore_this(l);
@@ -40759,6 +40778,10 @@ pub fn frame_script__execute_function_formatted_v__704f10(
         return;
     }
     let l = fs_get_lua_state();
+    // Peak footprint above the entry top: 19 parked old argN values at the
+    // format cap, the parked old `this`, the error handler and the function,
+    // plus key/value transients.
+    let _ = fs_checkstack(l, 25);
     let mut arg_count: i32 = 0;
     let mut p = format;
     let mut va = args.cast::<u8>();
