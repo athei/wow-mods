@@ -11878,18 +11878,17 @@ pub fn init_engine_clock(hz: u64) {
 /// `0x42c010` jumps here and is covered by this patch.
 pub fn os_get_time_ms__42b790() -> i64 {
     let ticks = wow_shared::tsc::rdtsc();
-    let magic = CLOCK_MAGIC.load(core::sync::atomic::Ordering::Relaxed);
     let bias = CLOCK_BIAS.load(core::sync::atomic::Ordering::Relaxed);
-    (((u128::from(ticks) * u128::from(magic)) >> CLOCK_SHIFT) as i64).wrapping_add(bias)
+    clock_ticks_to_ms(ticks).cast_signed().wrapping_add(bias)
 }
 
-/// Fold a raw `rdtsc` delta to whole milliseconds.
+/// Fold raw `rdtsc` ticks to whole milliseconds.
 ///
-/// The duration counterpart of [`os_get_time_ms__42b790`]'s absolute fold —
-/// the same integer Q[`CLOCK_SHIFT`] multiply against the published
-/// engine-clock scale, without the bias. Returns 0 before
-/// [`init_engine_clock`] publishes the magic (never observed: attach runs it
-/// before `install_all`).
+/// The single tick fold: the integer Q[`CLOCK_SHIFT`] multiply against the
+/// published engine-clock scale. [`os_get_time_ms__42b790`] adds the origin
+/// bias on top for absolute time; the gauges feed it deltas directly.
+/// Returns 0 before [`init_engine_clock`] publishes the magic (never
+/// observed: attach runs it before `install_all`).
 pub fn clock_ticks_to_ms(ticks: u64) -> u64 {
     let magic = CLOCK_MAGIC.load(core::sync::atomic::Ordering::Relaxed);
     ((u128::from(ticks) * u128::from(magic)) >> CLOCK_SHIFT) as u64
