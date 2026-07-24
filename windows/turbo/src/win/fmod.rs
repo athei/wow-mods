@@ -64,6 +64,18 @@ const ANTIALIAS_SIG: &str = "8B 44 24 08 83 78 10 02 75 0E 8B 48 14 85 C9 74 63 
                              B8 01 00 00 00 EB 04";
 const ANTIALIAS_LABEL: &str = "fmod::iii_antialias";
 
+/// RVA of the synthesis-filterbank DCT (`__cdecl(out0, out1, samples)`).
+const DCT64_RVA: usize = 0x1_7f60;
+/// RVA of the five-slot twiddle-table pointer array the DCT stages read.
+const DCT64_PNTS_RVA: usize = 0x4_3180;
+/// The DCT prologue: frame setup, `samples` load, first twiddle-slot load.
+///
+/// The slot load's `disp32` (byte indices 15..19) is relocated, so those
+/// four bytes are wildcarded.
+const DCT64_SIG: &str = "81 EC 08 01 00 00 8B 84 24 14 01 00 00 8B 0D ?? ?? ?? ?? \
+                         D9 00 D8 40 7C";
+const DCT64_LABEL: &str = "fmod::dct64";
+
 /// fmod's unpacked base, resolved at attach.
 ///
 /// Read by the init detour to locate the mixer and its window-table global.
@@ -87,6 +99,13 @@ static ANTIALIAS_TRAMPOLINE: AtomicUsize = AtomicUsize::new(0);
 static ANTIALIAS_CA: AtomicUsize = AtomicUsize::new(0);
 /// Address of the `cs` butterfly table (`base + ANTIALIAS_CS_RVA`).
 static ANTIALIAS_CS: AtomicUsize = AtomicUsize::new(0);
+/// The DCT trampoline; read only by the compare path.
+static DCT64_TRAMPOLINE: AtomicUsize = AtomicUsize::new(0);
+/// Address of the DCT's five-slot twiddle pointer array (`base + DCT64_PNTS_RVA`).
+///
+/// The slots hold the relocated table pointers, so the detour dereferences
+/// them per call, exactly as the original's stage loads do.
+static DCT64_PNTS: AtomicUsize = AtomicUsize::new(0);
 
 #[link(name = "kernel32")]
 unsafe extern "system" {
@@ -208,6 +227,14 @@ fn install_fmod_hooks() {
             trampoline: Some(&ANTIALIAS_TRAMPOLINE),
             publish: publish_antialias_globals,
         },
+        FmodHook {
+            rva: DCT64_RVA,
+            sig: DCT64_SIG,
+            label: DCT64_LABEL,
+            detour: dct64_detour as *mut c_void,
+            trampoline: Some(&DCT64_TRAMPOLINE),
+            publish: publish_dct64_globals,
+        },
     ];
 
     for hook in hooks {
@@ -250,6 +277,11 @@ fn publish_mixer_globals(base: usize) {
 fn publish_antialias_globals(base: usize) {
     ANTIALIAS_CA.store(base + ANTIALIAS_CA_RVA, Ordering::Release);
     ANTIALIAS_CS.store(base + ANTIALIAS_CS_RVA, Ordering::Release);
+}
+
+/// Publish the DCT detour's twiddle-slot array address.
+fn publish_dct64_globals(base: usize) {
+    DCT64_PNTS.store(base + DCT64_PNTS_RVA, Ordering::Release);
 }
 
 /// Detour for `fmod__mixer_fpu`.
@@ -398,5 +430,105 @@ fn antialias_diff(
     // ±1 ULP: the kernel carries f64 where the original carries the x87 stack,
     // so a double-rounding can move the narrowed f32 by one bit.
     super::diff::region_f32(&STATS, LABEL, false, 1, &shadow.0[..len_bytes], live);
+    true
+}
+
+/// The DCT's ABI, for calling the trampoline in compare mode.
+#[cfg(wow_turbo_diff)]
+type Dct64Fn = unsafe extern "C" fn(*mut f32, *mut f32, *const f32);
+
+/// Detour for the synthesis-filterbank DCT.
+///
+/// `__cdecl(out0, out1, samples)`, void. Dereferences the five twiddle-slot
+/// pointers per call (they hold the relocated table addresses) and hands the
+/// resolved pointers to the kernel.
+///
+/// # Safety
+///
+/// Installed only over the verified DCT prologue; FMOD invokes it with the
+/// original ABI, so the buffers cover the kernel's documented extents.
+unsafe extern "C" fn dct64_detour(out0: *mut f32, out1: *mut f32, samples: *const f32) {
+    let slots = DCT64_PNTS.load(Ordering::Acquire) as *const *const f32;
+    let pnts: [*const f32; 5] = core::array::from_fn(|k| {
+        // SAFETY: the detour is enabled only after the slot-array address is
+        // published; the five slots are initialized pointer data in fmod's image.
+        unsafe { slots.wrapping_add(k).read() }
+    });
+
+    #[cfg(wow_turbo_diff)]
+    if dct64_diff(out0, out1, samples, &pnts) {
+        return;
+    }
+
+    // SAFETY: the detour fires only for genuine DCT calls, so the buffers
+    // cover the kernel's documented extents.
+    unsafe { crate::math::fmod_mp3::fmod_dct64__17f60(out0, out1, samples, &pnts) };
+}
+
+/// Shadow-compare for the DCT hook (compare-mode builds).
+///
+/// When armed via `WOW_TURBO_DIFF_ARM` (`all` or `fmod__dct64__17f60`): run
+/// the reimpl into zeroed scratch halves, run the original on the live
+/// buffers (ground truth), then compare the 33 stride-16 lanes the function
+/// writes. Returns whether the call was handled.
+#[cfg(wow_turbo_diff)]
+fn dct64_diff(out0: *mut f32, out1: *mut f32, samples: *const f32, pnts: &[*const f32; 5]) -> bool {
+    use std::sync::LazyLock;
+
+    const LABEL: &str = "fmod__dct64__17f60";
+    /// Scratch capacity: the wider output half spans 257 floats.
+    const HALF_CAP: usize = 257 * 4;
+    static ARMED_NOTE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+    static STATS: super::diff::Stats = super::diff::Stats::new();
+    static SELECTED: LazyLock<bool> = LazyLock::new(|| {
+        std::env::var("WOW_TURBO_DIFF_ARM").ok().is_some_and(|s| {
+            s.split(',').any(|t| {
+                let t = t.trim();
+                t == "all" || t == LABEL
+            })
+        })
+    });
+
+    if !*SELECTED {
+        return false;
+    }
+    let trampoline = DCT64_TRAMPOLINE.load(Ordering::Acquire);
+    if trampoline == 0 {
+        return false;
+    }
+    super::diff::note_armed(&ARMED_NOTE, LABEL);
+
+    let mut shadow0 = super::diff::Buf::<HALF_CAP>::zeroed();
+    let mut shadow1 = super::diff::Buf::<HALF_CAP>::zeroed();
+    // SAFETY: the scratch halves cover every stride-16 index the kernel
+    // stores, and `samples`/`pnts` are the original's own inputs.
+    unsafe {
+        crate::math::fmod_mp3::fmod_dct64__17f60(
+            shadow0.0.as_mut_ptr().cast::<f32>(),
+            shadow1.0.as_mut_ptr().cast::<f32>(),
+            samples,
+            pnts,
+        );
+    }
+    let original =
+        // SAFETY: `DCT64_TRAMPOLINE` holds the trampoline published before
+        // this hook was enabled — the original prologue with its own ABI.
+        unsafe { core::mem::transmute::<usize, Dct64Fn>(trampoline) };
+    // SAFETY: forwarding the original's own arguments under its own ABI.
+    unsafe { original(out0, out1, samples) };
+
+    for (half, live, lanes) in [(&shadow0, out0, 17usize), (&shadow1, out1, 16)] {
+        for lane in 0..lanes {
+            let ours = f32::from_bits(u32::from_le_bytes(
+                half.0[lane * 64..lane * 64 + 4]
+                    .try_into()
+                    .unwrap_or([0; 4]),
+            ));
+            // SAFETY: the original just stored this stride-16 lane.
+            let orig = unsafe { live.wrapping_add(lane * 16).read() };
+            // ±1 ULP, as for the alias-reduction compare.
+            super::diff::scalar_f32(&STATS, LABEL, false, 1, ours, orig);
+        }
+    }
     true
 }
