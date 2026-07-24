@@ -269,7 +269,10 @@ pub struct Dct36Tables {
 /// * `inbuf` (18 floats) is **mutated in place** by two running-sum
 ///   prepasses (`in[i] += in[i-1]` for `i = 17..1`, then
 ///   `in[i] += in[i-2]` for odd `i = 17..3`) — callers rely on the mutated
-///   contents, so the kernel reproduces the passes exactly.
+///   contents, so the kernel reproduces the passes exactly, including the
+///   original's register carries: the `in[1]` and `in[3]` sums stay live
+///   unrounded (they feed each other and the odd core), only their stores
+///   narrow to `f32`.
 /// * two 9-point cores (even/odd prepassed lanes; the odd core's results
 ///   carry the `tf` twiddles) produce 9 sum/difference pairs.
 /// * the tail writes `o2[j] = sum * wintab[18 + j]` (18 floats) and
@@ -310,15 +313,22 @@ pub unsafe fn fmod_dct36__1db00(
         unsafe { p.wrapping_add(i).write(super::f64_to_f32(value)) };
     };
 
-    // Prepass 1: running sums, descending. The original chains these as f32
-    // adds through memory, so narrow each partial back to f32.
-    for i in (1..18).rev() {
+    // Prepass 1: pairwise sums, descending, each partial narrowed back to
+    // f32 through memory — except the `in[1]` sum, which the original keeps
+    // live in a register: the second pass and the odd core consume the
+    // UNROUNDED value, only the store narrows.
+    for i in (2..18).rev() {
         wr(inbuf, i, rd(inbuf, i) + rd(inbuf, i - 1));
     }
-    // Prepass 2: the odd lanes again, stride 2.
-    for i in (3..18).rev().step_by(2) {
+    let in1_carry = rd(inbuf, 0) + rd(inbuf, 1);
+    wr(inbuf, 1, in1_carry);
+    // Prepass 2: the odd lanes again, stride 2; the `in[3]` sum is the
+    // second register carry (built from the first, feeding the odd core).
+    for i in (5..18).rev().step_by(2) {
         wr(inbuf, i, rd(inbuf, i) + rd(inbuf, i - 2));
     }
+    let in3_carry = in1_carry + rd(inbuf, 3);
+    wr(inbuf, 3, in3_carry);
 
     let inb = |i: usize| rd(inbuf, i);
     let cos6_2 = rd(tables.cos6, 0);
@@ -358,11 +368,12 @@ pub unsafe fn fmod_dct36__1db00(
     let es6 = em0 - er2;
 
     // Odd 9-point core, over the odd prepassed lanes; results carry the
-    // `tf` twiddles.
+    // `tf` twiddles. `in[1]` and `in[3]` enter as the unrounded register
+    // carries, not the narrowed stores.
     let o_mid = cos6_2 * inb(13);
     let o_fold = ((inb(17) + inb(9)) - inb(5)) * cos6_2;
-    let o0 = inb(1) + o_mid;
-    let o_base = (inb(1) - o_mid) - o_mid;
+    let o0 = in1_carry + o_mid;
+    let o_base = (in1_carry - o_mid) - o_mid;
     let o1v = o_base - o_fold;
     let op_a = (inb(9) + inb(5)) * ca[0];
     let op_b = (inb(9) - inb(17)) * ca[1];
@@ -371,16 +382,16 @@ pub unsafe fn fmod_dct36__1db00(
     let om0 = (o0 - op_a) - op_c;
     let om1 = op_a + o0 + op_b;
     let om2 = (op_c - op_b) + o0;
-    let oq_a = (inb(3) + inb(11)) * cb[0];
+    let oq_a = (in3_carry + inb(11)) * cb[0];
     let oq_b = (inb(11) - inb(15)) * cb[1];
     let o_six = cos6_1 * inb(7);
     let or0 = o_six + oq_b + oq_a;
     let oy0 = (om1 + or0) * tf(0);
     let oy8 = (om1 - or0) * tf(8);
-    let oq_c = (inb(3) + inb(15)) * cb[2];
+    let oq_c = (in3_carry + inb(15)) * cb[2];
     let or1 = (oq_c - o_six) + oq_a;
     let oy3 = (om2 + or1) * tf(3);
-    let o_fold2 = ((inb(15) + inb(11)) - inb(3)) * cos6_1;
+    let o_fold2 = ((inb(15) + inb(11)) - in3_carry) * cos6_1;
     let oy5 = (om2 - or1) * tf(5);
     let or2 = oq_b - (o_six + oq_c);
     let oy1 = (o1v - o_fold2) * tf(1);
@@ -675,14 +686,19 @@ mod tests_fmod_dct36__1db00 {
         let overlap = [0.0f32; 18];
 
         // Independent reference for the in-place passes: pairwise sums
-        // descending, then the odd lanes again at stride 2.
+        // descending, then the odd lanes again at stride 2. The `in[1]` and
+        // `in[3]` sums carry unrounded f64 into their consumers (the
+        // original keeps them in registers), so only their stores narrow.
         let mut want = input.clone();
-        for i in (1..18).rev() {
+        for i in (2..18).rev() {
             want[i] += want[i - 1];
         }
-        for i in (3..18).rev().step_by(2) {
+        let carry1 = f64::from(want[0]) + f64::from(want[1]);
+        want[1] = carry1 as f32;
+        for i in (5..18).rev().step_by(2) {
             want[i] += want[i - 2];
         }
+        want[3] = (carry1 + f64::from(want[3])) as f32;
 
         let mut inbuf = input;
         let mut o2 = vec![0.0f32; 18];
