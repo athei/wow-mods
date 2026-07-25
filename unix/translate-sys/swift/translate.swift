@@ -49,6 +49,7 @@
 
 import AppKit
 import Foundation
+import QuartzCore
 import SwiftUI
 import Translation
 
@@ -177,17 +178,19 @@ private final class TranslationDriver: ObservableObject {
     /// never-taken staged stream of the prior generation) so repeated
     /// restages keep the state bounded.
     private func stage(key: PairKey, gen: Int) {
-        let (stream, cont) = AsyncStream<Request>.makeStream(
-            bufferingPolicy: .unbounded
-        )
-        continuations[key] = cont
-        let instance = PairInstance(key: key, gen: gen)
-        pendingStreams[instance] = stream
-        if let idx = activePairs.firstIndex(where: { $0.key == key }) {
-            pendingStreams.removeValue(forKey: activePairs[idx])
-            activePairs[idx] = instance
-        } else {
-            activePairs.append(instance)
+        preservingPointer {
+            let (stream, cont) = AsyncStream<Request>.makeStream(
+                bufferingPolicy: .unbounded
+            )
+            continuations[key] = cont
+            let instance = PairInstance(key: key, gen: gen)
+            pendingStreams[instance] = stream
+            if let idx = activePairs.firstIndex(where: { $0.key == key }) {
+                pendingStreams.removeValue(forKey: activePairs[idx])
+                activePairs[idx] = instance
+            } else {
+                activePairs.append(instance)
+            }
         }
     }
 
@@ -226,14 +229,56 @@ private final class TranslationDriver: ObservableObject {
         guard let host, let contentView = host.contentView else {
             return false
         }
-        let view = hostingView
-            ?? NSHostingView(rootView: DriverHostView())
+        let view = hostingView ?? NSHostingView(rootView: DriverHostView())
         view.frame = NSRect(x: -10, y: -10, width: 1, height: 1)
         view.removeFromSuperview()
-        contentView.addSubview(view)
+        preservingPointer { contentView.addSubview(view) }
         hostingView = view
         print("wow_translate_sys: hosted in window '\(host.title)'")
         return true
+    }
+
+    /// Run `body`, then undo the pointer reset AppKit does in response to it.
+    ///
+    /// Changing a window's view hierarchy invalidates its structural regions,
+    /// and AppKit recomputes which pointer belongs at the mouse location
+    /// during that window's next display cycle:
+    ///
+    ///     -[_NSTrackingAreaAKManager setCursorForMouseLocation:]
+    ///     -[_NSTrackingAreaAKManager displayCycleUpdateStructuralRegions]
+    ///     NSDisplayCycleFlush → CA::Transaction::commit
+    ///
+    /// Nothing in a wine window claims a cursor for that location, so the
+    /// recomputation lands on the system arrow. Wine never learns: its own
+    /// cursor state is unchanged, and it only notifies its Mac driver when the
+    /// cursor *handle* changes (`server/queue.c`, `set_cursor`:
+    /// `if (prev_cursor != new_cursor)`), so nothing re-applies the game's
+    /// cursor. It stays lost until something swaps the bitmap, for example
+    /// hovering a UI element. Wine's own re-apply path
+    /// (`-[WineApplicationController updateCursor:]` off `handleMouseMove:`)
+    /// stays silent for the same reason: it believes the cursor is current.
+    ///
+    /// The restore rides the completion of the transaction the mutation joins,
+    /// which is the transaction whose commit runs the reset, so the ordering
+    /// comes from CoreAnimation's commit sequence rather than from a guess
+    /// about how long AppKit takes. (`addCommitHandler(_:for:)` would express
+    /// that more directly but is not in the public SDK.) An existing
+    /// completion block is chained rather than replaced, since the property is
+    /// per-thread and shared with whatever else joined this transaction.
+    ///
+    /// `set()` talks to AppKit only, so wine's state stays untouched and
+    /// correct throughout, and the restore is skipped unless the pointer
+    /// actually changed, so a cursor the game swapped itself is left alone.
+    private func preservingPointer(_ body: () -> Void) {
+        let saved = NSCursor.current
+        body()
+        let chained = CATransaction.completionBlock()
+        CATransaction.setCompletionBlock {
+            chained?()
+            guard NSCursor.current !== saved else { return }
+            saved.set()
+            print("wow_translate_sys: pointer reset by AppKit, restored")
+        }
     }
 }
 
