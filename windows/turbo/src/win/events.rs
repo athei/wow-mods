@@ -186,11 +186,12 @@ struct State {
     cumulative_emit: u64,
     window: Tables,
     cumulative: Tables,
-    /// Chunk-to-addon memo, validated by content.
+    /// Chunk-to-addon memo, keyed by a hash of the chunk name.
     ///
-    /// Address and length find the entry; the content hash confirms it still
-    /// describes the same script.
-    owners: HashMap<(usize, u32), (u64, NameBuf)>,
+    /// Keyed by content rather than by the string object, so a reload that
+    /// re-interns every chunk at a fresh address reuses the entries instead of
+    /// doubling them, and a recycled address cannot inherit an owner.
+    owners: HashMap<u64, NameBuf>,
 }
 
 static STATE: LazyLock<Mutex<State>> = LazyLock::new(|| {
@@ -248,12 +249,16 @@ fn owner_of(st: &mut State, chunk: (usize, u32)) -> NameBuf {
     // inline and whose length excludes the terminator.
     let text = unsafe { core::slice::from_raw_parts(bytes as *const u8, len as usize) };
     let hash = chunk_hash(text);
-    if let Some((seen, owner)) = st.owners.get(&chunk)
-        && *seen == hash
-    {
+    if let Some(owner) = st.owners.get(&hash) {
         return *owner;
     }
     let owner = addon_from_chunk(text);
+    if st.owners.len() >= OWNER_TABLE_CAP {
+        // Start over rather than stop caching: a table that stopped inserting
+        // would re-parse every chunk on every invoke, for the rest of the
+        // session, on the hot path.
+        st.owners.clear();
+    }
     // One line per script FILE, the first time it runs a handler: the only
     // place the raw chunk name is visible to check an attribution against.
     // Scripts written inline in markup are excluded — there is one chunk per
@@ -267,9 +272,7 @@ fn owner_of(st: &mut State, chunk: (usize, u32)) -> NameBuf {
             name_str(&owner),
         );
     }
-    if st.owners.len() < OWNER_TABLE_CAP || st.owners.contains_key(&chunk) {
-        st.owners.insert(chunk, (hash, owner));
-    }
+    st.owners.insert(hash, owner);
     owner
 }
 
