@@ -20207,12 +20207,16 @@ fn gc_traverse_closure(s: &mut GcParSink, c: usize) {
             gc_mark_value(s, c + 0x10 + i * 0x10);
         }
     } else {
-        // SAFETY: Lua closure: proto object at `+0x18`, gt at `+0xc`.
-        let proto = unsafe { *((c + 0x18) as *const usize) };
+        // Stock marks the globals table before the proto, and the order is
+        // kept: a parity count cannot tell the two apart, so only the names
+        // here say which is which.
+        // SAFETY: Lua closure: the globals table is the object half of the
+        // `g` value at `+0x10`, so its pointer sits at `+0x18`.
+        let globals = unsafe { *((c + 0x18) as *const usize) };
+        s.mark(globals);
+        // SAFETY: the proto pointer follows the closure header at `+0xc`.
+        let proto = unsafe { *((c + 0xc) as *const usize) };
         s.mark(proto);
-        // SAFETY: see above.
-        let gt = unsafe { *((c + 0xc) as *const usize) };
-        s.mark(gt);
         for i in 0..nup {
             // SAFETY: upvalue pointer array at `+0x20`.
             let u = unsafe { *((c + 0x20 + i * 4) as *const usize) };
@@ -40758,8 +40762,8 @@ const fn fs_handler_chunk(l: i32) -> (usize, u32) {
     if unsafe { *((closure + 0x6) as *const u8) } != 0 {
         return (0, 0);
     }
-    // SAFETY: a Lua closure's proto pointer is at `+0x18`.
-    let proto = unsafe { *((closure + 0x18) as *const usize) };
+    // SAFETY: a Lua closure's proto pointer is at `+0xc`, after the header.
+    let proto = unsafe { *((closure + 0xc) as *const usize) };
     if proto == 0 {
         return (0, 0);
     }

@@ -199,10 +199,15 @@ fn validate_diff(name: &str, f: &Function) {
 /// rather than failing the build.
 ///
 /// Reruns are keyed on `HEAD` and on whichever ref it names (loose or packed),
-/// so a plain checkout or a new revision re-stamps the string. A worktree that
-/// only *becomes* dirty touches none of those, so the `dirty` marker can lag a
-/// rebuild that changed no file this script watches; it is a diagnostic, and
-/// `touch build.rs` forces it.
+/// so a plain checkout or a new revision re-stamps the string. Dirtiness needs
+/// the sources too, which the caller watches by directory: any edit that could
+/// change the binary re-derives the identity that describes it, and since such
+/// an edit rebuilds the crate anyway, the accuracy is free.
+///
+/// The watched set is what this crate compiles, so a `dirty` worktree whose
+/// only edits are elsewhere still stamps clean. That is the intended reading:
+/// the marker answers "was this binary built from committed sources", not
+/// "was every file in the repository committed".
 fn build_id() -> String {
     let git = |args: &[&str]| {
         Command::new("git")
@@ -230,6 +235,15 @@ fn build_id() -> String {
 fn main() {
     println!("cargo:rerun-if-changed=symbols.toml");
     println!("cargo:rerun-if-changed=build.rs");
+    // Directories are scanned recursively, so this covers every source that
+    // ends up in the binary — this crate's own, and the two it links. Watching
+    // them is what lets the build identity below notice an uncommitted edit;
+    // watching the workspace root instead would sweep in the target dirs and
+    // rebuild forever.
+    println!("cargo:rerun-if-changed=src");
+    println!("cargo:rerun-if-changed=Cargo.toml");
+    println!("cargo:rerun-if-changed=../hook/src");
+    println!("cargo:rerun-if-changed=../../unix/shared/src");
 
     // Stamp the build's own identity into the binary so a captured log names the
     // build that produced it. Without it a log can only be fingerprinted by
@@ -269,8 +283,14 @@ fn main() {
 
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR set by cargo"));
     let out_path = out_dir.join("symbols.rs");
-    fs::write(&out_path, render(&manifest))
-        .unwrap_or_else(|e| panic!("write {}: {e}", out_path.display()));
+    let rendered = render(&manifest);
+    // Write only on a change. The ship path re-runs this script on every build
+    // so the identity above cannot go stale, and rewriting an identical table
+    // would make that re-stamp cost a full rebuild of the generated code.
+    if fs::read_to_string(&out_path).is_ok_and(|old| old == rendered) {
+        return;
+    }
+    fs::write(&out_path, rendered).unwrap_or_else(|e| panic!("write {}: {e}", out_path.display()));
 
     // Pretty-print the generated file with nightly rustfmt so it reads cleanly
     // when inspected. `--config-path` is pinned to the manifest dir so the repo's

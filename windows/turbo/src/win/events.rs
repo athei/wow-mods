@@ -254,6 +254,19 @@ fn owner_of(st: &mut State, chunk: (usize, u32)) -> NameBuf {
         return *owner;
     }
     let owner = addon_from_chunk(text);
+    // One line per script FILE, the first time it runs a handler: the only
+    // place the raw chunk name is visible to check an attribution against.
+    // Scripts written inline in markup are excluded — there is one chunk per
+    // handler rather than per file, thousands of them in a session, and their
+    // name is already the row they group under.
+    if text.contains(&b'\\') {
+        log::debug!(
+            target: "wow::events",
+            "chunk: {:?} -> {}",
+            String::from_utf8_lossy(&text[..text.len().min(120)]),
+            name_str(&owner),
+        );
+    }
     if st.owners.len() < OWNER_TABLE_CAP || st.owners.contains_key(&chunk) {
         st.owners.insert(chunk, (hash, owner));
     }
@@ -262,14 +275,30 @@ fn owner_of(st: &mut State, chunk: (usize, u32)) -> NameBuf {
 
 /// Extract the owning addon's folder from a script chunk name.
 ///
-/// Chunk names carry the path the file was loaded from, so the folder under
-/// `AddOns` names the addon and the stock interface files fall out as their own
-/// bucket, which is the split between what shipped with the client and what a
-/// user installed. Lua prefixes file chunks with `@`, and a name that fits
-/// neither shape is kept verbatim so nothing lands in an anonymous pile.
+/// A chunk compiled from a file carries its path, so the folder under `AddOns`
+/// names the addon and the stock interface folders fall out as their own
+/// buckets: the split between what shipped with the client and what a user
+/// installed. Lua prefixes file chunks with `@`.
+///
+/// A script written inline in a frame's markup carries no path at all — the
+/// loader names it `Frame:Handler` — so the file, and with it the addon, is
+/// gone by the time the function exists. Those group under the frame with an
+/// `xml:` prefix, which keeps one row per frame instead of one per handler and
+/// is honest that the row names a frame rather than an owner. Anything else is
+/// kept verbatim rather than pooled into an anonymous bucket.
 fn addon_from_chunk(text: &[u8]) -> NameBuf {
     const ADDONS: &[u8] = b"addons\\";
     let text = text.strip_prefix(b"@").unwrap_or(text);
+    if !text.contains(&b'\\')
+        && let Some(colon) = text.iter().position(|&b| b == b':')
+    {
+        let mut buf: NameBuf = [0; NAME_CAP];
+        let frame = &text[..colon];
+        let n = frame.len().min(NAME_CAP - 5);
+        buf[..4].copy_from_slice(b"xml:");
+        buf[4..4 + n].copy_from_slice(&frame[..n]);
+        return buf;
+    }
     let lower: Vec<u8> = text.to_ascii_lowercase();
     if let Some(at) = lower
         .windows(ADDONS.len())
