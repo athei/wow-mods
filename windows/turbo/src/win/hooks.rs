@@ -40718,6 +40718,61 @@ fn fs_restore_this(l: i32) {
     fs_settable(l, FS_GLOBALSINDEX);
 }
 
+/// Locate the chunk a pushed handler was compiled from.
+///
+/// Returns the source string's bytes and length, or `(0, 0)` when the value on
+/// top is not a Lua closure: a C function has no chunk, and the gauge buckets
+/// those separately rather than guessing an owner for them.
+///
+/// The walk is the one the collector already makes over the same objects, so
+/// the offsets are the ones its parity harness exercises on every collect:
+/// stack top at `L+0x8` growing up in `0x10` strides, the value's tag at `+0x0`
+/// and its object at `+0x8`, a closure's `isC` byte at `+0x6` and its proto at
+/// `+0x18`, a proto's source string at `+0x20`, and a string's length at `+0xc`
+/// with its bytes inline at `+0x10`.
+///
+/// Called with the handler on top of the stack, which is where the dispatch
+/// tail leaves it between pushing it and calling it.
+const fn fs_handler_chunk(l: i32) -> (usize, u32) {
+    const LUA_TFUNCTION: i32 = 6;
+    if l == 0 {
+        return (0, 0);
+    }
+    // SAFETY: `L+0x8` is the stack top pointer, as the dispatch reimpl and the
+    // collector both read it.
+    let top = unsafe { *((l.cast_unsigned() as usize + 0x8) as *const usize) };
+    if top == 0 {
+        return (0, 0);
+    }
+    let value = top - 0x10;
+    // SAFETY: `value` is the live slot below the top; its tag is at `+0x0`.
+    if unsafe { *(value as *const i32) } != LUA_TFUNCTION {
+        return (0, 0);
+    }
+    // SAFETY: a function value's object pointer sits at `+0x8`.
+    let closure = unsafe { *((value + 0x8) as *const usize) };
+    if closure == 0 {
+        return (0, 0);
+    }
+    // SAFETY: `isC` is the byte at `+0x6` of any closure.
+    if unsafe { *((closure + 0x6) as *const u8) } != 0 {
+        return (0, 0);
+    }
+    // SAFETY: a Lua closure's proto pointer is at `+0x18`.
+    let proto = unsafe { *((closure + 0x18) as *const usize) };
+    if proto == 0 {
+        return (0, 0);
+    }
+    // SAFETY: a proto's source string pointer is at `+0x20`.
+    let source = unsafe { *((proto + 0x20) as *const usize) };
+    if source == 0 {
+        return (0, 0);
+    }
+    // SAFETY: a string's byte length is the dword at `+0xc`.
+    let len = unsafe { *((source + 0xc) as *const u32) };
+    (source + 0x10, len)
+}
+
 /// Run the ref'd handler under the shared dispatch error handler.
 ///
 /// Stock tail: push the errfunc from its registry ref, push the function,
@@ -40730,8 +40785,14 @@ fn fs_pcall_func(l: i32, func_ref: i32) {
     fs_rawgeti(l, FS_REGISTRYINDEX, errfunc);
     fs_rawgeti(l, FS_REGISTRYINDEX, func_ref);
     // The gauge splits an invoke here: inside this call is the script, outside
-    // it is the machinery. Unarmed the wrapper is the call and nothing else.
-    if super::events::time_body(|| fs_pcall(l, 0, -2)) != 0 {
+    // it is the machinery. Unarmed the wrapper is the call and nothing else,
+    // and the chunk lookup does not run.
+    let chunk = if super::events::armed() {
+        fs_handler_chunk(l)
+    } else {
+        (0, 0)
+    };
+    if super::events::time_body(chunk, || fs_pcall(l, 0, -2)) != 0 {
         fs_settop(l, -2);
     }
     fs_settop(l, -2);

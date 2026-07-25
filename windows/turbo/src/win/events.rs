@@ -78,6 +78,8 @@ const TOP_PER_SECOND: usize = 8;
 const TOP_CUMULATIVE: usize = 8;
 /// Handler-table size cap; past it new names fall into the overflow row.
 const HANDLER_TABLE_CAP: usize = 512;
+/// Chunk-memo cap; a client cannot load more script files than this.
+const OWNER_TABLE_CAP: usize = 4_096;
 /// Milliseconds between per-second summary emissions.
 const WINDOW_MS: u64 = 1_000;
 /// Milliseconds between cumulative summary emissions.
@@ -170,6 +172,8 @@ struct Tables {
     body_hist_ticks: [u64; BODY_BUCKETS],
     /// Bodies per bucket, so a bucket states both its mass and its count.
     body_hist_calls: [u64; BODY_BUCKETS],
+    /// Per-addon body cost, keyed by the folder that owns the script.
+    owners: HashMap<NameBuf, Stat>,
     /// Handler names dropped on the table cap (reported, never silent).
     dropped: u64,
     /// Ticks behind `dropped`, so the overflow row carries a cost too.
@@ -182,6 +186,8 @@ struct State {
     cumulative_emit: u64,
     window: Tables,
     cumulative: Tables,
+    /// Chunk-to-addon memo, keyed by string address and length.
+    owners: HashMap<(usize, u32), NameBuf>,
 }
 
 static STATE: LazyLock<Mutex<State>> = LazyLock::new(|| {
@@ -191,6 +197,7 @@ static STATE: LazyLock<Mutex<State>> = LazyLock::new(|| {
         cumulative_emit: t,
         window: Tables::default(),
         cumulative: Tables::default(),
+        owners: HashMap::new(),
     })
 });
 
@@ -201,6 +208,71 @@ pub fn armed() -> bool {
 
 /// Nesting depth of timed handler bodies; only the outermost is measured.
 static BODY_DEPTH: AtomicU32 = AtomicU32::new(0);
+
+/// Resolve a chunk to the addon that owns it, memoized on the chunk string.
+///
+/// Keyed by the string's address AND length so a recycled allocation cannot
+/// silently inherit the previous owner: the collector frees chunk strings on a
+/// UI reload, and an address alone would go stale. A mismatch simply re-reads
+/// the bytes, so the cache is self-healing rather than merely lucky.
+///
+/// One entry per script file, so the table is bounded by the addon set and
+/// every steady-state lookup is a hit.
+fn owner_of(st: &mut State, chunk: (usize, u32)) -> NameBuf {
+    let (bytes, len) = chunk;
+    if bytes == 0 {
+        // A C function: engine code reached through a script handler slot,
+        // which no addon owns.
+        return name_from_bytes(b"(engine)");
+    }
+    if let Some(hit) = st.owners.get(&chunk) {
+        return *hit;
+    }
+    // SAFETY: `bytes`/`len` came from a live string object, whose bytes are
+    // inline and whose length excludes the terminator.
+    let text = unsafe { core::slice::from_raw_parts(bytes as *const u8, len as usize) };
+    let owner = addon_from_chunk(text);
+    if st.owners.len() < OWNER_TABLE_CAP {
+        st.owners.insert(chunk, owner);
+    }
+    owner
+}
+
+/// Extract the owning addon's folder from a script chunk name.
+///
+/// Chunk names carry the path the file was loaded from, so the folder under
+/// `AddOns` names the addon and the stock interface files fall out as their own
+/// bucket, which is the split between what shipped with the client and what a
+/// user installed. Lua prefixes file chunks with `@`, and a name that fits
+/// neither shape is kept verbatim so nothing lands in an anonymous pile.
+fn addon_from_chunk(text: &[u8]) -> NameBuf {
+    const ADDONS: &[u8] = b"addons\\";
+    let text = text.strip_prefix(b"@").unwrap_or(text);
+    let lower: Vec<u8> = text.to_ascii_lowercase();
+    if let Some(at) = lower
+        .windows(ADDONS.len())
+        .position(|w| w == ADDONS)
+        .map(|p| p + ADDONS.len())
+    {
+        let rest = &text[at..];
+        let end = rest.iter().position(|&b| b == b'\\').unwrap_or(rest.len());
+        return name_from_bytes(&rest[..end]);
+    }
+    if lower.starts_with(b"interface\\") {
+        let rest = &text[b"interface\\".len()..];
+        let end = rest.iter().position(|&b| b == b'\\').unwrap_or(rest.len());
+        return name_from_bytes(&rest[..end]);
+    }
+    name_from_bytes(text)
+}
+
+/// Build a name key from raw bytes, truncating at the cap.
+fn name_from_bytes(bytes: &[u8]) -> NameBuf {
+    let mut buf: NameBuf = [0; NAME_CAP];
+    let n = bytes.len().min(NAME_CAP - 1);
+    buf[..n].copy_from_slice(&bytes[..n]);
+    buf
+}
 
 /// Time one handler body, the protected call that runs the script itself.
 ///
@@ -214,7 +286,7 @@ static BODY_DEPTH: AtomicU32 = AtomicU32::new(0);
 /// counter reads on the OUTERMOST body only: a handler that dispatches into
 /// another handler nests, and timing both would count the inner one twice,
 /// once on its own and once inside its parent.
-pub fn time_body<T>(body: impl FnOnce() -> T) -> T {
+pub fn time_body<T>(chunk: (usize, u32), body: impl FnOnce() -> T) -> T {
     if !armed() {
         return body();
     }
@@ -238,6 +310,11 @@ pub fn time_body<T>(body: impl FnOnce() -> T) -> T {
         .unwrap_or(BODY_BUCKETS - 1);
     st.window.body_hist_ticks[bucket] += dt;
     st.window.body_hist_calls[bucket] += 1;
+    let owner = owner_of(&mut st, chunk);
+    let stat = st.window.owners.entry(owner).or_default();
+    stat.count += 1;
+    stat.ticks += dt;
+    stat.max_ticks = stat.max_ticks.max(dt);
     drop(st);
     out
 }
@@ -553,6 +630,12 @@ fn merge(cum: &mut Tables, w: Tables) {
         dst.ticks += row.ticks;
         dst.max_ticks = dst.max_ticks.max(row.max_ticks);
     }
+    for (name, stat) in w.owners {
+        let dst = cum.owners.entry(name).or_default();
+        dst.count += stat.count;
+        dst.ticks += stat.ticks;
+        dst.max_ticks = dst.max_ticks.max(stat.max_ticks);
+    }
     for (name, stat) in w.handlers {
         if cum.handlers.len() >= HANDLER_TABLE_CAP && !cum.handlers.contains_key(&name) {
             cum.dropped += stat.count;
@@ -589,6 +672,37 @@ fn push_event_tail(line: &mut String, rows: &[&EventRow], shown: usize, skip: us
     let _ = write!(line, " +{n} more s={signals} h={handler_calls} ");
     push_ms(line, ticks);
     line.push_str(" ms;");
+}
+
+/// Emit the per-addon script cost, ranked, with the tail folded in.
+///
+/// This is the line that names what to optimize: the folder under `AddOns` that
+/// owns each script, so the cost lands on the addon rather than on whichever
+/// frame it happened to attach a handler to. The stock interface files bucket
+/// under their own names, which separates what shipped with the client from
+/// what a user installed.
+fn emit_owners(t: &Tables, top: usize, label: &str) {
+    if t.owners.is_empty() {
+        return;
+    }
+    let mut rows: Vec<(&NameBuf, &Stat)> = t.owners.iter().collect();
+    rows.sort_by_key(|r| std::cmp::Reverse(r.1.ticks));
+    let mut line = format!("{label}addons:");
+    for (name, stat) in rows.iter().take(top) {
+        let _ = write!(line, " {} x{} ", name_str(name), stat.count);
+        push_ms(&mut line, stat.ticks);
+        line.push_str(" ms (max ");
+        push_ms(&mut line, stat.max_ticks);
+        line.push_str(");");
+    }
+    if let Some(tail) = rows.get(top..).filter(|t| !t.is_empty()) {
+        let calls: u64 = tail.iter().map(|r| r.1.count).sum();
+        let ticks: u64 = tail.iter().map(|r| r.1.ticks).sum();
+        let _ = write!(line, " +{} more x{} ", tail.len(), calls);
+        push_ms(&mut line, ticks);
+        line.push_str(" ms;");
+    }
+    log::debug!(target: "wow::events", "{line}");
 }
 
 /// Emit where the body time sat on the cost scale.
@@ -678,6 +792,7 @@ fn emit_tables(t: &Tables, span_ms: u64, top: usize, label: &str) {
     }
     push_event_tail(&mut line, &rows, shown, skip);
     log::debug!(target: "wow::events", "{line}");
+    emit_owners(t, top, label);
     emit_body_histogram(t, label);
     if t.handlers.is_empty() {
         return;
