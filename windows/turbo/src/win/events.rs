@@ -80,6 +80,8 @@ const TOP_CUMULATIVE: usize = 8;
 const HANDLER_TABLE_CAP: usize = 512;
 /// Chunk-memo cap; a client cannot load more script files than this.
 const OWNER_TABLE_CAP: usize = 4_096;
+/// Bound on the addon-directory walk, so a diagnostic cannot wander.
+const FILE_WALK_CAP: usize = 4_096;
 /// Milliseconds between per-second summary emissions.
 const WINDOW_MS: u64 = 1_000;
 /// Milliseconds between cumulative summary emissions.
@@ -186,6 +188,10 @@ struct State {
     cumulative_emit: u64,
     window: Tables,
     cumulative: Tables,
+    /// Frames declared in addon markup, mapped to their declaring addon.
+    ///
+    /// Read from disk on first use, never on the load path.
+    frames: Option<HashMap<NameBuf, NameBuf>>,
     /// Chunk-to-addon memo, keyed by a hash of the chunk name.
     ///
     /// Keyed by content rather than by the string object, so a reload that
@@ -201,6 +207,7 @@ static STATE: LazyLock<Mutex<State>> = LazyLock::new(|| {
         cumulative_emit: t,
         window: Tables::default(),
         cumulative: Tables::default(),
+        frames: None,
         owners: HashMap::new(),
     })
 });
@@ -252,7 +259,20 @@ fn owner_of(st: &mut State, chunk: (usize, u32)) -> NameBuf {
     if let Some(owner) = st.owners.get(&hash) {
         return *owner;
     }
-    let owner = addon_from_chunk(text);
+    let owner = match xml_frame(text) {
+        // A markup-defined script: the frame is all its name carries, so ask
+        // the index which addon declared that frame. Absent from the index
+        // means the frame came with the client or was made at runtime, and the
+        // row keeps the frame's own name.
+        Some(frame) => {
+            let index = st.frames.get_or_insert_with(build_frame_index);
+            index
+                .get(&frame)
+                .copied()
+                .unwrap_or_else(|| xml_row(&frame))
+        }
+        None => addon_from_chunk(text),
+    };
     if st.owners.len() >= OWNER_TABLE_CAP {
         // Start over rather than stop caching: a table that stopped inserting
         // would re-parse every chunk on every invoke, for the rest of the
@@ -276,6 +296,112 @@ fn owner_of(st: &mut State, chunk: (usize, u32)) -> NameBuf {
     owner
 }
 
+/// Map every frame an addon declares in its markup to that addon's folder.
+///
+/// A script written inline in markup loses its file at compile time, so the
+/// only thing left naming it is the frame. The declaring file is still on disk
+/// though, and the addon directory sits beside the executable we are loaded
+/// into, so reading it recovers exactly what the compiler discarded.
+///
+/// Read once, lazily, off the load path: the client is running by the time any
+/// handler fires. A frame absent from every addon's markup came with the client
+/// or was made at runtime, and stays attributed to itself.
+fn build_frame_index() -> HashMap<NameBuf, NameBuf> {
+    let mut index = HashMap::new();
+    let Some(addons) = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("Interface").join("AddOns")))
+    else {
+        return index;
+    };
+    let Ok(dir) = std::fs::read_dir(&addons) else {
+        return index;
+    };
+    for addon in dir.flatten().take(FILE_WALK_CAP) {
+        let owner = name_from_bytes(addon.file_name().as_encoded_bytes());
+        let mut pending = vec![addon.path()];
+        let mut budget = FILE_WALK_CAP;
+        while let Some(path) = pending.pop() {
+            if budget == 0 {
+                break;
+            }
+            budget -= 1;
+            if path.is_dir() {
+                pending.extend(
+                    std::fs::read_dir(&path)
+                        .into_iter()
+                        .flatten()
+                        .flatten()
+                        .map(|e| e.path()),
+                );
+                continue;
+            }
+            if path
+                .extension()
+                .is_none_or(|e| !e.eq_ignore_ascii_case("xml"))
+            {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            for frame in declared_frames(&text) {
+                index.entry(frame).or_insert(owner);
+            }
+        }
+    }
+    log::debug!(
+        target: "wow::events",
+        "addon frame index: {} frames declared in addon markup",
+        index.len(),
+    );
+    index
+}
+
+/// The frame a markup-defined chunk names, if that is what this chunk is.
+///
+/// Those chunks are named `Frame:Handler` and carry no path, which is exactly
+/// what distinguishes them from a chunk compiled out of a file.
+fn xml_frame(text: &[u8]) -> Option<NameBuf> {
+    if text.contains(&b'\\') {
+        return None;
+    }
+    let colon = text.iter().position(|&b| b == b':')?;
+    Some(name_from_bytes(&text[..colon]))
+}
+
+/// Label a frame the addon index could not claim, as a row of its own.
+fn xml_row(frame: &NameBuf) -> NameBuf {
+    let mut buf: NameBuf = [0; NAME_CAP];
+    let name = name_str(frame).as_bytes();
+    let n = name.len().min(NAME_CAP - 5);
+    buf[..4].copy_from_slice(b"xml:");
+    buf[4..4 + n].copy_from_slice(&name[..n]);
+    buf
+}
+
+/// Pull every `name="Frame"` a markup file declares.
+///
+/// Deliberately a scan for the attribute rather than a parse: the frame names
+/// are all that is wanted, and a malformed or unusual file should yield nothing
+/// rather than derail a diagnostic.
+fn declared_frames(text: &str) -> Vec<NameBuf> {
+    let mut out = Vec::new();
+    for (at, _) in text.match_indices("name=\"") {
+        let rest = &text.as_bytes()[at + 6..];
+        let Some(end) = rest.iter().position(|&b| b == b'"') else {
+            continue;
+        };
+        // `$parent`-relative names resolve at runtime to something this scan
+        // cannot predict, so they are skipped rather than recorded wrong.
+        let name = &rest[..end];
+        if !name.is_empty() && !name.contains(&b'$') {
+            out.push(name_from_bytes(name));
+        }
+    }
+    out
+}
+
 /// Extract the owning addon's folder from a script chunk name.
 ///
 /// A chunk compiled from a file carries its path, so the folder under `AddOns`
@@ -292,16 +418,6 @@ fn owner_of(st: &mut State, chunk: (usize, u32)) -> NameBuf {
 fn addon_from_chunk(text: &[u8]) -> NameBuf {
     const ADDONS: &[u8] = b"addons\\";
     let text = text.strip_prefix(b"@").unwrap_or(text);
-    if !text.contains(&b'\\')
-        && let Some(colon) = text.iter().position(|&b| b == b':')
-    {
-        let mut buf: NameBuf = [0; NAME_CAP];
-        let frame = &text[..colon];
-        let n = frame.len().min(NAME_CAP - 5);
-        buf[..4].copy_from_slice(b"xml:");
-        buf[4..4 + n].copy_from_slice(&frame[..n]);
-        return buf;
-    }
     let lower: Vec<u8> = text.to_ascii_lowercase();
     if let Some(at) = lower
         .windows(ADDONS.len())
@@ -506,8 +622,30 @@ pub fn signal_event(event_id: i32) {
     DEPTH.fetch_sub(1, Ordering::Relaxed);
     WRAPPER_EVENT.store(prev, Ordering::Relaxed);
     record_signal(event_id, dt, depth == 0);
-    if name_str(&dump) == "PLAYER_ENTERING_WORLD" {
-        dump_registry();
+    // Bracket the loading screens. A capture is a mix of loading and playing,
+    // and the two have opposite shapes: loading runs a handful of enormous
+    // one-time handlers, playing runs many small ones every frame. Reading a
+    // session without knowing which is which turns a load hitch into an
+    // apparent frame-dropper, so the log says where the boundaries are.
+    // A reload brackets itself the same way a zone change does, so the pair
+    // alone cannot tell them apart. Two more markers do: only a reload tears
+    // the interface down and reads the saved variables back, and its cost is
+    // an interface rebuild rather than a world load.
+    match name_str(&dump) {
+        "PLAYER_ENTERING_WORLD" => {
+            log::debug!(target: "wow::events", "world: entered (loading screen ended)");
+            dump_registry();
+        }
+        "PLAYER_LEAVING_WORLD" => {
+            log::debug!(target: "wow::events", "world: leaving (loading screen started)");
+        }
+        "PLAYER_LOGOUT" => {
+            log::debug!(target: "wow::events", "ui: unloading (reload or logout)");
+        }
+        "VARIABLES_LOADED" => {
+            log::debug!(target: "wow::events", "ui: rebuilt (saved variables read back)");
+        }
+        _ => {}
     }
 }
 
