@@ -170,6 +170,13 @@ struct Tables {
     body_ticks: u64,
     /// Bodies behind `body_ticks`, so the line can state a per-body cost.
     body_calls: u64,
+    /// Ticks this gauge itself spent inside the span it is measuring.
+    ///
+    /// Resolving a handler's owner and folding it into the tables happens
+    /// between the dispatch wrapper's two clock reads, so without measuring it
+    /// the cost would land in `machinery` and inflate the very number that
+    /// says whether the invoke path is worth optimizing.
+    gauge_ticks: u64,
     /// Body ticks by how long the body took, bucketed by `BODY_BUCKET_US`.
     body_hist_ticks: [u64; BODY_BUCKETS],
     /// Bodies per bucket, so a bucket states both its mass and its count.
@@ -191,13 +198,16 @@ struct State {
     /// Frames declared in addon markup, mapped to their declaring addon.
     ///
     /// Read from disk on first use, never on the load path.
-    frames: Option<HashMap<NameBuf, NameBuf>>,
+    frames: Option<rustc_hash::FxHashMap<NameBuf, NameBuf>>,
     /// Chunk-to-addon memo, keyed by a hash of the chunk name.
+    ///
+    /// A per-invoke lookup, so it skips the standard hasher: the key is
+    /// already a hash, and hashing it again with `SipHash` is pure cost.
     ///
     /// Keyed by content rather than by the string object, so a reload that
     /// re-interns every chunk at a fresh address reuses the entries instead of
     /// doubling them, and a recycled address cannot inherit an owner.
-    owners: HashMap<u64, NameBuf>,
+    owners: rustc_hash::FxHashMap<u64, NameBuf>,
 }
 
 static STATE: LazyLock<Mutex<State>> = LazyLock::new(|| {
@@ -208,7 +218,7 @@ static STATE: LazyLock<Mutex<State>> = LazyLock::new(|| {
         window: Tables::default(),
         cumulative: Tables::default(),
         frames: None,
-        owners: HashMap::new(),
+        owners: rustc_hash::FxHashMap::default(),
     })
 });
 
@@ -306,8 +316,8 @@ fn owner_of(st: &mut State, chunk: (usize, u32)) -> NameBuf {
 /// Read once, lazily, off the load path: the client is running by the time any
 /// handler fires. A frame absent from every addon's markup came with the client
 /// or was made at runtime, and stays attributed to itself.
-fn build_frame_index() -> HashMap<NameBuf, NameBuf> {
-    let mut index = HashMap::new();
+fn build_frame_index() -> rustc_hash::FxHashMap<NameBuf, NameBuf> {
+    let mut index = rustc_hash::FxHashMap::default();
     let Some(addons) = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|d| d.join("Interface").join("AddOns")))
@@ -456,7 +466,7 @@ fn name_from_bytes(bytes: &[u8]) -> NameBuf {
 /// counter reads on the OUTERMOST body only: a handler that dispatches into
 /// another handler nests, and timing both would count the inner one twice,
 /// once on its own and once inside its parent.
-pub fn time_body<T>(chunk: (usize, u32), body: impl FnOnce() -> T) -> T {
+pub fn time_body<T>(chunk: impl FnOnce() -> (usize, u32), body: impl FnOnce() -> T) -> T {
     if !armed() {
         return body();
     }
@@ -466,9 +476,16 @@ pub fn time_body<T>(chunk: (usize, u32), body: impl FnOnce() -> T) -> T {
         BODY_DEPTH.fetch_sub(1, Ordering::Relaxed);
         return out;
     }
+    // Everything between here and the body, and between the body and the
+    // return, is this gauge's own work sitting inside the span the dispatch
+    // wrapper is timing. Bracket it so it can be reported and subtracted
+    // rather than silently inflating `machinery`.
+    let gauge_in = wow_shared::tsc::rdtsc();
+    let chunk = chunk();
     let t0 = wow_shared::tsc::rdtsc();
     let out = body();
-    let dt = wow_shared::tsc::rdtsc().wrapping_sub(t0);
+    let t1 = wow_shared::tsc::rdtsc();
+    let dt = t1.wrapping_sub(t0);
     BODY_DEPTH.fetch_sub(1, Ordering::Relaxed);
     let mut st = state();
     st.window.body_ticks += dt;
@@ -485,6 +502,8 @@ pub fn time_body<T>(chunk: (usize, u32), body: impl FnOnce() -> T) -> T {
     stat.count += 1;
     stat.ticks += dt;
     stat.max_ticks = stat.max_ticks.max(dt);
+    let gauge_out = wow_shared::tsc::rdtsc();
+    st.window.gauge_ticks += t0.wrapping_sub(gauge_in) + gauge_out.wrapping_sub(t1);
     drop(st);
     out
 }
@@ -803,6 +822,7 @@ fn merge(cum: &mut Tables, w: Tables) {
     cum.signal_ticks += w.signal_ticks;
     cum.body_ticks += w.body_ticks;
     cum.body_calls += w.body_calls;
+    cum.gauge_ticks += w.gauge_ticks;
     for i in 0..BODY_BUCKETS {
         cum.body_hist_ticks[i] += w.body_hist_ticks[i];
         cum.body_hist_calls[i] += w.body_hist_calls[i];
@@ -941,7 +961,14 @@ fn emit_tables(t: &Tables, span_ms: u64, top: usize, label: &str) {
     let _ = write!(line, "; {} bodies ", t.body_calls);
     push_ms(&mut line, t.body_ticks);
     line.push_str(" ms, machinery ");
-    push_ms(&mut line, t.total_ticks.saturating_sub(t.body_ticks));
+    push_ms(
+        &mut line,
+        t.total_ticks
+            .saturating_sub(t.body_ticks)
+            .saturating_sub(t.gauge_ticks),
+    );
+    line.push_str(" + gauge ");
+    push_ms(&mut line, t.gauge_ticks);
     line.push_str(") |");
     let mut rows: Vec<&EventRow> = t.events.values().collect();
     rows.sort_by_key(|r| std::cmp::Reverse(r.ticks));

@@ -40791,12 +40791,7 @@ fn fs_pcall_func(l: i32, func_ref: i32) {
     // The gauge splits an invoke here: inside this call is the script, outside
     // it is the machinery. Unarmed the wrapper is the call and nothing else,
     // and the chunk lookup does not run.
-    let chunk = if super::events::armed() {
-        fs_handler_chunk(l)
-    } else {
-        (0, 0)
-    };
-    if super::events::time_body(chunk, || fs_pcall(l, 0, -2)) != 0 {
+    if super::events::time_body(|| fs_handler_chunk(l), || fs_pcall(l, 0, -2)) != 0 {
         fs_settop(l, -2);
     }
     fs_settop(l, -2);
