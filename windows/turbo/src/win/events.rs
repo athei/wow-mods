@@ -22,6 +22,15 @@
 //! frame) and are inclusive of nested work; the per-second totals line only
 //! counts depth-zero entries, so nothing is double-counted there.
 //!
+//! Reading a line. The header splits the dispatch total into `signals` (time
+//! under an event, whether the paramless wrapper or a parameterized
+//! listener) and `invokes` (everything else at depth zero: `OnUpdate` and
+//! the rest of the per-frame UI callbacks). Both lines close with a
+//! `+N more` row folding every table entry past the printed top-N, so the
+//! ranked rows never imply the tail is empty; the events line also names the
+//! `busiest` row by signal count when the ticks ranking would have hidden it,
+//! which is how a storm of cheap zero-listener signals stays visible.
+//!
 //! Event registry (fixed client globals): base `*(0xceef68)`, count
 //! `*(0xceef64)`, stride 0x10 — entry+0x0 event name, entry+0xc intrusive
 //! listener list (node+0x4 next, low-bit-tagged terminator; node+0x8 the
@@ -114,10 +123,17 @@ struct Tables {
     handler_calls: u64,
     /// Depth-zero inclusive dispatch ticks — the "time in dispatch" total.
     total_ticks: u64,
+    /// The part of `total_ticks` attributable to an event signal.
+    ///
+    /// The rest is per-frame script work: `OnUpdate` and the other UI
+    /// invokes, which no event row can explain.
+    signal_ticks: u64,
     events: HashMap<i32, EventRow>,
     handlers: HashMap<NameBuf, Stat>,
     /// Handler names dropped on the table cap (reported, never silent).
     dropped: u64,
+    /// Ticks behind `dropped`, so the overflow row carries a cost too.
+    dropped_ticks: u64,
 }
 
 /// Gauge state: the rolling one-second window plus the cumulative tables.
@@ -368,6 +384,7 @@ fn record_signal(event_id: i32, dt: u64, depth_zero: bool) {
     st.window.signals += 1;
     if depth_zero {
         st.window.total_ticks += dt;
+        st.window.signal_ticks += dt;
     }
     maybe_emit(&mut st);
     drop(st);
@@ -379,6 +396,9 @@ fn record_handler(name: &NameBuf, dt: u64, ctx: u32, depth_zero: bool, param_pat
     st.window.handler_calls += 1;
     if depth_zero {
         st.window.total_ticks += dt;
+        if ctx != 0 {
+            st.window.signal_ticks += dt;
+        }
     }
     if ctx != 0 {
         let row = event_row(&mut st.window, ctx.wrapping_sub(1).cast_signed());
@@ -394,6 +414,7 @@ fn record_handler(name: &NameBuf, dt: u64, ctx: u32, depth_zero: bool, param_pat
         st.window.handlers.len() >= HANDLER_TABLE_CAP && !st.window.handlers.contains_key(name);
     if over_cap {
         st.window.dropped += 1;
+        st.window.dropped_ticks += dt;
     } else {
         let stat = st.window.handlers.entry(*name).or_default();
         stat.count += 1;
@@ -427,7 +448,9 @@ fn merge(cum: &mut Tables, w: Tables) {
     cum.signals += w.signals;
     cum.handler_calls += w.handler_calls;
     cum.total_ticks += w.total_ticks;
+    cum.signal_ticks += w.signal_ticks;
     cum.dropped += w.dropped;
+    cum.dropped_ticks += w.dropped_ticks;
     for (id, row) in w.events {
         let dst = cum.events.entry(id).or_insert_with(|| EventRow {
             name: row.name,
@@ -444,6 +467,7 @@ fn merge(cum: &mut Tables, w: Tables) {
     for (name, stat) in w.handlers {
         if cum.handlers.len() >= HANDLER_TABLE_CAP && !cum.handlers.contains_key(&name) {
             cum.dropped += stat.count;
+            cum.dropped_ticks += stat.ticks;
             continue;
         }
         let dst = cum.handlers.entry(name).or_default();
@@ -451,6 +475,31 @@ fn merge(cum: &mut Tables, w: Tables) {
         dst.ticks += stat.ticks;
         dst.max_ticks = dst.max_ticks.max(stat.max_ticks);
     }
+}
+
+/// Append the unprinted event rows as one aggregate row.
+///
+/// `shown` rows were printed by ticks rank and `skip` (if in range) was
+/// printed as the busiest-by-signals row; everything else lands here.
+fn push_event_tail(line: &mut String, rows: &[&EventRow], shown: usize, skip: usize) {
+    let tail = rows
+        .iter()
+        .skip(shown)
+        .enumerate()
+        .filter_map(|(i, r)| (shown + i != skip).then_some(*r));
+    let (mut n, mut signals, mut handler_calls, mut ticks) = (0u64, 0u64, 0u64, 0u64);
+    for row in tail {
+        n += 1;
+        signals += row.signals;
+        handler_calls += row.handler_calls;
+        ticks += row.ticks;
+    }
+    if n == 0 {
+        return;
+    }
+    let _ = write!(line, " +{n} more s={signals} h={handler_calls} ");
+    push_ms(line, ticks);
+    line.push_str(" ms;");
 }
 
 /// Emit one events line and one handlers line for a window.
@@ -463,7 +512,11 @@ fn emit_tables(t: &Tables, span_ms: u64, top: usize, label: &str) {
         t.signals, t.handler_calls
     );
     push_ms(&mut line, t.total_ticks);
-    let _ = write!(line, " ms in {span_ms} ms |");
+    let _ = write!(line, " ms in {span_ms} ms (signals ");
+    push_ms(&mut line, t.signal_ticks);
+    line.push_str(", invokes ");
+    push_ms(&mut line, t.total_ticks.saturating_sub(t.signal_ticks));
+    line.push_str(") |");
     let mut rows: Vec<&EventRow> = t.events.values().collect();
     rows.sort_by_key(|r| std::cmp::Reverse(r.ticks));
     for row in rows.iter().take(top) {
@@ -479,6 +532,31 @@ fn emit_tables(t: &Tables, span_ms: u64, top: usize, label: &str) {
         push_ms(&mut line, row.max_ticks);
         line.push_str(");");
     }
+    // The tail is where a cheap-but-enormous signal storm hides: rank by
+    // ticks and a million zero-listener signals never make the list. Name the
+    // busiest row by signal count when the ticks ranking missed it, then sum
+    // whatever is still unprinted so no window is silently truncated.
+    let shown = rows.len().min(top);
+    let top_signals = rows[..shown].iter().map(|r| r.signals).max().unwrap_or(0);
+    let mut skip = usize::MAX;
+    let busiest = rows[shown..]
+        .iter()
+        .enumerate()
+        .max_by_key(|(_, r)| r.signals)
+        .filter(|(_, r)| r.signals > top_signals);
+    if let Some((i, row)) = busiest {
+        let _ = write!(
+            line,
+            " busiest {} s={} h={} ",
+            name_str(&row.name),
+            row.signals,
+            row.handler_calls
+        );
+        push_ms(&mut line, row.ticks);
+        line.push_str(" ms;");
+        skip = shown + i;
+    }
+    push_event_tail(&mut line, &rows, shown, skip);
     log::debug!(target: "wow::events", "{line}");
     if t.handlers.is_empty() {
         return;
@@ -491,8 +569,17 @@ fn emit_tables(t: &Tables, span_ms: u64, top: usize, label: &str) {
         push_ms(&mut line, stat.ticks);
         line.push_str(" ms;");
     }
+    if let Some(tail) = rows.get(top..).filter(|t| !t.is_empty()) {
+        let calls: u64 = tail.iter().map(|r| r.1.count).sum();
+        let ticks: u64 = tail.iter().map(|r| r.1.ticks).sum();
+        let _ = write!(line, " +{} more x{} ", tail.len(), calls);
+        push_ms(&mut line, ticks);
+        line.push_str(" ms;");
+    }
     if t.dropped > 0 {
-        let _ = write!(line, " (+{} calls past the name cap)", t.dropped);
+        let _ = write!(line, " (+{} calls past the name cap, ", t.dropped);
+        push_ms(&mut line, t.dropped_ticks);
+        line.push_str(" ms)");
     }
     log::debug!(target: "wow::events", "{line}");
 }
