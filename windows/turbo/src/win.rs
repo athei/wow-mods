@@ -24,6 +24,68 @@ const DLL_PROCESS_ATTACH: u32 = 1;
 /// it; `unknown` when built outside a checkout.
 const BUILD: &str = env!("WOW_TURBO_BUILD");
 
+unsafe extern "system" {
+    fn GetModuleHandleA(module_name: *const u8) -> usize;
+    fn GetProcAddress(module: usize, proc_name: *const u8) -> usize;
+}
+
+/// Log the host OS and loader version when running under a translating loader.
+///
+/// The loader publishes both through `ntdll` (`cdecl`, static strings it owns),
+/// which is the only route to them from a 32-bit guest: the Win32 version APIs
+/// describe the emulated system, not the machine. On a real Windows host the
+/// exports are absent and this says nothing.
+///
+/// The OS string is the kernel release, not the marketing version: kernel 25.5
+/// is macOS 26.5, and a patch release does not move it. That is enough to tell
+/// which translator generation a captured log came from, which is what a
+/// reader of somebody else's log actually needs.
+fn log_host() {
+    // SAFETY: `ntdll` is loaded in every process before any user DLL; this only
+    // takes a handle to it and never loads anything.
+    let ntdll = unsafe { GetModuleHandleA(c"ntdll.dll".as_ptr().cast()) };
+    if ntdll == 0 {
+        return;
+    }
+    // SAFETY: the module handle is live and the name is a nul-terminated
+    // literal; a missing export returns null, which is checked below.
+    let host_version = unsafe { GetProcAddress(ntdll, c"wine_get_host_version".as_ptr().cast()) };
+    if host_version == 0 {
+        return;
+    }
+    // SAFETY: the export's published signature, writing two pointers to
+    // loader-owned static strings.
+    let host_version: extern "cdecl" fn(*mut *const u8, *mut *const u8) =
+        unsafe { core::mem::transmute(host_version) };
+    let (mut sysname, mut release) = (core::ptr::null(), core::ptr::null());
+    host_version(&raw mut sysname, &raw mut release);
+    let name = |p: *const u8| {
+        if p.is_null() {
+            return String::from("?");
+        }
+        // SAFETY: the loader wrote a pointer to one of its own nul-terminated
+        // static strings, valid for the process lifetime.
+        String::from_utf8_lossy(unsafe { core::ffi::CStr::from_ptr(p.cast()) }.to_bytes())
+            .into_owned()
+    };
+    // SAFETY: same module handle and literal-name contract as above.
+    let loader = unsafe { GetProcAddress(ntdll, c"wine_get_version".as_ptr().cast()) };
+    let loader = if loader == 0 {
+        String::from("?")
+    } else {
+        // SAFETY: the export's published signature, returning a pointer to a
+        // loader-owned static string.
+        let f: extern "cdecl" fn() -> *const u8 = unsafe { core::mem::transmute(loader) };
+        name(f())
+    };
+    log::info!(
+        target: LOG_TARGET,
+        "host: {} {} (loader {loader})",
+        name(sysname),
+        name(release),
+    );
+}
+
 /// The 1.12 client is non-`DYNAMICBASE` and always loads here.
 ///
 /// The reimpls read fixed host globals by absolute address (no per-call base
@@ -50,6 +112,7 @@ fn attach_process(instance: *mut c_void) {
         target: LOG_TARGET,
         "wow_turbo {BUILD} initialized, image_base = {image_base:#010x}",
     );
+    log_host();
     // The reimplementations read host globals by absolute address, valid only at
     // the fixed base of the non-DYNAMICBASE 1.12 client. Fail loudly at load if
     // that assumption ever breaks rather than reading wrong addresses.
