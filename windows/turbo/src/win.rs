@@ -29,17 +29,42 @@ unsafe extern "system" {
     fn GetProcAddress(module: usize, proc_name: *const u8) -> usize;
 }
 
-/// Log the host OS and loader version when running under a translating loader.
+/// `RTL_OSVERSIONINFOW`, the version record `ntdll` fills in.
+#[repr(C)]
+struct OsVersionInfoW {
+    size: u32,
+    major: u32,
+    minor: u32,
+    build: u32,
+    platform_id: u32,
+    csd_version: [u16; 128],
+}
+
+/// Byte count the version query expects in the record's leading field.
 ///
-/// The loader publishes both through `ntdll` (`cdecl`, static strings it owns),
-/// which is the only route to them from a 32-bit guest: the Win32 version APIs
-/// describe the emulated system, not the machine. On a real Windows host the
-/// exports are absent and this says nothing.
+/// Stated as a literal and checked against the layout below, so the value the
+/// call validates cannot drift from the struct it describes.
+const OS_VERSION_INFO_SIZE: u32 = 276;
+const _: () = assert!(size_of::<OsVersionInfoW>() == OS_VERSION_INFO_SIZE as usize);
+
+/// Log what the process is running on, one line, always.
 ///
-/// The OS string is the kernel release, not the marketing version: kernel 25.5
-/// is macOS 26.5, and a patch release does not move it. That is enough to tell
-/// which translator generation a captured log came from, which is what a
-/// reader of somebody else's log actually needs.
+/// Under a translating loader the interesting fact is the machine underneath,
+/// which the loader publishes through `ntdll` (`cdecl`, static strings it
+/// owns). That is the only route to it from a 32-bit guest, because the Win32
+/// version APIs describe the emulated system rather than the host.
+///
+/// On a real Windows host those exports are absent, and the fallback reports
+/// the actual Windows version through `RtlGetVersion` (`stdcall`, present
+/// everywhere, and unlike `GetVersionEx` not rewritten by compatibility
+/// shims). Every log carries the line either way: a missing line would be
+/// indistinguishable from a build predating it, which is the ambiguity this
+/// exists to remove.
+///
+/// The translated-host string is the kernel release, not the marketing
+/// version: kernel 25.5 is macOS 26.5, and a patch release does not move it.
+/// That is enough to tell which translator generation a captured log came
+/// from, which is what a reader of somebody else's log actually needs.
 fn log_host() {
     // SAFETY: `ntdll` is loaded in every process before any user DLL; this only
     // takes a handle to it and never loads anything.
@@ -51,6 +76,7 @@ fn log_host() {
     // literal; a missing export returns null, which is checked below.
     let host_version = unsafe { GetProcAddress(ntdll, c"wine_get_host_version".as_ptr().cast()) };
     if host_version == 0 {
+        log_windows_version(ntdll);
         return;
     }
     // SAFETY: the export's published signature, writing two pointers to
@@ -83,6 +109,36 @@ fn log_host() {
         "host: {} {} (loader {loader})",
         name(sysname),
         name(release),
+    );
+}
+
+/// Report the Windows version, for a process not running under a loader.
+fn log_windows_version(ntdll: usize) {
+    // SAFETY: the module handle is live and the name is a nul-terminated
+    // literal; a missing export returns null, which is checked below.
+    let get_version = unsafe { GetProcAddress(ntdll, c"RtlGetVersion".as_ptr().cast()) };
+    if get_version == 0 {
+        return;
+    }
+    // SAFETY: the export's published signature, filling in a caller-owned
+    // record whose leading field states its size.
+    let get_version: extern "stdcall" fn(*mut OsVersionInfoW) -> i32 =
+        unsafe { core::mem::transmute(get_version) };
+    let mut info = OsVersionInfoW {
+        size: OS_VERSION_INFO_SIZE,
+        major: 0,
+        minor: 0,
+        build: 0,
+        platform_id: 0,
+        csd_version: [0; 128],
+    };
+    if get_version(&raw mut info) != 0 {
+        return;
+    }
+    log::info!(
+        target: LOG_TARGET,
+        "host: Windows {}.{}.{}",
+        info.major, info.minor, info.build,
     );
 }
 
