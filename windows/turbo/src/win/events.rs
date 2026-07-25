@@ -85,6 +85,18 @@ const CUMULATIVE_MS: u64 = 60_000;
 /// Upper bound on any registry/listener-list walk, against corrupt links.
 const WALK_CAP: u32 = 4_096;
 
+/// Upper edges, in microseconds, for the handler-body cost buckets.
+///
+/// A body cannot cost less than the interpreter's own call setup, so the
+/// cheapest bucket is a standing estimate of that floor, and how much of a
+/// session's time sits in it says whether the cost is per-call overhead or
+/// what the scripts actually do. The edges bracket what an armed session
+/// shows: a floor around two microseconds, a mean near eight, and a long tail
+/// of the handlers that genuinely work.
+const BODY_BUCKET_US: [u64; 5] = [2, 4, 8, 16, 64];
+/// Bucket count: one per edge, plus everything above the last.
+const BODY_BUCKETS: usize = BODY_BUCKET_US.len() + 1;
+
 /// Fixed-size, nul-padded name key.
 type NameBuf = [u8; NAME_CAP];
 
@@ -154,6 +166,10 @@ struct Tables {
     body_ticks: u64,
     /// Bodies behind `body_ticks`, so the line can state a per-body cost.
     body_calls: u64,
+    /// Body ticks by how long the body took, bucketed by `BODY_BUCKET_US`.
+    body_hist_ticks: [u64; BODY_BUCKETS],
+    /// Bodies per bucket, so a bucket states both its mass and its count.
+    body_hist_calls: [u64; BODY_BUCKETS],
     /// Handler names dropped on the table cap (reported, never silent).
     dropped: u64,
     /// Ticks behind `dropped`, so the overflow row carries a cost too.
@@ -215,6 +231,13 @@ pub fn time_body<T>(body: impl FnOnce() -> T) -> T {
     let mut st = state();
     st.window.body_ticks += dt;
     st.window.body_calls += 1;
+    let us = ticks_to_us(dt);
+    let bucket = BODY_BUCKET_US
+        .iter()
+        .position(|&edge| us < edge)
+        .unwrap_or(BODY_BUCKETS - 1);
+    st.window.body_hist_ticks[bucket] += dt;
+    st.window.body_hist_calls[bucket] += 1;
     drop(st);
     out
 }
@@ -511,6 +534,10 @@ fn merge(cum: &mut Tables, w: Tables) {
     cum.signal_ticks += w.signal_ticks;
     cum.body_ticks += w.body_ticks;
     cum.body_calls += w.body_calls;
+    for i in 0..BODY_BUCKETS {
+        cum.body_hist_ticks[i] += w.body_hist_ticks[i];
+        cum.body_hist_calls[i] += w.body_hist_calls[i];
+    }
     cum.dropped += w.dropped;
     cum.dropped_ticks += w.dropped_ticks;
     for (id, row) in w.events {
@@ -562,6 +589,33 @@ fn push_event_tail(line: &mut String, rows: &[&EventRow], shown: usize, skip: us
     let _ = write!(line, " +{n} more s={signals} h={handler_calls} ");
     push_ms(line, ticks);
     line.push_str(" ms;");
+}
+
+/// Emit where the body time sat on the cost scale.
+///
+/// Mass in the cheapest buckets is per-call cost that no addon can be blamed
+/// for and no faster dispatch can remove, since it is already inside the
+/// protected call; mass in the tail is what the scripts are doing. Which end
+/// carries the time decides what is worth attacking.
+fn emit_body_histogram(t: &Tables, label: &str) {
+    if t.body_calls == 0 {
+        return;
+    }
+    let mut line = format!("{label}bodies:");
+    for (i, ticks) in t.body_hist_ticks.iter().enumerate() {
+        if t.body_hist_calls[i] == 0 {
+            continue;
+        }
+        if let Some(edge) = BODY_BUCKET_US.get(i) {
+            let _ = write!(line, " <{edge}us x{} ", t.body_hist_calls[i]);
+        } else {
+            let last = BODY_BUCKET_US[BODY_BUCKETS - 2];
+            let _ = write!(line, " {last}us+ x{} ", t.body_hist_calls[i]);
+        }
+        push_ms(&mut line, *ticks);
+        line.push_str(" ms;");
+    }
+    log::debug!(target: "wow::events", "{line}");
 }
 
 /// Emit one events line and one handlers line for a window.
@@ -624,6 +678,7 @@ fn emit_tables(t: &Tables, span_ms: u64, top: usize, label: &str) {
     }
     push_event_tail(&mut line, &rows, shown, skip);
     log::debug!(target: "wow::events", "{line}");
+    emit_body_histogram(t, label);
     if t.handlers.is_empty() {
         return;
     }
