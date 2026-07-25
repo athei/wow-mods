@@ -31,6 +31,12 @@
 //! `busiest` row by signal count when the ticks ranking would have hidden it,
 //! which is how a storm of cheap zero-listener signals stays visible.
 //!
+//! Do not read the event rows as a partition of `signals`. Rows are billed at
+//! every depth while the totals count depth zero only, so a dispatch nested
+//! inside a handler bills its own row while its time is already inside the
+//! parent's. Summing the rows can therefore land slightly above `signals`, and
+//! does whenever nesting occurs.
+//!
 //! Event registry (fixed client globals): base `*(0xceef68)`, count
 //! `*(0xceef64)`, stride 0x10 — entry+0x0 event name, entry+0xc intrusive
 //! listener list (node+0x4 next, low-bit-tagged terminator; node+0x8 the
