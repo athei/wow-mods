@@ -186,8 +186,11 @@ struct State {
     cumulative_emit: u64,
     window: Tables,
     cumulative: Tables,
-    /// Chunk-to-addon memo, keyed by string address and length.
-    owners: HashMap<(usize, u32), NameBuf>,
+    /// Chunk-to-addon memo, validated by content.
+    ///
+    /// Address and length find the entry; the content hash confirms it still
+    /// describes the same script.
+    owners: HashMap<(usize, u32), (u64, NameBuf)>,
 }
 
 static STATE: LazyLock<Mutex<State>> = LazyLock::new(|| {
@@ -209,15 +212,31 @@ pub fn armed() -> bool {
 /// Nesting depth of timed handler bodies; only the outermost is measured.
 static BODY_DEPTH: AtomicU32 = AtomicU32::new(0);
 
+/// Hash a chunk's bytes, to tell one path from another by content.
+///
+/// FNV-1a over the whole string: a path is a few dozen bytes, so this is
+/// cheaper than the parse it guards and vastly cheaper than being wrong.
+fn chunk_hash(text: &[u8]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for &b in text {
+        h ^= u64::from(b);
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h
+}
+
 /// Resolve a chunk to the addon that owns it, memoized on the chunk string.
 ///
-/// Keyed by the string's address AND length so a recycled allocation cannot
-/// silently inherit the previous owner: the collector frees chunk strings on a
-/// UI reload, and an address alone would go stale. A mismatch simply re-reads
-/// the bytes, so the cache is self-healing rather than merely lucky.
+/// Address and length find the entry; the content decides whether to trust it.
+/// Chunk strings are collectable, so a UI reload can free one and hand the same
+/// block back for another script's path — and paths cluster in length, sharing
+/// the `Interface\AddOns\` prefix, so identical address and length is a real
+/// coincidence rather than a fanciful one. Comparing a hash of the bytes makes
+/// a stale hit re-resolve instead of quietly billing one addon's time to
+/// another, which is the kind of error a reader of the log could never catch.
 ///
 /// One entry per script file, so the table is bounded by the addon set and
-/// every steady-state lookup is a hit.
+/// every steady-state lookup is a hit plus one hash of a short string.
 fn owner_of(st: &mut State, chunk: (usize, u32)) -> NameBuf {
     let (bytes, len) = chunk;
     if bytes == 0 {
@@ -225,15 +244,18 @@ fn owner_of(st: &mut State, chunk: (usize, u32)) -> NameBuf {
         // which no addon owns.
         return name_from_bytes(b"(engine)");
     }
-    if let Some(hit) = st.owners.get(&chunk) {
-        return *hit;
-    }
     // SAFETY: `bytes`/`len` came from a live string object, whose bytes are
     // inline and whose length excludes the terminator.
     let text = unsafe { core::slice::from_raw_parts(bytes as *const u8, len as usize) };
+    let hash = chunk_hash(text);
+    if let Some((seen, owner)) = st.owners.get(&chunk)
+        && *seen == hash
+    {
+        return *owner;
+    }
     let owner = addon_from_chunk(text);
-    if st.owners.len() < OWNER_TABLE_CAP {
-        st.owners.insert(chunk, owner);
+    if st.owners.len() < OWNER_TABLE_CAP || st.owners.contains_key(&chunk) {
+        st.owners.insert(chunk, (hash, owner));
     }
     owner
 }
