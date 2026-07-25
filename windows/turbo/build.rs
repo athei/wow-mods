@@ -19,7 +19,7 @@
 // the formatting-args lint is a false positive here.
 #![allow(clippy::literal_string_with_formatting_args)]
 
-use std::{collections::BTreeMap, env, fmt::Write as _, fs, path::PathBuf};
+use std::{collections::BTreeMap, env, fmt::Write as _, fs, path::PathBuf, process::Command};
 
 use serde::Deserialize;
 
@@ -190,9 +190,52 @@ fn validate_diff(name: &str, f: &Function) {
     }
 }
 
+/// `git describe` of the build commit, for the startup log line.
+///
+/// `--tags` so a release build reads as its tag rather than the nearest
+/// annotated one, `--always` so a shallow or tagless clone still yields a short
+/// object name, and `--dirty` so a build carrying uncommitted edits says so.
+/// Outside a checkout (a source tarball) the whole thing degrades to `unknown`
+/// rather than failing the build.
+///
+/// Reruns are keyed on `HEAD` and on whichever ref it names (loose or packed),
+/// so a plain checkout or a new revision re-stamps the string. A worktree that
+/// only *becomes* dirty touches none of those, so the `dirty` marker can lag a
+/// rebuild that changed no file this script watches; it is a diagnostic, and
+/// `touch build.rs` forces it.
+fn build_id() -> String {
+    let git = |args: &[&str]| {
+        Command::new("git")
+            .args(args)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().to_owned())
+            .filter(|s| !s.is_empty())
+    };
+    if let Some(dir) = git(&["rev-parse", "--absolute-git-dir"]) {
+        let dir = PathBuf::from(dir);
+        let mut watch = vec![dir.join("HEAD"), dir.join("packed-refs")];
+        if let Some(head_ref) = git(&["symbolic-ref", "--quiet", "HEAD"]) {
+            watch.push(dir.join(head_ref));
+        }
+        for path in watch.iter().filter(|p| p.exists()) {
+            println!("cargo:rerun-if-changed={}", path.display());
+        }
+    }
+    git(&["describe", "--tags", "--always", "--dirty"]).unwrap_or_else(|| "unknown".to_owned())
+}
+
 fn main() {
     println!("cargo:rerun-if-changed=symbols.toml");
     println!("cargo:rerun-if-changed=build.rs");
+
+    // Stamp the build's own identity into the binary so a captured log names the
+    // build that produced it. Without it a log can only be fingerprinted by
+    // indirect evidence (how many hooks installed, which names appear), which is
+    // slow and ambiguous when two builds differ by a handful of entries.
+    println!("cargo:rustc-env=WOW_TURBO_BUILD={}", build_id());
 
     // Diagnostic-only: `WOW_CRUMB=1` makes each generated thunk record a
     // breadcrumb (which hook ran + its output pointer) into the shared mmap ring

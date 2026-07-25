@@ -18,6 +18,12 @@ use core::ffi::c_void;
 const LOG_TARGET: &str = "wow_turbo";
 const DLL_PROCESS_ATTACH: u32 = 1;
 
+/// Build identity, stamped in by `build.rs` from `git describe`.
+///
+/// Named in the startup line so a captured session log says which build wrote
+/// it; `unknown` when built outside a checkout.
+const BUILD: &str = env!("WOW_TURBO_BUILD");
+
 /// The 1.12 client is non-`DYNAMICBASE` and always loads here.
 ///
 /// The reimpls read fixed host globals by absolute address (no per-call base
@@ -40,7 +46,10 @@ fn attach_process(instance: *mut c_void) {
     // land in the same mmap the crash handler dumps (no-op unless wow_crumb).
     wow_shared::crumb::init();
     let image_base = wow_hook::host_image_base();
-    log::info!(target: LOG_TARGET, "wow_turbo initialized, image_base = {image_base:#010x}");
+    log::info!(
+        target: LOG_TARGET,
+        "wow_turbo {BUILD} initialized, image_base = {image_base:#010x}",
+    );
     // The reimplementations read host globals by absolute address, valid only at
     // the fixed base of the non-DYNAMICBASE 1.12 client. Fail loudly at load if
     // that assumption ever breaks rather than reading wrong addresses.
