@@ -31,6 +31,12 @@
 //! `busiest` row by signal count when the ticks ranking would have hidden it,
 //! which is how a storm of cheap zero-listener signals stays visible.
 //!
+//! The same header also splits the total the other way, into the `bodies` that
+//! ran and the `machinery` around them: argument binding, the dispatch frames,
+//! the stock prologue. That second split is the one that says how much of a
+//! session's script cost is the scripts themselves, and it bounds what any
+//! faster invoke path could ever win back.
+//!
 //! Do not read the event rows as a partition of `signals`. Rows are billed at
 //! every depth while the totals count depth zero only, so a dispatch nested
 //! inside a handler bills its own row while its time is already inside the
@@ -62,7 +68,12 @@ const REGISTRY_STRIDE: usize = 0x10;
 /// Stored-name cap; longer names are truncated for table keys and log lines.
 const NAME_CAP: usize = 40;
 /// Rows shown in the per-second top list.
-const TOP_PER_SECOND: usize = 4;
+///
+/// Eight rather than four so the per-frame drivers (`WorldFrame`, `UIParent`)
+/// stay visible under a heavy addon load: each runs its script once per frame,
+/// so their call counts are the frame rate, which is what turns a per-second
+/// cost into a share of the frame budget.
+const TOP_PER_SECOND: usize = 8;
 /// Rows shown in the periodic cumulative top list.
 const TOP_CUMULATIVE: usize = 8;
 /// Handler-table size cap; past it new names fall into the overflow row.
@@ -136,6 +147,13 @@ struct Tables {
     signal_ticks: u64,
     events: HashMap<i32, EventRow>,
     handlers: HashMap<NameBuf, Stat>,
+    /// Ticks inside the handler bodies themselves, outermost only.
+    ///
+    /// The window total minus this is the dispatch and argument-binding
+    /// machinery around them.
+    body_ticks: u64,
+    /// Bodies behind `body_ticks`, so the line can state a per-body cost.
+    body_calls: u64,
     /// Handler names dropped on the table cap (reported, never silent).
     dropped: u64,
     /// Ticks behind `dropped`, so the overflow row carries a cost too.
@@ -161,8 +179,44 @@ static STATE: LazyLock<Mutex<State>> = LazyLock::new(|| {
 });
 
 /// Whether the gauge is armed (cheap after the first call).
-fn armed() -> bool {
+pub fn armed() -> bool {
     *ARMED
+}
+
+/// Nesting depth of timed handler bodies; only the outermost is measured.
+static BODY_DEPTH: AtomicU32 = AtomicU32::new(0);
+
+/// Time one handler body, the protected call that runs the script itself.
+///
+/// Splits an invoke into the script it ran and everything else: the argument
+/// binding either side of it, the dispatch frames above it, and the stock
+/// prologue between. Subtracting from the window total gives that remainder,
+/// which is the part a faster invoke path could ever win back, so the split
+/// bounds the whole avenue instead of hiding it under body noise.
+///
+/// Unarmed this is the call itself and nothing more. Armed it costs two
+/// counter reads on the OUTERMOST body only: a handler that dispatches into
+/// another handler nests, and timing both would count the inner one twice,
+/// once on its own and once inside its parent.
+pub fn time_body<T>(body: impl FnOnce() -> T) -> T {
+    if !armed() {
+        return body();
+    }
+    let nested = BODY_DEPTH.fetch_add(1, Ordering::Relaxed) != 0;
+    if nested {
+        let out = body();
+        BODY_DEPTH.fetch_sub(1, Ordering::Relaxed);
+        return out;
+    }
+    let t0 = wow_shared::tsc::rdtsc();
+    let out = body();
+    let dt = wow_shared::tsc::rdtsc().wrapping_sub(t0);
+    BODY_DEPTH.fetch_sub(1, Ordering::Relaxed);
+    let mut st = state();
+    st.window.body_ticks += dt;
+    st.window.body_calls += 1;
+    drop(st);
+    out
 }
 
 /// Encode an event id into the context slots (id+1; 0 means none).
@@ -455,6 +509,8 @@ fn merge(cum: &mut Tables, w: Tables) {
     cum.handler_calls += w.handler_calls;
     cum.total_ticks += w.total_ticks;
     cum.signal_ticks += w.signal_ticks;
+    cum.body_ticks += w.body_ticks;
+    cum.body_calls += w.body_calls;
     cum.dropped += w.dropped;
     cum.dropped_ticks += w.dropped_ticks;
     for (id, row) in w.events {
@@ -522,6 +578,10 @@ fn emit_tables(t: &Tables, span_ms: u64, top: usize, label: &str) {
     push_ms(&mut line, t.signal_ticks);
     line.push_str(", invokes ");
     push_ms(&mut line, t.total_ticks.saturating_sub(t.signal_ticks));
+    let _ = write!(line, "; {} bodies ", t.body_calls);
+    push_ms(&mut line, t.body_ticks);
+    line.push_str(" ms, machinery ");
+    push_ms(&mut line, t.total_ticks.saturating_sub(t.body_ticks));
     line.push_str(") |");
     let mut rows: Vec<&EventRow> = t.events.values().collect();
     rows.sort_by_key(|r| std::cmp::Reverse(r.ticks));

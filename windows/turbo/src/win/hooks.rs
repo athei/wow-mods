@@ -40729,7 +40729,9 @@ fn fs_pcall_func(l: i32, func_ref: i32) {
     let errfunc = unsafe { FS_ERRFUNC_REF.read() };
     fs_rawgeti(l, FS_REGISTRYINDEX, errfunc);
     fs_rawgeti(l, FS_REGISTRYINDEX, func_ref);
-    if fs_pcall(l, 0, -2) != 0 {
+    // The gauge splits an invoke here: inside this call is the script, outside
+    // it is the machinery. Unarmed the wrapper is the call and nothing else.
+    if super::events::time_body(|| fs_pcall(l, 0, -2)) != 0 {
         fs_settop(l, -2);
     }
     fs_settop(l, -2);
