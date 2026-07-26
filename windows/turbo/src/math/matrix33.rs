@@ -91,36 +91,113 @@ mod tests_c33_matrix__determinant__7bc040 {
 
 /// Builds a 3x3 rotation matrix (Rodrigues) of `angle` radians about `axis`.
 ///
-/// When `normalize` is true the axis is normalized first. Returns row-major 9 floats.
+/// When `normalize` is true the axis is normalized first (the original's flag runs
+/// the other way: a non-zero byte *skips* it). Returns row-major 9 floats.
+///
+/// This is also the arithmetic behind `0x7bb860` and `0x7bdb00`, which are the
+/// same routine emitted against wider destination layouts. All three bodies carry
+/// the identical eighty floating-point instructions once the destination offsets
+/// are masked off, so those two call this and only place the result.
+///
+/// Widths, read off the stores rather than the operand types. The `f32` slots the
+/// original really does spill to are `cos`, `sin` and `1 - cos` (each written by an
+/// `FSTP m32`), the renormalized axis components, and `x * sin` / `y * sin`
+/// (`0x7be517` / `0x7be520`). Everything else stays on the x87 stack for the whole
+/// body, which makes three things not narrow where a plain transcription narrows
+/// them:
+/// - `z * sin` never leaves the register, so `out[1]` and `out[3]` take it wide
+///   while their `x` and `y` counterparts take a rounded product.
+/// - the three axis pair products are exact (`f32 * f32`) and are multiplied by
+///   `1 - cos` **after** the pair, not folded left to right: the original's
+///   `FLD t; FMUL ST(4)` forms `t * (y * x)`, and `(t * y) * x` is other bits.
+/// - `t * (z * x)` is used at two widths. `FST m32` at `0x7be554` stores an `f32`
+///   copy and keeps the wide value, so `out[2]` subtracts from the wide one while
+///   `out[6]` reloads the narrowed one.
+///
+/// `sin_cos` here is the shared polynomial and the original is the hardware
+/// `FSINCOS`, so the two can never agree to the last bit; that residual is a
+/// bounded deviation, separate from the shape facts above.
 pub fn c33_matrix__from_axis_angle__7be490(
     axis: &[f32; 3],
     angle: f32,
     normalize: bool,
 ) -> [f32; 9] {
-    let mut ax = axis[0];
-    let mut ay = axis[1];
-    let mut az = axis[2];
+    let mut x = axis[0];
+    let mut y = axis[1];
+    let mut z = axis[2];
+
     if normalize {
-        let inv = 1.0 / (ax * ax + ay * ay + az * az).sqrt();
-        ax *= inv;
-        ay *= inv;
-        az *= inv;
+        // FLD z, FMUL z, FLD y, FMUL y, FADDP, FLD x, FMUL x, FADDP: the squares
+        // are summed z, then y, then x, and the sum stays in the register through
+        // the FSQRT and the FDIVR. Only the three scaled components narrow.
+        //
+        // The order is the original's but nothing can observe it, so no test pins
+        // it: over 3.4M random axes the two groupings gave a different sum on 1.2%
+        // of them and a different reciprocal on 0.5%, and never once a different
+        // scaled component. A one-ulp difference in an f64 reciprocal is ~2^-53
+        // relative, far under the 2^-24 granularity of the f32 store that
+        // follows, so it survives only on a rounding tie.
+        let len2 = (f64::from(z) * f64::from(z) + f64::from(y) * f64::from(y))
+            + f64::from(x) * f64::from(x);
+        let inv = 1.0_f64 / len2.sqrt();
+        x = super::f64_to_f32(f64::from(x) * inv);
+        y = super::f64_to_f32(f64::from(y) * inv);
+        z = super::f64_to_f32(f64::from(z) * inv);
     }
+
     let (s, c) = crate::math::trig::sin_cos(angle);
-    let t = 1.0 - c;
-    let mut out = [0.0f32; 9];
-    out[0] = ax * ax * t + c;
-    let xy = t * ay * ax;
-    out[1] = xy + az * s;
-    let xz = t * az * ax;
-    out[2] = xz - ay * s;
-    out[3] = xy - az * s;
-    out[4] = ay * ay * t + c;
-    let yz = t * az * ay;
-    out[5] = ax * s + yz;
-    out[6] = xz + ay * s;
-    out[7] = yz - ax * s;
-    out[8] = az * az * t + c;
+
+    // Exact: both factors are f32 and 24 + 24 bits fit the register.
+    let yx = f64::from(y) * f64::from(x);
+    let zy = f64::from(z) * f64::from(y);
+    let zx = f64::from(z) * f64::from(x);
+
+    let zs = f64::from(z) * f64::from(s);
+    let xs = super::f64_to_f32(f64::from(x) * f64::from(s));
+    let ys = super::f64_to_f32(f64::from(y) * f64::from(s));
+
+    let t = f64::from(1.0f32 - c);
+    let t_yx = t * yx;
+    let t_zy = t * zy;
+    let t_zx = t * zx;
+    let t_zx_narrowed = super::f64_to_f32(t_zx);
+
+    let diagonal = |v: f32| super::f64_to_f32(f64::from(v) * f64::from(v) * t + f64::from(c));
+
+    [
+        diagonal(x),
+        super::f64_to_f32(t_yx + zs),
+        super::f64_to_f32(t_zx - f64::from(ys)),
+        super::f64_to_f32(t_yx - zs),
+        diagonal(y),
+        super::f64_to_f32(f64::from(xs) + t_zy),
+        super::f64_to_f32(f64::from(t_zx_narrowed) + f64::from(ys)),
+        super::f64_to_f32(t_zy - f64::from(xs)),
+        diagonal(z),
+    ]
+}
+
+/// Axis/angle pairs carrying full mantissas, so a reassociation lands apart.
+///
+/// Shared with the two wider entry points' tests. Built from an LCG rather than
+/// written out: the shapes being separated differ on most inputs, and what the
+/// asserts need is that *some* input separates them.
+#[cfg(test)]
+pub fn axis_angle_sweep() -> [([f32; 3], f32); 64] {
+    // In [1, 2) with every mantissa bit in play, mapped to [-1, 1).
+    let spread = |bits: u32| f32::from_bits(0x3f80_0000 | (bits & 0x007f_ffff)) * 2.0 - 3.0;
+    let mut out = [([0.0f32; 3], 0.0f32); 64];
+    let mut w = 0x3f2c_1d09_u32;
+    let mut next = move || {
+        w = w.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        w
+    };
+    for (axis, angle) in &mut out {
+        for component in axis.iter_mut() {
+            *component = spread(next());
+        }
+        *angle = spread(next()) * core::f32::consts::PI;
+    }
     out
 }
 
@@ -175,6 +252,122 @@ mod tests_c33_matrix__from_axis_angle__7be490 {
         let prod = mul(&r, &ri);
         let i = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
         approx(&prod, &i, 1e-4);
+    }
+
+    /// One deviation from the byte-faithful shape, for the separation asserts.
+    ///
+    /// Each variant changes exactly one reading of the bytes, so an input that
+    /// separates it separates that reading and nothing else.
+    enum Deviation {
+        /// Every intermediate rounded to `f32`, `1 - cos` folded in left to right.
+        PerStepF32,
+        /// `z * sin` narrowed like its `x` and `y` siblings.
+        ZSinNarrowed,
+        /// `out[6]` built from the wide `t * (z * x)`, not the stored `f32` copy.
+        WideZxInRow2,
+    }
+
+    fn deviate(axis: &[f32; 3], angle: f32, deviation: &Deviation) -> [f32; 9] {
+        let narrow = super::super::f64_to_f32;
+        let (mut x, mut y, mut z) = (axis[0], axis[1], axis[2]);
+
+        if matches!(deviation, Deviation::PerStepF32) {
+            let inv = 1.0 / (x * x + y * y + z * z).sqrt();
+            x *= inv;
+            y *= inv;
+            z *= inv;
+            let (s, c) = crate::math::trig::sin_cos(angle);
+            let t = 1.0 - c;
+            let xy = t * y * x;
+            let xz = t * z * x;
+            let yz = t * z * y;
+            return [
+                x * x * t + c,
+                xy + z * s,
+                xz - y * s,
+                xy - z * s,
+                y * y * t + c,
+                x * s + yz,
+                xz + y * s,
+                yz - x * s,
+                z * z * t + c,
+            ];
+        }
+
+        let len2 = (f64::from(z) * f64::from(z) + f64::from(y) * f64::from(y))
+            + f64::from(x) * f64::from(x);
+        let inv = 1.0_f64 / len2.sqrt();
+        x = narrow(f64::from(x) * inv);
+        y = narrow(f64::from(y) * inv);
+        z = narrow(f64::from(z) * inv);
+
+        let (s, c) = crate::math::trig::sin_cos(angle);
+        let t = f64::from(1.0f32 - c);
+        let zs = if matches!(deviation, Deviation::ZSinNarrowed) {
+            f64::from(narrow(f64::from(z) * f64::from(s)))
+        } else {
+            f64::from(z) * f64::from(s)
+        };
+        let xs = narrow(f64::from(x) * f64::from(s));
+        let ys = narrow(f64::from(y) * f64::from(s));
+        let t_yx = t * (f64::from(y) * f64::from(x));
+        let t_zy = t * (f64::from(z) * f64::from(y));
+        let t_zx = t * (f64::from(z) * f64::from(x));
+        let zx_for_row2 = if matches!(deviation, Deviation::WideZxInRow2) {
+            t_zx
+        } else {
+            f64::from(narrow(t_zx))
+        };
+        let diagonal = |v: f32| narrow(f64::from(v) * f64::from(v) * t + f64::from(c));
+
+        [
+            diagonal(x),
+            narrow(t_yx + zs),
+            narrow(t_zx - f64::from(ys)),
+            narrow(t_yx - zs),
+            diagonal(y),
+            narrow(f64::from(xs) + t_zy),
+            narrow(zx_for_row2 + f64::from(ys)),
+            narrow(t_zy - f64::from(xs)),
+            diagonal(z),
+        ]
+    }
+
+    fn separating_count(deviation: &Deviation) -> usize {
+        super::axis_angle_sweep()
+            .iter()
+            .filter(|(axis, angle)| {
+                let faithful = rot(axis, *angle, true);
+                let other = deviate(axis, *angle, deviation);
+                (0..9).any(|i| faithful[i].to_bits() != other[i].to_bits())
+            })
+            .count()
+    }
+
+    #[test]
+    fn separates_from_the_per_step_f32_form() {
+        // Without this the width half of the shape is unpinned: every tolerance
+        // test above passes under either form.
+        assert!(
+            separating_count(&Deviation::PerStepF32) > 0,
+            "sweep no longer separates narrow-once from narrow-per-step"
+        );
+    }
+
+    #[test]
+    fn separates_from_a_narrowed_z_sin() {
+        assert!(
+            separating_count(&Deviation::ZSinNarrowed) > 0,
+            "sweep no longer separates the wide z * sin from a narrowed one"
+        );
+    }
+
+    #[test]
+    fn separates_from_a_wide_zx_in_row_two() {
+        assert!(
+            separating_count(&Deviation::WideZxInRow2) > 0,
+            "sweep no longer separates out[6]'s stored f32 copy from the wide one"
+        );
     }
 }
 

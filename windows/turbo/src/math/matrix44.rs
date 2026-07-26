@@ -509,39 +509,21 @@ mod tests_c44_matrix__multiply_scalar__7bc8e0 {
 /// trusts the caller's axis to be unit length. The remaining matrix slots
 /// (indices 12..16) are left untouched, matching the original which only writes
 /// 0..12.
+///
+/// The arithmetic is `0x7be490`'s — the same routine against a narrower
+/// destination, its eighty floating-point instructions identical once the
+/// destination offsets are masked off — so it lives in
+/// `c33_matrix__from_axis_angle__7be490` and this entry point only places the
+/// result. That kernel's flag runs the other way round from this one's.
 pub fn c44_matrix__set_rotation_axis_angle__7bb860(
     axis: &[f32; 3],
     angle: f32,
     skip_normalize: bool,
 ) -> [f32; 12] {
-    let mut ax = axis[0];
-    let mut ay = axis[1];
-    let mut az = axis[2];
-
-    if !skip_normalize {
-        let inv = 1.0 / (ax * ax + ay * ay + az * az).sqrt();
-        ax *= inv;
-        ay *= inv;
-        az *= inv;
-    }
-
-    let (s, c) = crate::math::trig::sin_cos(angle);
-    let omc = 1.0 - c;
-
-    let xy = omc * ay * ax;
-    let xz = omc * az * ax;
-    let yz = omc * az * ay;
-
+    let r =
+        crate::math::matrix33::c33_matrix__from_axis_angle__7be490(axis, angle, !skip_normalize);
     let mut out = [0.0f32; 12];
-    out[0] = ax * ax * omc + c;
-    out[1] = xy + az * s;
-    out[2] = xz - ay * s;
-    out[3] = xy - az * s;
-    out[4] = ay * ay * omc + c;
-    out[5] = ax * s + yz;
-    out[6] = xz + ay * s;
-    out[7] = yz - ax * s;
-    out[8] = az * az * omc + c;
+    out[0..9].copy_from_slice(&r);
     // out[9..12] stay zero (translation column).
     out
 }
@@ -1272,45 +1254,22 @@ mod tests_c44_matrix__scale_rows__7be670 {
 /// identity (zeros with `out[15] == 1`). When `skip_normalize` is false the axis
 /// is normalized first. Mirrors the original's exact element layout (the off-
 /// diagonal sin terms are placed per the original's `out[1]/out[2]/...` writes).
+///
+/// The arithmetic is `0x7be490`'s, so it lives in
+/// `c33_matrix__from_axis_angle__7be490` (whose flag runs the other way round) and
+/// this entry point differs from it only in where the nine elements land and in
+/// the six zeros and the `1.0` it writes around them (`0x7bdb76`..`0x7bdb9a`).
 pub fn c44_matrix__set_rotation_axis_angle__7bdb00(
     axis: &[f32; 3],
     angle: f32,
     skip_normalize: bool,
 ) -> [f32; 16] {
-    let mut x = axis[0];
-    let mut y = axis[1];
-    let mut z = axis[2];
-
-    if !skip_normalize {
-        let inv = 1.0 / (x * x + y * y + z * z).sqrt();
-        x *= inv;
-        y *= inv;
-        z *= inv;
-    }
-
-    let (s, c) = crate::math::trig::sin_cos(angle);
-    let omc = 1.0 - c;
-
-    let xy = omc * y * x;
-    let xz = omc * z * x;
-    let yz = omc * z * y;
-
+    let r =
+        crate::math::matrix33::c33_matrix__from_axis_angle__7be490(axis, angle, !skip_normalize);
     let mut out = [0.0f32; 16];
-    out[0] = x * x * omc + c;
-    out[1] = xy + z * s;
-    out[2] = xz - y * s;
-    out[3] = 0.0;
-    out[4] = xy - z * s;
-    out[5] = y * y * omc + c;
-    out[6] = x * s + yz;
-    out[7] = 0.0;
-    out[8] = xz + y * s;
-    out[9] = yz - x * s;
-    out[10] = z * z * omc + c;
-    out[11] = 0.0;
-    out[12] = 0.0;
-    out[13] = 0.0;
-    out[14] = 0.0;
+    for row in 0..3 {
+        out[row * 4..row * 4 + 3].copy_from_slice(&r[row * 3..row * 3 + 3]);
+    }
     out[15] = 1.0;
     out
 }
@@ -1372,6 +1331,34 @@ mod tests_c44_matrix__set_rotation_axis_angle__7bdb00 {
         let det = m[0] * (m[5] * m[10] - m[6] * m[9]) - m[1] * (m[4] * m[10] - m[6] * m[8])
             + m[2] * (m[4] * m[9] - m[5] * m[8]);
         assert!((det - 1.0).abs() < 1e-4, "det {det}");
+    }
+
+    #[test]
+    fn all_three_entry_points_place_the_same_elements() {
+        // The three originals' floating-point instruction streams are identical
+        // once the destination offsets are masked off, so the nine rotation
+        // elements have to agree to the bit and only the layout may differ. Both
+        // wider entry points take `skip_normalize`, the 3x3 one takes its inverse.
+        for (axis, angle) in crate::math::matrix33::axis_angle_sweep() {
+            let square = rot(&axis, angle, false);
+            let rows = super::c44_matrix__set_rotation_axis_angle__7bb860(&axis, angle, false);
+            let three = crate::math::matrix33::c33_matrix__from_axis_angle__7be490(
+                &axis, angle, true, // normalize: the same act as skip_normalize = false
+            );
+            for r in 0..3 {
+                for c in 0..3 {
+                    let want = three[r * 3 + c].to_bits();
+                    assert_eq!(square[r * 4 + c].to_bits(), want, "4x4 element {r},{c}");
+                    assert_eq!(rows[r * 3 + c].to_bits(), want, "3x4 element {r},{c}");
+                }
+            }
+            assert_eq!([rows[9], rows[10], rows[11]], [0.0, 0.0, 0.0]);
+            assert_eq!([square[3], square[7], square[11]], [0.0, 0.0, 0.0]);
+            assert_eq!(
+                [square[12], square[13], square[14], square[15]],
+                [0.0, 0.0, 0.0, 1.0]
+            );
+        }
     }
 }
 
