@@ -133,9 +133,18 @@ mod tests_c3_vector__add_in_place__4841c0 {
 }
 
 /// Scales a vec3 by the inverse of `divisor` (each component divided by `divisor`).
+///
+/// The reciprocal is formed once (`FLD 1.0; FDIV`, `0x4549c3`) and left on the
+/// x87 stack; only the three products are stored, each by its own `FSTP m32`.
+/// So the reciprocal carries an `f64` significand into all three multiplies and
+/// rounding it to `f32` first would change every lane.
 pub fn c3_vector__scale_by_inverse__4549c0(v: &[f32; 3], divisor: f32) -> [f32; 3] {
-    let inv = 1.0_f32 / divisor;
-    [v[0] * inv, v[1] * inv, v[2] * inv]
+    let inv = 1.0_f64 / f64::from(divisor);
+    [
+        f64_to_f32(f64::from(v[0]) * inv),
+        f64_to_f32(f64::from(v[1]) * inv),
+        f64_to_f32(f64::from(v[2]) * inv),
+    ]
 }
 
 #[cfg(test)]
@@ -151,6 +160,33 @@ mod tests_c3_vector__scale_by_inverse__4549c0 {
         let v = [1.5, -3.25, 7.0];
         assert_eq!(f(&v, 1.0), v);
     }
+    #[test]
+    fn reciprocal_stays_wide_across_all_three_lanes() {
+        // Rounding the reciprocal to `f32` before the multiplies moves the y
+        // lane by one ulp here. Bit patterns, not decimals: a rounded literal is
+        // a different float and stops separating the two shapes.
+        let v = [
+            f32::from_bits(0x4166_4d79),
+            f32::from_bits(0x41ca_b74c),
+            f32::from_bits(0xc1e2_13d6),
+        ];
+        let divisor = f32::from_bits(0x4160_5a98);
+        let got = f(&v, divisor);
+
+        let narrow_inv = 1.0_f32 / divisor;
+        let per_step = [v[0] * narrow_inv, v[1] * narrow_inv, v[2] * narrow_inv];
+        assert!(
+            (0..3).any(|i| got[i].to_bits() != per_step[i].to_bits()),
+            "fixture no longer separates a wide reciprocal from an f32 one"
+        );
+
+        let wide_inv = 1.0_f64 / f64::from(divisor);
+        for i in 0..3 {
+            let want = super::f64_to_f32(f64::from(v[i]) * wide_inv);
+            assert_eq!(got[i].to_bits(), want.to_bits(), "lane {i}");
+        }
+    }
+
     #[test]
     fn normalize_by_length_gives_unit() {
         let v = [3.0_f32, 4.0, 0.0];
@@ -314,11 +350,18 @@ mod tests_c3_vector__add__621160 {
 }
 
 /// Cross product of two 3-component vectors (`a x b`).
+///
+/// Each lane's two products and their subtraction stay on the x87 stack: the
+/// only stores in the body are the three trailing `FSTP m32` at `0x672160`, so
+/// a lane narrows once, after the subtraction. Rounding each product to `f32`
+/// first is a different number — at 53-bit precision a product of two `f32`
+/// needs 48 bits and is exact, so the whole divergence lives in that narrowing.
 pub fn c3_vector__cross__672130(a: &[f32; 3], b: &[f32; 3]) -> [f32; 3] {
+    let m = |x: f32, y: f32| f64::from(x) * f64::from(y);
     [
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
+        f64_to_f32(m(a[1], b[2]) - m(a[2], b[1])),
+        f64_to_f32(m(a[2], b[0]) - m(a[0], b[2])),
+        f64_to_f32(m(a[0], b[1]) - m(a[1], b[0])),
     ]
 }
 
@@ -330,6 +373,44 @@ mod tests_c3_vector__cross__672130 {
     fn known_value_basis() {
         // x cross y = z
         assert_eq!(cross(&[1.0, 0.0, 0.0], &[0.0, 1.0, 0.0]), [0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn lanes_narrow_once_after_the_subtraction() {
+        // Rounding each product to `f32` before subtracting moves all three
+        // lanes by one ulp here. Bit patterns, not decimals: a rounded literal
+        // is a different float and stops separating the two shapes.
+        let a = [
+            f32::from_bits(0x41d4_cfac),
+            f32::from_bits(0x410f_03fc),
+            f32::from_bits(0x41c0_6ea7),
+        ];
+        let b = [
+            f32::from_bits(0xc1b9_a940),
+            f32::from_bits(0xbfed_8cba),
+            f32::from_bits(0xc173_4a43),
+        ];
+        let got = cross(&a, &b);
+
+        let per_step = [
+            a[1] * b[2] - a[2] * b[1],
+            a[2] * b[0] - a[0] * b[2],
+            a[0] * b[1] - a[1] * b[0],
+        ];
+        assert!(
+            (0..3).any(|i| got[i].to_bits() != per_step[i].to_bits()),
+            "fixture no longer separates narrow-once from narrow-per-product"
+        );
+
+        let m = |x: f32, y: f32| f64::from(x) * f64::from(y);
+        let want = [
+            super::f64_to_f32(m(a[1], b[2]) - m(a[2], b[1])),
+            super::f64_to_f32(m(a[2], b[0]) - m(a[0], b[2])),
+            super::f64_to_f32(m(a[0], b[1]) - m(a[1], b[0])),
+        ];
+        for i in 0..3 {
+            assert_eq!(got[i].to_bits(), want[i].to_bits(), "lane {i}");
+        }
     }
 
     #[test]

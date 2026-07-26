@@ -12,29 +12,52 @@
 /// degenerate (collinear) triangle yields a zero-length normal and propagates
 /// `inf`/`NaN` exactly as the original does.
 pub fn c4_plane__from_triangle__637480(p0: &[f32; 3], p1: &[f32; 3], p2: &[f32; 3]) -> [f32; 4] {
-    // edge1 = p2 - p0, edge2 = p1 - p0 (per the reference annotation).
-    let e1x = p2[0] - p0[0];
-    let e1y = p2[1] - p0[1];
-    let e1z = p2[2] - p0[2];
-    let e2x = p1[0] - p0[0];
-    let e2y = p1[1] - p0[1];
-    let e2z = p1[2] - p0[2];
+    let sub = |a: f32, b: f32| f64::from(a) - f64::from(b);
 
-    // normal = edge2 × edge1.
-    let nx = e2y * e1z - e2z * e1y;
-    let ny = e2z * e1x - e1z * e2x;
-    let nz = e1y * e2x - e2y * e1x;
+    // edge1 = p2 - p0 stays on the x87 stack in all three components; edge2's x
+    // and y are spilled to `f32` slots right after their subtraction (`FSTP` at
+    // 0x6374a4 / 0x6374ad) while its z stays wide. Same asymmetry the portal's
+    // copy of this normal has.
+    let e1x = sub(p2[0], p0[0]);
+    let e1y = sub(p2[1], p0[1]);
+    let e1z = sub(p2[2], p0[2]);
+    let e2x = f64::from(super::f64_to_f32(sub(p1[0], p0[0])));
+    let e2y = f64::from(super::f64_to_f32(sub(p1[1], p0[1])));
+    let e2z = sub(p1[2], p0[2]);
 
-    let scale = 1.0_f32 / (nx * nx + ny * ny + nz * nz).sqrt();
-    let nnx = scale * nx;
-    let nny = scale * ny;
-    let nnz = scale * nz;
+    // normal = edge2 × edge1, each lane narrowed at its own store (0x6374c3,
+    // 0x6374d4, 0x6374e7) and written straight into the output.
+    let nx = super::f64_to_f32(e2y * e1z - e2z * e1y);
+    let ny = super::f64_to_f32(e2z * e1x - e1z * e2x);
+    let nz = super::f64_to_f32(e1y * e2x - e2y * e1x);
+
+    // The length is rebuilt from the three stored `f32` lanes (0x6374f2 reloads
+    // them), but the sum, the square root and the reciprocal all stay wide.
+    let len2 = (f64::from(nx) * f64::from(nx) + f64::from(ny) * f64::from(ny))
+        + f64::from(nz) * f64::from(nz);
+    let scale = 1.0_f64 / len2.sqrt();
+
+    // `FST m32`, not `FSTP`: each scaled lane is stored as `f32` and *kept* wide
+    // in the register (0x63751c, 0x637523, 0x63752b). So the output normal is
+    // narrowed but `D` is built from the unnarrowed products.
+    let nnx = scale * f64::from(nx);
+    let nny = scale * f64::from(ny);
+    let nnz = scale * f64::from(nz);
+
     // `D` sums z first, then y, then x (`0x63752e`..`0x63753b`: the z product is
-    // formed, `FXCH`'d under the y product, and `FADDP st(2)` folds them before
-    // the x product arrives). Left to right over x, y, z is a different number.
-    let d = -((nnz * p0[2] + nny * p0[1]) + nnx * p0[0]);
+    // formed, the y product is exchanged under it, and `FADDP st(2)` folds the
+    // pair before the x product arrives). Left to right over x, y, z is a
+    // different number.
+    let d = super::f64_to_f32(
+        -((nnz * f64::from(p0[2]) + nny * f64::from(p0[1])) + nnx * f64::from(p0[0])),
+    );
 
-    [nnx, nny, nnz, d]
+    [
+        super::f64_to_f32(nnx),
+        super::f64_to_f32(nny),
+        super::f64_to_f32(nnz),
+        d,
+    ]
 }
 
 #[cfg(test)]
@@ -108,8 +131,17 @@ mod tests_c4_plane__from_triangle__637480 {
         assert!((pl[3] + 5.0).abs() < 1e-5, "{pl:?}");
     }
 
+    /// Pin the whole chain against an explicitly written wide reference.
+    ///
+    /// The `D` summation order is transcribed from the original but is *not*
+    /// separately pinnable: a search over two million random triangles found no
+    /// input where summing `z, y, x` and summing `x, y, z` disagree once the
+    /// chain carries an `f64` significand — three products of `f32` lanes fit in
+    /// 53 bits, so the regrouping is almost always exact. The order is written
+    /// the way the original writes it regardless; what this test actually holds
+    /// down is every narrowing point in the chain.
     #[test]
-    fn plane_distance_sums_z_then_y_then_x() {
+    fn matches_the_wide_reference_chain() {
         // Corners with full non-terminating mantissas, so the two groupings of
         // the `D` dot land on different bits. Bit patterns, not decimals: a
         // rounded literal is a different float and stops separating them.
@@ -129,15 +161,66 @@ mod tests_c4_plane__from_triangle__637480 {
             f32::from_bits(0x4179_5ff4),
         ];
         let pl = f(&p0, &p1, &p2);
-        let (nnx, nny, nnz) = (pl[0], pl[1], pl[2]);
 
-        let stock = -((nnz * p0[2] + nny * p0[1]) + nnx * p0[0]);
-        let left_to_right = -((nnx * p0[0] + nny * p0[1]) + nnz * p0[2]);
+        // The distance is built from the unnarrowed scaled lanes, so the
+        // reference has to rebuild them rather than read `pl[0..3]` back.
+        let sub = |a: f32, b: f32| f64::from(a) - f64::from(b);
+        let e1 = [sub(p2[0], p0[0]), sub(p2[1], p0[1]), sub(p2[2], p0[2])];
+        let e2 = [
+            f64::from(super::super::f64_to_f32(sub(p1[0], p0[0]))),
+            f64::from(super::super::f64_to_f32(sub(p1[1], p0[1]))),
+            sub(p1[2], p0[2]),
+        ];
+        let nx = super::super::f64_to_f32(e2[1] * e1[2] - e2[2] * e1[1]);
+        let ny = super::super::f64_to_f32(e2[2] * e1[0] - e1[2] * e2[0]);
+        let nz = super::super::f64_to_f32(e1[1] * e2[0] - e2[1] * e1[0]);
+        let len2 = (f64::from(nx) * f64::from(nx) + f64::from(ny) * f64::from(ny))
+            + f64::from(nz) * f64::from(nz);
+        let scale = 1.0_f64 / len2.sqrt();
+        let (wx, wy, wz) = (
+            scale * f64::from(nx),
+            scale * f64::from(ny),
+            scale * f64::from(nz),
+        );
+
+        let stock = super::super::f64_to_f32(
+            -((wz * f64::from(p0[2]) + wy * f64::from(p0[1])) + wx * f64::from(p0[0])),
+        );
         assert_eq!(pl[3].to_bits(), stock.to_bits());
+        assert_eq!(pl[0].to_bits(), super::super::f64_to_f32(wx).to_bits());
+        assert_eq!(pl[1].to_bits(), super::super::f64_to_f32(wy).to_bits());
+        assert_eq!(pl[2].to_bits(), super::super::f64_to_f32(wz).to_bits());
+    }
+
+    #[test]
+    fn distance_uses_the_unnarrowed_scaled_lanes() {
+        // The three `FST m32` stores narrow the output normal but keep the wide
+        // values live for `D`, so recomputing `D` from the stored `f32` lanes is
+        // a different number. Without this the width half of the fix is unpinned.
+        let p0 = [
+            f32::from_bits(0x428c_47d5),
+            f32::from_bits(0xbfdb_a61c),
+            f32::from_bits(0xc148_9a79),
+        ];
+        let p1 = [
+            f32::from_bits(0x4190_eaa4),
+            f32::from_bits(0xc235_5122),
+            f32::from_bits(0x4280_a3c9),
+        ];
+        let p2 = [
+            f32::from_bits(0xc1a1_4e4e),
+            f32::from_bits(0xc18f_3782),
+            f32::from_bits(0x41e9_6e9d),
+        ];
+        let pl = f(&p0, &p1, &p2);
+        let from_stored = super::super::f64_to_f32(
+            -((f64::from(pl[2]) * f64::from(p0[2]) + f64::from(pl[1]) * f64::from(p0[1]))
+                + f64::from(pl[0]) * f64::from(p0[0])),
+        );
         assert_ne!(
-            stock.to_bits(),
-            left_to_right.to_bits(),
-            "fixture no longer separates the two summation orders"
+            pl[3].to_bits(),
+            from_stored.to_bits(),
+            "fixture no longer separates the stored lanes from the wide ones"
         );
     }
 

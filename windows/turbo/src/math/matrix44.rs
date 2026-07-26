@@ -58,16 +58,22 @@ const MULTIPLY_K_ORDER: [[usize; 4]; 16] = [
 /// not four. Kept separate from [`mul4x4`] because that one has to keep agreeing
 /// to the bit with the dispatched D3DX product the animation update also uses,
 /// which sums `k = 0..3` from zero.
+///
+/// An element's four products and three sums never leave the x87 stack — the
+/// only store in a block is the `FSTP m32` that ends it (`0x7bc6cc` for the
+/// first) — so the chain carries an `f64` significand and narrows exactly once,
+/// at the element's store.
 pub fn c44_matrix__multiply__7bc6a0(a: &[f32; 16], b: &[f32; 16]) -> [f32; 16] {
     let mut out = [0.0f32; 16];
     for r in 0..4 {
         for c in 0..4 {
             let ks = MULTIPLY_K_ORDER[r * 4 + c];
-            let mut acc = a[r * 4 + ks[0]] * b[ks[0] * 4 + c];
-            acc += a[r * 4 + ks[1]] * b[ks[1] * 4 + c];
-            acc += a[r * 4 + ks[2]] * b[ks[2] * 4 + c];
-            acc += a[r * 4 + ks[3]] * b[ks[3] * 4 + c];
-            out[r * 4 + c] = acc;
+            let term = |k: usize| f64::from(a[r * 4 + k]) * f64::from(b[k * 4 + c]);
+            let mut acc = term(ks[0]);
+            acc += term(ks[1]);
+            acc += term(ks[2]);
+            acc += term(ks[3]);
+            out[r * 4 + c] = super::f64_to_f32(acc);
         }
     }
     out
@@ -103,13 +109,38 @@ mod tests_c44_matrix__multiply__7bc6a0 {
         for r in 0..4 {
             for c in 0..4 {
                 let ks = super::MULTIPLY_K_ORDER[r * 4 + c];
-                let mut want = a[r * 4 + ks[0]] * b[ks[0] * 4 + c];
-                want += a[r * 4 + ks[1]] * b[ks[1] * 4 + c];
-                want += a[r * 4 + ks[2]] * b[ks[2] * 4 + c];
-                want += a[r * 4 + ks[3]] * b[ks[3] * 4 + c];
+                let term = |k: usize| f64::from(a[r * 4 + k]) * f64::from(b[k * 4 + c]);
+                let mut want = term(ks[0]);
+                want += term(ks[1]);
+                want += term(ks[2]);
+                want += term(ks[3]);
+                let want = super::super::f64_to_f32(want);
                 assert_eq!(got[r * 4 + c].to_bits(), want.to_bits(), "element {r},{c}");
             }
         }
+    }
+
+    #[test]
+    fn separates_from_the_per_step_f32_form() {
+        // Same order, narrowed after every add instead of once at the store.
+        // Without this the width half of the fix is unpinned.
+        let (a, b) = fixtures();
+        let got = stock(&a, &b);
+        let mut per_step = [0.0f32; 16];
+        for r in 0..4 {
+            for c in 0..4 {
+                let ks = super::MULTIPLY_K_ORDER[r * 4 + c];
+                let mut acc = a[r * 4 + ks[0]] * b[ks[0] * 4 + c];
+                acc += a[r * 4 + ks[1]] * b[ks[1] * 4 + c];
+                acc += a[r * 4 + ks[2]] * b[ks[2] * 4 + c];
+                acc += a[r * 4 + ks[3]] * b[ks[3] * 4 + c];
+                per_step[r * 4 + c] = acc;
+            }
+        }
+        assert!(
+            (0..16).any(|i| got[i].to_bits() != per_step[i].to_bits()),
+            "fixture no longer separates narrow-once from narrow-per-step"
+        );
     }
 
     #[test]
