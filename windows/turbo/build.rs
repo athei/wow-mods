@@ -42,6 +42,15 @@ struct Function {
     /// caller-saved registers live across calls to these internal functions.
     /// Orthogonal to `abi`; drives the save/restore shim.
     preserve: Vec<String>,
+    /// Install this hook only when the `wow::events` gauge is armed.
+    ///
+    /// For an observation hook whose target is hot enough that even a
+    /// trampoline on the unarmed path is a measurable tax — `luaD_precall` runs
+    /// on every Lua-level call, not once per handler invoke. The logger is
+    /// initialized before `install_all`, so the gate resolves at install time
+    /// and an unarmed run keeps the function fully stock.
+    #[serde(default)]
+    armed_only: bool,
     /// Optional differential-mode annotation.
     ///
     /// Present only on functions the harness can validate against the live
@@ -520,36 +529,59 @@ fn render(m: &Manifest) -> String {
         // Install step: verify the signature, create the hook over the thunk,
         // store the original, queue the enable (applied in one batch at the end
         // of `install_all`). Address + signature are inlined here.
-        let _ = writeln!(install_body, "    queued += usize::from(install_thunk(");
-        let _ = writeln!(install_body, "        image_base,");
-        let _ = writeln!(install_body, "        {:#010x},", f.rva);
-        let _ = writeln!(install_body, "        {:?},", f.sig);
+        //
+        // An `armed_only` entry puts that step behind the gauge's own arming
+        // check, so an unarmed run never patches the address at all. The target
+        // is hot enough that the usual "unarmed cost is one trampoline" argument
+        // does not carry, and the gauge resolves its filter before `install_all`.
+        let ind = if f.armed_only { "    " } else { "" };
+        if f.armed_only {
+            let _ = writeln!(
+                install_body,
+                "    // Observation hook on a path too hot to detour for nothing: stock"
+            );
+            let _ = writeln!(
+                install_body,
+                "    // unless the `wow::events` gauge is armed."
+            );
+            let _ = writeln!(install_body, "    if super::events::armed() {{");
+        }
         let _ = writeln!(
             install_body,
-            "        {snake}_thunk as *mut ::core::ffi::c_void,"
+            "{ind}    queued += usize::from(install_thunk("
         );
-        let _ = writeln!(install_body, "        {name:?},");
-        let _ = writeln!(install_body, "        |trampoline| {{");
+        let _ = writeln!(install_body, "{ind}        image_base,");
+        let _ = writeln!(install_body, "{ind}        {:#010x},", f.rva);
+        let _ = writeln!(install_body, "{ind}        {:?},", f.sig);
         let _ = writeln!(
             install_body,
-            "            // SAFETY: the trampoline runs the displaced prologue then continues"
+            "{ind}        {snake}_thunk as *mut ::core::ffi::c_void,"
+        );
+        let _ = writeln!(install_body, "{ind}        {name:?},");
+        let _ = writeln!(install_body, "{ind}        |trampoline| {{");
+        let _ = writeln!(
+            install_body,
+            "{ind}            // SAFETY: the trampoline runs the displaced prologue then continues"
         );
         let _ = writeln!(
             install_body,
-            "            // into the unhooked original, carrying its ABI."
+            "{ind}            // into the unhooked original, carrying its ABI."
         );
-        let _ = writeln!(install_body, "            let original = unsafe {{");
+        let _ = writeln!(install_body, "{ind}            let original = unsafe {{");
         let _ = writeln!(
             install_body,
-            "                ::core::mem::transmute::<*mut ::core::ffi::c_void, {name}Fn>(trampoline)"
+            "{ind}                ::core::mem::transmute::<*mut ::core::ffi::c_void, {name}Fn>(trampoline)"
         );
-        let _ = writeln!(install_body, "            }};");
+        let _ = writeln!(install_body, "{ind}            }};");
         let _ = writeln!(
             install_body,
-            "            let _ = {screaming}_ORIGINAL.set(original);"
+            "{ind}            let _ = {screaming}_ORIGINAL.set(original);"
         );
-        let _ = writeln!(install_body, "        }},");
-        let _ = writeln!(install_body, "    ));");
+        let _ = writeln!(install_body, "{ind}        }},");
+        let _ = writeln!(install_body, "{ind}    ));");
+        if f.armed_only {
+            let _ = writeln!(install_body, "    }}");
+        }
 
         // Arm this hook's compare switch if it is selected at runtime. Only a
         // hook with a `[diff]` table has the switch (compare mode runs both

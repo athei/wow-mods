@@ -27,6 +27,11 @@
 # Codegen emits the original type, a private lazy resolver, the `extern "abi"`
 # thunk, and the install wiring. The reimpl is plain Rust at `crate::hooks::<snake>`.
 #
+# One OPTIONAL top-level field exists: `armed_only = true` puts the install step
+# behind the `wow::events` gauge's arming check, so an unarmed run leaves the
+# function stock. It is for observation hooks whose target is hot enough that
+# even a trampoline on the unarmed path would be a measurable tax.
+#
 # One OPTIONAL sub-table is allowed per entry: `[functions.Name.diff]`, the
 # differential-mode annotation. It only affects `WOW_TURBO_DIFF=1` builds (the
 # harness); default builds emit identical thunks whether or not it is present.
@@ -3580,3 +3585,24 @@ abi  = "cdecl"
 ret  = "void"
 args = ["i32", "*mut u32", "*const u8", "*const u32"]
 preserve = []
+
+# The single funnel for every Lua-level call: `fastcall(ecx = L, edx = func)`,
+# reached from the interpreter's call opcode, lua_call and the protected-call
+# path. A Lua closure is only prepared here (returns 0, the interpreter runs the
+# body); a C closure is CALLED here and the results pointer comes back, so the
+# return value alone says which of the two a call was. That is what splits a
+# script's cost into the client's own C API and the VM running bytecode.
+# Closure layout on the argument: value tag at +0x0 (6 = function), object at
+# +0x8, then `isC` at +0x6 and, at +0xc, the Proto for a Lua closure or the C
+# function pointer for a C one.
+# `armed_only`: this runs orders of magnitude more often than the per-invoke
+# hooks above, so an unarmed session leaves it stock rather than paying a
+# trampoline per Lua call.
+[functions.luaD_precall__6f6050]
+rva  = 0x2f6050
+sig  = "55 8B EC 51 53 56 8B DA 8B 03"
+abi  = "fastcall"
+ret  = "i32"
+args = ["i32", "i32"]
+preserve = []
+armed_only = true

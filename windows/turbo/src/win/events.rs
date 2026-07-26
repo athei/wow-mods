@@ -37,6 +37,15 @@
 //! session's script cost is the scripts themselves, and it bounds what any
 //! faster invoke path could ever win back.
 //!
+//! Inside the bodies the cost splits once more, into `api` and `vm`. Every
+//! Lua-level call funnels through `luaD_precall`, which either prepares a Lua
+//! closure for the interpreter or calls a C closure outright, so timing the
+//! second case separates the client's own script API from the interpreter and
+//! the Lua runtime under it. `api` covers only calls made inside a timed body,
+//! which is what keeps it comparable with the `bodies` number beside it; the
+//! `api:` line then ranks those C functions by their entry address, left
+//! unresolved on purpose so no table of names has to ship in the mod.
+//!
 //! Do not read the event rows as a partition of `signals`. Rows are billed at
 //! every depth while the totals count depth zero only, so a dispatch nested
 //! inside a handler bills its own row while its time is already inside the
@@ -55,7 +64,7 @@ use std::{
     fmt::Write as _,
     sync::{
         LazyLock, Mutex, PoisonError,
-        atomic::{AtomicU32, Ordering},
+        atomic::{AtomicU32, AtomicU64, Ordering},
     },
 };
 
@@ -78,6 +87,8 @@ const TOP_PER_SECOND: usize = 8;
 const TOP_CUMULATIVE: usize = 8;
 /// Handler-table size cap; past it new names fall into the overflow row.
 const HANDLER_TABLE_CAP: usize = 512;
+/// Script-API table size cap; past it new addresses fall into the overflow row.
+const API_TABLE_CAP: usize = 512;
 /// Chunk-memo cap; a client cannot load more script files than this.
 const OWNER_TABLE_CAP: usize = 4_096;
 /// Bound on the addon-directory walk, so a diagnostic cannot wander.
@@ -112,10 +123,23 @@ type NameBuf = [u8; NAME_CAP];
 static ARMED: LazyLock<bool> = LazyLock::new(|| {
     let armed = log::log_enabled!(target: "wow::events", log::Level::Debug);
     if armed {
+        // Force the counter's read-cost calibration here rather than leaving it
+        // to the first C call, which would run it inside a handler body and
+        // bill a millisecond of it to whatever script was unlucky.
+        let _ = wow_shared::tsc::read_cost_milli_ticks();
         log::debug!(target: "wow::events", "event gauge armed");
     }
     armed
 });
+
+/// Ticks a window's C-API spans carry purely as counter-read latency.
+///
+/// One read per span, priced by the counter's own calibration — the same place
+/// the tick-to-millisecond scale comes from, since both are properties of the
+/// counter rather than of this gauge.
+fn clock_overhead(calls: u64) -> u64 {
+    calls.saturating_mul(wow_shared::tsc::read_cost_milli_ticks()) / 1_000
+}
 
 /// Current parameterized-dispatch event, as id+1 (0 = none).
 ///
@@ -138,6 +162,12 @@ struct Stat {
     count: u64,
     ticks: u64,
     max_ticks: u64,
+    /// The part of `ticks` spent inside the client's C script API.
+    ///
+    /// Only the per-addon table fills this: it is what says whether an addon is
+    /// expensive because of what it asks the client to do or because of the Lua
+    /// it runs, and those want different work.
+    api_ticks: u64,
 }
 
 /// Per-event accumulator.
@@ -170,6 +200,33 @@ struct Tables {
     body_ticks: u64,
     /// Bodies behind `body_ticks`, so the line can state a per-body cost.
     body_calls: u64,
+    /// The part of `body_ticks` spent inside the client's own C script API.
+    ///
+    /// `body_ticks` minus this and minus `body_gauge_ticks` is the interpreter
+    /// and the Lua runtime under it — the other half of the split.
+    api_ticks: u64,
+    /// C-API calls behind `api_ticks`, so the line can state a per-call cost.
+    api_calls: u64,
+    /// Calls that only prepared a Lua closure, so the VM side has a call count.
+    ///
+    /// The bound on what this gauge can be overstating the VM by: every one of
+    /// these paid a detour that no measurement from inside can see.
+    vm_calls: u64,
+    /// Ticks the API measurement itself spent, inside the bodies it measured.
+    ///
+    /// Kept apart from `gauge_ticks` because that one sits outside the bodies
+    /// and is already subtracted from `machinery`; subtracting this there too
+    /// would take the same time off twice.
+    body_gauge_ticks: u64,
+    /// Per-C-function cost, keyed by the function's entry address.
+    ///
+    /// Addresses rather than names: the mapping is a build-side artifact, and
+    /// resolving it offline keeps a few hundred strings out of the mod.
+    api: HashMap<usize, Stat>,
+    /// C functions dropped on the API-table cap (reported, never silent).
+    api_dropped: u64,
+    /// Ticks behind `api_dropped`, so the overflow row carries a cost too.
+    api_dropped_ticks: u64,
     /// Ticks this gauge itself spent inside the span it is measuring.
     ///
     /// Resolving a handler's owner and folding it into the tables happens
@@ -229,6 +286,45 @@ pub fn armed() -> bool {
 
 /// Nesting depth of timed handler bodies; only the outermost is measured.
 static BODY_DEPTH: AtomicU32 = AtomicU32::new(0);
+
+/// Running total of C-API ticks, read as a delta across a handler body.
+///
+/// A free-running counter rather than per-body state: `luaD_precall` knows
+/// nothing about which body it is under, and the difference across the body's
+/// own bracket answers that without either side having to look the other up.
+static API_TICKS: AtomicU64 = AtomicU64::new(0);
+
+/// Running total of what the API measurement cost, on the same delta scheme.
+static API_SELF_TICKS: AtomicU64 = AtomicU64::new(0);
+
+/// Running count of calls that only prepared a Lua closure, same delta scheme.
+///
+/// These are the calls the split has nothing to measure, and counting them is
+/// what bounds the one cost that cannot be measured from inside this module:
+/// the detour into it. Multiply by the per-call detour cost and that is the
+/// most the VM side can be overstated by.
+static VM_CALLS: AtomicU64 = AtomicU64::new(0);
+
+/// Add to one of the running counters, without a read-modify-write.
+///
+/// Both counters are written from `luaD_precall` and read from the body bracket
+/// around it, which is the same thread in both cases: the client runs one Lua
+/// state on the game thread. A load, an add and a store are three cheap
+/// instructions where a 64-bit atomic add on this target is a compare-exchange
+/// loop, and this sits on the hottest path the gauge touches. The atomic type
+/// is kept for the shared-mutability it grants, not for the arithmetic.
+fn add_ticks(counter: &AtomicU64, ticks: u64) {
+    counter.store(
+        counter.load(Ordering::Relaxed).wrapping_add(ticks),
+        Ordering::Relaxed,
+    );
+}
+
+/// Nesting depth of timed C-API calls; only the outermost is measured.
+///
+/// A C function that calls back into Lua reaches `luaD_precall` again, and the
+/// time is already inside the outer call's span.
+static API_DEPTH: AtomicU32 = AtomicU32::new(0);
 
 /// Hash a chunk's bytes, to tell one path from another by content.
 ///
@@ -482,14 +578,33 @@ pub fn time_body<T>(chunk: impl FnOnce() -> (usize, u32), body: impl FnOnce() ->
     // rather than silently inflating `machinery`.
     let gauge_in = wow_shared::tsc::rdtsc();
     let chunk = chunk();
+    let api_in = API_TICKS.load(Ordering::Relaxed);
+    let api_self_in = API_SELF_TICKS.load(Ordering::Relaxed);
+    let vm_calls_in = VM_CALLS.load(Ordering::Relaxed);
     let t0 = wow_shared::tsc::rdtsc();
     let out = body();
     let t1 = wow_shared::tsc::rdtsc();
     let dt = t1.wrapping_sub(t0);
     BODY_DEPTH.fetch_sub(1, Ordering::Relaxed);
+    // A script error inside a C function does not return through `precall` — it
+    // longjmps to the protected call that just returned here, so that call's
+    // exit bookkeeping never ran and its depth counter is still raised. This is
+    // the point where no C call can be outstanding, so it is where the counter
+    // is known to be zero rather than assumed to be. Without this, one addon
+    // error would silently end API accounting for the rest of the session.
+    API_DEPTH.store(0, Ordering::Relaxed);
+    // What the C API cost inside this body, and what measuring it cost. Both
+    // counters free-run, so the difference across the body is this body's share.
+    let api_dt = API_TICKS.load(Ordering::Relaxed).wrapping_sub(api_in);
+    let api_self_dt = API_SELF_TICKS
+        .load(Ordering::Relaxed)
+        .wrapping_sub(api_self_in);
     let mut st = state();
     st.window.body_ticks += dt;
     st.window.body_calls += 1;
+    st.window.api_ticks += api_dt;
+    st.window.body_gauge_ticks += api_self_dt;
+    st.window.vm_calls += VM_CALLS.load(Ordering::Relaxed).wrapping_sub(vm_calls_in);
     let us = ticks_to_us(dt);
     let bucket = BODY_BUCKET_US
         .iter()
@@ -502,10 +617,125 @@ pub fn time_body<T>(chunk: impl FnOnce() -> (usize, u32), body: impl FnOnce() ->
     stat.count += 1;
     stat.ticks += dt;
     stat.max_ticks = stat.max_ticks.max(dt);
+    stat.api_ticks += api_dt;
     let gauge_out = wow_shared::tsc::rdtsc();
     st.window.gauge_ticks += t0.wrapping_sub(gauge_in) + gauge_out.wrapping_sub(t1);
     drop(st);
     out
+}
+
+/// `luaD_precall` wrapper — time the calls that land in the client's C API.
+///
+/// Every Lua-level call arrives here, and the two branches are what the split
+/// needs: a Lua closure is only prepared (the interpreter runs its body
+/// afterwards, on the VM side of the ledger), while a C closure is called
+/// outright from inside this function. Reading the closure up front tells the
+/// two apart before any clock is touched, so a pure-Lua call pays two relaxed
+/// loads and the classification, and nothing else.
+///
+/// The hook is installed only when the gauge is armed, so there is no unarmed
+/// path to keep cheap here — the unarmed client never reaches this code at all.
+/// Calls made outside a timed handler body are skipped: `api` is quoted against
+/// `bodies`, and counting the client's own start-up scripts in it would put the
+/// two on different scales.
+///
+/// Inside a body, EVERY call pays a bracket, including the Lua-closure calls
+/// this function has nothing to measure. That is the point: this wrapper's own
+/// work runs inside the body the gauge is timing, so leaving the cheap branch
+/// unbracketed would quietly add the cost of one detour per Lua call to the VM
+/// side — the very number the split exists to size. What cannot be measured
+/// from in here is the detour itself and this function's last store, which is
+/// the same irreducible floor every hook in the tree has.
+pub fn precall(l: i32, func: i32) -> i32 {
+    let original = super::symbols::originals::lua_d_precall__6f6050();
+    if BODY_DEPTH.load(Ordering::Relaxed) == 0 || API_DEPTH.load(Ordering::Relaxed) != 0 {
+        return original(l, func);
+    }
+    let gauge_in = wow_shared::tsc::rdtsc();
+    let Some(entry) = c_entry(func) else {
+        add_ticks(&VM_CALLS, 1);
+        add_ticks(
+            &API_SELF_TICKS,
+            wow_shared::tsc::rdtsc().wrapping_sub(gauge_in),
+        );
+        return original(l, func);
+    };
+    API_DEPTH.store(1, Ordering::Relaxed);
+    let t0 = wow_shared::tsc::rdtsc();
+    let out = original(l, func);
+    let t1 = wow_shared::tsc::rdtsc();
+    API_DEPTH.store(0, Ordering::Relaxed);
+    // Raw here, counter-read latency and all: the correction is a fraction of a
+    // tick, so it is applied once against the call count when the window is
+    // reported rather than truncated to zero on every call.
+    let dt = t1.wrapping_sub(t0);
+    add_ticks(&API_TICKS, dt);
+    record_api(entry, dt);
+    let gauge_out = wow_shared::tsc::rdtsc();
+    add_ticks(
+        &API_SELF_TICKS,
+        t0.wrapping_sub(gauge_in)
+            .wrapping_add(gauge_out.wrapping_sub(t1)),
+    );
+    out
+}
+
+/// The C function a call is about to run, or `None` for anything else.
+///
+/// `func` points at the value being called. The offsets are the ones the
+/// collector and the chunk walk already use: the value's tag at `+0x0` (6 is a
+/// function) and its object at `+0x8`, then a closure's `isC` byte at `+0x6`
+/// and, at `+0xc`, the C entry point for a C closure (where a Lua closure keeps
+/// its proto instead).
+///
+/// A value that is not a function can still end up called, through the call
+/// metamethod the original resolves internally. That case reads as VM time,
+/// which is the safer way round: it under-reports the API rather than billing it
+/// for a function this walk never saw.
+fn c_entry(func: i32) -> Option<usize> {
+    const LUA_TFUNCTION: i32 = 6;
+    if func == 0 {
+        return None;
+    }
+    let value = func.cast_unsigned() as usize;
+    // SAFETY: `func` is the live stack slot the original is about to call; a
+    // value's tag is the word at `+0x0`.
+    if unsafe { *(value as *const i32) } != LUA_TFUNCTION {
+        return None;
+    }
+    // SAFETY: a function value's object pointer sits at `+0x8`.
+    let closure = unsafe { *((value + 0x8) as *const usize) };
+    if closure == 0 {
+        return None;
+    }
+    // SAFETY: `isC` is the byte at `+0x6` of any closure.
+    if unsafe { *((closure + 0x6) as *const u8) } == 0 {
+        return None;
+    }
+    // SAFETY: a C closure's function pointer is at `+0xc`, after the header.
+    let entry = unsafe { *((closure + 0xc) as *const usize) };
+    (entry != 0).then_some(entry)
+}
+
+/// Record one timed C-API call against its entry address.
+///
+/// Deliberately does not emit: this runs inside a handler body, and closing the
+/// window here would print a body that has not finished. The invoke wrappers
+/// emit often enough that a window can never run long.
+fn record_api(entry: usize, dt: u64) {
+    let mut st = state();
+    st.window.api_calls += 1;
+    let over_cap = st.window.api.len() >= API_TABLE_CAP && !st.window.api.contains_key(&entry);
+    if over_cap {
+        st.window.api_dropped += 1;
+        st.window.api_dropped_ticks += dt;
+    } else {
+        let stat = st.window.api.entry(entry).or_default();
+        stat.count += 1;
+        stat.ticks += dt;
+        stat.max_ticks = stat.max_ticks.max(dt);
+    }
+    drop(st);
 }
 
 /// Encode an event id into the context slots (id+1; 0 means none).
@@ -797,6 +1027,14 @@ fn record_handler(name: &NameBuf, dt: u64, ctx: u32, depth_zero: bool, param_pat
 }
 
 /// Emit the per-second window (and periodically the cumulative tables).
+///
+/// Emission is the most expensive thing the gauge does — formatting several
+/// ranked tables and writing them out — and it happens wherever the window
+/// happened to expire. A nested invoke can trigger it, which puts a stdout write
+/// inside a handler body that is still being timed, so what it cost is charged
+/// to the gauge's own buckets rather than to the script or the dispatch it
+/// interrupted. The charge lands on the window that follows, since the one it
+/// reported has already been printed.
 fn maybe_emit(st: &mut State) {
     let now = wow_shared::tsc::rdtsc();
     let window_ms = super::hooks::clock_ticks_to_ms(now.wrapping_sub(st.window_start));
@@ -812,6 +1050,14 @@ fn maybe_emit(st: &mut State) {
         emit_tables(&st.cumulative, cum_ms, TOP_CUMULATIVE, "total ");
         st.cumulative_emit = now;
     }
+    let spent = wow_shared::tsc::rdtsc().wrapping_sub(now);
+    if BODY_DEPTH.load(Ordering::Relaxed) == 0 {
+        if DEPTH.load(Ordering::Relaxed) != 0 {
+            st.window.gauge_ticks += spent;
+        }
+    } else {
+        st.window.body_gauge_ticks += spent;
+    }
 }
 
 /// Fold one window into the cumulative tables (caps respected).
@@ -823,6 +1069,12 @@ fn merge(cum: &mut Tables, w: Tables) {
     cum.body_ticks += w.body_ticks;
     cum.body_calls += w.body_calls;
     cum.gauge_ticks += w.gauge_ticks;
+    cum.api_ticks += w.api_ticks;
+    cum.api_calls += w.api_calls;
+    cum.vm_calls += w.vm_calls;
+    cum.body_gauge_ticks += w.body_gauge_ticks;
+    cum.api_dropped += w.api_dropped;
+    cum.api_dropped_ticks += w.api_dropped_ticks;
     for i in 0..BODY_BUCKETS {
         cum.body_hist_ticks[i] += w.body_hist_ticks[i];
         cum.body_hist_calls[i] += w.body_hist_calls[i];
@@ -844,6 +1096,18 @@ fn merge(cum: &mut Tables, w: Tables) {
     }
     for (name, stat) in w.owners {
         let dst = cum.owners.entry(name).or_default();
+        dst.count += stat.count;
+        dst.ticks += stat.ticks;
+        dst.max_ticks = dst.max_ticks.max(stat.max_ticks);
+        dst.api_ticks += stat.api_ticks;
+    }
+    for (entry, stat) in w.api {
+        if cum.api.len() >= API_TABLE_CAP && !cum.api.contains_key(&entry) {
+            cum.api_dropped += stat.count;
+            cum.api_dropped_ticks += stat.ticks;
+            continue;
+        }
+        let dst = cum.api.entry(entry).or_default();
         dst.count += stat.count;
         dst.ticks += stat.ticks;
         dst.max_ticks = dst.max_ticks.max(stat.max_ticks);
@@ -905,6 +1169,9 @@ fn emit_owners(t: &Tables, top: usize, label: &str) {
         push_ms(&mut line, stat.ticks);
         line.push_str(" ms (max ");
         push_ms(&mut line, stat.max_ticks);
+        // A row with no time has no API share either, so the guard against
+        // dividing by it can just as well be part of the divisor.
+        let _ = write!(line, ", api {}%", stat.api_ticks * 100 / stat.ticks.max(1));
         line.push_str(");");
     }
     if let Some(tail) = rows.get(top..).filter(|t| !t.is_empty()) {
@@ -944,6 +1211,38 @@ fn emit_body_histogram(t: &Tables, label: &str) {
     log::debug!(target: "wow::events", "{line}");
 }
 
+/// Emit the client's C script API, ranked by cost, with the tail folded in.
+///
+/// Keyed by the function's entry address, because the names live in a build-side
+/// map rather than in the mod: an address is what a reader can resolve offline,
+/// and a table of a few hundred strings would have to ship to say no more.
+fn emit_api(t: &Tables, top: usize, label: &str) {
+    if t.api.is_empty() {
+        return;
+    }
+    let mut rows: Vec<(&usize, &Stat)> = t.api.iter().collect();
+    rows.sort_by_key(|r| std::cmp::Reverse(r.1.ticks));
+    let mut line = format!("{label}api:");
+    for (entry, stat) in rows.iter().take(top) {
+        let _ = write!(line, " {entry:#010x} x{} ", stat.count);
+        push_ms(&mut line, stat.ticks);
+        line.push_str(" ms;");
+    }
+    if let Some(tail) = rows.get(top..).filter(|t| !t.is_empty()) {
+        let calls: u64 = tail.iter().map(|r| r.1.count).sum();
+        let ticks: u64 = tail.iter().map(|r| r.1.ticks).sum();
+        let _ = write!(line, " +{} more x{calls} ", tail.len());
+        push_ms(&mut line, ticks);
+        line.push_str(" ms;");
+    }
+    if t.api_dropped > 0 {
+        let _ = write!(line, " (+{} calls past the address cap, ", t.api_dropped);
+        push_ms(&mut line, t.api_dropped_ticks);
+        line.push_str(" ms)");
+    }
+    log::debug!(target: "wow::events", "{line}");
+}
+
 /// Emit one events line and one handlers line for a window.
 fn emit_tables(t: &Tables, span_ms: u64, top: usize, label: &str) {
     if t.signals == 0 && t.handler_calls == 0 {
@@ -960,7 +1259,20 @@ fn emit_tables(t: &Tables, span_ms: u64, top: usize, label: &str) {
     push_ms(&mut line, t.total_ticks.saturating_sub(t.signal_ticks));
     let _ = write!(line, "; {} bodies ", t.body_calls);
     push_ms(&mut line, t.body_ticks);
-    line.push_str(" ms, machinery ");
+    // The C spans were accumulated raw, so lift one counter read per call off
+    // `api` and onto the gauge. Only the split between the two moves: the time
+    // was really spent inside the bodies, it just was not spent by the client.
+    let read_ticks = clock_overhead(t.api_calls);
+    line.push_str(" ms (api ");
+    push_ms(&mut line, t.api_ticks.saturating_sub(read_ticks));
+    let _ = write!(line, " in {} calls, vm ", t.api_calls);
+    push_ms(
+        &mut line,
+        t.body_ticks
+            .saturating_sub(t.api_ticks)
+            .saturating_sub(t.body_gauge_ticks),
+    );
+    let _ = write!(line, " in {} calls), machinery ", t.vm_calls);
     push_ms(
         &mut line,
         t.total_ticks
@@ -968,7 +1280,7 @@ fn emit_tables(t: &Tables, span_ms: u64, top: usize, label: &str) {
             .saturating_sub(t.gauge_ticks),
     );
     line.push_str(" + gauge ");
-    push_ms(&mut line, t.gauge_ticks);
+    push_ms(&mut line, t.gauge_ticks + t.body_gauge_ticks + read_ticks);
     line.push_str(") |");
     let mut rows: Vec<&EventRow> = t.events.values().collect();
     rows.sort_by_key(|r| std::cmp::Reverse(r.ticks));
@@ -1013,6 +1325,7 @@ fn emit_tables(t: &Tables, span_ms: u64, top: usize, label: &str) {
     log::debug!(target: "wow::events", "{line}");
     emit_owners(t, top, label);
     emit_body_histogram(t, label);
+    emit_api(t, top, label);
     if t.handlers.is_empty() {
         return;
     }

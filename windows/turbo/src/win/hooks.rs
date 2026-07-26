@@ -40464,6 +40464,17 @@ pub fn frame_script_invoke_handler_formatted_v__702710(
     crate::win::events::invoke_handler_formatted_v(frame, handler_slot, format, args);
 }
 
+/// `luaD_precall` — every Lua-level call, `__fastcall(ecx = L, edx = func)`.
+///
+/// Observation wrapper for the `wow::events` gauge, installed only when the
+/// gauge is armed: the original always runs, and a call that lands on a C
+/// closure (the client's own script API) is timed and billed to that function's
+/// entry address. A call that only prepares a Lua closure is left alone, so what
+/// the interpreter goes on to run stays on the VM side of the split.
+pub fn lua_d_precall__6f6050(l: i32, func: i32) -> i32 {
+    crate::win::events::precall(l, func)
+}
+
 // --- FrameScript ExecuteFunction fast path ---
 //
 // Reimplementations of the two per-listener invoke primitives (0x704d50
@@ -40732,7 +40743,7 @@ fn fs_restore_this(l: i32) {
 /// the offsets are the ones its parity harness exercises on every collect:
 /// stack top at `L+0x8` growing up in `0x10` strides, the value's tag at `+0x0`
 /// and its object at `+0x8`, a closure's `isC` byte at `+0x6` and its proto at
-/// `+0x18`, a proto's source string at `+0x20`, and a string's length at `+0xc`
+/// `+0xc`, a proto's source string at `+0x20`, and a string's length at `+0xc`
 /// with its bytes inline at `+0x10`.
 ///
 /// Called with the handler on top of the stack, which is where the dispatch

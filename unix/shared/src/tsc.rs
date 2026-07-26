@@ -120,7 +120,56 @@ pub fn secs_to_cycles(seconds: u64) -> u64 {
     tsc_hz().saturating_mul(seconds)
 }
 
+/// Return the cost of one counter read, in THOUSANDTHS of a tick.
+///
+/// The counterpart to [`tsc_hz`]: that says what a tick is worth, this says
+/// what it costs to ask. A measurement bracket is two reads, so every span a
+/// caller times is inflated by one read's latency; on a span of milliseconds
+/// that rounds away, but on spans of a fraction of a microsecond taken millions
+/// of times a second it is percent-scale, and a caller that wants to subtract
+/// it needs a number rather than a guess.
+///
+/// Thousandths because the cost is a FRACTION of a tick under Rosetta, where
+/// the counter is a scaled ARM timer: it advances in steps far larger than one
+/// nominal tick, so a whole-tick figure would round to nothing. The first call
+/// runs the calibration (about a millisecond); force it off the hot path.
+#[must_use]
+pub fn read_cost_milli_ticks() -> u64 {
+    *READ_COST
+}
+
 static TSC_HZ: LazyLock<u64> = LazyLock::new(calibrate);
+static READ_COST: LazyLock<u64> = LazyLock::new(calibrate_read_cost);
+
+/// Time a long run of reads, because a single pair cannot resolve one.
+///
+/// Under Rosetta the counter advances in steps much larger than one nominal
+/// tick, so back-to-back reads usually return the same value and the median
+/// pair delta is zero — a real per-read cost reading as no cost at all. Timing
+/// thousands of reads and dividing recovers the fraction. The best of several
+/// runs is taken because a run that was descheduled part-way through can only
+/// ever overstate the result, and overstating it means over-subtracting from
+/// every span a caller corrects.
+fn calibrate_read_cost() -> u64 {
+    const RUNS: usize = 8;
+    const READS: u64 = 4_096;
+    let mut best = u64::MAX;
+    for _ in 0..RUNS {
+        let start = rdtsc();
+        for _ in 0..READS {
+            std::hint::black_box(rdtsc());
+        }
+        let spent = rdtsc().wrapping_sub(start);
+        best = best.min(spent.saturating_mul(1_000) / READS);
+    }
+    info!(
+        target: LOG_TARGET,
+        "tsc read cost: {}.{:03} ticks",
+        best / 1_000,
+        best % 1_000,
+    );
+    best
+}
 
 fn calibrate() -> u64 {
     const SLEEP: Duration = Duration::from_millis(50);
@@ -141,4 +190,21 @@ fn calibrate() -> u64 {
         elapsed.as_secs_f64() * 1e3,
     );
     hz
+}
+
+#[cfg(test)]
+mod tests {
+    use super::read_cost_milli_ticks;
+
+    /// A read that measures as free is a broken estimator, not a free read.
+    ///
+    /// The first estimator here took the median of back-to-back pairs, which is
+    /// zero on a stepped counter, so every caller correcting for the read cost
+    /// silently corrected by nothing.
+    #[test]
+    fn a_counter_read_costs_something_measurable() {
+        let cost = read_cost_milli_ticks();
+        assert!(cost > 0, "a counter read cannot cost zero ticks");
+        assert!(cost < 1_000_000, "{cost} milli-ticks is not a read cost");
+    }
 }
