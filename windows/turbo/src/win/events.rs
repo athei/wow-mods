@@ -85,10 +85,22 @@ const NAME_CAP: usize = 40;
 const TOP_PER_SECOND: usize = 8;
 /// Rows shown in the periodic cumulative top list.
 const TOP_CUMULATIVE: usize = 8;
+/// Rows shown in the script-API top list, in both the window and the total pass.
+///
+/// Wider than the name tables because the api table is what a reimplementation
+/// picks its targets from, and a row here is an eight-character address rather
+/// than a frame name. Eight rows leave around a quarter of measured API time
+/// folded into the tail, which is enough to hide a target from the ranking
+/// entirely; this deep the tail holds a few per cent.
+const TOP_API: usize = 48;
 /// Handler-table size cap; past it new names fall into the overflow row.
 const HANDLER_TABLE_CAP: usize = 512;
 /// Script-API table size cap; past it new addresses fall into the overflow row.
-const API_TABLE_CAP: usize = 512;
+///
+/// Larger than the handler cap because the key is an address rather than a
+/// stored name, so an entry costs a fraction of a handler row, and because a
+/// bound that binds makes the tail unrankable however many rows are printed.
+const API_TABLE_CAP: usize = 2_048;
 /// Chunk-memo cap; a client cannot load more script files than this.
 const OWNER_TABLE_CAP: usize = 4_096;
 /// Bound on the addon-directory walk, so a diagnostic cannot wander.
@@ -1216,19 +1228,21 @@ fn emit_body_histogram(t: &Tables, label: &str) {
 /// Keyed by the function's entry address, because the names live in a build-side
 /// map rather than in the mod: an address is what a reader can resolve offline,
 /// and a table of a few hundred strings would have to ship to say no more.
-fn emit_api(t: &Tables, top: usize, label: &str) {
+/// Ranked [`TOP_API`] deep rather than to the shared cap, for the reason given
+/// there.
+fn emit_api(t: &Tables, label: &str) {
     if t.api.is_empty() {
         return;
     }
     let mut rows: Vec<(&usize, &Stat)> = t.api.iter().collect();
     rows.sort_by_key(|r| std::cmp::Reverse(r.1.ticks));
     let mut line = format!("{label}api:");
-    for (entry, stat) in rows.iter().take(top) {
+    for (entry, stat) in rows.iter().take(TOP_API) {
         let _ = write!(line, " {entry:#010x} x{} ", stat.count);
         push_ms(&mut line, stat.ticks);
         line.push_str(" ms;");
     }
-    if let Some(tail) = rows.get(top..).filter(|t| !t.is_empty()) {
+    if let Some(tail) = rows.get(TOP_API..).filter(|t| !t.is_empty()) {
         let calls: u64 = tail.iter().map(|r| r.1.count).sum();
         let ticks: u64 = tail.iter().map(|r| r.1.ticks).sum();
         let _ = write!(line, " +{} more x{calls} ", tail.len());
@@ -1325,7 +1339,7 @@ fn emit_tables(t: &Tables, span_ms: u64, top: usize, label: &str) {
     log::debug!(target: "wow::events", "{line}");
     emit_owners(t, top, label);
     emit_body_histogram(t, label);
-    emit_api(t, top, label);
+    emit_api(t, label);
     if t.handlers.is_empty() {
         return;
     }
