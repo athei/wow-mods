@@ -442,13 +442,25 @@ args = ["*mut f32", "f32", "f32", "f32"]
 preserve = []
 
 
-# Golden-diff the written region, byte compare. Region covers everything the
-# adapter touches, reads included: the argument is swapped for a fixed-size
-# scratch buffer, so a read past the declared length reads past that buffer.
+# Golden-diff the written region. Region covers everything the adapter touches,
+# reads included: the argument is swapped for a fixed-size scratch buffer, so a
+# read past the declared length reads past that buffer.
+#
+# Lane compare with a 2-ulp bound, and the bound is measured rather than
+# assumed. The region is nine whole f32 with nothing else in it, so it needs no
+# `float_from` split. The original builds its three per-axis matrices from the
+# hardware FSINCOS; we use the branchless polynomial the surrounding kernels
+# need in order to vectorize, and the two cannot agree to the bit. What pins the
+# residual to the trig is that it did not move when the 3x3 product underneath
+# it was rebuilt from the bytes: one lane, one ulp, same count, before and
+# after. The polynomial is within 1 ulp of a correctly-rounded reference over
+# this input range, so 2 leaves a single ulp of headroom and anything larger
+# still reports.
 [functions.C33Matrix__FromEulerAngles__7bf4b0.diff]
 mode  = "inout"
 out   = { arg = 0, len = 36 }
-float = "bytes"
+float = "f32"
+ulp   = 2
 
 [functions.C33Matrix__FromEulerXYZ__7bed30]
 rva  = 0x3bed30
