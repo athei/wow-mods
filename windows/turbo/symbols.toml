@@ -125,7 +125,7 @@ preserve = ["edx"]
 rva  = 0x3bc040
 sig  = "55 8B EC D9 45 0C D8 4D 1C D8 4D 20"
 abi  = "stdcall"
-ret  = "f32"
+ret  = "f64"
 args = ["f32", "f32", "f32", "f32", "f32", "f32", "f32", "f32", "f32"]
 preserve = ["eax", "ecx", "edx"]
 
@@ -2532,7 +2532,7 @@ preserve = []
 rva  = 0x3bcf90
 sig  = "55 8B EC 51 8B 41 3C 8B 51 38 50 8B 41 34 52 8B 51 2C 50 8B 41 28"
 abi  = "fastcall"
-ret  = "f32"
+ret  = "f64"
 args = ["*const f32"]
 # The original keeps `this` (ecx) live read-only across the whole body and never
 # clobbers it, so callers may rely on ecx surviving the call (abi-audit verifies).

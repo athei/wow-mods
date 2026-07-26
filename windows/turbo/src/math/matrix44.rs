@@ -2373,6 +2373,30 @@ mod tests_bb__714260 {
     }
 }
 
+/// A 3x3 minor as a caller that stores it into an `f32` slot sees it.
+///
+/// `C33Matrix::Determinant` leaves its result at register width; this is the
+/// narrowing that the storing callers perform and the 4x4 determinant does not.
+// The nine elements are the client's own parameter list at `0x7bc040`, so the
+// signature has to keep that shape to forward them unchanged.
+#[allow(clippy::too_many_arguments)]
+#[inline]
+fn minor3_narrowed(
+    m00: f32,
+    m01: f32,
+    m02: f32,
+    m10: f32,
+    m11: f32,
+    m12: f32,
+    m20: f32,
+    m21: f32,
+    m22: f32,
+) -> f32 {
+    super::f64_to_f32(crate::math::matrix33::c33_matrix__determinant__7bc040(
+        m00, m01, m02, m10, m11, m12, m20, m21, m22,
+    ))
+}
+
 /// `C44Matrix::Adjugate` — 4×4 adjugate (transpose of the cofactor matrix).
 ///
 /// The numerator of the inverse. The original evaluates the sixteen 3×3 minors
@@ -2382,12 +2406,16 @@ mod tests_bb__714260 {
 /// Each minor selects nine source elements in the exact order the original
 /// passes them to the determinant (matching the per-call push order of the
 /// original), and the eight negations are reproduced as f32 negation:
-/// stock negates the 80-bit x87 value before the `fstp` rounds it to f32, and
+/// stock negates the value before the `fstp` rounds it to f32, and
 /// negation is an exact sign-bit flip that commutes with rounding, so `-det(..)`
 /// is bit-identical. Input/output are row-major 16-float matrices.
 pub fn c44_matrix__adjugate__7bd390(src: &[f32; 16]) -> [f32; 16] {
     let s = src;
-    let det = crate::math::matrix33::c33_matrix__determinant__7bc040;
+    // Unlike the 4x4 determinant, which keeps its minors at register width and
+    // never stores the last term, every slot here reaches an `f32` element of
+    // the output, so each minor narrows at its own store. The negations stay
+    // outside the narrowing: a sign flip is exact and commutes with rounding.
+    let det = minor3_narrowed;
     [
         // out[0]  = +minor(rows 1,2,3 / cols 1,2,3)
         det(s[5], s[6], s[7], s[9], s[10], s[11], s[13], s[14], s[15]),
@@ -2596,16 +2624,27 @@ mod tests_c44_matrix__adjugate__7bd390 {
 /// minor with row 0 and column `k` removed, evaluated by `C33Matrix::Determinant`
 /// in the exact nine-element order the original pushes (verified against the four
 /// `CALL 0x7bc040` push sequences). The accumulation order `((t0 − t1) + t2) − t3`
-/// matches the stock `FSUBR`/`FADD`/`FSUBR` chain; the result rounds to `f32` on
-/// return.
-pub fn c44_matrix__determinant__7bcf90(m: &[f32; 16]) -> f32 {
+/// matches the stock `FSUBR`/`FADD`/`FSUBR` chain.
+///
+/// The widths are mixed and each one is deliberate. The running total **is**
+/// spilled, by three `FSTP dword` to one frame slot after the first, second and
+/// third terms, so those three narrow to `f32`. Nothing else does: each minor
+/// arrives from `0x7bc040` at register width and is multiplied by an `f32`
+/// element without being rounded first, and the fourth term is never stored, so
+/// the result leaves in `ST(0)` and each caller narrows it or does not. One
+/// caller uses `FST` and keeps the wide value live, which is why the narrowing
+/// belongs at the call site rather than here.
+pub fn c44_matrix__determinant__7bcf90(m: &[f32; 16]) -> f64 {
     let det3 = crate::math::matrix33::c33_matrix__determinant__7bc040;
     // Minor for the m0j cofactor: row 0 and column j removed (3×3 of rows 1..=3).
     let m0 = det3(m[5], m[6], m[7], m[9], m[10], m[11], m[13], m[14], m[15]);
     let m1 = det3(m[4], m[6], m[7], m[8], m[10], m[11], m[12], m[14], m[15]);
     let m2 = det3(m[4], m[5], m[7], m[8], m[9], m[11], m[12], m[13], m[15]);
     let m3 = det3(m[4], m[5], m[6], m[8], m[9], m[10], m[12], m[13], m[14]);
-    ((m[0] * m0 - m[1] * m1) + m[2] * m2) - m[3] * m3
+    let t0 = super::f64_to_f32(f64::from(m[0]) * m0);
+    let t1 = super::f64_to_f32(f64::from(t0) - f64::from(m[1]) * m1);
+    let t2 = super::f64_to_f32(f64::from(t1) + f64::from(m[2]) * m2);
+    f64::from(t2) - f64::from(m[3]) * m3
 }
 
 #[cfg(test)]
@@ -2672,7 +2711,7 @@ mod tests_c44_matrix__determinant__7bcf90 {
         ];
         for m in &mats {
             let got = det4(m);
-            let want = det4_ref(m);
+            let want = f64::from(det4_ref(m));
             assert!(
                 (got - want).abs() <= want.abs() * 1e-4 + 1e-3,
                 "{got} vs {want}"
@@ -2734,7 +2773,8 @@ mod tests_c44_matrix__inverse_scaled_by_det__7bd6c0 {
         let m = [
             4.0, 7.0, 2.0, 0.0, 3.0, 6.0, 1.0, 0.0, 2.0, 5.0, 9.0, 0.0, 1.0, 2.0, 3.0, 1.0,
         ];
-        let d = det4(&m);
+        // The inverse takes the determinant as the f32 its caller stores.
+        let d = super::super::f64_to_f32(det4(&m));
         let inv = inverse(&m, d);
         let prod = mul4(&inv, &m);
         for r in 0..4 {

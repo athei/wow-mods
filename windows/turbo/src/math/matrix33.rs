@@ -45,11 +45,20 @@ pub fn c33_matrix__determinant__7bc040(
     m20: f32,
     m21: f32,
     m22: f32,
-) -> f32 {
-    m00 * m11 * m22 + m02 * m10 * m21 + m01 * m12 * m20
-        - m02 * m11 * m20
-        - m01 * m10 * m22
-        - m00 * m12 * m21
+) -> f64 {
+    // Stock's term order is `(((((A + B) + C) - D) - E) - F)`, and A is the
+    // `m01·m12·m20` triple, not the leading diagonal — the diagonal is C. The
+    // body contains no `FST`/`FSTP` at all: every triple is `FLD; FMUL; FMUL`
+    // and the running total is only ever touched by `FADDP`/`FSUBP`, so the
+    // result leaves in `ST(0)` un-narrowed. Its only caller multiplies it
+    // straight into another `FMUL` without narrowing either, hence `f64` out.
+    let a = f64::from(m01) * f64::from(m12) * f64::from(m20);
+    let b = f64::from(m02) * f64::from(m10) * f64::from(m21);
+    let c = f64::from(m00) * f64::from(m11) * f64::from(m22);
+    let d = f64::from(m02) * f64::from(m11) * f64::from(m20);
+    let e = f64::from(m01) * f64::from(m10) * f64::from(m22);
+    let f = f64::from(m00) * f64::from(m12) * f64::from(m21);
+    ((((a + b) + c) - d) - e) - f
 }
 
 #[cfg(test)]
@@ -59,7 +68,7 @@ mod tests_c33_matrix__determinant__7bc040 {
     fn identity_is_one() {
         assert_eq!(
             det(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0).to_bits(),
-            1.0f32.to_bits()
+            1.0f64.to_bits()
         );
     }
     #[test]

@@ -224,6 +224,9 @@ pub fn c33_matrix__scale_by_scalar__672d80(
 /// `C33Matrix::Determinant` — `__cdecl(m00, m01, m02, m10, m11, m12, m20, m21, m22)`.
 ///
 /// Returns the 3×3 determinant (rule of Sarrus) of the row-major scalars.
+///
+/// Returned wide: the stock body never stores its accumulator, so the value
+/// leaves in `ST(0)` at register width and each caller narrows it or does not.
 // The nine elements arrive as nine separate `__cdecl` stack scalars; folding them
 // into a `[f32; 9]` would change the frame the thunk calls with.
 #[allow(clippy::too_many_arguments)]
@@ -237,7 +240,7 @@ pub fn c33_matrix__determinant__7bc040(
     m20: f32,
     m21: f32,
     m22: f32,
-) -> f32 {
+) -> f64 {
     crate::math::matrix33::c33_matrix__determinant__7bc040(
         m00, m01, m02, m10, m11, m12, m20, m21, m22,
     )
@@ -3814,7 +3817,9 @@ pub fn c_gx_batch__fill_sprite_quads__5c8710(
         let multiply: extern "thiscall" fn(*mut f32, *const f32) =
             unsafe { core::mem::transmute(MUL_VA) };
         let mut inv = [0.0f32; 16];
-        let d = c44_matrix__determinant__7bcf90(cur.as_ptr());
+        // This site is one of the callers that narrows: the original stores the
+        // determinant with `fstp dword` to push it as the inverse's f32 argument.
+        let d = c44_matrix__determinant__7bcf90(cur.as_ptr()) as f32;
         c44_matrix__inverse_scaled_by_det__7bd6c0(cur.as_ptr(), inv.as_mut_ptr(), d);
         multiply(mat.as_mut_ptr(), inv.as_ptr());
     }
@@ -17147,7 +17152,10 @@ pub fn world_scene__update_and_cull_nodes__683700(scene: *mut u8) {
                 let cam = unsafe { CAM_POS.read() };
                 // SAFETY: fixed, initialized `.data` distance threshold.
                 let max_sq = unsafe { DIST_SQ_MAX.read() };
-                crate::math::world::world_scene__node_cam_dist_sq__683700(&center, &cam) < max_sq
+                // `FCOMP m32` promotes the f32 threshold rather than narrowing
+                // the accumulated distance, so the compare is at register width.
+                crate::math::world::world_scene__node_cam_dist_sq__683700(&center, &cam)
+                    < f64::from(max_sq)
             };
             set_active(model, i32::from(active));
         }
@@ -22385,8 +22393,11 @@ unsafe fn query_liquid_kind_arm(
             // SAFETY: `base` query point (3 floats).
             let qp = &unsafe { base.cast::<[f32; 3]>().read_unaligned() };
             let d2 = crate::math::world::sq_dist__69be70(qp, dist_center);
-            // Site 0x69b9a7: inside iff d2 <= r2 (TEST AH,0x1 carry).
-            if d2 <= r2 {
+            // Site 0x69b9a7: inside iff d2 <= r2 (TEST AH,0x1 carry). The
+            // distance leaves the kernel un-narrowed, as it does in the
+            // original, so the threshold is promoted rather than the sum
+            // rounded.
+            if d2 <= f64::from(r2) {
                 // SAFETY: `+0x1c` is the scalar directly after the `+0x10` vec3
                 // dereferenced above, so it is inside the same sub-struct.
                 let s_p = unsafe { center.add(0x1c) };
@@ -22444,8 +22455,13 @@ unsafe fn query_liquid_kind_arm(
             let corner_b = unsafe { &*corner_b_p.cast::<[f32; 3]>() };
             // SAFETY: `base` query point (3 floats).
             let qp = &unsafe { base.cast::<[f32; 3]>().read_unaligned() };
-            let inside_a = crate::math::world::sq_dist__69be70(qp, dist_a) <= r0 * r0;
-            let inside_b = crate::math::world::sq_dist__69be70(qp, dist_b) <= r1 * r1;
+            // The radius squares are built the same way the original builds
+            // them, `fld m32; fmul m32`, so the compare happens at register
+            // width on both sides rather than against an f32 product.
+            let inside_a =
+                crate::math::world::sq_dist__69be70(qp, dist_a) <= f64::from(r0) * f64::from(r0);
+            let inside_b =
+                crate::math::world::sq_dist__69be70(qp, dist_b) <= f64::from(r1) * f64::from(r1);
             if inside_a && inside_b {
                 // Add corners (0x69b8da), copy to surface, Normalize (0x69b8f3),
                 // then ScaleInPlace by the midpoint radius (0x69b90d).
@@ -31054,8 +31070,10 @@ pub fn math__pow_x87(base: f64, exp: f64) -> f64 {
 
 /// `C44Matrix::Determinant` — `__fastcall(ecx = this)`, returns the 4×4 determinant in `ST(0)`.
 ///
-/// `this` is a `C44Matrix` (16 contiguous f32).
-pub fn c44_matrix__determinant__7bcf90(this: *const f32) -> f32 {
+/// `this` is a `C44Matrix` (16 contiguous f32). Returned wide: the fourth term
+/// is never stored, so the value leaves in `ST(0)` at register width and each
+/// caller narrows it or does not.
+pub fn c44_matrix__determinant__7bcf90(this: *const f32) -> f64 {
     if this.is_null() {
         return 0.0;
     }

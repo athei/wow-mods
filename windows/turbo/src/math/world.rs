@@ -2994,11 +2994,15 @@ pub fn world_scene__node_depth_key__683700(center: &[f32; 3], row: &[f32; 4], ra
 
 /// Squared distance from a node centre to the camera position.
 ///
-/// Accumulation order matches the reference: `(dz*dz + dx*dx) + dy*dy`.
-pub fn world_scene__node_cam_dist_sq__683700(center: &[f32; 3], cam: &[f32; 3]) -> f32 {
-    let dx = center[0] - cam[0];
-    let dy = center[1] - cam[1];
-    let dz = center[2] - cam[2];
+/// Accumulation order matches the reference: `(dz*dz + dx*dx) + dy*dy`. The
+/// chain never reaches memory — the deltas stay on the x87 stack and the sole
+/// consumer is a `FCOMP m32` against the threshold, which promotes the f32
+/// threshold rather than narrowing the sum. So this returns `f64` and the
+/// comparison belongs at that width too.
+pub fn world_scene__node_cam_dist_sq__683700(center: &[f32; 3], cam: &[f32; 3]) -> f64 {
+    let dx = f64::from(center[0]) - f64::from(cam[0]);
+    let dy = f64::from(center[1]) - f64::from(cam[1]);
+    let dz = f64::from(center[2]) - f64::from(cam[2]);
     (dz * dz + dx * dx) + dy * dy
 }
 
@@ -3032,7 +3036,7 @@ mod tests_world_scene__update_and_cull_nodes__683700 {
     #[test]
     fn dist_sq_matches_pythagoras() {
         let d = dist_sq(&[3.0, 4.0, 0.0], &[0.0, 0.0, 0.0]);
-        assert_eq!(d.to_bits(), 25.0f32.to_bits());
+        assert_eq!(d.to_bits(), 25.0f64.to_bits());
     }
 
     #[test]
@@ -3040,7 +3044,7 @@ mod tests_world_scene__update_and_cull_nodes__683700 {
         let a = dist_sq(&[1.0, 2.0, 3.0], &[4.0, 6.0, 3.0]);
         let b = dist_sq(&[11.0, 12.0, 13.0], &[14.0, 16.0, 13.0]);
         assert_eq!(a.to_bits(), b.to_bits());
-        assert_eq!(a.to_bits(), 25.0f32.to_bits());
+        assert_eq!(a.to_bits(), 25.0f64.to_bits());
     }
 }
 
@@ -3571,17 +3575,22 @@ pub fn c_world__query_liquid_grid_map__69b6d0(
 
 /// Squared Euclidean distance between two vec3, at `0x69be70`.
 ///
-/// Stock body (0x69be70): `(a.x-b.x)^2 + (a.y-b.y)^2 + (a.z-b.z)^2` to ST0 with
-/// `ret 4`; ECX = `&a`, the single stack arg = `&b` (fastcall-with-one-reg-arg,
-/// NOT a `this` object). Inlining this kernel removes one of SP's indirect
-/// FKI call-outs. The three subtractions then squares-and-sum match the stock
-/// `fld;fsub` / `fmul;faddp` grouping (a single rounding per square, per add).
+/// Stock body (0x69be70): `(dx^2 + dz^2) + dy^2` to ST0 with `ret 4`; ECX =
+/// `&a`, the single stack arg = `&b` (fastcall-with-one-reg-arg, NOT a `this`
+/// object). Inlining this kernel removes one of SP's indirect FKI call-outs.
+///
+/// Nothing here reaches memory: the three deltas live in `ST(2)`/`ST(1)`/`ST(0)`
+/// and the accumulator is only ever touched by `FADDP`, so the result leaves in
+/// `ST(0)` un-narrowed and every caller compares it against a squared radius
+/// built the same way. Hence `f64` out and no rounding anywhere inside. Note the
+/// summation pairs x with z before adding y; the deltas themselves are exact in
+/// `f64`, so only the squares and adds carry the difference.
 #[inline]
-pub fn sq_dist__69be70(a: &[f32; 3], b: &[f32; 3]) -> f32 {
-    let dx = a[0] - b[0];
-    let dy = a[1] - b[1];
-    let dz = a[2] - b[2];
-    dx * dx + dy * dy + dz * dz
+pub fn sq_dist__69be70(a: &[f32; 3], b: &[f32; 3]) -> f64 {
+    let dx = f64::from(a[0]) - f64::from(b[0]);
+    let dy = f64::from(a[1]) - f64::from(b[1]);
+    let dz = f64::from(a[2]) - f64::from(b[2]);
+    (dx * dx + dz * dz) + dy * dy
 }
 
 #[cfg(test)]
@@ -3642,21 +3651,31 @@ mod tests_c_world__query_liquid_grid_map__69b6d0 {
         let a = [1.0f32, 2.0, 3.0];
         let b = [4.0f32, 6.0, 3.0];
         // (1-4)^2 + (2-6)^2 + 0 = 9 + 16 = 25.
-        assert_eq!(sq_dist__69be70(&a, &b).to_bits(), 25.0f32.to_bits());
+        assert_eq!(sq_dist__69be70(&a, &b).to_bits(), 25.0f64.to_bits());
         // Identical points -> 0.
-        assert_eq!(sq_dist__69be70(&a, &a).to_bits(), 0.0f32.to_bits());
+        assert_eq!(sq_dist__69be70(&a, &a).to_bits(), 0.0f64.to_bits());
     }
 
+    /// Law: x pairs with z and y is added last, at register precision.
+    ///
+    /// The stock body squares and sums entirely on the x87 stack — the deltas
+    /// never reach memory and the accumulator is only touched by `FADDP` — so
+    /// both the grouping and the width are load-bearing. The `assert_ne` keeps
+    /// the fixture honest: it fails if these inputs stop separating this from
+    /// the left-to-right f32 form the kernel used to have.
     #[test]
     fn sqdist_grouping_matches_stock_fadd_order() {
-        // The stock sums dx^2 then +dy^2 then +dz^2 (left-to-right). Match it.
         let a = [0.1f32, 0.2, 0.3];
         let b = [0.4f32, 0.5, 0.9];
-        let dx = a[0] - b[0];
-        let dy = a[1] - b[1];
-        let dz = a[2] - b[2];
-        let want = dx * dx + dy * dy + dz * dz;
+        let dx = f64::from(a[0]) - f64::from(b[0]);
+        let dy = f64::from(a[1]) - f64::from(b[1]);
+        let dz = f64::from(a[2]) - f64::from(b[2]);
+        let want = (dx * dx + dz * dz) + dy * dy;
         assert_eq!(sq_dist__69be70(&a, &b).to_bits(), want.to_bits());
+
+        let (fx, fy, fz) = (a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+        let per_step = fx * fx + fy * fy + fz * fz;
+        assert_ne!(f64::from(per_step).to_bits(), want.to_bits());
     }
 }
 
