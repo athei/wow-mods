@@ -221,7 +221,15 @@ fn build_id() -> String {
     };
     if let Some(dir) = git(&["rev-parse", "--absolute-git-dir"]) {
         let dir = PathBuf::from(dir);
-        let mut watch = vec![dir.join("HEAD"), dir.join("packed-refs")];
+        // Tags matter as much as commits here: `--tags` means cutting a
+        // release changes the identity without touching a single source file
+        // or moving HEAD, and a release artifact stamped with the previous
+        // version is the one mistake this whole line exists to prevent.
+        let mut watch = vec![
+            dir.join("HEAD"),
+            dir.join("packed-refs"),
+            dir.join("refs").join("tags"),
+        ];
         if let Some(head_ref) = git(&["symbolic-ref", "--quiet", "HEAD"]) {
             watch.push(dir.join(head_ref));
         }
