@@ -3895,34 +3895,63 @@ pub fn tile_collect_vertex_to_world__6aadc0(v: &[f32; 3], origin: &[f32; 3]) -> 
 /// full `1.0/sqrt`) so neither precision regresses: the stock takes the
 /// `0x637480` path only when that flag at `0xc9e388` is zero. `rsqrtss` is
 /// replicated via `_mm_rsqrt_ss`; `libm`'s reciprocal sqrt would NOT bit-match.
+///
+/// The same arm is emitted again inside `0x671cc0`, instruction for instruction
+/// across all sixty-six of its floating-point and SSE ops once the operand
+/// addresses are masked, so `build_mesh_triangle_planes__671cc0` calls this rather
+/// than carrying its own copy.
+///
+/// Nothing narrows except where the original stores. `ea` stays on the x87 stack
+/// whole; `eb`'s `x` and `y` are spilled to `f32` slots at `0x6ab2d3` / `0x6ab2dc`
+/// while its `z` stays wide; each cross lane is formed wide and narrowed at its
+/// own store into the plane record; `len2` is summed wide from the three narrowed
+/// lanes and narrowed only because `rsqrtss` takes a memory operand. The three
+/// scaled lanes use **`FST`**, not `FSTP` (`0x6ab34f`, `0x6ab357`, `0x6ab360`), so
+/// the normal is narrowed but `d` is built from the unnarrowed products — the same
+/// asymmetry `c4_plane__from_triangle__637480` has.
 #[must_use]
 pub fn tile_collect_triangle_plane__6aadc0(
     v0: &[f32; 3],
     v1: &[f32; 3],
     v2: &[f32; 3],
 ) -> [f32; 4] {
-    // ea = v2 - v0 (stays on the x87 stack); eb = v1 - v0 (spilled, then z live).
-    let ea = [v2[0] - v0[0], v2[1] - v0[1], v2[2] - v0[2]];
-    let eb = [v1[0] - v0[0], v1[1] - v0[1], v1[2] - v0[2]];
+    let sub = |a: f32, b: f32| f64::from(a) - f64::from(b);
+
+    // ea = v2 - v0 (stays on the x87 stack); eb = v1 - v0 (x and y spilled to f32,
+    // z left live).
+    let ea = [sub(v2[0], v0[0]), sub(v2[1], v0[1]), sub(v2[2], v0[2])];
+    let eb_x = f64::from(super::f64_to_f32(sub(v1[0], v0[0])));
+    let eb_y = f64::from(super::f64_to_f32(sub(v1[1], v0[1])));
+    let eb_z = sub(v1[2], v0[2]);
 
     // n = cross(eb, ea): normal.x = eb.y*ea.z - eb.z*ea.y, etc. (0x6ab2e5..0x6ab314).
-    let nx = eb[1] * ea[2] - eb[2] * ea[1];
-    let ny = eb[2] * ea[0] - eb[0] * ea[2];
-    let nz = eb[0] * ea[1] - eb[1] * ea[0];
+    let nx = super::f64_to_f32(eb_y * ea[2] - eb_z * ea[1]);
+    let ny = super::f64_to_f32(eb_z * ea[0] - ea[2] * eb_x);
+    let nz = super::f64_to_f32(ea[1] * eb_x - eb_y * ea[0]);
 
-    // len2 = (nx*nx + ny*ny) + nz*nz  (left-to-right; 0x6ab31f..0x6ab337).
-    let len2 = (nx * nx + ny * ny) + nz * nz;
+    // len2 = (nx*nx + ny*ny) + nz*nz, rebuilt wide from the three stored lanes and
+    // narrowed at 0x6ab337 because `rsqrtss` reads it back from memory.
+    let sq = |v: f32| f64::from(v) * f64::from(v);
+    let len2 = super::f64_to_f32((sq(nx) + sq(ny)) + sq(nz));
     let inv = rsqrt_ss__6aadc0(len2);
 
-    // Normalize in place (fst keeps the products live for d). (0x6ab34a..0x6ab360)
-    let nnx = inv * nx;
-    let nny = inv * ny;
-    let nnz = inv * nz;
+    // Normalize in place. `FST` keeps each product live, so `d` sees the wide ones;
+    // both factors are f32 there, which makes the products exact (0x6ab34a..0x6ab360).
+    let nnx = f64::from(inv) * f64::from(nx);
+    let nny = f64::from(inv) * f64::from(ny);
+    let nnz = f64::from(inv) * f64::from(nz);
 
     // d = -((nz*v0.z + ny*v0.y) + nx*v0.x)  (right-to-left; 0x6ab363..0x6ab375).
-    let d = -((nnz * v0[2] + nny * v0[1]) + nnx * v0[0]);
+    let d = super::f64_to_f32(
+        -((nnz * f64::from(v0[2]) + nny * f64::from(v0[1])) + nnx * f64::from(v0[0])),
+    );
 
-    [nnx, nny, nnz, d]
+    [
+        super::f64_to_f32(nnx),
+        super::f64_to_f32(nny),
+        super::f64_to_f32(nnz),
+        d,
+    ]
 }
 
 /// Single-pass SSE reciprocal square root (`rsqrtss`, 12-bit approximation, no refinement).
@@ -4058,26 +4087,76 @@ mod tests_c_world__collect_tile_geometry__6aadc0 {
 
     #[test]
     fn triangle_plane_grouping_is_bit_exact() {
-        // Pin the exact fsub/cross/fadd grouping + rsqrtss the stock uses.
-        let v0 = [1.0f32, 2.0, 3.0];
-        let v1 = [4.0f32, 0.0, -1.0];
-        let v2 = [-2.0f32, 5.0, 2.0];
-        let ea = [v2[0] - v0[0], v2[1] - v0[1], v2[2] - v0[2]];
-        let eb = [v1[0] - v0[0], v1[1] - v0[1], v1[2] - v0[2]];
-        let nx = eb[1] * ea[2] - eb[2] * ea[1];
-        let ny = eb[2] * ea[0] - eb[0] * ea[2];
-        let nz = eb[0] * ea[1] - eb[1] * ea[0];
-        let len2 = (nx * nx + ny * ny) + nz * nz;
-        let inv = rsqrt_ss__6aadc0(len2);
-        let nnx = inv * nx;
-        let nny = inv * ny;
-        let nnz = inv * nz;
-        let d = -((nnz * v0[2] + nny * v0[1]) + nnx * v0[0]);
-        let pl = tile_collect_triangle_plane__6aadc0(&v0, &v1, &v2);
-        assert_eq!(pl[0].to_bits(), nnx.to_bits());
-        assert_eq!(pl[1].to_bits(), nny.to_bits());
-        assert_eq!(pl[2].to_bits(), nnz.to_bits());
-        assert_eq!(pl[3].to_bits(), d.to_bits());
+        // Full-mantissa vertices given as bit patterns. The small integers this
+        // used to use made every intermediate exact, so the narrow and wide forms
+        // agreed and the pin held whichever one the kernel had.
+        let v0 = [
+            f32::from_bits(0x3fc7_1d09),
+            f32::from_bits(0xc019_3b7f),
+            f32::from_bits(0x4055_e2cd),
+        ];
+        let v1 = [
+            f32::from_bits(0x4093_a51b),
+            f32::from_bits(0x3f2d_77e3),
+            f32::from_bits(0xbfb1_04a7),
+        ];
+        let v2 = [
+            f32::from_bits(0xc00b_9d55),
+            f32::from_bits(0x40a7_31ef),
+            f32::from_bits(0x4013_c6b1),
+        ];
+
+        // The narrow-per-step form the kernel used to have, kept as the witness.
+        let narrow_form = || {
+            let ea = [v2[0] - v0[0], v2[1] - v0[1], v2[2] - v0[2]];
+            let eb = [v1[0] - v0[0], v1[1] - v0[1], v1[2] - v0[2]];
+            let nx = eb[1] * ea[2] - eb[2] * ea[1];
+            let ny = eb[2] * ea[0] - eb[0] * ea[2];
+            let nz = eb[0] * ea[1] - eb[1] * ea[0];
+            let len2 = (nx * nx + ny * ny) + nz * nz;
+            let inv = rsqrt_ss__6aadc0(len2);
+            let (nnx, nny, nnz) = (inv * nx, inv * ny, inv * nz);
+            let d = -((nnz * v0[2] + nny * v0[1]) + nnx * v0[0]);
+            [nnx, nny, nnz, d]
+        };
+
+        // Same grouping, but ea wide, eb's x and y narrowed, each cross lane and
+        // `len2` narrowed at its own store, and `d` off the unnarrowed products.
+        let sub = |a: f32, b: f32| f64::from(a) - f64::from(b);
+        let ea = [sub(v2[0], v0[0]), sub(v2[1], v0[1]), sub(v2[2], v0[2])];
+        let eb_x = f64::from(super::super::f64_to_f32(sub(v1[0], v0[0])));
+        let eb_y = f64::from(super::super::f64_to_f32(sub(v1[1], v0[1])));
+        let eb_z = sub(v1[2], v0[2]);
+        let nx = super::super::f64_to_f32(eb_y * ea[2] - eb_z * ea[1]);
+        let ny = super::super::f64_to_f32(eb_z * ea[0] - ea[2] * eb_x);
+        let nz = super::super::f64_to_f32(ea[1] * eb_x - eb_y * ea[0]);
+        let sq = |v: f32| f64::from(v) * f64::from(v);
+        let inv = f64::from(rsqrt_ss__6aadc0(super::super::f64_to_f32(
+            (sq(nx) + sq(ny)) + sq(nz),
+        )));
+        let (nnx, nny, nnz) = (
+            inv * f64::from(nx),
+            inv * f64::from(ny),
+            inv * f64::from(nz),
+        );
+        let want = [
+            super::super::f64_to_f32(nnx),
+            super::super::f64_to_f32(nny),
+            super::super::f64_to_f32(nnz),
+            super::super::f64_to_f32(
+                -((nnz * f64::from(v0[2]) + nny * f64::from(v0[1])) + nnx * f64::from(v0[0])),
+            ),
+        ];
+
+        let got = tile_collect_triangle_plane__6aadc0(&v0, &v1, &v2);
+        for i in 0..4 {
+            assert_eq!(got[i].to_bits(), want[i].to_bits(), "lane {i}");
+        }
+        let narrow = narrow_form();
+        assert!(
+            (0..4).any(|i| got[i].to_bits() != narrow[i].to_bits()),
+            "fixture no longer separates narrow-once from narrow-per-step"
+        );
     }
 
     #[test]

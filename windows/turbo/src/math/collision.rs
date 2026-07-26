@@ -3062,12 +3062,17 @@ mod tests_collision_sweep_polygon_against_faces__632700 {
 /// constant `d = -dot(n, q0)`, returned as `[n_x, n_y, n_z, d]`.
 ///
 /// `target_len` is the host's normalize constant (the length the precise
-/// normalizer scales to); `precise` selects between the reference's two
-/// builders. The precise path uses the f64 normalize and accumulates the
-/// plane constant in x, y, z order; the inline path normalizes by an f32
-/// reciprocal square root and accumulates in z, y, x order. The inline path's
-/// hardware reciprocal-sqrt estimate is deliberately computed exactly — a
-/// strict precision upgrade over the reference's ~12-bit approximation.
+/// normalizer scales to); `precise` selects between the reference's two builders,
+/// and it is the arm taken when the flag at `0xc9e388` is **zero**. That flag is
+/// set to 1 whenever `CPUID` reports SSE (`0x6920a7`), so on any real processor
+/// the inline arm below is the one that runs.
+///
+/// That arm is not this function's own code: `0x671cc0` emits the identical
+/// sixty-six floating-point and SSE operations that `0x6aadc0` does, so it calls
+/// `tile_collect_triangle_plane__6aadc0`. Notably it ends in a raw `rsqrtss`
+/// (`0x671e5a`) with no Newton-Raphson step, which a full `1.0 / sqrt` does not
+/// approximate — that is a different algorithm, not a rounding difference, and
+/// computing it "more precisely" is a divergence rather than an upgrade.
 pub fn build_mesh_triangle_planes__671cc0(
     q0: &[f32; 3],
     q1: &[f32; 3],
@@ -3075,25 +3080,28 @@ pub fn build_mesh_triangle_planes__671cc0(
     target_len: f64,
     precise: bool,
 ) -> [f32; 4] {
-    let e1 = [q1[0] - q0[0], q1[1] - q0[1], q1[2] - q0[2]];
-    let e2 = [q2[0] - q0[0], q2[1] - q0[1], q2[2] - q0[2]];
-    let mut n = super::vector::c3_vector__cross__672130(&e1, &e2);
     if precise {
+        let e1 = [q1[0] - q0[0], q1[1] - q0[1], q1[2] - q0[2]];
+        let e2 = [q2[0] - q0[0], q2[1] - q0[1], q2[2] - q0[2]];
+        let mut n = super::vector::c3_vector__cross__672130(&e1, &e2);
         super::vector::normalize3(&mut n, target_len);
         let d = -super::vector::c3_vector__dot__602630(&n, q0);
         return [n[0], n[1], n[2], d];
     }
-    let len2 = n[0] * n[0] + n[1] * n[1] + n[2] * n[2];
-    let r = 1.0_f32 / len2.sqrt();
-    let n = [n[0] * r, n[1] * r, n[2] * r];
-    // The inline reference accumulates the plane constant in z, y, x order.
-    let d = -((n[2] * q0[2] + n[1] * q0[1]) + n[0] * q0[0]);
-    [n[0], n[1], n[2], d]
+    super::world::tile_collect_triangle_plane__6aadc0(q0, q1, q2)
 }
 
 #[cfg(test)]
 mod tests_build_mesh_triangle_planes__671cc0 {
     use super::build_mesh_triangle_planes__671cc0 as plane;
+
+    /// Relative error of a single `rsqrtss` with no Newton-Raphson step.
+    ///
+    /// The instruction is specified to within 1.5 * 2^-12, so anything the inline
+    /// arm normalizes is unit only to about that. The tests here assert the
+    /// original's accuracy; tightening them would pin a reimplementation that had
+    /// quietly upgraded the algorithm.
+    const RSQRTSS_TOL: f32 = 4.0e-4;
 
     fn eval(p: &[f32; 4], v: &[f32; 3]) -> f32 {
         p[0] * v[0] + p[1] * v[1] + p[2] * v[2] + p[3]
@@ -3105,11 +3113,14 @@ mod tests_build_mesh_triangle_planes__671cc0 {
         let q0 = [0.0_f32, 0.0, 5.0];
         let q1 = [1.0_f32, 0.0, 5.0];
         let q2 = [0.0_f32, 1.0, 5.0];
-        for precise in [true, false] {
+        // The inline arm scales by a raw `rsqrtss` estimate, which is a ~12-bit
+        // approximation: its unit normal is only unit to about 2^-12, and the
+        // tolerances here are the original's precision, not a target for ours.
+        for (precise, tol) in [(true, 1e-6_f32), (false, RSQRTSS_TOL)] {
             let p = plane(&q0, &q1, &q2, 1.0, precise);
-            assert!(p[0].abs() < 1e-6 && p[1].abs() < 1e-6, "{p:?}");
-            assert!((p[2] - 1.0).abs() < 1e-6, "{p:?}");
-            assert!((p[3] + 5.0).abs() < 1e-5, "{p:?}");
+            assert!(p[0].abs() < tol && p[1].abs() < tol, "{p:?}");
+            assert!((p[2] - 1.0).abs() < tol, "{p:?}");
+            assert!((p[3] + 5.0).abs() < 5.0 * tol, "{p:?}");
         }
     }
 
@@ -3137,7 +3148,12 @@ mod tests_build_mesh_triangle_planes__671cc0 {
                 + f64::from(p[1]) * f64::from(p[1])
                 + f64::from(p[2]) * f64::from(p[2]))
             .sqrt();
-            assert!((len - 1.0).abs() < 1e-5, "precise={precise} len={len}");
+            let tol = if precise {
+                1e-5
+            } else {
+                f64::from(RSQRTSS_TOL)
+            };
+            assert!((len - 1.0).abs() < tol, "precise={precise} len={len}");
         }
     }
 
@@ -3160,8 +3176,12 @@ mod tests_build_mesh_triangle_planes__671cc0 {
         let q2 = [2.0_f32, -8.5, 12.5];
         let a = plane(&q0, &q1, &q2, 1.0, true);
         let b = plane(&q0, &q1, &q2, 1.0, false);
+        // The two arms are different algorithms, not two roundings of one: the
+        // inline one's reciprocal square root carries ~12 bits, so they agree only
+        // to that, scaled by the lane's magnitude.
         for i in 0..4 {
-            assert!((a[i] - b[i]).abs() < 1e-4, "{a:?} vs {b:?}");
+            let tol = RSQRTSS_TOL * a[i].abs().max(1.0);
+            assert!((a[i] - b[i]).abs() < tol, "lane {i}: {a:?} vs {b:?}");
         }
     }
 
