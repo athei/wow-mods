@@ -2231,12 +2231,18 @@ pub fn collision_clip_polygon_by_plane__6318c0(
             if d_cur >= 0.0 {
                 clip_emit_vertex(verts, tags, &mut out, c, saved_tags[cur]);
             } else if d_prev > eps_pos {
-                let x = clip_crossing(p, c, d_prev, d_cur);
+                // Leaving the half-space. The original builds this one through
+                // two `C3Vector::Set` calls, so all three products become `f32`
+                // stack arguments first, and it emits the crossing alone.
+                let x = clip_crossing_narrow(p, c, d_prev, d_cur);
                 clip_emit_vertex(verts, tags, &mut out, &x, plane_index);
             }
         } else if d_cur >= 0.0 {
             if d_cur > eps_pos {
-                let x = clip_crossing(p, c, d_prev, d_cur);
+                // Entering the half-space. The original inlines the stores here
+                // and rounds each component differently, then falls through to
+                // emit the current vertex as well.
+                let x = clip_crossing_mixed(p, c, d_prev, d_cur);
                 clip_emit_vertex(verts, tags, &mut out, &x, plane_index);
             }
             clip_emit_vertex(verts, tags, &mut out, c, saved_tags[cur]);
@@ -2245,15 +2251,66 @@ pub fn collision_clip_polygon_by_plane__6318c0(
     if out > 2 { out } else { 0 }
 }
 
-/// Interpolated plane crossing between `p` (prev) and `c` (cur).
+/// The crossing parameter `t = d_prev / (d_cur - d_prev)`.
 ///
-/// `t = d_prev / (d_cur - d_prev)`, `x = p - (c - p) * t`.
-fn clip_crossing(p: &[f32], c: &[f32], d_prev: f32, d_cur: f32) -> [f32; 3] {
-    let t = d_prev / (d_cur - d_prev);
+/// Shared by both crossing shapes and rounded the same way in each: the original
+/// leaves the denominator on the x87 stack and stores only the quotient, so the
+/// subtraction happens at register width and the divide's result is the single
+/// narrowing.
+fn clip_crossing_t(d_prev: f32, d_cur: f32) -> f32 {
+    super::f64_to_f32(f64::from(d_prev) / (f64::from(d_cur) - f64::from(d_prev)))
+}
+
+/// One crossing component whose `delta * t` product reaches an `f32` slot.
+///
+/// The delta itself stays at register width into the multiply; the product is
+/// stored and reloaded, so the final subtraction reads a narrowed operand.
+fn cross_store_product(pi: f32, ci: f32, tf: f64) -> f32 {
+    let dt = super::f64_to_f32((f64::from(ci) - f64::from(pi)) * tf);
+    super::f64_to_f32(f64::from(pi) - f64::from(dt))
+}
+
+/// One crossing component that never reaches memory before its single store.
+fn cross_wide(pi: f32, ci: f32, tf: f64) -> f32 {
+    super::f64_to_f32(f64::from(pi) - (f64::from(ci) - f64::from(pi)) * tf)
+}
+
+/// One crossing component whose *delta* reaches an `f32` slot before the multiply.
+///
+/// The mirror image of [`cross_store_product`]: here the subtraction is stored
+/// and reloaded, and the product and final subtraction then stay wide.
+fn cross_store_delta(pi: f32, ci: f32, tf: f64) -> f32 {
+    let d = super::f64_to_f32(f64::from(ci) - f64::from(pi));
+    super::f64_to_f32(f64::from(pi) - f64::from(d) * tf)
+}
+
+/// Interpolated plane crossing, in the mixed widths of the inlined block.
+///
+/// `x = p - (c - p) * t`, but each component rounds differently and the
+/// difference is not decorative: the original spills `dx * t`, spills `dz`
+/// before its multiply, and leaves the whole y chain in a register until its
+/// single store. Reproducing one shape for all three is what this used to do.
+fn clip_crossing_mixed(p: &[f32], c: &[f32], d_prev: f32, d_cur: f32) -> [f32; 3] {
+    let tf = f64::from(clip_crossing_t(d_prev, d_cur));
     [
-        p[0] - (c[0] - p[0]) * t,
-        p[1] - (c[1] - p[1]) * t,
-        p[2] - (c[2] - p[2]) * t,
+        cross_store_product(p[0], c[0], tf),
+        cross_wide(p[1], c[1], tf),
+        cross_store_delta(p[2], c[2], tf),
+    ]
+}
+
+/// Interpolated plane crossing, narrowed at every step.
+///
+/// The block that builds its result through two `C3Vector::Set` calls: all three
+/// `delta * t` products become `f32` stack arguments before the subtraction, so
+/// every component takes the [`cross_store_product`] shape. The setter itself is
+/// three integer stores and adds no rounding of its own.
+fn clip_crossing_narrow(p: &[f32], c: &[f32], d_prev: f32, d_cur: f32) -> [f32; 3] {
+    let tf = f64::from(clip_crossing_t(d_prev, d_cur));
+    [
+        cross_store_product(p[0], c[0], tf),
+        cross_store_product(p[1], c[1], tf),
+        cross_store_product(p[2], c[2], tf),
     ]
 }
 
@@ -2345,9 +2402,59 @@ mod tests_collision_clip_polygon_by_plane__6318c0 {
 
     #[test]
     fn crossing_lands_on_the_plane() {
-        let x = super::clip_crossing(&[0.0, 0.0, -1.0], &[4.0, 0.0, 3.0], 1.0, -3.0);
-        assert!((x[0] - 1.0).abs() < 1e-6);
-        assert!((x[2] - 0.0).abs() < 1e-6);
+        for x in [
+            super::clip_crossing_mixed(&[0.0, 0.0, -1.0], &[4.0, 0.0, 3.0], 1.0, -3.0),
+            super::clip_crossing_narrow(&[0.0, 0.0, -1.0], &[4.0, 0.0, 3.0], 1.0, -3.0),
+        ] {
+            assert!((x[0] - 1.0).abs() < 1e-6);
+            assert!((x[2] - 0.0).abs() < 1e-6);
+        }
+    }
+
+    /// Law: the two crossing arms round differently, and neither rounds per step.
+    ///
+    /// The entering arm is the inlined block, whose y component stays in a
+    /// register from its subtraction to a single store while x spills its
+    /// product and z spills its delta. The leaving arm goes through two
+    /// `C3Vector::Set` calls, so every component spills its product. Pinned
+    /// because one shared formula for both reads natural and is what was here.
+    #[test]
+    fn crossing_arms_round_differently() {
+        // Bit patterns, not decimal literals: a rounded decimal is a different
+        // float and stops separating the shapes.
+        let p = [
+            f32::from_bits(0xbef3_d112),
+            f32::from_bits(0x3f19_046e),
+            f32::from_bits(0x4087_bf55),
+        ];
+        let c = [
+            f32::from_bits(0xbeaf_df24),
+            f32::from_bits(0x3da0_96db),
+            f32::from_bits(0x3f5f_b485),
+        ];
+        let (d_prev, d_cur) = (f32::from_bits(0x3ec1_4448), f32::from_bits(0xbf7b_3698));
+        let mixed = super::clip_crossing_mixed(&p, &c, d_prev, d_cur);
+        let narrow = super::clip_crossing_narrow(&p, &c, d_prev, d_cur);
+
+        // x takes the same shape in both arms, so it must agree.
+        assert_eq!(mixed[0].to_bits(), narrow[0].to_bits());
+        // y and z do not: if these ever match, the arms have collapsed.
+        assert!(
+            mixed[1].to_bits() != narrow[1].to_bits() || mixed[2].to_bits() != narrow[2].to_bits(),
+            "the two arms produced identical y and z; the shapes have collapsed"
+        );
+
+        // And neither is the old all-f32 form.
+        let t = d_prev / (d_cur - d_prev);
+        let per_step = [
+            p[0] - (c[0] - p[0]) * t,
+            p[1] - (c[1] - p[1]) * t,
+            p[2] - (c[2] - p[2]) * t,
+        ];
+        assert!(
+            (0..3).any(|i| per_step[i].to_bits() != mixed[i].to_bits()),
+            "inputs no longer separate the entering arm from per-step f32"
+        );
     }
 }
 
