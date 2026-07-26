@@ -107,6 +107,20 @@ struct Diff {
     /// assertion of safety, like `unsafe`; consumed by `diff_audit.py`, not codegen.
     #[serde(default)]
     double_run_safe: bool,
+    /// `true` marks an adapter that runs the original on some inputs.
+    ///
+    /// A partial reimplementation delegates the shapes it does not model. On
+    /// those calls the compare path runs the original on both sides, so the
+    /// comparison is vacuous and passes by construction — and nothing at runtime
+    /// distinguishes a delegated call from a modelled one. The flag permits the
+    /// `original(` the audit otherwise refuses, and makes the arming line say so,
+    /// because the trap here is reading a clean result as coverage.
+    ///
+    /// Only sound when the delegated call cannot corrupt live state on a second
+    /// run. The `out` region is redirected to scratch, so the usual case is an
+    /// original that reads its receiver and writes only through `out`.
+    #[serde(default)]
+    delegates: bool,
 }
 
 fn default_float() -> String {
@@ -738,7 +752,8 @@ fn emit_diff(out: &mut String, name: &str, snake: &str, screaming: &str, f: &Fun
     // when nothing diverges (distinguishes faithful from never-ran / not-armed).
     let _ = writeln!(
         out,
-        "    super::diff::note_armed(&{screaming}_DIFF_ARMED, \"{name}\");"
+        "    super::diff::note_armed(&{screaming}_DIFF_ARMED, \"{name}\", {});",
+        d.delegates
     );
     emit_diff_compare(out, name, snake, screaming, f, d);
     let _ = writeln!(out, "}}");

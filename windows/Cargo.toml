@@ -100,7 +100,7 @@ items_after_statements = "allow"        # 864
 cast_ptr_alignment = "allow"            # 911 — reads are already `read_unaligned`
 unreadable_literal = "allow"            # 372 — addresses and bit masks, verbatim
 similar_names = "allow"                 # 215
-semicolon_if_nothing_returned = "allow" # 157
+semicolon_if_nothing_returned = "allow" # 156
 many_single_char_names = "allow"        # 38
 
 # Numeric conversions that must truncate, wrap and round exactly as the

@@ -438,7 +438,7 @@ fn antialias_diff(
     if trampoline == 0 {
         return false;
     }
-    super::diff::note_armed(&ARMED_NOTE, LABEL);
+    super::diff::note_armed(&ARMED_NOTE, LABEL, false);
 
     let mut shadow = super::diff::Buf::<REGION_CAP>::zeroed();
     // SAFETY: `buf` covers `len_bytes` (the folded region for `boundaries`,
@@ -549,7 +549,7 @@ fn dct64_diff(out0: *mut f32, out1: *mut f32, samples: *const f32, pnts: &[*cons
     if trampoline == 0 {
         return false;
     }
-    super::diff::note_armed(&ARMED_NOTE, LABEL);
+    super::diff::note_armed(&ARMED_NOTE, LABEL, false);
 
     let mut shadow0 = super::diff::Buf::<HALF_CAP>::zeroed();
     let mut shadow1 = super::diff::Buf::<HALF_CAP>::zeroed();
@@ -668,7 +668,7 @@ fn dct36_diff(
     if trampoline == 0 {
         return false;
     }
-    super::diff::note_armed(&ARMED_NOTE, LABEL);
+    super::diff::note_armed(&ARMED_NOTE, LABEL, false);
 
     let mut shadow_in = super::diff::Buf::<LINE_CAP>::zeroed();
     let mut shadow_o2 = super::diff::Buf::<LINE_CAP>::zeroed();

@@ -94,9 +94,21 @@ fn report(stats: &Stats, label: &str, expected: bool, detail: impl FnOnce() -> S
 /// the compare path is live. Without it an armed-but-faithful hook is
 /// indistinguishable from one that never ran or was never armed. Subsequent
 /// calls are a cheap already-set atomic load.
-pub fn note_armed(armed: &::core::sync::atomic::AtomicBool, label: &str) {
+/// `delegates = true` says the adapter runs the original on some inputs, so a
+/// clean result for this hook is not evidence of anything: on a delegated call
+/// both sides of the compare are the same machine code and match by
+/// construction. Nothing at runtime tells the two kinds of call apart, so the
+/// caveat is stated once, here, rather than implied by silence.
+pub fn note_armed(armed: &::core::sync::atomic::AtomicBool, label: &str, delegates: bool) {
     if !armed.swap(true, ::core::sync::atomic::Ordering::Relaxed) {
-        log::info!(target: super::LOG_TARGET, "[diff] armed: {label}");
+        if delegates {
+            log::info!(
+                target: super::LOG_TARGET,
+                "[diff] armed: {label} (delegating — matches may be vacuous, not coverage)"
+            );
+        } else {
+            log::info!(target: super::LOG_TARGET, "[diff] armed: {label}");
+        }
     }
 }
 

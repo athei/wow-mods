@@ -20034,7 +20034,7 @@ pub fn storm_archive__find_file_entry__6549a0(
         if !armed {
             return delegate();
         }
-        super::diff::note_armed(&ARMED_NOTE, LABEL);
+        super::diff::note_armed(&ARMED_NOTE, LABEL, false);
         let predicted = storm_filecache()
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)

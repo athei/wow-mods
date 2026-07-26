@@ -46,6 +46,14 @@
 #   ulp      — max ULP per f32 lane before a divergence is reported (default 4).
 #   expected — true for a reimpl deliberately more precise than the original
 #              (f64 intermediates); divergences log at debug, never warn.
+#   delegates— true for a partial reimplementation that runs the original on the
+#              shapes it does not model. On those calls both sides of the compare
+#              are the same code, so they match by construction and a clean
+#              result is NOT coverage; the arming line says so. Only set it when
+#              the delegated call is replay-safe.
+# `float` selects the REGION comparator and never reaches a scalar return, which
+# always compares within `ulp` — so exactness on a scalar wants `ulp = 0`, not
+# `float = "bytes"`. An f64 return is not compared at all.
 # Runtime selection: `WOW_TURBO_DIFF_ARM=Name1,Name2|all`. out/inout adapters are
 # checked by `tools/diff_audit.py` (no call-out, writes only the out arg).
 
@@ -618,6 +626,19 @@ abi  = "thiscall"
 ret  = "void"
 args = ["*mut core::ffi::c_void", "i32", "f32", "*mut f32"]
 preserve = []
+
+# Golden-diff the evaluated position (out = arg 3, three f32), byte compare.
+# `delegates`: the cubic branch runs the original, because its basis table is an
+# unreconstructed host global. That call reads the receiver and writes only
+# through `out`, which the compare path has redirected to scratch, so replaying
+# it cannot touch live state. The cost is that calls taking that branch compare
+# the original against itself and always match — the linear branch is the one
+# this entry actually measures.
+[functions.CCubicSpline__EvalSegmentPos__4541b0.diff]
+mode  = "out"
+out   = { arg = 3, len = 12 }
+float = "bytes"
+delegates = true
 
 [functions.CCubicSpline__SqMag2D__454980]
 rva  = 0x054980
