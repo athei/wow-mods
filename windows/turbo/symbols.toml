@@ -65,6 +65,14 @@ ret  = "*mut f32"
 args = ["*mut f32", "*const f32", "*const f32"]
 preserve = []
 
+# Golden-diff the product (out = arg 0, the whole 16-float matrix). Byte compare:
+# each element is an independent four-term dot, so a per-element order or width
+# difference is exactly one ulp and a tolerant compare would pass it.
+[functions.C44Matrix__Multiply__7bc6a0.diff]
+mode  = "out"
+out   = { arg = 0, len = 64 }
+float = "bytes"
+
 [functions.C3Vector__ScaleByInverse__4549c0]
 rva  = 0x0549c0
 sig  = "55 8B EC D9 05 ?? ?? ?? ?? 8B C1 D8"
@@ -80,6 +88,11 @@ abi  = "thiscall"
 ret  = "f32"
 args = ["*const f32"]
 preserve = ["eax", "ecx", "edx"]
+
+# Scalar f32 return at `ulp = 0`, as above.
+[functions.C3Vector__SquaredMagnitude__4549f0.diff]
+mode = "out"
+ulp  = 0
 
 [functions.C3Vector__AddInPlace__4841c0]
 rva  = 0x0841c0
@@ -337,6 +350,13 @@ ret  = "f32"
 args = ["*const f32", "*const f32"]
 preserve = ["eax", "ecx", "edx"]
 
+# Scalar f32 return, compared at `ulp = 0`. `float` does not reach a scalar
+# return - it selects the region comparator - so exactness here has to come from
+# the tolerance, and the default of 4 would accept the difference being hunted.
+[functions.C3Vector__Dot__602630.diff]
+mode = "out"
+ulp  = 0
+
 [functions.C3Vector__Negate__637330]
 rva  = 0x237330
 sig  = "55 8B EC D9 41 08 8B 45 08 D9 E0 D9 41 04 D9 E0 D9 01 D9 E0 D9 18 D9 58"
@@ -412,6 +432,14 @@ ret  = "*mut f32"
 args = ["*mut f32", "*const f32", "*const f32"]
 preserve = ["ecx", "edx"]
 
+# Golden-diff the transformed point (out = arg 0, three f32). Byte compare, not
+# ulp: the divergence this exists to catch is a term-order difference worth one
+# or two ulp, which the default tolerance accepts.
+[functions.C44Matrix__TransformPoint__7bca80.diff]
+mode  = "out"
+out   = { arg = 0, len = 12 }
+float = "bytes"
+
 [functions.C44Matrix__TransformPoint__7bcae0]
 rva  = 0x3bcae0
 sig  = "55 8B EC D9 42 28 56 8B 75 08 D8 4E"
@@ -419,6 +447,13 @@ abi  = "fastcall"
 ret  = "*mut f32"
 args = ["*mut f32", "*const f32", "*const f32"]
 preserve = ["ecx", "edx"]
+
+# Golden-diff the transformed point (out = arg 0, three f32). Byte compare for
+# the same reason as its column-major sibling.
+[functions.C44Matrix__TransformPoint__7bcae0.diff]
+mode  = "out"
+out   = { arg = 0, len = 12 }
+float = "bytes"
 
 [functions.C44Matrix__TransformVector4__7bcb40]
 rva  = 0x3bcb40
@@ -448,7 +483,7 @@ preserve = ["ecx"]
 mode  = "out"
 out   = { arg = 0, len = 12 }
 ins   = [{ arg = 1, len = 12 }]
-float = "f32"
+float = "bytes"
 double_run_safe = true
 
 [functions.C44Matrix__Translate__7bdc40]
@@ -481,6 +516,14 @@ abi  = "thiscall"
 ret  = "*const f32"
 args = ["*mut f32", "*const f32", "*const f32", "*const f32"]
 preserve = ["ecx"]
+
+# Golden-diff the built plane (out = arg 0, `[nx, ny, nz, d]`). Byte compare:
+# `d` accumulates through the normalize, so it carries every rounding decision
+# the body makes and a tolerant compare would hide all of them.
+[functions.C4Plane__FromTriangle__637480.diff]
+mode  = "out"
+out   = { arg = 0, len = 16 }
+float = "bytes"
 
 [functions.C4Quaternion__ComputeSquadTangents__7c0b60]
 rva  = 0x003c0b60
@@ -561,6 +604,12 @@ abi  = "thiscall"
 ret  = "void"
 args = ["*mut core::ffi::c_void", "i32", "f32", "*const f32", "*mut f32"]
 preserve = []
+
+# Golden-diff the accumulated point (out = arg 4, three f32), byte compare.
+[functions.CCubicSpline__EvalBasisQuadratic__453640.diff]
+mode  = "out"
+out   = { arg = 4, len = 12 }
+float = "bytes"
 
 [functions.CCubicSpline__EvalSegmentPos__4541b0]
 rva  = 0x0541b0
@@ -650,6 +699,12 @@ ret  = "void"
 args = ["*mut core::ffi::c_void", "i32", "f32", "*const f32", "*mut f32"]
 preserve = []
 
+# Golden-diff the accumulated point (out = arg 4, three f32), byte compare.
+[functions.CSpline_EvalPoint__453580.diff]
+mode  = "out"
+out   = { arg = 4, len = 12 }
+float = "bytes"
+
 [functions.CWorldBsp__AabbTriangleOverlap__6b8b70]
 rva  = 0x2b8b70
 sig  = "55 8B EC 83 EC 0C 8B 45 08 53 56 89"
@@ -666,6 +721,14 @@ ret  = "u32"
 args = ["*const core::ffi::c_void", "*const f32", "*mut u32"]
 preserve = []
 
+# Golden-diff the plane mask (out = arg 2, one u32) alongside the integer return,
+# which the harness compares exactly on its own. The mask is the observable: a
+# plane-dot difference only matters when it flips a bit here.
+[functions.CWorldFrustum__ClassifyPoint__686c20.diff]
+mode  = "out"
+out   = { arg = 2, len = 4 }
+float = "bytes"
+
 [functions.CWorldFrustum__TestOrientedBox__6869c0]
 rva  = 0x2869c0
 sig  = "55 8B EC 83 EC 50 53 56 8B 75 0C 8B"
@@ -674,6 +737,10 @@ ret  = "u32"
 args = ["*const core::ffi::c_void", "*const f32", "*const f32", "*const f32"]
 preserve = []
 
+# No out region; the integer verdict is the observable, compared exactly.
+[functions.CWorldFrustum__TestOrientedBox__6869c0.diff]
+mode = "out"
+
 [functions.CWorldFrustum__TestSphere__686b80]
 rva  = 0x286b80
 sig  = "55 8B EC 56 8B 75 08 D9 46 0C 33 D2"
@@ -681,6 +748,12 @@ abi  = "thiscall"
 ret  = "u32"
 args = ["*const core::ffi::c_void", "*const f32"]
 preserve = []
+
+# No out region: the integer return is the whole observable, and the harness
+# compares integer returns exactly. A plane-dot difference registers only when it
+# flips the verdict, which is precisely the failure worth reporting.
+[functions.CWorldFrustum__TestSphere__686b80.diff]
+mode = "out"
 
 [functions.Cloud_GradientSample__6cf6c0]
 rva  = 0x2cf6c0
@@ -1002,6 +1075,12 @@ abi  = "fastcall"
 ret  = "f32"
 args = ["u32", "*const f32", "f32"]
 preserve = ["ecx", "edx"]
+
+# Scalar f32 return at `ulp = 0`. A Horner chain compounds one rounding per
+# coefficient, so the tolerance has to be zero for the compare to mean anything.
+[functions.EvalPolynomialHorner__453620.diff]
+mode = "out"
+ulp  = 0
 
 [functions.Frustum_ComputeC3Vector__699250]
 rva  = 0x299250   # VA 0x699250 − image_base
