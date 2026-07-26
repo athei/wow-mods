@@ -1159,13 +1159,28 @@ mod tests_collision_build_prism_planes__631440 {
 /// (A = verts[i], B = verts[(i+1)%4]), oriented so the opposite (previous-ring)
 /// vertex lies on the negative side. The cap plane uses `cap_normal` and passes
 /// through `verts[0]+face_offset`. Each plane is `[Nx,Ny,Nz,D]` with unit normal
-/// and `D = -dot(N,point)`. Returns `None` if any edge is degenerate (swept area
-/// below `2^-20`).
+/// and `D = -dot(N,point)`.
+///
+/// Returns the planes and how many leading entries the original had written when
+/// it returned: 5 on success, and on a degenerate edge (swept area below `2^-20`)
+/// the number of side planes already finished. The original writes each side plane
+/// straight through its out pointer during that edge's iteration (`ECX = ESI`,
+/// `ESI += 0x10`), so the ones before the bail are left behind and only the cap is
+/// skipped.
+///
+/// Widths and orders, off the bytes rather than the algebra. The two edge vectors
+/// and the three cross components each go through an `f32` stack slot on their way
+/// into `0x4549a0`, so they narrow; but the cross components are formed wide from
+/// exact `f32 * f32` products and narrow only at that store, the squared area is
+/// summed wide from the narrowed components in the order `(y² + z²) + x²`, the
+/// orientation dot runs `(z + x) + y` wide with no store, and the cap plane's
+/// point is never stored at all — `0x6331a1`..`0x6331b1` leaves all three sums on
+/// the stack and its `D` is built from them wide, dotted `(z + y) + x`.
 pub fn collision_build_quad_face_clip_planes__632f80(
     verts: &[[f32; 3]; 4],
     cap_normal: &[f32; 3],
     face_offset: &[f32; 3],
-) -> Option<[[f32; 4]; 5]> {
+) -> ([[f32; 4]; 5], usize) {
     // Degenerate-area epsilon at `0x8026bc` (2^-20) and orientation threshold
     // at `0x7ffd74` (0.0), folded in as binary-exact literals.
     // The digit string is what makes the literal land on `0x35800000`; a shorter
@@ -1189,55 +1204,55 @@ pub fn collision_build_quad_face_clip_planes__632f80(
         // e1 = Asw - A (= face_offset), e2 = B - A; degenerate test on |e1 x e2|^2.
         let e1 = [asw[0] - a[0], asw[1] - a[1], asw[2] - a[2]];
         let e2 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
-        let cx = e1[2] * e2[1] - e1[1] * e2[2];
-        let cy = e2[2] * e1[0] - e1[2] * e2[0];
-        let cz = e1[1] * e2[0] - e2[1] * e1[0];
-        let area_sq = cx * cx + cz * cz + cy * cy;
-        if area_sq.abs() < AREA_EPS {
-            return None;
+        let cross = |u: f32, v: f32, w: f32, t: f32| {
+            super::f64_to_f32(f64::from(u) * f64::from(v) - f64::from(w) * f64::from(t))
+        };
+        let cx = cross(e1[2], e2[1], e1[1], e2[2]);
+        let cy = cross(e2[2], e1[0], e1[2], e2[0]);
+        let cz = cross(e1[1], e2[0], e2[1], e1[0]);
+        let sq = |v: f32| f64::from(v) * f64::from(v);
+        let area_sq = (sq(cy) + sq(cz)) + sq(cx);
+        if area_sq.abs() < f64::from(AREA_EPS) {
+            return (planes, i);
         }
 
-        // Plane from triangle (A, B, Asw): normal = (B-A) x (Asw-A), normalized.
-        let mut plane = plane_from_triangle(&a, &b, &asw);
+        // Plane from triangle (A, B, Asw), the original's own `0x637480` call.
+        let mut plane = super::plane::c4_plane__from_triangle__637480(&a, &b, &asw);
 
         // Orient: flip if the previous-ring vertex is on the positive side.
         let d = [p[0] - a[0], p[1] - a[1], p[2] - a[2]];
-        let side = d[0] * plane[0] + d[1] * plane[1] + d[2] * plane[2];
-        if side > FLIP_THRESH {
+        let term = |k: usize| f64::from(d[k]) * f64::from(plane[k]);
+        let side = (term(2) + term(0)) + term(1);
+        if side > f64::from(FLIP_THRESH) {
             plane = [-plane[0], -plane[1], -plane[2], -plane[3]];
         }
         planes[i] = plane;
     }
 
-    // Cap plane: cap_normal through verts[0] + face_offset.
+    // Cap plane: cap_normal through verts[0] + face_offset, that point kept wide.
     let v0 = verts[0];
     let cp = [
-        v0[0] + face_offset[0],
-        v0[1] + face_offset[1],
-        v0[2] + face_offset[2],
+        f64::from(v0[0]) + f64::from(face_offset[0]),
+        f64::from(v0[1]) + f64::from(face_offset[1]),
+        f64::from(v0[2]) + f64::from(face_offset[2]),
     ];
-    let d = -(cp[0] * cap_normal[0] + cp[1] * cap_normal[1] + cp[2] * cap_normal[2]);
+    let term = |k: usize| cp[k] * f64::from(cap_normal[k]);
+    let d = super::f64_to_f32(-((term(2) + term(1)) + term(0)));
     planes[4] = [cap_normal[0], cap_normal[1], cap_normal[2], d];
 
-    Some(planes)
-}
-
-/// Builds a normalized plane `[Nx,Ny,Nz,D]` from a triangle, matching `C4Plane__FromTriangle`.
-///
-/// normal = `(p1-p0) x (p2-p0)`, scaled by `1.0/|n|`, `D = -dot(N, p0)`.
-fn plane_from_triangle(p0: &[f32; 3], p1: &[f32; 3], p2: &[f32; 3]) -> [f32; 4] {
-    let nx = (p1[1] - p0[1]) * (p2[2] - p0[2]) - (p1[2] - p0[2]) * (p2[1] - p0[1]);
-    let ny = (p1[2] - p0[2]) * (p2[0] - p0[0]) - (p2[2] - p0[2]) * (p1[0] - p0[0]);
-    let nz = (p2[1] - p0[1]) * (p1[0] - p0[0]) - (p1[1] - p0[1]) * (p2[0] - p0[0]);
-    let inv = 1.0f32 / (nz * nz + ny * ny + nx * nx).sqrt();
-    let n = [nx * inv, ny * inv, nz * inv];
-    let dd = -(n[0] * p0[0] + n[1] * p0[1] + n[2] * p0[2]);
-    [n[0], n[1], n[2], dd]
+    (planes, 5)
 }
 
 #[cfg(test)]
 mod tests_collision_build_quad_face_clip_planes__632f80 {
     use super::collision_build_quad_face_clip_planes__632f80;
+
+    /// The five planes, asserting the original ran to completion.
+    fn all_five(verts: &[[f32; 3]; 4], cap: &[f32; 3], off: &[f32; 3]) -> [[f32; 4]; 5] {
+        let (planes, written) = collision_build_quad_face_clip_planes__632f80(verts, cap, off);
+        assert_eq!(written, 5, "expected all five planes");
+        planes
+    }
 
     fn dot4_point(plane: &[f32; 4], p: &[f32; 3]) -> f32 {
         plane[0] * p[0] + plane[1] * p[1] + plane[2] * p[2] + plane[3]
@@ -1258,7 +1273,7 @@ mod tests_collision_build_quad_face_clip_planes__632f80 {
         let q = unit_quad();
         let cap = [0.0, 0.0, 1.0];
         let off = [0.0, 0.0, 2.0];
-        let planes = collision_build_quad_face_clip_planes__632f80(&q, &cap, &off).unwrap();
+        let planes = all_five(&q, &cap, &off);
         for plane in planes.iter().take(4) {
             let len = (plane[0] * plane[0] + plane[1] * plane[1] + plane[2] * plane[2]).sqrt();
             assert!((len - 1.0).abs() < 1e-5, "normal not unit: {len}");
@@ -1270,7 +1285,7 @@ mod tests_collision_build_quad_face_clip_planes__632f80 {
         let q = unit_quad();
         let cap = [0.0, 0.0, 1.0];
         let off = [0.0, 0.0, 3.0];
-        let planes = collision_build_quad_face_clip_planes__632f80(&q, &cap, &off).unwrap();
+        let planes = all_five(&q, &cap, &off);
         let capp = planes[4];
         assert_eq!(capp[0].to_bits(), cap[0].to_bits());
         assert_eq!(capp[1].to_bits(), cap[1].to_bits());
@@ -1287,7 +1302,7 @@ mod tests_collision_build_quad_face_clip_planes__632f80 {
         let q = unit_quad();
         let cap = [0.0, 0.0, 1.0];
         let off = [0.0, 0.0, 2.0];
-        let planes = collision_build_quad_face_clip_planes__632f80(&q, &cap, &off).unwrap();
+        let planes = all_five(&q, &cap, &off);
         // Centroid of the swept box interior.
         let center = [0.5, 0.5, 1.0];
         for plane in planes.iter().take(4) {
@@ -1304,7 +1319,7 @@ mod tests_collision_build_quad_face_clip_planes__632f80 {
         let q = unit_quad();
         let cap = [0.0, 0.0, 1.0];
         let off = [0.0, 0.0, 2.0];
-        let planes = collision_build_quad_face_clip_planes__632f80(&q, &cap, &off).unwrap();
+        let planes = all_five(&q, &cap, &off);
         for i in 0..4 {
             let a = q[i];
             let b = q[(i + 1) & 3];
@@ -1328,7 +1343,7 @@ mod tests_collision_build_quad_face_clip_planes__632f80 {
         let q = unit_quad();
         let cap = [0.0, 0.0, 1.0];
         let off = [0.0, 0.0, 2.0];
-        let planes = collision_build_quad_face_clip_planes__632f80(&q, &cap, &off).unwrap();
+        let planes = all_five(&q, &cap, &off);
         let p0 = planes[0];
         assert!((p0[0] - 0.0).abs() < 1e-6);
         assert!((p0[1] - (-1.0)).abs() < 1e-6);
@@ -1342,7 +1357,113 @@ mod tests_collision_build_quad_face_clip_planes__632f80 {
         let q = unit_quad();
         let cap = [0.0, 0.0, 1.0];
         let off = [0.0, 0.0, 0.0];
-        assert!(collision_build_quad_face_clip_planes__632f80(&q, &cap, &off).is_none());
+        assert_eq!(
+            collision_build_quad_face_clip_planes__632f80(&q, &cap, &off).1,
+            0
+        );
+    }
+
+    /// A degenerate edge leaves the side planes finished before it.
+    ///
+    /// The original writes each side plane straight through its out pointer during
+    /// that edge's own iteration, so a quad whose edge 1 collapses still reports
+    /// plane 0. Returning nothing would be a different observable region.
+    #[test]
+    fn a_late_degenerate_edge_keeps_the_planes_before_it() {
+        // Edge 0 spans (0,0,0)-(1,0,0); edges 1 and 2 collapse because verts 1, 2
+        // and 3 coincide, and the sweep is along +z so edge 0's area is fine.
+        let q = [
+            [0.0f32, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+        ];
+        let (planes, written) =
+            collision_build_quad_face_clip_planes__632f80(&q, &[0.0, 0.0, 1.0], &[0.0, 0.0, 2.0]);
+        assert_eq!(written, 1);
+        assert!(planes[0].iter().any(|v| *v != 0.0), "plane 0 not written");
+        assert_eq!(planes[1], [0.0; 4]);
+    }
+
+    /// One sweep case: the quad, the cap normal, the sweep offset.
+    type Case = ([[f32; 3]; 4], [f32; 3], [f32; 3]);
+
+    /// Quads, cap normals and offsets that separate the shape below.
+    fn sweep() -> [Case; 48] {
+        // Sign and all 23 mantissa bits kept, exponent forced: values in +/-[1, 2).
+        // Mapping [1, 2) onto [-1, 1) by `v * 2 - 3` would leave every value a
+        // multiple of 2^-22, and sums of those are exact in f32 - which is enough
+        // to stop several of the shapes below from separating at all.
+        let spread = |bits: u32| f32::from_bits((bits & 0x807f_ffff) | 0x3f80_0000);
+        let mut out = [([[0.0f32; 3]; 4], [0.0f32; 3], [0.0f32; 3]); 48];
+        let mut w = 0x2f5c_71d3_u32;
+        let mut next = move || {
+            w = w.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            w
+        };
+        for (quad, cap, off) in &mut out {
+            for vertex in quad.iter_mut() {
+                for component in vertex.iter_mut() {
+                    *component = spread(next());
+                }
+            }
+            for component in cap.iter_mut() {
+                *component = spread(next());
+            }
+            for component in off.iter_mut() {
+                *component = spread(next());
+            }
+        }
+        out
+    }
+
+    /// The cap plane's `D` with its point narrowed to `f32` before the dot.
+    ///
+    /// The one shape fact in this function a test can see, and that scope is
+    /// deliberate. Of everything here, the side planes come from `0x637480`
+    /// (pinned in `plane.rs`) and `D` is the only number this body forms itself.
+    /// The cross components, the squared area and the orientation dot are each
+    /// consumed by a single comparison and never stored, so they can only be
+    /// observed when they move a decision, and they do not: 200k quads including
+    /// ones deliberately squashed towards coplanar produced no sign disagreement
+    /// between the two orientation-dot groupings.
+    ///
+    /// The cap dot's own order is unobservable for the same reason a reassociation
+    /// usually is. Regrouping three `f64` products perturbs the sum by about
+    /// 2^-53 relative, and the `f32` store that follows is granular to 2^-24, so
+    /// it survives only under heavy cancellation: 0 of 2M random cases. Narrowing
+    /// the point instead perturbs it by 2^-24, which lands 35% of the time. Order
+    /// is fixed here because it is what the bytes do; width is fixed *and* pinned.
+    fn narrowed_cap_point(
+        verts: &[[f32; 3]; 4],
+        cap_normal: &[f32; 3],
+        face_offset: &[f32; 3],
+    ) -> f32 {
+        let v0 = verts[0];
+        let cp = [
+            f64::from(v0[0] + face_offset[0]),
+            f64::from(v0[1] + face_offset[1]),
+            f64::from(v0[2] + face_offset[2]),
+        ];
+        let term = |k: usize| cp[k] * f64::from(cap_normal[k]);
+        super::super::f64_to_f32(-((term(2) + term(1)) + term(0)))
+    }
+
+    #[test]
+    fn separates_from_a_narrowed_cap_point() {
+        let separating = sweep()
+            .iter()
+            .filter(|(quad, cap, off)| {
+                let (faithful, written) =
+                    collision_build_quad_face_clip_planes__632f80(quad, cap, off);
+                written == 5
+                    && faithful[4][3].to_bits() != narrowed_cap_point(quad, cap, off).to_bits()
+            })
+            .count();
+        assert!(
+            separating > 0,
+            "sweep no longer separates the wide cap point from a narrowed one"
+        );
     }
 }
 
@@ -2025,15 +2146,27 @@ mod tests_sq_dist_point_triangle_edges__6dc900 {
 /// side plane is the triangle plane through `A`, `B`, `A+extrude`, flipped so the
 /// opposite vertex stays on the negative side. `extrude` is the sweep offset;
 /// `face_plane` is the cap plane's normal, offset through `tri[0]+extrude`.
-/// Returns `None` when any edge is degenerate (swept area below `area_eps`).
 /// `flip_thresh` is the host orientation threshold (`0.0`).
+///
+/// Returns the planes and how many leading entries the original had written when
+/// it returned: 4 on success, and on a degenerate edge (swept area below
+/// `area_eps`) the number of side planes already finished, since each is written
+/// straight through the out pointer during its own iteration.
+///
+/// The triangle sibling of `collision_build_quad_face_clip_planes__632f80`, and
+/// the same shape facts apply with one difference the algebra hides: **this one's
+/// orientation dot runs `(z + y) + x`** (`0x632614`..`0x632627`) where the quad's
+/// runs `(z + x) + y`. The cross components are also stored to the other slots, so
+/// the original computes them with the signs swapped throughout; that is invisible
+/// (they only feed a squared magnitude) and the faithful expressions are written
+/// here so both siblings read alike.
 pub fn collision_build_face_edge_planes__632460(
     tri: &[[f32; 3]; 3],
     extrude: &[f32; 3],
     face_plane: &[f32; 3],
     area_eps: f32,
     flip_thresh: f32,
-) -> Option<[[f32; 4]; 4]> {
+) -> ([[f32; 4]; 4], usize) {
     let mut planes = [[0.0f32; 4]; 4];
 
     for i in 0..3 {
@@ -2045,40 +2178,59 @@ pub fn collision_build_face_edge_planes__632460(
         // Degenerate test on |e1 x e2|^2 with e1 = Asw - A (= extrude), e2 = B - A.
         let e1 = [asw[0] - a[0], asw[1] - a[1], asw[2] - a[2]];
         let e2 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
-        let cx = e1[1] * e2[2] - e1[2] * e2[1];
-        let cy = e2[0] * e1[2] - e1[0] * e2[2];
-        let cz = e1[0] * e2[1] - e2[0] * e1[1];
-        let area_sq = cx * cx + cy * cy + cz * cz;
-        if area_sq.abs() < area_eps {
-            return None;
+        let cross = |u: f32, v: f32, w: f32, t: f32| {
+            super::f64_to_f32(f64::from(u) * f64::from(v) - f64::from(w) * f64::from(t))
+        };
+        let cx = cross(e1[2], e2[1], e1[1], e2[2]);
+        let cy = cross(e2[2], e1[0], e1[2], e2[0]);
+        let cz = cross(e1[1], e2[0], e2[1], e1[0]);
+        let sq = |v: f32| f64::from(v) * f64::from(v);
+        let area_sq = (sq(cy) + sq(cz)) + sq(cx);
+        if area_sq.abs() < f64::from(area_eps) {
+            return (planes, i);
         }
 
-        // Plane from triangle (A, B, Asw), then inward-flip if the opposite
-        // vertex is on the positive side.
-        let mut plane = plane_from_triangle(&a, &b, &asw);
+        // Plane from triangle (A, B, Asw), the original's own `0x637480` call, then
+        // inward-flip if the opposite vertex is on the positive side.
+        let mut plane = super::plane::c4_plane__from_triangle__637480(&a, &b, &asw);
         let d = [opp[0] - a[0], opp[1] - a[1], opp[2] - a[2]];
-        let side = d[0] * plane[0] + d[1] * plane[1] + d[2] * plane[2];
-        if side > flip_thresh {
+        let term = |k: usize| f64::from(d[k]) * f64::from(plane[k]);
+        let side = (term(2) + term(1)) + term(0);
+        if side > f64::from(flip_thresh) {
             plane = [-plane[0], -plane[1], -plane[2], -plane[3]];
         }
         planes[i] = plane;
     }
 
-    // Cap plane: `face_plane` normal through tri[0] + extrude.
+    // Cap plane: `face_plane` normal through tri[0] + extrude, that point kept wide.
     let mid = [
-        tri[0][0] + extrude[0],
-        tri[0][1] + extrude[1],
-        tri[0][2] + extrude[2],
+        f64::from(tri[0][0]) + f64::from(extrude[0]),
+        f64::from(tri[0][1]) + f64::from(extrude[1]),
+        f64::from(tri[0][2]) + f64::from(extrude[2]),
     ];
-    let cap_d = -(mid[0] * face_plane[0] + mid[1] * face_plane[1] + mid[2] * face_plane[2]);
+    let term = |k: usize| mid[k] * f64::from(face_plane[k]);
+    let cap_d = super::f64_to_f32(-((term(2) + term(1)) + term(0)));
     planes[3] = [face_plane[0], face_plane[1], face_plane[2], cap_d];
 
-    Some(planes)
+    (planes, 4)
 }
 
 #[cfg(test)]
 mod tests_collision_build_face_edge_planes__632460 {
     use super::collision_build_face_edge_planes__632460 as build;
+
+    /// The four planes, asserting the original ran to completion.
+    fn all_four(
+        tri: &[[f32; 3]; 3],
+        extrude: &[f32; 3],
+        face_plane: &[f32; 3],
+        area_eps: f32,
+        flip_thresh: f32,
+    ) -> [[f32; 4]; 4] {
+        let (planes, written) = build(tri, extrude, face_plane, area_eps, flip_thresh);
+        assert_eq!(written, 4, "expected all four planes");
+        planes
+    }
 
     // The oracle repeats the kernel's degeneracy epsilon at full precision so both
     // land on the same stored f32; trimming digits would test a different value.
@@ -2096,7 +2248,7 @@ mod tests_collision_build_face_edge_planes__632460 {
     #[test]
     fn edge_planes_unit_normalized() {
         let t = unit_tri();
-        let planes = build(&t, &[0.0, 0.0, 2.0], &[0.0, 0.0, 1.0], AREA_EPS, 0.0).unwrap();
+        let planes = all_four(&t, &[0.0, 0.0, 2.0], &[0.0, 0.0, 1.0], AREA_EPS, 0.0);
         for plane in planes.iter().take(3) {
             let len = (plane[0] * plane[0] + plane[1] * plane[1] + plane[2] * plane[2]).sqrt();
             assert!((len - 1.0).abs() < 1e-5, "len={len}");
@@ -2107,7 +2259,7 @@ mod tests_collision_build_face_edge_planes__632460 {
     fn each_edge_plane_contains_its_endpoints() {
         let t = unit_tri();
         let ex = [0.0, 0.0, 2.0];
-        let planes = build(&t, &ex, &[0.0, 0.0, 1.0], AREA_EPS, 0.0).unwrap();
+        let planes = all_four(&t, &ex, &[0.0, 0.0, 1.0], AREA_EPS, 0.0);
         for i in 0..3 {
             let a = t[i];
             let b = t[(i + 1) % 3];
@@ -2121,7 +2273,7 @@ mod tests_collision_build_face_edge_planes__632460 {
     #[test]
     fn opposite_vertex_on_negative_side() {
         let t = unit_tri();
-        let planes = build(&t, &[0.0, 0.0, 2.0], &[0.0, 0.0, 1.0], AREA_EPS, 0.0).unwrap();
+        let planes = all_four(&t, &[0.0, 0.0, 2.0], &[0.0, 0.0, 1.0], AREA_EPS, 0.0);
         for i in 0..3 {
             let opp = t[(i + 2) % 3];
             assert!(dot4(&planes[i], &opp) <= 1e-4);
@@ -2133,7 +2285,7 @@ mod tests_collision_build_face_edge_planes__632460 {
         let t = unit_tri();
         let ex = [0.0, 0.0, 3.0];
         let face = [0.0, 0.0, 1.0];
-        let planes = build(&t, &ex, &face, AREA_EPS, 0.0).unwrap();
+        let planes = all_four(&t, &ex, &face, AREA_EPS, 0.0);
         let cap = planes[3];
         assert_eq!(cap[0].to_bits(), face[0].to_bits());
         assert_eq!(cap[1].to_bits(), face[1].to_bits());
@@ -2145,13 +2297,16 @@ mod tests_collision_build_face_edge_planes__632460 {
     #[test]
     fn degenerate_zero_extrude_returns_none() {
         let t = unit_tri();
-        assert!(build(&t, &[0.0, 0.0, 0.0], &[0.0, 0.0, 1.0], AREA_EPS, 0.0).is_none());
+        assert_eq!(
+            build(&t, &[0.0, 0.0, 0.0], &[0.0, 0.0, 1.0], AREA_EPS, 0.0).1,
+            0
+        );
     }
 
     #[test]
     fn known_value_edge0_plane() {
         let t = unit_tri();
-        let planes = build(&t, &[0.0, 0.0, 2.0], &[0.0, 0.0, 1.0], AREA_EPS, 0.0).unwrap();
+        let planes = all_four(&t, &[0.0, 0.0, 2.0], &[0.0, 0.0, 1.0], AREA_EPS, 0.0);
         let p = planes[0];
         assert!(p[0].abs() < 1e-6);
         assert!((p[1] + 1.0).abs() < 1e-6, "{}", p[1]);

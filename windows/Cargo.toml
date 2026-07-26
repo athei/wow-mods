@@ -65,7 +65,7 @@ too_many_lines = "allow"                # 65
 # has no hardware FMA, so `mul_add` lowers to an `fmaf` libcall. (The AVX2
 # native-Windows variant does have FMA, which is why the faithfulness argument
 # is the one that carries this and not the ISA.)
-suboptimal_flops = "allow"              # 1181
+suboptimal_flops = "allow"              # 1162
 # Stricter unsafe discipline.
 missing_safety_doc = "warn"
 not_unsafe_ptr_arg_deref = "warn"
@@ -137,7 +137,7 @@ if_not_else = "allow"                   # 12
 suspicious_operation_groupings = "allow" # 12
 # The tail `match` of a transcribed function: the arms ARE the original's branch
 # structure, and four of the five sites are installed hook adapters.
-option_if_let_else = "allow"            # 5
+option_if_let_else = "allow"            # 3
 # Each site destructures a fixed-size array just read out of the client's memory,
 # and the index literals are that record's field map.
 tuple_array_conversions = "allow"       # 4

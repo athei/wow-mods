@@ -2230,16 +2230,22 @@ pub fn collision_build_quad_face_clip_planes__632f80(
     // SAFETY: `face_offset` is a non-null caller-owned vector of 3 contiguous f32.
     let off = &unsafe { face_offset.cast::<[f32; 3]>().read_unaligned() };
 
-    match crate::math::collision::collision_build_quad_face_clip_planes__632f80(&quad, cap, off) {
-        Some(planes) => {
-            // SAFETY: `out_planes` is non-null and addresses 20 writable contiguous f32.
-            unsafe {
-                *out_planes.cast::<[[f32; 4]; 5]>() = planes;
-            }
-            1
+    let (planes, written) =
+        crate::math::collision::collision_build_quad_face_clip_planes__632f80(&quad, cap, off);
+    // Only the prefix the original had finished: it writes each side plane through
+    // this pointer during that edge's own iteration, so a degenerate edge leaves
+    // the earlier ones behind rather than nothing at all.
+    let slots = out_planes.cast::<[f32; 4]>();
+    for (i, plane) in planes.iter().take(written).enumerate() {
+        // SAFETY: `out_planes` is non-null and addresses 20 writable contiguous f32
+        // (five plane equations), so `i < written <= 5` keeps the offset in bounds.
+        let slot = unsafe { slots.add(i) };
+        // SAFETY: `slot` addresses one writable plane inside that region.
+        unsafe {
+            *slot = *plane;
         }
-        None => 0,
     }
+    u32::from(written == 5)
 }
 
 /// `Collision::RayPlaneIntersectTime`.
@@ -8991,23 +8997,27 @@ pub fn collision_build_face_edge_planes__632460(
     // image.
     let flip_thresh = unsafe { FLIP_THRESH.read() };
 
-    match crate::math::collision::collision_build_face_edge_planes__632460(
+    let (planes, written) = crate::math::collision::collision_build_face_edge_planes__632460(
         &tri,
         ex,
         fp,
         area_eps,
         flip_thresh,
-    ) {
-        Some(planes) => {
-            // SAFETY: `out_planes` is non-null and addresses 16 writable contiguous
-            // f32 (four plane equations).
-            unsafe {
-                *out_planes.cast::<[[f32; 4]; 4]>() = planes;
-            }
-            1
+    );
+    // Only the prefix the original had finished: it writes each side plane through
+    // this pointer during that edge's own iteration, so a degenerate edge leaves
+    // the earlier ones behind rather than nothing at all.
+    let slots = out_planes.cast::<[f32; 4]>();
+    for (i, plane) in planes.iter().take(written).enumerate() {
+        // SAFETY: `out_planes` is non-null and addresses 16 writable contiguous f32
+        // (four plane equations), so `i < written <= 4` keeps the offset in bounds.
+        let slot = unsafe { slots.add(i) };
+        // SAFETY: `slot` addresses one writable plane inside that region.
+        unsafe {
+            *slot = *plane;
         }
-        None => 0,
     }
+    u32::from(written == 4)
 }
 
 /// `Collision::ClipPolygonByPlane`.

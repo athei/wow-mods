@@ -184,8 +184,10 @@ pub fn c33_matrix__from_axis_angle__7be490(
 /// asserts need is that *some* input separates them.
 #[cfg(test)]
 pub fn axis_angle_sweep() -> [([f32; 3], f32); 64] {
-    // In [1, 2) with every mantissa bit in play, mapped to [-1, 1).
-    let spread = |bits: u32| f32::from_bits(0x3f80_0000 | (bits & 0x007f_ffff)) * 2.0 - 3.0;
+    // Sign and all 23 mantissa bits kept, exponent forced: values in +/-[1, 2).
+    // Mapping [1, 2) onto [-1, 1) by `v * 2 - 3` would leave every value a multiple
+    // of 2^-22, and sums of those are exact in f32.
+    let spread = |bits: u32| f32::from_bits((bits & 0x807f_ffff) | 0x3f80_0000);
     let mut out = [([0.0f32; 3], 0.0f32); 64];
     let mut w = 0x3f2c_1d09_u32;
     let mut next = move || {
