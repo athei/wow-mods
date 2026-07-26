@@ -993,6 +993,20 @@ fn emit_diff_compare(
                 d.expected, d.ulp
             );
         }
+        // After the compare, so the dump describes the divergence just reported.
+        // Snapshot regions only: a live pointer read here would be the post-call
+        // state, which is exactly what the reimpl did NOT see.
+        let ins_list = d
+            .ins
+            .iter()
+            .map(|r| format!("({0}, &snap{0}.0[..])", r.arg))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _ = writeln!(
+            out,
+            "    super::diff::dump_case(&{screaming}_DIFF_STATS, {name:?}, {}, &[{ins_list}], &scratch.0, orig_out);",
+            d.expected
+        );
     }
 
     // Compare scalar returns; pointer/void returns carry no value to compare.

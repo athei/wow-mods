@@ -29,6 +29,12 @@ const MISMATCH_EVERY: u32 = 1024;
 /// Per-hook event counter; one generated `static` per diff-annotated entry.
 pub struct Stats {
     events: AtomicU32,
+    /// One-shot latch for [`dump_case`], which fires once and not once per call.
+    ///
+    /// A non-zero event count stays true on every *matching* call between the
+    /// first and second divergence, so counting alone would turn a hot hook into
+    /// a flood.
+    dumped: ::core::sync::atomic::AtomicBool,
 }
 
 impl Stats {
@@ -36,6 +42,7 @@ impl Stats {
     pub const fn new() -> Self {
         Self {
             events: AtomicU32::new(0),
+            dumped: ::core::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -109,6 +116,89 @@ pub fn note_armed(armed: &::core::sync::atomic::AtomicBool, label: &str, delegat
         } else {
             log::info!(target: super::LOG_TARGET, "[diff] armed: {label}");
         }
+    }
+}
+
+/// Print the operands and every differing lane on a hook's first divergence.
+///
+/// The region comparators name the first byte or lane that disagrees, which is
+/// enough to classify a rounding but not enough to *reproduce* one. A divergence
+/// that survives every static reading of the bytes — matching term order, seed,
+/// element mapping and widths, with the inputs proven not to move — can only be
+/// pinned down by replaying the operands that produced it, and until now nothing
+/// recorded them. `C44Matrix::Multiply` sat in exactly that state.
+///
+/// Called after the region compare, so a non-zero event count means the divergence
+/// this is about to describe is the one that just happened. Latched, so a hot
+/// per-frame hook pays one hex dump per session and an atomic load thereafter.
+pub fn dump_case(
+    stats: &Stats,
+    label: &str,
+    expected: bool,
+    ins: &[(usize, &[u8])],
+    ours: &[u8],
+    orig: &[u8],
+) {
+    // A divergence must have happened (events was ticked by the compare just
+    // above) and this must be the first dump for this hook.
+    if stats.events.load(Ordering::Relaxed) == 0 || stats.dumped.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    for (arg, bytes) in ins {
+        emit_case(
+            expected,
+            format_args!("{label} case: arg{arg} = {}", Hex(bytes)),
+        );
+    }
+    emit_case(
+        expected,
+        format_args!("{label} case: out ours = {}", Hex(ours)),
+    );
+    emit_case(
+        expected,
+        format_args!("{label} case: out orig = {}", Hex(orig)),
+    );
+
+    // Per-lane, so a signed zero or a one-ulp step is readable without counting
+    // hex digits. Only the lanes that differ: the rest is already above.
+    if ours.len() == orig.len() && ours.len().is_multiple_of(4) {
+        for (lane, (a, b)) in ours.chunks_exact(4).zip(orig.chunks_exact(4)).enumerate() {
+            let (ab, bb) = (
+                u32::from_le_bytes([a[0], a[1], a[2], a[3]]),
+                u32::from_le_bytes([b[0], b[1], b[2], b[3]]),
+            );
+            if ab != bb {
+                emit_case(
+                    expected,
+                    format_args!(
+                        "{label} case: lane {lane} ours {ab:#010x} ({}) orig {bb:#010x} ({})",
+                        f32::from_bits(ab),
+                        f32::from_bits(bb)
+                    ),
+                );
+            }
+        }
+    }
+}
+
+/// Route a case line to the same level the entry's divergences use.
+fn emit_case(expected: bool, args: core::fmt::Arguments) {
+    if expected {
+        log::debug!(target: super::LOG_TARGET, "[diff] {args}");
+    } else {
+        log::warn!(target: super::LOG_TARGET, "[diff] {args}");
+    }
+}
+
+/// Lowercase hex of a byte slice, no separators, written without allocating.
+struct Hex<'a>(&'a [u8]);
+
+impl core::fmt::Display for Hex<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        for b in self.0 {
+            write!(f, "{b:02x}")?;
+        }
+        Ok(())
     }
 }
 
