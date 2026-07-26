@@ -392,9 +392,10 @@ mod tests_collide_box_box__7c3780 {
 /// barycentrics `u` and `u + v` (not the ray parameter `t`) stay within the
 /// tolerance band, and the returned `t = dot(qvec, edge2) / det` is left
 /// unclamped. Returns `None` on a miss.
-// The band tests stay negated — `!(v >= lo)` and `!(u + v <= hi)` — so a NaN
-// barycentric misses as in the original; `v < lo` / `u + v > hi` would hit.
-#[allow(clippy::neg_cmp_op_on_partial_ord)]
+// The band tests are ordered-negative — `v < lo`, `u + v > hi` — so a miss needs
+// an ordered compare and a NaN barycentric reaches the hit path, as in the
+// original: its `FCOM` + `TEST AH,5`/`JNP` and `TEST AH,0x41`/`JZ` pairs all
+// leave the unordered case falling through.
 pub fn collide_line_triangle_indexed16__7c29f0(
     segment: &[f32; 6],
     v0: &[f32; 3],
@@ -438,7 +439,7 @@ pub fn collide_line_triangle_indexed16__7c29f0(
 
     // u = dot(tvec, pvec) * invDet.
     let u = (tx * px + ty * py + tz * pz) * inv_det;
-    if !(u >= t_min && u <= t_max) {
+    if u < t_min || u > t_max {
         return None;
     }
 
@@ -449,10 +450,10 @@ pub fn collide_line_triangle_indexed16__7c29f0(
 
     // v = dot(dir, qvec) * invDet.
     let v = (qx * dir[0] + qy * dir[1] + qz * dir[2]) * inv_det;
-    if !(v >= t_min) {
+    if v < t_min {
         return None;
     }
-    if !(u + v <= t_max) {
+    if u + v > t_max {
         return None;
     }
 
@@ -475,6 +476,26 @@ mod tests_collide_line_triangle_indexed16__7c29f0 {
     ) -> Option<[f32; 3]> {
         let seg = [o[0], o[1], o[2], d[0], d[1], d[2]];
         f(&seg, &v0, &v1, &v2, tol)
+    }
+
+    /// Law: a NaN barycentric reaches the hit path, not a miss.
+    ///
+    /// The original's four band compares are the unordered-tolerant `TEST AH,5`
+    /// / `TEST AH,0x41` pairs, so an unordered result falls through all of them.
+    /// Pinned because the positive in-band predicate that would reject NaN reads
+    /// more naturally and is the easy thing to reintroduce.
+    #[test]
+    fn nan_reaches_the_hit_path() {
+        let seg = [0.25f32, 0.25, 1.0, 0.0, 0.0, -1.0];
+        let r = f(
+            &seg,
+            &[f32::NAN, 0.0, 0.0],
+            &[1.0, 0.0, 0.0],
+            &[0.0, 1.0, 0.0],
+            0.0,
+        )
+        .expect("NaN must not miss");
+        assert!(r.iter().any(|c| c.is_nan()), "{r:?}");
     }
 
     #[test]
@@ -585,8 +606,10 @@ mod tests_collide_line_triangle_indexed16__7c29f0 {
 /// array. The barycentric `u`,`v` and ray parameter `t` are accepted within the
 /// band `[-edge_tol, 1 + edge_tol]` (the reference's `±edge_tol` slack on a unit
 /// triangle/ray). Returns `Some((t, u, v))` on a hit, `None` on a miss. A
-/// near-parallel ray (`|det| < 1e-6`) is rejected. Computed in `f32` to match the
-/// reference SSE replacement's lane width.
+/// near-parallel ray (`|det| < 1e-6`) is rejected. Computed in `f32`; the
+/// original is x87 throughout and compares each band against an accumulator it
+/// never rounded to `f32`, so a value sitting exactly on a band edge can
+/// classify differently here.
 pub fn collide_line_triangle_indexed32__7c2c40(
     segment: &[f32; 6],
     v0: &[f32; 3],
@@ -624,9 +647,13 @@ pub fn collide_line_triangle_indexed32__7c2c40(
 
     // u = dot(tvec, pvec) * inv_det
     let u = (tvec[0] * pvec[0] + tvec[1] * pvec[1] + tvec[2] * pvec[2]) * inv_det;
-    // Positive in-band predicate (`u >= t_min && u <= t_max`) so a NaN `u` —
-    // which makes every comparison false — misses, exactly as the original.
-    if !(u >= t_min && u <= t_max) {
+    // Negative predicate, so a miss needs an ordered compare. The original's
+    // band tests are the unordered-tolerant form — `FCOM` then `FNSTSW AX` with
+    // `TEST AH,5`/`JNP` for the lower bound and `TEST AH,0x41`/`JZ` for the
+    // upper — and an unordered result sets both tested bits, so a NaN `u` takes
+    // neither miss branch and reaches the hit epilogue with NaN outputs. A
+    // positive `u >= t_min && u <= t_max` would reject NaN instead.
+    if u < t_min || u > t_max {
         return None;
     }
 
@@ -640,8 +667,9 @@ pub fn collide_line_triangle_indexed32__7c2c40(
     // v = dot(dir, qvec) * inv_det
     let v = (dir[0] * qvec[0] + dir[1] * qvec[1] + dir[2] * qvec[2]) * inv_det;
     // Lower bound on `v`, upper bound on `u + v` (the original tests the sum
-    // against `t_max`); positive predicate for the same NaN-misses reason.
-    if !(v >= t_min && u + v <= t_max) {
+    // against `t_max`); negative predicates for the same fall-through reason as
+    // the `u` band.
+    if v < t_min || u + v > t_max {
         return None;
     }
 
@@ -689,6 +717,24 @@ mod tests_collide_line_triangle_indexed32__7c2c40 {
         assert!((py - target[1]).abs() < 1e-5, "py={py}");
         // origin.z + t*dir.z = 5 + t*(-1) = 0 => t = 5
         assert!((t - 5.0).abs() < 1e-4, "t={t}");
+    }
+
+    /// Law: a NaN barycentric falls through the band tests and reports a hit.
+    ///
+    /// The original compares each band with `FCOM` + `FNSTSW AX` + a `TEST AH`
+    /// mask, and an unordered result sets every bit those masks test, so neither
+    /// miss branch is taken and the hit epilogue runs with NaN outputs. Pinned
+    /// because the positive in-band predicate that would reject NaN reads more
+    /// naturally and is the easy thing to reintroduce.
+    #[test]
+    fn nan_barycentric_reaches_the_hit_path() {
+        let v0 = [f32::NAN, 0.0, 0.0];
+        let v1 = [1.0f32, 0.0, 0.0];
+        let v2 = [0.0f32, 1.0, 0.0];
+        let seg = [1.0 / 3.0f32, 1.0 / 3.0, 1.0, 0.0, 0.0, -1.0];
+        let (t, u, v) = f(&seg, &v0, &v1, &v2, 0.0).expect("NaN must not miss");
+        assert!(u.is_nan(), "u={u}");
+        assert!(v.is_nan() || t.is_nan(), "v={v} t={t}");
     }
 
     // A ray parallel to the triangle plane has near-zero determinant => miss.
@@ -754,9 +800,11 @@ mod tests_collide_line_triangle_indexed32__7c2c40 {
 /// register. Returns `Some([t, u, v])` on a hit and `None` on a miss, matching
 /// the reference's boolean result; `t`,`u`,`v` are the values the original
 /// writes to its `outT`/`outUV` out-parameters.
-// Same negated band tests as the reference — `!(v >= lo)`, `!(u + v <= hi)` —
-// so a NaN barycentric misses; `v < lo` / `u + v > hi` would report a hit.
-#[allow(clippy::neg_cmp_op_on_partial_ord)]
+// Ordered-negative band tests, as in the reference — `v < lo`, `u + v > hi` —
+// so a miss needs an ordered compare and a NaN barycentric reaches the hit path.
+// The near-parallel gate below needs the same shape for the same reason: the
+// original's first compare branches to the continue path on unordered, so a NaN
+// determinant is not treated as near-parallel.
 pub fn collide_line_triangle__7c27d0(
     segment: &[f32; 6],
     tri: &[f32; 9],
@@ -784,7 +832,7 @@ pub fn collide_line_triangle__7c27d0(
 
     // det = dot(e1, pvec). Two-sided: reject only the parallel band |det| < EPS.
     let det = pvec[0] * e1[0] + pvec[1] * e1[1] + pvec[2] * e1[2];
-    if !(det <= -EPS || det >= EPS) {
+    if det > -EPS && det < EPS {
         return None;
     }
     let inv_det = ONE / det;
@@ -798,7 +846,7 @@ pub fn collide_line_triangle__7c27d0(
 
     // u = dot(tvec, pvec) * inv_det.
     let u = (tvec[0] * pvec[0] + tvec[1] * pvec[1] + tvec[2] * pvec[2]) * inv_det;
-    if !(u >= t_min && u <= t_max) {
+    if u < t_min || u > t_max {
         return None;
     }
 
@@ -811,10 +859,10 @@ pub fn collide_line_triangle__7c27d0(
 
     // v = dot(dir, qvec) * inv_det.
     let v = (qvec[0] * dir[0] + qvec[1] * dir[1] + qvec[2] * dir[2]) * inv_det;
-    if !(v >= t_min) {
+    if v < t_min {
         return None;
     }
-    if !(u + v <= t_max) {
+    if u + v > t_max {
         return None;
     }
 
@@ -833,6 +881,21 @@ mod tests_collide_line_triangle__7c27d0 {
 
     // Unit triangle in the z=0 plane: v0=(0,0,0), v1=(1,0,0), v2=(0,1,0).
     const TRI: [f32; 9] = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+
+    /// Law: a NaN barycentric or determinant reaches the hit path, not a miss.
+    ///
+    /// Every band compare in the original is `FCOM` + `FNSTSW AX` + a `TEST AH`
+    /// mask whose bits an unordered result all sets, so neither miss branch is
+    /// taken; the near-parallel gate likewise branches to the continue path on
+    /// unordered. Pinned because the positive in-band predicate that would
+    /// reject NaN reads more naturally and is the easy thing to reintroduce.
+    #[test]
+    fn nan_reaches_the_hit_path() {
+        const NAN_TRI: [f32; 9] = [f32::NAN, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+        let seg = [0.25, 0.25, 1.0, 0.0, 0.0, -1.0];
+        let r = collide_line_triangle__7c27d0(&seg, &NAN_TRI, 0.0).expect("NaN must not miss");
+        assert!(r.iter().any(|c| c.is_nan()), "{r:?}");
+    }
 
     #[test]
     fn hits_center_known_values() {
