@@ -93,7 +93,7 @@ pub fn c44_matrix__multiply__7bc6a0(out: *mut f32, a: *const f32, b: *const f32)
     // SAFETY: as for `a` — `b` addresses 16 contiguous, 4-byte-aligned `f32`.
     let bm = &unsafe { b.cast::<[f32; 16]>().read_unaligned() };
 
-    let product = crate::math::matrix44::mul4x4(am, bm);
+    let product = crate::math::matrix44::c44_matrix__multiply__7bc6a0(am, bm);
     // Build the verbose input dump only on a non-finite product, so the hot path
     // pays just the cheap scan.
     if product.iter().any(|v| !v.is_finite()) {

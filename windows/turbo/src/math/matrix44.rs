@@ -24,6 +24,127 @@ pub fn mul4x4(a: &[f32; 16], b: &[f32; 16]) -> [f32; 16] {
     out
 }
 
+/// Per-element `k` summation order of `C44Matrix::Multiply`, indexed `r * 4 + c`.
+///
+/// The original is fully unrolled and its sixteen four-term dots do **not** share
+/// one `k` order: there are six distinct ones, read off the `FLD`/`FMUL`/`FADDP`
+/// sequence from `0x7bc6a8` to `0x7bc8dc`. Nothing about the algebra predicts
+/// them — they are whatever the 1.12 compiler's scheduler emitted — so the table
+/// is transcribed, not derived.
+const MULTIPLY_K_ORDER: [[usize; 4]; 16] = [
+    [3, 2, 1, 0],
+    [3, 2, 1, 0],
+    [3, 2, 1, 0],
+    [2, 3, 0, 1],
+    [3, 2, 0, 1],
+    [3, 2, 1, 0],
+    [3, 2, 1, 0],
+    [2, 3, 0, 1],
+    [3, 2, 0, 1],
+    [3, 2, 1, 0],
+    [3, 2, 1, 0],
+    [2, 3, 0, 1],
+    [2, 1, 3, 0],
+    [2, 0, 1, 3],
+    [2, 0, 1, 3],
+    [2, 1, 0, 3],
+];
+
+/// 4×4 row-major product as `C44Matrix::Multiply` (`0x7bc6a0`) computes it.
+///
+/// Same algebra as [`mul4x4`] and a different summation: each element sums its
+/// four products in that element's own [`MULTIPLY_K_ORDER`], starting from the
+/// first product rather than from a zero seed, so there are three additions and
+/// not four. Kept separate from [`mul4x4`] because that one has to keep agreeing
+/// to the bit with the dispatched D3DX product the animation update also uses,
+/// which sums `k = 0..3` from zero.
+pub fn c44_matrix__multiply__7bc6a0(a: &[f32; 16], b: &[f32; 16]) -> [f32; 16] {
+    let mut out = [0.0f32; 16];
+    for r in 0..4 {
+        for c in 0..4 {
+            let ks = MULTIPLY_K_ORDER[r * 4 + c];
+            let mut acc = a[r * 4 + ks[0]] * b[ks[0] * 4 + c];
+            acc += a[r * 4 + ks[1]] * b[ks[1] * 4 + c];
+            acc += a[r * 4 + ks[2]] * b[ks[2] * 4 + c];
+            acc += a[r * 4 + ks[3]] * b[ks[3] * 4 + c];
+            out[r * 4 + c] = acc;
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests_c44_matrix__multiply__7bc6a0 {
+    use super::{c44_matrix__multiply__7bc6a0 as stock, mul4x4};
+
+    /// Two matrices whose entries all carry a full non-terminating mantissa.
+    ///
+    /// Every reassociation of a four-term dot then lands on different bits.
+    /// Given as bit patterns: a rounded decimal literal is a different float and
+    /// would stop separating the orders.
+    fn fixtures() -> ([f32; 16], [f32; 16]) {
+        let mut a = [0.0f32; 16];
+        let mut b = [0.0f32; 16];
+        let mut aw = 0x3fc0_0001_u32;
+        let mut bw = 0xbf91_0003_u32;
+        for (slot_a, slot_b) in a.iter_mut().zip(b.iter_mut()) {
+            *slot_a = f32::from_bits(aw);
+            *slot_b = f32::from_bits(bw);
+            aw += 0x0001_3579;
+            bw += 0x0000_9adf;
+        }
+        (a, b)
+    }
+
+    #[test]
+    fn matches_the_transcribed_per_element_order() {
+        let (a, b) = fixtures();
+        let got = stock(&a, &b);
+        for r in 0..4 {
+            for c in 0..4 {
+                let ks = super::MULTIPLY_K_ORDER[r * 4 + c];
+                let mut want = a[r * 4 + ks[0]] * b[ks[0] * 4 + c];
+                want += a[r * 4 + ks[1]] * b[ks[1] * 4 + c];
+                want += a[r * 4 + ks[2]] * b[ks[2] * 4 + c];
+                want += a[r * 4 + ks[3]] * b[ks[3] * 4 + c];
+                assert_eq!(got[r * 4 + c].to_bits(), want.to_bits(), "element {r},{c}");
+            }
+        }
+    }
+
+    #[test]
+    fn separates_from_the_zero_seeded_k_ascending_form() {
+        // The fixture has to actually distinguish the two summations, otherwise
+        // this pins nothing and neither does the diff harness.
+        let (a, b) = fixtures();
+        let stock_form = stock(&a, &b);
+        let d3dx_form = mul4x4(&a, &b);
+        assert!(
+            (0..16).any(|i| stock_form[i].to_bits() != d3dx_form[i].to_bits()),
+            "fixture no longer separates the two summation orders"
+        );
+    }
+
+    #[test]
+    fn agrees_with_the_zero_seeded_form_on_exact_inputs() {
+        // Small integers make every intermediate exact, so both orders agree —
+        // which is exactly why the pre-existing tolerance tests never saw this.
+        let a: [f32; 16] = [
+            0.0, 1.0, 2.0, 3.0, //
+            4.0, 5.0, 6.0, 7.0, //
+            8.0, 9.0, 10.0, 11.0, //
+            12.0, 13.0, 14.0, 15.0,
+        ];
+        let b: [f32; 16] = [
+            16.0, 15.0, 14.0, 13.0, //
+            12.0, 11.0, 10.0, 9.0, //
+            8.0, 7.0, 6.0, 5.0, //
+            4.0, 3.0, 2.0, 1.0,
+        ];
+        assert_eq!(stock(&a, &b), mul4x4(&a, &b));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::mul4x4;
@@ -734,8 +855,11 @@ mod tests_c44_matrix__invert_orthonormal__7bd700 {
 ///
 /// `quat` is `[x, y, z, w]`. The rotation `R` is the standard quaternion->matrix
 /// in the original's row-major scratch layout, then composed with the incoming
-/// matrix via the shared 4x4 product [`mul4x4`]. The original writes the 16-float
-/// result back into the receiver; here it is returned by value.
+/// matrix. The original does not inline that product — it `call`s `0x7bc6a0` at
+/// `0x7bded7` — so the composition goes through
+/// [`c44_matrix__multiply__7bc6a0`] and inherits its per-element summation
+/// order, not [`mul4x4`]'s. The original writes the 16-float result back into
+/// the receiver; here it is returned by value.
 pub fn c44_matrix__rotate_quaternion__7bddb0(m: &[f32; 16], quat: &[f32; 4]) -> [f32; 16] {
     let x = quat[0];
     let y = quat[1];
@@ -775,12 +899,12 @@ pub fn c44_matrix__rotate_quaternion__7bddb0(m: &[f32; 16], quat: &[f32; 4]) -> 
         1.0,             // [15]
     ];
 
-    super::matrix44::mul4x4(&r, m)
+    super::matrix44::c44_matrix__multiply__7bc6a0(&r, m)
 }
 
 #[cfg(test)]
 mod tests_c44_matrix__rotate_quaternion__7bddb0 {
-    use super::{c44_matrix__rotate_quaternion__7bddb0 as rotq, mul4x4};
+    use super::c44_matrix__rotate_quaternion__7bddb0 as rotq;
 
     const IDENTITY: [f32; 16] = [
         1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
@@ -854,8 +978,12 @@ mod tests_c44_matrix__rotate_quaternion__7bddb0 {
             0.0,
             1.0,
         ];
-        let want = mul4x4(&r, &m);
-        approx(&out, &want, 1e-5);
+        // The original composes through `0x7bc6a0`, so the reference is that
+        // product and the comparison can be exact rather than tolerant.
+        let want = super::c44_matrix__multiply__7bc6a0(&r, &m);
+        for i in 0..16 {
+            assert_eq!(out[i].to_bits(), want[i].to_bits(), "element {i}");
+        }
     }
 }
 

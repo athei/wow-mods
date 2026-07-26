@@ -29,7 +29,10 @@ pub fn c4_plane__from_triangle__637480(p0: &[f32; 3], p1: &[f32; 3], p2: &[f32; 
     let nnx = scale * nx;
     let nny = scale * ny;
     let nnz = scale * nz;
-    let d = -(nnx * p0[0] + nny * p0[1] + nnz * p0[2]);
+    // `D` sums z first, then y, then x (`0x63752e`..`0x63753b`: the z product is
+    // formed, `FXCH`'d under the y product, and `FADDP st(2)` folds them before
+    // the x product arrives). Left to right over x, y, z is a different number.
+    let d = -((nnz * p0[2] + nny * p0[1]) + nnx * p0[0]);
 
     [nnx, nny, nnz, d]
 }
@@ -103,6 +106,39 @@ mod tests_c4_plane__from_triangle__637480 {
         let pl = f(&[0.0, 0.0, 5.0], &[1.0, 0.0, 5.0], &[0.0, 1.0, 5.0]);
         assert!((pl[2] - 1.0).abs() < 1e-6, "{pl:?}");
         assert!((pl[3] + 5.0).abs() < 1e-5, "{pl:?}");
+    }
+
+    #[test]
+    fn plane_distance_sums_z_then_y_then_x() {
+        // Corners with full non-terminating mantissas, so the two groupings of
+        // the `D` dot land on different bits. Bit patterns, not decimals: a
+        // rounded literal is a different float and stops separating them.
+        let p0 = [
+            f32::from_bits(0xc0b6_dcce),
+            f32::from_bits(0x40e5_86a5),
+            f32::from_bits(0x424b_9eff),
+        ];
+        let p1 = [
+            f32::from_bits(0xc083_e75b),
+            f32::from_bits(0x3f70_e248),
+            f32::from_bits(0x4127_c764),
+        ];
+        let p2 = [
+            f32::from_bits(0xc217_5cf0),
+            f32::from_bits(0x3fb6_eaad),
+            f32::from_bits(0x4179_5ff4),
+        ];
+        let pl = f(&p0, &p1, &p2);
+        let (nnx, nny, nnz) = (pl[0], pl[1], pl[2]);
+
+        let stock = -((nnz * p0[2] + nny * p0[1]) + nnx * p0[0]);
+        let left_to_right = -((nnx * p0[0] + nny * p0[1]) + nnz * p0[2]);
+        assert_eq!(pl[3].to_bits(), stock.to_bits());
+        assert_ne!(
+            stock.to_bits(),
+            left_to_right.to_bits(),
+            "fixture no longer separates the two summation orders"
+        );
     }
 
     #[test]
