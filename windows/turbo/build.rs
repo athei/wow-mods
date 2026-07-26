@@ -926,6 +926,24 @@ fn emit_diff_compare(
         "    {bind_reimpl}super::hooks::{snake}({reimpl_args});"
     );
 
+    // Before trusting any comparison, check each snapshotted input still holds
+    // what was snapshotted. If it moved while the original ran, the two sides
+    // were handed different inputs and the divergence says nothing about the
+    // reimplementation.
+    for region_in in &d.ins {
+        let _ = writeln!(
+            out,
+            "    // SAFETY: arg{0} is non-null and addresses {1} bytes (manifest diff.ins region).",
+            region_in.arg, region_in.len
+        );
+        let _ = writeln!(
+            out,
+            "    super::diff::note_input_drift(&{screaming}_DIFF_STATS, {name:?}, {0}, &snap{0}.0, \
+             unsafe {{ ::core::slice::from_raw_parts(arg{0} as *const u8, {1}) }});",
+            region_in.arg, region_in.len
+        );
+    }
+
     // Compare the scratch (ours) against the real out region (now the original's).
     if let Some(region_out) = &d.out {
         let _ = writeln!(

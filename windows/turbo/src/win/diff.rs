@@ -185,6 +185,32 @@ pub fn region_split(
     });
 }
 
+/// Report an input region that changed while the compare was running.
+///
+/// The compare path snapshots each `ins` region, runs the original on the live
+/// arguments, then replays the reimplementation against the snapshots. That is
+/// only a fair comparison while the live region still holds what was
+/// snapshotted. If it does not, the two sides were handed different inputs and
+/// **every divergence the entry reports is unattributable** — it says nothing
+/// about whether the reimplementation matches.
+///
+/// Nothing in the harness could distinguish that from a real arithmetic
+/// difference before this existed, which is exactly how a reimplementation
+/// verified from the bytes can still be reported as diverging.
+pub fn note_input_drift(stats: &Stats, label: &str, arg: usize, snapshot: &[u8], live: &[u8]) {
+    let Some(at) = ulp::first_divergence_bytes(snapshot, live) else {
+        return;
+    };
+    report(stats, label, false, || {
+        format!(
+            "INPUT DRIFT: arg{arg} byte {at} changed under the compare \
+             (snapshot {:#04x}, now {:#04x}) — divergences for this entry are \
+             not attributable to the reimplementation",
+            snapshot[at], live[at],
+        )
+    });
+}
+
 /// Compare an output region byte-exactly; report the first diverging offset.
 pub fn region_bytes(stats: &Stats, label: &str, expected: bool, ours: &[u8], orig: &[u8]) {
     let Some(at) = ulp::first_divergence_bytes(ours, orig) else {
