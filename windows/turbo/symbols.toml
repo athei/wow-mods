@@ -238,13 +238,6 @@ ret  = "i32"
 args = ["*const f32", "*const f32"]
 preserve = ["ecx", "edx"]
 
-
-# Integer return, which the harness compares exactly. No region: the return
-# is the whole observable, so an arithmetic difference registers here only
-# when it changes the verdict.
-[functions.AABB__MinLessThanMax__6acb40.diff]
-mode = "out"
-
 [functions.BoundsFit__AccumulateCentroid__71bc70]
 rva  = 0x31bc70
 sig  = "55 8B EC 8B 45 08 D9 41 54 D8 00 D9"
@@ -596,13 +589,6 @@ ret  = "i32"
 args = ["*const f32", "*const f32", "*const f32"]
 preserve = []
 
-
-# Integer return, which the harness compares exactly. No region: the return
-# is the whole observable, so an arithmetic difference registers here only
-# when it changes the verdict.
-[functions.CAaBox__IntersectSegment__6dc5a0.diff]
-mode = "out"
-
 [functions.CAaBox__TransformBy3x3__6dc470]
 rva  = 0x2dc470
 sig  = "55 8B EC 83 EC 0C 8B 45 08 56 57 8B 7D 0C 89 55"
@@ -662,14 +648,6 @@ ret  = "f32"
 args = ["*const f32"]
 preserve = ["eax", "ecx", "edx"]
 
-
-# Scalar return, compared at `ulp = 0`: `float` selects the region
-# comparator and never reaches a scalar, so exactness has to come from the
-# tolerance, and the default of 4 hides a one-ulp rounding difference.
-[functions.CCubicSpline__SqMag2D__454980.diff]
-mode = "out"
-ulp  = 0
-
 [functions.CGGameObjectDisplay_MoTransport__EvalMoveDistance__5f8dc0]
 rva  = 0x1f8dc0
 sig  = "55 8B EC 8B 45 14 85 C0 8B 45 18 0F"
@@ -694,14 +672,6 @@ ret  = "f32"
 args = ["*mut u8", "u32"]
 preserve = ["ecx"]
 
-
-# Scalar return, compared at `ulp = 0`: `float` selects the region
-# comparator and never reaches a scalar, so exactness has to come from the
-# tolerance, and the default of 4 hides a one-ulp rounding difference.
-[functions.CMovement__AccelCurveOffset__7c5f30.diff]
-mode = "out"
-ulp  = 0
-
 [functions.CMovement__ApplyAccelCurve__7c5e70]
 rva  = 0x3c5e70
 sig  = "55 8B EC 51 ?? ?? ?? ?? 00 00 20 74"
@@ -709,14 +679,6 @@ abi  = "thiscall"
 ret  = "f32"
 args = ["*mut u8", "f32"]
 preserve = ["ecx"]
-
-
-# Scalar return, compared at `ulp = 0`: `float` selects the region
-# comparator and never reaches a scalar, so exactness has to come from the
-# tolerance, and the default of 4 hides a one-ulp rounding difference.
-[functions.CMovement__ApplyAccelCurve__7c5e70.diff]
-mode = "out"
-ulp  = 0
 
 [functions.CMovement__ComputeForwardVector__7c5880]
 rva  = 0x3c5880
@@ -772,13 +734,6 @@ ret  = "u32"
 args = ["*const f32", "*const f32", "*const f32", "*const f32"]
 preserve = []
 
-
-# Integer return, which the harness compares exactly. No region: the return
-# is the whole observable, so an arithmetic difference registers here only
-# when it changes the verdict.
-[functions.CWorldBsp__AabbTriangleOverlap__6b8b70.diff]
-mode = "out"
-
 [functions.CWorldFrustum__ClassifyPoint__686c20]
 rva  = 0x286c20
 sig  = "55 8B EC 53 56 8B 75 0C 8B C1 57 8B"
@@ -829,14 +784,6 @@ ret  = "f32"
 args = ["*const f32", "u32", "f32"]
 preserve = ["ecx"]
 
-
-# Scalar return, compared at `ulp = 0`: `float` selects the region
-# comparator and never reaches a scalar, so exactness has to come from the
-# tolerance, and the default of 4 hides a one-ulp rounding difference.
-[functions.Cloud_GradientSample__6cf6c0.diff]
-mode = "out"
-ulp  = 0
-
 [functions.CollideBoxBox__7c3780]
 rva  = 0x3c3780
 sig  = "55 8B EC 83 EC 60 D9 02 56 D8 21 57"
@@ -844,13 +791,6 @@ abi  = "fastcall"
 ret  = "i32"
 args = ["*const f32", "*const f32"]
 preserve = ["ecx", "edx"]
-
-
-# Integer return, which the harness compares exactly. No region: the return
-# is the whole observable, so an arithmetic difference registers here only
-# when it changes the verdict.
-[functions.CollideBoxBox__7c3780.diff]
-mode = "out"
 
 [functions.CollideLineTriangleIndexed16__7c29f0]
 rva  = 0x3c29f0
@@ -892,13 +832,6 @@ ret  = "u32"
 args = ["*const f32", "*const u8", "*const f32", "*const f32", "*mut f32"]
 preserve = []
 
-
-# Integer return, which the harness compares exactly. No region: the return
-# is the whole observable, so an arithmetic difference registers here only
-# when it changes the verdict.
-[functions.Collision_BuildQuadFaceClipPlanes__632f80.diff]
-mode = "out"
-
 [functions.Collision_RayPlaneIntersectTime__6329e0]
 rva  = 0x2329e0
 sig  = "55 8B EC D9 41 08 8B 45 08 D8 4A 08"
@@ -914,13 +847,6 @@ abi  = "thiscall"
 ret  = "u32"
 args = ["*const f32", "*const f32"]
 preserve = []
-
-
-# Integer return, which the harness compares exactly. No region: the return
-# is the whole observable, so an arithmetic difference registers here only
-# when it changes the verdict.
-[functions.Frustum__CullBox__686940.diff]
-mode = "out"
 
 [functions.GxLight_PackFogGradientBlock__71c4e0]
 rva  = 0x0031c4e0   # VA 0x71c4e0 − image_base
@@ -954,14 +880,6 @@ ret  = "f32"
 args = ["f32", "f32", "f32"]
 preserve = ["ecx", "edx"]
 
-
-# Scalar return, compared at `ulp = 0`: `float` selects the region
-# comparator and never reaches a scalar, so exactness has to come from the
-# tolerance, and the default of 4 hides a one-ulp rounding difference.
-[functions.LerpClamp01__674ba0.diff]
-mode = "out"
-ulp  = 0
-
 [functions.Math_LerpFloat__6d15f0]
 rva  = 0x2d15f0
 sig  = "55 8B EC D9 45 0C D8 5D 08 DF E0 F6"
@@ -969,14 +887,6 @@ abi  = "stdcall"
 ret  = "f32"
 args = ["f32", "f32", "f32"]
 preserve = ["ecx", "edx"]
-
-
-# Scalar return, compared at `ulp = 0`: `float` selects the region
-# comparator and never reaches a scalar, so exactness has to come from the
-# tolerance, and the default of 4 hides a one-ulp rounding difference.
-[functions.Math_LerpFloat__6d15f0.diff]
-mode = "out"
-ulp  = 0
 
 [functions.Math_ScaleOneThird__6d6e50]
 rva  = 0x2d6e50
@@ -986,14 +896,6 @@ ret  = "f32"
 args = ["f32"]
 preserve = ["eax", "ecx", "edx"]
 
-
-# Scalar return, compared at `ulp = 0`: `float` selects the region
-# comparator and never reaches a scalar, so exactness has to come from the
-# tolerance, and the default of 4 hides a one-ulp rounding difference.
-[functions.Math_ScaleOneThird__6d6e50.diff]
-mode = "out"
-ulp  = 0
-
 [functions.Object_TestValueThreshold__6a4670]
 rva  = 0x2a4670
 sig  = "55 8B EC 8A 81 D4 01 00 00 84 C0 75 06 32 C0 5D C2 04 00"
@@ -1001,13 +903,6 @@ abi  = "thiscall"
 ret  = "bool"
 args = ["*const core::ffi::c_void", "*const f32"]
 preserve = []
-
-
-# Integer return, which the harness compares exactly. No region: the return
-# is the whole observable, so an arithmetic difference registers here only
-# when it changes the verdict.
-[functions.Object_TestValueThreshold__6a4670.diff]
-mode = "out"
 
 [functions.QuadElement__SeedFromFill__7bf7b0]
 rva  = 0x3bf7b0
@@ -1025,13 +920,6 @@ ret  = "u32"
 args = ["*const f32", "*const f32", "i32"]
 preserve = ["ecx", "edx"]
 
-
-# Integer return, which the harness compares exactly. No region: the return
-# is the whole observable, so an arithmetic difference registers here only
-# when it changes the verdict.
-[functions.Sphere_TestCellDirection__7c2040.diff]
-mode = "out"
-
 [functions.SqDistPointTriangleEdges__6dc900]
 rva  = 0x2dc900
 sig  = "55 8B EC 83 EC 20 D9 02 8B 45 08 D8"
@@ -1040,14 +928,6 @@ ret  = "f32"
 args = ["*const f32", "*const f32", "*const f32", "*const f32"]
 preserve = ["edx"]
 
-
-# Scalar return, compared at `ulp = 0`: `float` selects the region
-# comparator and never reaches a scalar, so exactness has to come from the
-# tolerance, and the default of 4 hides a one-ulp rounding difference.
-[functions.SqDistPointTriangleEdges__6dc900.diff]
-mode = "out"
-ulp  = 0
-
 [functions.luaH_arrayindex__6fa4a0]
 rva  = 0x2fa4a0
 sig  = "55 8B EC 51 56 8B F1 83 3E 03 75 32"
@@ -1055,13 +935,6 @@ abi  = "thiscall"
 ret  = "i32"
 args = ["*const u8"]
 preserve = []
-
-
-# Integer return, which the harness compares exactly. No region: the return
-# is the whole observable, so an arithmetic difference registers here only
-# when it changes the verdict.
-[functions.luaH_arrayindex__6fa4a0.diff]
-mode = "out"
 
 [functions.BoundsFit__AccumulateMoment__71bce0]
 rva  = 0x31bce0
@@ -1079,13 +952,6 @@ ret  = "i32"
 args = ["*const f32", "*const f32"]
 preserve = ["ecx", "edx"]
 
-
-# Integer return, which the harness compares exactly. No region: the return
-# is the whole observable, so an arithmetic difference registers here only
-# when it changes the verdict.
-[functions.C3Vector__GreaterEqualAll__699330.diff]
-mode = "out"
-
 [functions.C3Vector__IsValid__6337d0]
 rva  = 0x2337d0
 sig  = "55 8B EC 51 8B 45 08 8B 48 08 D9 00"
@@ -1093,13 +959,6 @@ abi  = "stdcall"
 ret  = "u8"
 args = ["*const f32"]
 preserve = []
-
-
-# Integer return, which the harness compares exactly. No region: the return
-# is the whole observable, so an arithmetic difference registers here only
-# when it changes the verdict.
-[functions.C3Vector__IsValid__6337d0.diff]
-mode = "out"
 
 [functions.C3Vector__MaxInPlace__6b11f0]
 rva  = 0x2b11f0
@@ -1222,13 +1081,6 @@ ret  = "i32"
 args = ["*mut core::ffi::c_void", "*mut f32", "f32"]
 preserve = ["ecx"]
 
-
-# Integer return, which the harness compares exactly. No region: the return
-# is the whole observable, so an arithmetic difference registers here only
-# when it changes the verdict.
-[functions.CParticleEmitter__UpdateParticlePhysics__7b2680.diff]
-mode = "out"
-
 [functions.CWorld__PointInLiquidGrid__69b350]
 rva  = 0x29b350
 sig  = "55 8B EC 83 EC 14 D9 41 04 D8 25 B4"
@@ -1236,13 +1088,6 @@ abi  = "fastcall"
 ret  = "u32"
 args = ["*const f32"]
 preserve = []
-
-
-# Integer return, which the harness compares exactly. No region: the return
-# is the whole observable, so an arithmetic difference registers here only
-# when it changes the verdict.
-[functions.CWorld__PointInLiquidGrid__69b350.diff]
-mode = "out"
 
 [functions.EvalPolynomialHorner__453620]
 rva  = 0x053620
@@ -1282,13 +1127,6 @@ ret  = "i32"
 args = ["u32", "u32", "*const u8"]
 preserve = ["ecx", "edx"]
 
-
-# Integer return, which the harness compares exactly. No region: the return
-# is the whole observable, so an arithmetic difference registers here only
-# when it changes the verdict.
-[functions.M2BatchSortCompare__70a060.diff]
-mode = "out"
-
 [functions.OsGui_ScaleX__41ae60]
 rva  = 0x1ae60
 sig  = "55 8B EC D9 05 ?? ?? ?? ?? D8 4D 08 5D C2 04 00"
@@ -1296,14 +1134,6 @@ abi  = "stdcall"
 ret  = "f32"
 args = ["f32"]
 preserve = ["eax", "ecx", "edx"]
-
-
-# Scalar return, compared at `ulp = 0`: `float` selects the region
-# comparator and never reaches a scalar, so exactness has to come from the
-# tolerance, and the default of 4 hides a one-ulp rounding difference.
-[functions.OsGui_ScaleX__41ae60.diff]
-mode = "out"
-ulp  = 0
 
 [functions.OsGui_ScaleY__41ae70]
 rva  = 0x1ae70
@@ -1313,14 +1143,6 @@ ret  = "f32"
 args = ["f32"]
 preserve = ["eax", "ecx", "edx"]
 
-
-# Scalar return, compared at `ulp = 0`: `float` selects the region
-# comparator and never reaches a scalar, so exactness has to come from the
-# tolerance, and the default of 4 hides a one-ulp rounding difference.
-[functions.OsGui_ScaleY__41ae70.diff]
-mode = "out"
-ulp  = 0
-
 [functions.OsGui_UnscaleX__41ae40]
 rva  = 0x1ae40
 sig  = "55 8B EC D9 45 08 D8 35 ?? ?? ?? ?? 5D C2 04 00"
@@ -1329,14 +1151,6 @@ ret  = "f32"
 args = ["f32"]
 preserve = ["eax", "ecx", "edx"]
 
-
-# Scalar return, compared at `ulp = 0`: `float` selects the region
-# comparator and never reaches a scalar, so exactness has to come from the
-# tolerance, and the default of 4 hides a one-ulp rounding difference.
-[functions.OsGui_UnscaleX__41ae40.diff]
-mode = "out"
-ulp  = 0
-
 [functions.OsGui_UnscaleY__41ae50]
 rva  = 0x1ae50
 sig  = "55 8B EC D9 45 08 D8 35 ?? ?? ?? ?? 5D C2 04 00"
@@ -1344,14 +1158,6 @@ abi  = "stdcall"
 ret  = "f32"
 args = ["f32"]
 preserve = ["eax", "ecx", "edx"]
-
-
-# Scalar return, compared at `ulp = 0`: `float` selects the region
-# comparator and never reaches a scalar, so exactness has to come from the
-# tolerance, and the default of 4 hides a one-ulp rounding difference.
-[functions.OsGui_UnscaleY__41ae50.diff]
-mode = "out"
-ulp  = 0
 
 [functions.Plane_IntersectRayParam__7c22b0]
 rva  = 0x3c22b0
@@ -1373,14 +1179,6 @@ preserve = ["ecx"]
 # selected by movement flag 0x200000, surface-crossing detection fires the
 # splash sound + ripples, and the liquid-event handlers dispatch by flag
 # bits. Un-diffable: state writes + sound/ripple/dispatch delegates.
-
-# Scalar return, compared at `ulp = 0`: `float` selects the region
-# comparator and never reaches a scalar, so exactness has to come from the
-# tolerance, and the default of 4 hides a one-ulp rounding difference.
-[functions.SnapCoordToPixelY__5c7010.diff]
-mode = "out"
-ulp  = 0
-
 [functions.CGUnit_C__UpdateWaterInteraction__6030c0]
 rva  = 0x2030c0
 sig  = "55 8B EC 83 EC 10 56 8B F1 8B 86 18 01 00 00"
@@ -1680,14 +1478,6 @@ preserve = []
 # Byte-identical twin of SnapCoordToPixelY__5c7010 scaling by the X device
 # pixel-scale global (0xc2b9a0) instead of Y. Un-diffable: f32 ST0 return
 # only, no pointer-out args.
-
-# Scalar return, compared at `ulp = 0`: `float` selects the region
-# comparator and never reaches a scalar, so exactness has to come from the
-# tolerance, and the default of 4 hides a one-ulp rounding difference.
-[functions.CGxFont__SubPixelAdvance__5cb080.diff]
-mode = "out"
-ulp  = 0
-
 [functions.Object__SnapValueToUnit__5c6fa0]
 rva  = 0x1c6fa0
 sig  = "55 8B EC 83 EC 08 85 C9 74 09 D9 45 08 8B E5 5D C2 04 00"
@@ -1695,14 +1485,6 @@ abi  = "thiscall"
 ret  = "f32"
 args = ["*mut core::ffi::c_void", "f32"]
 preserve = ["ecx"]
-
-
-# Scalar return, compared at `ulp = 0`: `float` selects the region
-# comparator and never reaches a scalar, so exactness has to come from the
-# tolerance, and the default of 4 hides a one-ulp rounding difference.
-[functions.Object__SnapValueToUnit__5c6fa0.diff]
-mode = "out"
-ulp  = 0
 
 [functions.UIFrame_RectOverlapDistance__509220]
 rva  = 0x109220
@@ -1727,13 +1509,6 @@ abi  = "fastcall"
 ret  = "bool"
 args = ["*const i32", "*const i32"]
 preserve = ["ecx", "edx"]
-
-
-# Integer return, which the harness compares exactly. No region: the return
-# is the whole observable, so an arithmetic difference registers here only
-# when it changes the verdict.
-[functions.luaO_rawequalObj__6f58b0.diff]
-mode = "out"
 
 [functions.CM2Shared__GetBoundsCenter__713680]
 rva  = 0x313680
@@ -1879,14 +1654,6 @@ ret  = "f32"
 args = ["f32"]
 preserve = ["ecx"]
 
-
-# Scalar return, compared at `ulp = 0`: `float` selects the region
-# comparator and never reaches a scalar, so exactness has to come from the
-# tolerance, and the default of 4 hides a one-ulp rounding difference.
-[functions.CMath_WrapAngle__7abbe0.diff]
-mode = "out"
-ulp  = 0
-
 [functions.CMovement__ComputeBoxGroundNormal__6332a0]
 rva  = 0x2332a0
 sig  = "55 8B EC 83 EC 6C 53 56 57 8B F1"
@@ -1902,13 +1669,6 @@ abi  = "fastcall"
 ret  = "i32"
 args = ["*mut core::ffi::c_void"]
 preserve = []
-
-
-# Integer return, which the harness compares exactly. No region: the return
-# is the whole observable, so an arithmetic difference registers here only
-# when it changes the verdict.
-[functions.CMovement__IsPositionFinite__616bf0.diff]
-mode = "out"
 
 [functions.CMovement__StepSplineAndSnapPosition__616af0]
 rva  = 0x216af0
@@ -1954,13 +1714,6 @@ abi  = "thiscall"
 ret  = "i32"
 args = ["*mut core::ffi::c_void", "*mut f32", "*mut f32"]
 preserve = []
-
-
-# Integer return, which the harness compares exactly. No region: the return
-# is the whole observable, so an arithmetic difference registers here only
-# when it changes the verdict.
-[functions.CParticleEmitter__BuildParticleQuad__7b2a50.diff]
-mode = "out"
 
 [functions.CParticleEmitter__RenderParticles__7b3a10]
 rva  = 0x3b3a10
@@ -2010,13 +1763,6 @@ ret  = "i32"
 args = ["u32", "u32", "i32"]
 preserve = []
 
-
-# Integer return, which the harness compares exactly. No region: the return
-# is the whole observable, so an arithmetic difference registers here only
-# when it changes the verdict.
-[functions.CWorldView__CompareDrawListOpaque__70ae10.diff]
-mode = "out"
-
 [functions.CWorldView__CompareDrawListByTexture__70aa00]
 rva  = 0x0030aa00
 sig  = "55 8B EC 8B 45 08 8B 40 34"
@@ -2030,13 +1776,6 @@ preserve = []
 # prologue. The reimpl is called by name; the entry exists so a sig-refusal of the
 # BuildDrawList hook still lands on it. `CWorldView__CompareDrawListOpaque__70ae10`
 # has the same dead-thunk shape.
-
-
-# Integer return, which the harness compares exactly. No region: the return
-# is the whole observable, so an arithmetic difference registers here only
-# when it changes the verdict.
-[functions.CWorldView__CompareDrawListByTexture__70aa00.diff]
-mode = "out"
 
 [functions.CWorldView__CompareDrawListExtended__70aa30]
 rva  = 0x0030aa30
@@ -2064,13 +1803,6 @@ ret  = "i32"
 args = ["*mut core::ffi::c_void", "*const f32"]
 preserve = []
 
-
-# Integer return, which the harness compares exactly. No region: the return
-# is the whole observable, so an arithmetic difference registers here only
-# when it changes the verdict.
-[functions.CWorldView__BuildDrawList__707680.diff]
-mode = "out"
-
 [functions.Cloud_ApplyDepthRangeAndColor__6c31e0]
 rva  = 0x2c31e0
 sig  = "55 8B EC 83 EC 10 56 8B F1 E8 ?? ?? ?? ?? F6 46 0C 02"
@@ -2086,13 +1818,6 @@ abi  = "fastcall"
 ret  = "u32"
 args = ["*const u8", "*const u8", "*const f32", "*const f32", "*mut f32"]
 preserve = []
-
-
-# Integer return, which the harness compares exactly. No region: the return
-# is the whole observable, so an arithmetic difference registers here only
-# when it changes the verdict.
-[functions.Collision_BuildFaceEdgePlanes__632460.diff]
-mode = "out"
 
 [functions.Collision_ClipPolygonByPlane__6318c0]
 rva  = 0x2318c0
@@ -2122,13 +1847,6 @@ abi  = "fastcall"
 ret  = "u32"
 args = ["i32", "*const f32"]
 preserve = []
-
-
-# Integer return, which the harness compares exactly. No region: the return
-# is the whole observable, so an arithmetic difference registers here only
-# when it changes the verdict.
-[functions.Collision_PlaneBoxClearanceTest__6335d0.diff]
-mode = "out"
 
 [functions.Collision_RayPolygonSweepDistance__632830]
 rva  = 0x232830
@@ -2202,13 +1920,6 @@ ret  = "u32"
 args = ["*const f32", "u32"]
 preserve = []
 
-
-# Integer return, which the harness compares exactly. No region: the return
-# is the whole observable, so an arithmetic difference registers here only
-# when it changes the verdict.
-[functions.HeightBucket__TestBox__686180.diff]
-mode = "out"
-
 [functions.HeightBucket__TestSphere__686000]
 rva  = 0x286000
 sig  = "55 8B EC 83 EC 28 F6 05 ?? ?? ?? ?? 20"
@@ -2216,13 +1927,6 @@ abi  = "fastcall"
 ret  = "u32"
 args = ["*const f32", "u32", "f32"]
 preserve = []
-
-
-# Integer return, which the harness compares exactly. No region: the return
-# is the whole observable, so an arithmetic difference registers here only
-# when it changes the verdict.
-[functions.HeightBucket__TestSphere__686000.diff]
-mode = "out"
 
 [functions.Light_AnimateColorAndIntensity__69e770]
 rva  = 0x29e770
@@ -2396,13 +2100,6 @@ ret  = "i64"
 args = []
 preserve = ["ecx"]
 
-
-# Integer return, which the harness compares exactly. No region: the return
-# is the whole observable, so an arithmetic difference registers here only
-# when it changes the verdict.
-[functions.OsGetTimeMs__42b790.diff]
-mode = "out"
-
 [functions.Ftol__40a2b0]
 rva  = 0xa2b0
 sig  = "55 8B EC 83 C4 F4 9B D9 7D FE"
@@ -2474,13 +2171,6 @@ abi  = "thiscall"
 ret  = "i32"
 args = ["*mut core::ffi::c_void", "*mut f32", "f32", "*mut i32", "*mut f32", "*mut f32"]
 preserve = []
-
-
-# Integer return, which the harness compares exactly. No region: the return
-# is the whole observable, so an arithmetic difference registers here only
-# when it changes the verdict.
-[functions.CMapChunkGrid__QueryRadius__68b0d0.diff]
-mode = "out"
 
 [functions.CMapChunk__Update__6afad0]
 rva  = 0x2afad0
@@ -2625,13 +2315,6 @@ abi  = "thiscall"
 ret  = "i32"
 args = ["*mut u8", "u32", "*const f32", "*mut u32", "*mut f32", "*mut f32"]
 preserve = []
-
-
-# Integer return, which the harness compares exactly. No region: the return
-# is the whole observable, so an arithmetic difference registers here only
-# when it changes the verdict.
-[functions.Object_PickChildAtPoint__6a4e00.diff]
-mode = "out"
 
 [functions.Object_QueryOverlappingBoxes__6a3b10]
 rva  = 0x2a3b10
@@ -2820,13 +2503,6 @@ ret  = "bool"
 args = ["*mut core::ffi::c_void", "i32", "u32"]
 preserve = []
 
-
-# Integer return, which the harness compares exactly. No region: the return
-# is the whole observable, so an arithmetic difference registers here only
-# when it changes the verdict.
-[functions.World__QueryObjectBoxes__6ad330.diff]
-mode = "out"
-
 [functions.Cloud_UpdateLayer__6cffc0]
 rva  = 0x2cffc0
 sig  = "55 8B EC 81 EC D0 01 00 00 56 8B F1 8B 46 2C 85 C0"
@@ -2909,13 +2585,6 @@ abi  = "thiscall"
 ret  = "u32"
 args = ["*const f32", "*const f32"]
 preserve = ["ecx"]
-
-
-# Integer return, which the harness compares exactly. No region: the return
-# is the whole observable, so an arithmetic difference registers here only
-# when it changes the verdict.
-[functions.CAaBox__ContainsPoint__637350.diff]
-mode = "out"
 
 [functions.Collision_BuildSweepPrism__631be0]
 rva  = 0x231be0
@@ -3021,14 +2690,6 @@ preserve = []
 # Writes device state at this+0xf34.. (high offset, and stateful: re-running on
 # the already-updated `this` would disagree on the dirty flag) => not safely
 # golden-diffable via the out-region harness; validated by host tests.
-
-# Scalar return, compared at `ulp = 0`: `float` selects the region
-# comparator and never reaches a scalar, so exactness has to come from the
-# tolerance, and the default of 4 hides a one-ulp rounding difference.
-[functions.NormalizeAngleToPi__6084f0.diff]
-mode = "out"
-ulp  = 0
-
 [functions.CGxDevice__SetViewport__592530]
 rva  = 0x192530   # VA 0x592530 − image_base
 sig  = "55 8B EC D9 81 38 0F 00 00 D8 5D 08"
@@ -3502,13 +3163,6 @@ preserve = []
 # re-appends tied contacts (non-idempotent); coverage is transitive via
 # the diffable SweepVolume parent 0x632ba0, which calls this adapter
 # directly (its SWEEP_BOX_VA delegate is devirtualized by this hook).
-
-# Integer return, which the harness compares exactly. No region: the return
-# is the whole observable, so an arithmetic difference registers here only
-# when it changes the verdict.
-[functions.CGxAabb16__TestFloatBox__6b4d10.diff]
-mode = "out"
-
 [functions.Collision_SweepBoxFaces__632280]
 rva  = 0x232280   # VA 0x632280 − image_base
 sig  = "55 8B EC 83 EC 70 53 56 57 89 4D F0"
@@ -3885,13 +3539,6 @@ preserve = []
 # (CRT memmove) average with overshoot guard, half-step apply + [0,2pi) wrap.
 # Un-diffable: void, unit state writes. Host-tested kernels; validate in-game
 # (remote units turning smoothly, no facing snaps/spins).
-
-# Integer return, which the harness compares exactly. No region: the return
-# is the whole observable, so an arithmetic difference registers here only
-# when it changes the verdict.
-[functions.CWorld__CollectGeometryInBox__6aa8b0.diff]
-mode = "out"
-
 [functions.CGUnit_C__UpdateFacingInterpolation__600cd0]
 rva  = 0x200cd0
 sig  = "55 8B EC 83 EC 1C 8B 15 ?? ?? ?? ??"
@@ -3987,13 +3634,6 @@ preserve = []
 # bumps live archive refcounts ([handle+0x38]) and the miss path delegates to
 # the original, so a double-run double-refs — the adapter carries its own
 # cfg(wow_turbo_diff) shadow-validate (pure probe vs original outs, no refs).
-
-# Integer return, which the harness compares exactly. No region: the return
-# is the whole observable, so an arithmetic difference registers here only
-# when it changes the verdict.
-[functions.CMovement__StepMovementWithOffset__616cb0.diff]
-mode = "out"
-
 [functions.StormArchive__FindFileEntry__6549a0]
 rva  = 0x2549a0   # VA 0x6549a0 − image_base
 sig  = "55 8B EC 81 EC 44 02 00 00 53 56 57 89 55 E0"
@@ -4140,10 +3780,3 @@ ret  = "i32"
 args = ["i32", "i32"]
 preserve = []
 armed_only = true
-
-
-# Integer return, which the harness compares exactly. No region: the return
-# is the whole observable, so an arithmetic difference registers here only
-# when it changes the verdict.
-[functions.luaD_precall__6f6050.diff]
-mode = "out"
