@@ -3400,21 +3400,6 @@ pub fn c_world__point_in_liquid_grid__69b350(pos: *const f32) -> u32 {
     u32::from(crate::math::world::liquid_bit_set(byte, look.bit_index))
 }
 
-/// `EvalPolynomialHorner` — `__fastcall(ecx = degree, edx = coeffs, stack = x)`.
-///
-/// Evaluates the `degree + 1`-coefficient polynomial at `x` by Horner's scheme.
-/// Pure: reads only the `coeffs` array and the scalar args.
-pub fn eval_polynomial_horner__453620(degree: u32, coeffs: *const f32, x: f32) -> f32 {
-    if coeffs.is_null() {
-        return 0.0;
-    }
-    let len = degree as usize + 1;
-    // SAFETY: `coeffs` is non-null and the caller guarantees `degree + 1`
-    // contiguous, aligned `f32` (the loop reads indices `0..=degree`).
-    let slice = unsafe { core::slice::from_raw_parts(coeffs, len) };
-    crate::math::lua::eval_polynomial_horner__453620(degree, slice, x)
-}
-
 /// `Frustum::ComputeC3Vector` — `__fastcall(ecx = result, edx = a, stack = b)`.
 ///
 /// Returns the `result` pointer. Writes the per-component minimum of the two

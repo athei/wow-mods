@@ -1583,13 +1583,24 @@ preserve = []
 [functions.CWorld__PointInLiquidGrid__69b350.diff]
 mode = "out"
 
-[functions.EvalPolynomialHorner__453620]
-rva  = 0x053620
-sig  = "55 8B EC D9 02 B8 01 00 00 00 3B C8"
-abi  = "fastcall"
-ret  = "f32"
-args = ["u32", "*const f32", "f32"]
-preserve = ["ecx", "edx"]
+# `EvalPolynomialHorner` at 0x453620 is DELIBERATELY NOT PATCHED, and removing it
+# was a fidelity fix rather than a cleanup.
+#
+# It leaves its result in `ST(0)` at register width and stores nothing, so each
+# caller narrows for itself — and none of the three do: 0x4535c4, 0x453679 and
+# 0x453709 all multiply it wide. A hook has to declare a return type, and `f32`
+# (the only honest choice for a float-returning `fastcall`) makes the trampoline
+# narrow on the way out. That rounding is not in the original, and it reached
+# every caller: the un-hooked stock one at 0x4536d0 got a value the client would
+# never compute, and the two hooked ones had the *original* side of their diff
+# comparison silently fed it, which is what made `CSpline_EvalPoint` diverge on
+# all three lanes by 2-3 ulp after its own arithmetic had been fixed.
+#
+# Nothing is lost by leaving the VA alone. It is a four-instruction leaf, so the
+# hook bought no speed, and both hooked callers reach the kernel by name
+# (`crate::math::lua::eval_polynomial_horner__453620`, which returns `f64`).
+# Un-patching restores stock behaviour for the one stock caller and makes the
+# other two comparable.
 [functions.Frustum_ComputeC3Vector__699250]
 rva  = 0x299250   # VA 0x699250 − image_base
 sig  = "55 8B EC D9 42 08 56 8B 75 08 D9 46 08 DE D9 DF E0 F6 C4 41"

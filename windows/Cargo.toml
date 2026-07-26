@@ -65,7 +65,7 @@ too_many_lines = "allow"                # 65
 # has no hardware FMA, so `mul_add` lowers to an `fmaf` libcall. (The AVX2
 # native-Windows variant does have FMA, which is why the faithfulness argument
 # is the one that carries this and not the ISA.)
-suboptimal_flops = "allow"              # 1164
+suboptimal_flops = "allow"              # 1157
 # Stricter unsafe discipline.
 missing_safety_doc = "warn"
 not_unsafe_ptr_arg_deref = "warn"
@@ -98,10 +98,10 @@ undocumented_unsafe_blocks = "warn"
 # behaviour it has to match.
 items_after_statements = "allow"        # 864
 cast_ptr_alignment = "allow"            # 911 — reads are already `read_unaligned`
-unreadable_literal = "allow"            # 372 — addresses and bit masks, verbatim
-similar_names = "allow"                 # 218
+unreadable_literal = "allow"            # 371 — addresses and bit masks, verbatim
+similar_names = "allow"                 # 217
 semicolon_if_nothing_returned = "allow" # 143
-many_single_char_names = "allow"        # 42
+many_single_char_names = "allow"        # 41
 
 # Numeric conversions that must truncate, wrap and round exactly as the
 # original did. The usual fix — `try_from(..).expect(..)` — turns a silent

@@ -98,32 +98,29 @@ mod tests_c_cubic_spline__arc_length_to_segment__453840 {
 /// `basis` (4 rows of 4 f32, stride 4; each row a degree-2 polynomial whose
 /// first 3 coefficients are used), accumulates
 /// `out[axis] = Σ_i Horner2(basis_row_i, t) * cp_i[axis]`.
+/// The same routine as [`c_spline_eval_point__453580`] at degree 2, and it carries
+/// the identical three shape facts — the output words are zeroed as integers at
+/// `0x453650` and every row adds into them, the Horner comes wide out of the
+/// `call` at `0x453679`, and only the `x` product survives the accumulate wide
+/// while `y` and `z` are spilled to `f32` at `0x453697` / `0x45369f`.
 pub fn c_cubic_spline__eval_basis_quadratic__453640(
     cp: &[f32; 12],
     basis: &[f32; 16],
     t: f32,
 ) -> [f32; 3] {
-    // Seed each accumulator with the first control point's contribution so the
-    // inner sum starts from a real product (no dead xorps).
-    let w0 = horner2(&[basis[0], basis[1], basis[2]], t);
-    let mut x = w0 * cp[0];
-    let mut y = w0 * cp[1];
-    let mut z = w0 * cp[2];
-    for i in 1..4 {
+    let mut out = [0.0f32; 3];
+    for i in 0..4 {
         let b = i * 4;
         let c = i * 3;
-        let w = horner2(&[basis[b], basis[b + 1], basis[b + 2]], t);
-        x += w * cp[c];
-        y += w * cp[c + 1];
-        z += w * cp[c + 2];
+        // Degree 2, so three of the four coefficients in the row are used.
+        let w = crate::math::lua::eval_polynomial_horner__453620(2, &basis[b..b + 3], t);
+        out[0] = super::f64_to_f32(w * f64::from(cp[c]) + f64::from(out[0]));
+        let py = super::f64_to_f32(w * f64::from(cp[c + 1]));
+        let pz = super::f64_to_f32(w * f64::from(cp[c + 2]));
+        out[1] = super::f64_to_f32(f64::from(py) + f64::from(out[1]));
+        out[2] = super::f64_to_f32(f64::from(pz) + f64::from(out[2]));
     }
-    [x, y, z]
-}
-
-/// Degree-2 Horner evaluation: `((c0 * t) + c1) * t + c2`.
-#[inline]
-fn horner2(c: &[f32; 3], t: f32) -> f32 {
-    (c[0] * t + c[1]) * t + c[2]
+    out
 }
 
 #[cfg(test)]
@@ -303,16 +300,14 @@ mod tests_c_cubic_spline__sq_mag2_d__454980 {
 ///   register across `FADD [esi]` (`0x4535f0`), while `y` and `z` are spilled to
 ///   `f32` stack slots (`0x4535df`, `0x4535ed`) and reloaded for theirs.
 pub fn c_spline_eval_point__453580(control: &[f32; 16], basis: &[f32; 12], t: f32) -> [f32; 3] {
-    let t = f64::from(t);
     let mut out = [0.0f32; 3];
     let mut i = 0;
     while i < 4 {
         let c = i * 4;
         let b = i * 3;
-        let w = ((f64::from(control[c]) * t + f64::from(control[c + 1])) * t
-            + f64::from(control[c + 2]))
-            * t
-            + f64::from(control[c + 3]);
+        // The original `call`s 0x453620 here (at 0x4535c4) rather than inlining a
+        // Horner of its own, and takes the result wide out of `ST(0)`.
+        let w = crate::math::lua::eval_polynomial_horner__453620(3, &control[c..c + 4], t);
         out[0] = super::f64_to_f32(w * f64::from(basis[b]) + f64::from(out[0]));
         let py = super::f64_to_f32(w * f64::from(basis[b + 1]));
         let pz = super::f64_to_f32(w * f64::from(basis[b + 2]));

@@ -16,10 +16,15 @@
 /// The accumulator is `f64` because the original's never leaves the x87 stack:
 /// `0x453623` loads the leading coefficient and the loop at `0x453630` is a bare
 /// `FMUL`/`FADD` pair with no store in it or after it, so the whole chain runs
-/// at register width however long the polynomial is and the result leaves in
-/// `ST(0)` for the caller to narrow. Rounding to `f32` after every step, as this
-/// did, compounds that error once per degree.
-pub fn eval_polynomial_horner__453620(degree: u32, coeffs: &[f32], x: f32) -> f32 {
+/// at register width however long the polynomial is. Rounding to `f32` after
+/// every step, as this did, compounds that error once per degree.
+///
+/// **Returns `f64`, and that is the point.** The original stores nothing on the
+/// way out either: the result leaves in `ST(0)` at register width and each of the
+/// three call sites decides for itself whether to narrow. All three
+/// (`0x4535c4`, `0x453679`, `0x453709`) go straight on to multiply it wide, so a
+/// narrowing here is a rounding none of them perform. Returning `f32` put one in.
+pub fn eval_polynomial_horner__453620(degree: u32, coeffs: &[f32], x: f32) -> f64 {
     let x = f64::from(x);
     let mut acc = f64::from(coeffs[0]);
     let mut i = 1u32;
@@ -27,7 +32,7 @@ pub fn eval_polynomial_horner__453620(degree: u32, coeffs: &[f32], x: f32) -> f3
         acc = acc * x + f64::from(coeffs[i as usize]);
         i += 1;
     }
-    crate::math::f64_to_f32(acc)
+    acc
 }
 
 #[cfg(test)]
@@ -39,14 +44,14 @@ mod tests_eval_polynomial_horner__453620 {
         // No iterations: returns coeffs[0] regardless of x.
         assert_eq!(
             horner(0, &[7.5, 1.0, 2.0], 99.0).to_bits(),
-            7.5f32.to_bits()
+            7.5f64.to_bits()
         );
     }
 
     #[test]
     fn linear_known_value() {
         // coeffs = [a, b] => a*x + b. a=2,b=3,x=5 => 13.
-        assert_eq!(horner(1, &[2.0, 3.0], 5.0).to_bits(), 13.0f32.to_bits());
+        assert_eq!(horner(1, &[2.0, 3.0], 5.0).to_bits(), 13.0f64.to_bits());
     }
 
     #[test]
@@ -54,7 +59,7 @@ mod tests_eval_polynomial_horner__453620 {
         // coeffs = [1,-3,2] => x^2 - 3x + 2; at x=4 => 16-12+2 = 6.
         assert_eq!(
             horner(2, &[1.0, -3.0, 2.0], 4.0).to_bits(),
-            6.0f32.to_bits()
+            6.0f64.to_bits()
         );
     }
 
@@ -62,7 +67,7 @@ mod tests_eval_polynomial_horner__453620 {
     fn evaluates_at_one_is_coefficient_sum() {
         // At x=1 a polynomial equals the sum of its coefficients.
         let c = [1.0f32, 2.0, 3.0, 4.0];
-        let sum = c.iter().sum::<f32>();
+        let sum = c.iter().map(|v| f64::from(*v)).sum::<f64>();
         assert_eq!(horner(3, &c, 1.0).to_bits(), sum.to_bits());
     }
 
@@ -74,10 +79,8 @@ mod tests_eval_polynomial_horner__453620 {
         let c = [0.5f32, -1.25, 2.0, -0.75];
         let x = 1.7f32;
         let xw = f64::from(x);
-        let want = crate::math::f64_to_f32(
-            ((f64::from(c[0]) * xw + f64::from(c[1])) * xw + f64::from(c[2])) * xw
-                + f64::from(c[3]),
-        );
+        let want = ((f64::from(c[0]) * xw + f64::from(c[1])) * xw + f64::from(c[2])) * xw
+            + f64::from(c[3]);
         assert_eq!(horner(3, &c, x).to_bits(), want.to_bits());
 
         // This fixture separates the two shapes, so the assertion above is not
@@ -86,7 +89,7 @@ mod tests_eval_polynomial_horner__453620 {
         let per_step = ((c[0] * x + c[1]) * x + c[2]) * x + c[3];
         assert_ne!(
             want.to_bits(),
-            per_step.to_bits(),
+            f64::from(per_step).to_bits(),
             "fixture no longer separates narrow-once from narrow-per-step"
         );
     }
