@@ -1264,32 +1264,117 @@ mod tests_c44_matrix__set_rotation_axis_angle__7bdb00 {
 /// Transforms a 3D point by a 4×4 matrix with implied `w = 1`, applying the
 /// translation row at indices 12/13/14.
 /// `out[j] = in.x·mat[j] + in.y·mat[4+j] + in.z·mat[8+j] + mat[12+j]`.
+///
+/// The summation order is not uniform across the three components, and nothing
+/// about the algebra says it should be — it is what the original emitted. `out.x`
+/// runs `z, y, x` then the translation (`0x7bcab9`); `out.y` and `out.z` run
+/// `z, x, y` then the translation (`0x7bcaa1`, `0x7bca87`). Left to right over
+/// `x, y, z` is a different number in all three.
+///
+/// Nothing is stored until the three trailing `FSTP m32` at `0x7bcad1`, so each
+/// component carries an `f64` significand through its three multiplies, two adds
+/// and the translation add, and narrows once.
 pub fn c44_matrix__transform_point__7bca80(input: &[f32; 3], mat: &[f32; 16]) -> [f32; 3] {
-    let ix = input[0];
-    let iy = input[1];
-    let iz = input[2];
+    let (ix, iy, iz) = (
+        f64::from(input[0]),
+        f64::from(input[1]),
+        f64::from(input[2]),
+    );
+    let elem = |i: usize| f64::from(mat[i]);
 
-    let mut x = ix * mat[0];
-    x += iy * mat[4];
-    x += iz * mat[8];
-    x += mat[12];
+    let x = ((iz * elem(8) + iy * elem(4)) + ix * elem(0)) + elem(12);
+    let y = ((iz * elem(9) + ix * elem(1)) + iy * elem(5)) + elem(13);
+    let z = ((iz * elem(10) + ix * elem(2)) + iy * elem(6)) + elem(14);
 
-    let mut y = ix * mat[1];
-    y += iy * mat[5];
-    y += iz * mat[9];
-    y += mat[13];
-
-    let mut z = ix * mat[2];
-    z += iy * mat[6];
-    z += iz * mat[10];
-    z += mat[14];
-
-    [x, y, z]
+    [
+        super::f64_to_f32(x),
+        super::f64_to_f32(y),
+        super::f64_to_f32(z),
+    ]
 }
 
 #[cfg(test)]
 mod tests_c44_matrix__transform_point__7bca80 {
     use super::c44_matrix__transform_point__7bca80 as xform;
+
+    #[test]
+    fn per_component_order_and_single_narrowing() {
+        // Separates the stock shape from the left-to-right per-step f32 form on
+        // all three components at once. Bit patterns, not decimals.
+        let v = [
+            f32::from_bits(0xc1b4_400e),
+            f32::from_bits(0x41bd_d201),
+            f32::from_bits(0x4193_156c),
+        ];
+        let m = [
+            f32::from_bits(0xbfeb_2709),
+            f32::from_bits(0x3f58_6664),
+            f32::from_bits(0xbfd7_aad3),
+            f32::from_bits(0xc030_18e5),
+            f32::from_bits(0xbf7b_e37a),
+            f32::from_bits(0xbf7e_7312),
+            f32::from_bits(0xbf1f_7d2c),
+            f32::from_bits(0x3f61_6dce),
+            f32::from_bits(0x4001_172c),
+            f32::from_bits(0x4031_25f2),
+            f32::from_bits(0x4036_f30d),
+            f32::from_bits(0x403d_819e),
+            f32::from_bits(0x3fde_9a5a),
+            f32::from_bits(0xbf94_c063),
+            f32::from_bits(0xbff8_9a61),
+            f32::from_bits(0x3f3e_1530),
+        ];
+        let got = xform(&v, &m);
+
+        // `out.x` runs z,y,x; `out.y` and `out.z` run z,x,y. All narrow once.
+        let (ix, iy, iz) = (f64::from(v[0]), f64::from(v[1]), f64::from(v[2]));
+        let elem = |i: usize| f64::from(m[i]);
+        let want = [
+            super::super::f64_to_f32(((iz * elem(8) + iy * elem(4)) + ix * elem(0)) + elem(12)),
+            super::super::f64_to_f32(((iz * elem(9) + ix * elem(1)) + iy * elem(5)) + elem(13)),
+            super::super::f64_to_f32(((iz * elem(10) + ix * elem(2)) + iy * elem(6)) + elem(14)),
+        ];
+        for i in 0..3 {
+            assert_eq!(got[i].to_bits(), want[i].to_bits(), "component {i}");
+        }
+
+        let mut per_step = [0.0f32; 3];
+        for (i, slot) in per_step.iter_mut().enumerate() {
+            let mut acc = v[0] * m[i];
+            acc += v[1] * m[4 + i];
+            acc += v[2] * m[8 + i];
+            acc += m[12 + i];
+            *slot = acc;
+        }
+        for i in 0..3 {
+            assert_ne!(
+                got[i].to_bits(),
+                per_step[i].to_bits(),
+                "fixture no longer separates component {i}"
+            );
+        }
+    }
+
+    #[test]
+    fn vertex_in_place_is_the_same_arithmetic() {
+        // The two originals are the same instruction sequence over the same
+        // operands, differing only in where the results are stored.
+        let v = [
+            f32::from_bits(0xc1b4_400e),
+            f32::from_bits(0x41bd_d201),
+            f32::from_bits(0x4193_156c),
+        ];
+        let mut m = [0.0f32; 16];
+        let mut w = 0x3fc0_0001_u32;
+        for slot in &mut m {
+            *slot = f32::from_bits(w);
+            w += 7919;
+        }
+        assert_eq!(
+            xform(&v, &m),
+            super::c44_matrix__transform_vertex_in_place__7bcc60(&v, &m)
+        );
+    }
 
     const ID: [f32; 16] = [
         1.0, 0.0, 0.0, 0.0, //
@@ -1445,38 +1530,90 @@ mod tests_c44_matrix__transform_point__7bcae0 {
 /// Transforms a homogeneous 4D vector by a 4×4 matrix, computing the full `w`
 /// component. `out[j] = in.x·mat[j] + in.y·mat[4+j] + in.z·mat[8+j] +
 /// in.w·mat[12+j]` for `j = 0..3` (column-major).
+///
+/// As in [`c44_matrix__transform_point__7bca80`] the order is not uniform.
+/// Three components run `w, x, z, y`; `out.x` alone runs `w, z, y, x`
+/// (`0x7bcba0`, and it is also the one that loads the vector lane before the
+/// matrix lane on its last product). Nothing is stored until the four trailing
+/// `FSTP m32` at `0x7bcbbd`, so every component narrows exactly once.
 pub fn c44_matrix__transform_vector4__7bcb40(input: &[f32; 4], mat: &[f32; 16]) -> [f32; 4] {
-    let ix = input[0];
-    let iy = input[1];
-    let iz = input[2];
-    let iw = input[3];
+    let (ix, iy, iz, iw) = (
+        f64::from(input[0]),
+        f64::from(input[1]),
+        f64::from(input[2]),
+        f64::from(input[3]),
+    );
+    let elem = |i: usize| f64::from(mat[i]);
 
-    let mut x = ix * mat[0];
-    x += iy * mat[4];
-    x += iz * mat[8];
-    x += iw * mat[12];
+    let x = ((iw * elem(12) + iz * elem(8)) + iy * elem(4)) + ix * elem(0);
+    let y = ((iw * elem(13) + ix * elem(1)) + iz * elem(9)) + iy * elem(5);
+    let z = ((iw * elem(14) + ix * elem(2)) + iz * elem(10)) + iy * elem(6);
+    let w = ((iw * elem(15) + ix * elem(3)) + iz * elem(11)) + iy * elem(7);
 
-    let mut y = ix * mat[1];
-    y += iy * mat[5];
-    y += iz * mat[9];
-    y += iw * mat[13];
-
-    let mut z = ix * mat[2];
-    z += iy * mat[6];
-    z += iz * mat[10];
-    z += iw * mat[14];
-
-    let mut w = ix * mat[3];
-    w += iy * mat[7];
-    w += iz * mat[11];
-    w += iw * mat[15];
-
-    [x, y, z, w]
+    [
+        super::f64_to_f32(x),
+        super::f64_to_f32(y),
+        super::f64_to_f32(z),
+        super::f64_to_f32(w),
+    ]
 }
 
 #[cfg(test)]
 mod tests_c44_matrix__transform_vector4__7bcb40 {
     use super::c44_matrix__transform_vector4__7bcb40 as xform;
+
+    #[test]
+    fn per_component_order_and_single_narrowing() {
+        // Three components sum w,x,z,y; `out.x` alone sums w,z,y,x. Every one
+        // narrows only at its trailing store. The fixture has to separate that
+        // from the left-to-right per-step f32 form on all four lanes.
+        let mut v = [0.0f32; 4];
+        let mut m = [0.0f32; 16];
+        let mut w = 0x4021_3c0f_u32;
+        for slot in v.iter_mut().chain(m.iter_mut()) {
+            *slot = f32::from_bits(w);
+            w = w.wrapping_add(0x0002_4c9d) ^ 0x0000_0b1d;
+        }
+        let got = xform(&v, &m);
+
+        let (ix, iy, iz, iw) = (
+            f64::from(v[0]),
+            f64::from(v[1]),
+            f64::from(v[2]),
+            f64::from(v[3]),
+        );
+        let elem = |i: usize| f64::from(m[i]);
+        let want = [
+            super::super::f64_to_f32(
+                ((iw * elem(12) + iz * elem(8)) + iy * elem(4)) + ix * elem(0),
+            ),
+            super::super::f64_to_f32(
+                ((iw * elem(13) + ix * elem(1)) + iz * elem(9)) + iy * elem(5),
+            ),
+            super::super::f64_to_f32(
+                ((iw * elem(14) + ix * elem(2)) + iz * elem(10)) + iy * elem(6),
+            ),
+            super::super::f64_to_f32(
+                ((iw * elem(15) + ix * elem(3)) + iz * elem(11)) + iy * elem(7),
+            ),
+        ];
+        for i in 0..4 {
+            assert_eq!(got[i].to_bits(), want[i].to_bits(), "component {i}");
+        }
+
+        let mut per_step = [0.0f32; 4];
+        for (i, slot) in per_step.iter_mut().enumerate() {
+            let mut acc = v[0] * m[i];
+            acc += v[1] * m[4 + i];
+            acc += v[2] * m[8 + i];
+            acc += v[3] * m[12 + i];
+            *slot = acc;
+        }
+        assert!(
+            (0..4).any(|i| got[i].to_bits() != per_step[i].to_bits()),
+            "fixture no longer separates the stock shape from the per-step form"
+        );
+    }
 
     const ID: [f32; 16] = [
         1.0, 0.0, 0.0, 0.0, //
@@ -1545,27 +1682,14 @@ mod tests_c44_matrix__transform_vector4__7bcb40 {
 /// transform. The original writes the result back into the input vertex and
 /// copies it to `out`; this returns the value so the adapter performs both
 /// writes.
+///
+/// "Identical math" is exact rather than approximate here: `0x7bcc67`..`0x7bccad`
+/// is the same instruction sequence over the same operands as `0x7bca87`
+/// onwards, down to the per-component summation order, and the two differ only
+/// in which pointer the results are stored through. So this defers to the point
+/// transform rather than carrying a second copy that could drift away from it.
 pub fn c44_matrix__transform_vertex_in_place__7bcc60(vec: &[f32; 3], mat: &[f32; 16]) -> [f32; 3] {
-    let ix = vec[0];
-    let iy = vec[1];
-    let iz = vec[2];
-
-    let mut x = ix * mat[0];
-    x += iy * mat[4];
-    x += iz * mat[8];
-    x += mat[12];
-
-    let mut y = ix * mat[1];
-    y += iy * mat[5];
-    y += iz * mat[9];
-    y += mat[13];
-
-    let mut z = ix * mat[2];
-    z += iy * mat[6];
-    z += iz * mat[10];
-    z += mat[14];
-
-    [x, y, z]
+    c44_matrix__transform_point__7bca80(vec, mat)
 }
 
 #[cfg(test)]
@@ -1638,19 +1762,84 @@ mod tests_c44_matrix__transform_vertex_in_place__7bcc60 {
 /// The 4x4 has a 4-float row stride: the rotation columns scaling `trans.{x,y,z}`
 /// are read from indices {0,4,8}, {1,5,9}, {2,6,10}; each translation component
 /// `mat[12+i]` gains `mat[i]*tx + mat[4+i]*ty + mat[8+i]*tz`.
+///
+/// All three rows sum `z, y, x` and fold the existing translation in last
+/// (`0x7bdc46` onwards). Unlike the point transform the order *is* uniform here.
+/// Each row's three products, two adds and the translation add stay on the x87
+/// stack until that row's `FSTP m32` (`0x7bdc5d`, `0x7bdc78`, `0x7bdc93`), so a
+/// row narrows once. Note the rows are written one at a time and each reads only
+/// its own column, so the in-place store cannot feed a later row.
 pub fn c44_matrix__translate__7bdc40(mat: &mut [f32; 16], trans: &[f32; 3]) {
-    let tx = trans[0];
-    let ty = trans[1];
-    let tz = trans[2];
+    let (tx, ty, tz) = (
+        f64::from(trans[0]),
+        f64::from(trans[1]),
+        f64::from(trans[2]),
+    );
+    let elem = |i: usize| f64::from(mat[i]);
 
-    mat[12] += mat[0] * tx + mat[4] * ty + mat[8] * tz;
-    mat[13] += mat[1] * tx + mat[5] * ty + mat[9] * tz;
-    mat[14] += mat[2] * tx + mat[6] * ty + mat[10] * tz;
+    let r0 = ((elem(8) * tz + elem(4) * ty) + elem(0) * tx) + elem(12);
+    let r1 = ((elem(9) * tz + elem(5) * ty) + elem(1) * tx) + elem(13);
+    let r2 = ((elem(10) * tz + elem(6) * ty) + elem(2) * tx) + elem(14);
+
+    mat[12] = super::f64_to_f32(r0);
+    mat[13] = super::f64_to_f32(r1);
+    mat[14] = super::f64_to_f32(r2);
 }
 
 #[cfg(test)]
 mod tests_c44_matrix__translate__7bdc40 {
     use super::c44_matrix__translate__7bdc40 as translate;
+
+    #[test]
+    fn rows_sum_z_then_y_then_x_and_narrow_once() {
+        let t = [
+            f32::from_bits(0xc200_5ce7),
+            f32::from_bits(0x421a_8f04),
+            f32::from_bits(0xc1f3_a2bc),
+        ];
+        let m = [
+            f32::from_bits(0xbfea_ecf7),
+            f32::from_bits(0xbf7d_1ccb),
+            f32::from_bits(0x3fa3_efe5),
+            f32::from_bits(0x4007_f85d),
+            f32::from_bits(0xbe15_61d2),
+            f32::from_bits(0xbc36_1883),
+            f32::from_bits(0x3fdd_8511),
+            f32::from_bits(0xbfaa_7eac),
+            f32::from_bits(0xbf43_fe30),
+            f32::from_bits(0x3f2d_23d4),
+            f32::from_bits(0x3f51_3dc1),
+            f32::from_bits(0xc031_60f8),
+            f32::from_bits(0xc014_fbff),
+            f32::from_bits(0xc00b_08d5),
+            f32::from_bits(0x3fac_e606),
+            f32::from_bits(0x3f94_29b1),
+        ];
+
+        let mut got = m;
+        translate(&mut got, &t);
+
+        let (tx, ty, tz) = (f64::from(t[0]), f64::from(t[1]), f64::from(t[2]));
+        let elem = |i: usize| f64::from(m[i]);
+        for i in 0..3 {
+            let want = super::super::f64_to_f32(
+                ((elem(8 + i) * tz + elem(4 + i) * ty) + elem(i) * tx) + elem(12 + i),
+            );
+            assert_eq!(got[12 + i].to_bits(), want.to_bits(), "row {i}");
+
+            let per_step = m[12 + i] + (m[i] * t[0] + m[4 + i] * t[1] + m[8 + i] * t[2]);
+            assert_ne!(
+                got[12 + i].to_bits(),
+                per_step.to_bits(),
+                "fixture no longer separates row {i}"
+            );
+        }
+
+        // The rest of the matrix is untouched.
+        for i in 0..12 {
+            assert_eq!(got[i].to_bits(), m[i].to_bits(), "element {i} moved");
+        }
+    }
 
     fn id_with_t(t: [f32; 3]) -> [f32; 16] {
         [
