@@ -16,14 +16,11 @@ fn rz3(c: f32, s: f32) -> [f32; 9] {
     [c, s, 0.0, -s, c, 0.0, 0.0, 0.0, 1.0]
 }
 fn mul3(a: &[f32; 9], b: &[f32; 9]) -> [f32; 9] {
-    let mut out = [0.0f32; 9];
-    for r in 0..3 {
-        for col in 0..3 {
-            out[r * 3 + col] =
-                a[r * 3] * b[col] + a[r * 3 + 1] * b[3 + col] + a[r * 3 + 2] * b[6 + col];
-        }
-    }
-    out
+    // The Euler builders do not inline a product of their own: each one `call`s
+    // `C33Matrix::Multiply` twice (`0x7bf5d2` and `0x7bf5de` for the ZYX order),
+    // so this has to be that kernel and not a second, tidier transcription of
+    // the same algebra.
+    c33_matrix__multiply__7bdfc0(a, b)
 }
 fn transpose3(m: &[f32; 9]) -> [f32; 9] {
     [m[0], m[3], m[6], m[1], m[4], m[7], m[2], m[5], m[8]]
@@ -221,15 +218,42 @@ mod tests_c33_matrix__from_rotation_z__7be5b0 {
     }
 }
 
+/// Per-element `k` summation order of `C33Matrix::Multiply`, indexed `r * 3 + c`.
+///
+/// As in the 4x4 product, the original is unrolled and its nine three-term dots
+/// do not share one `k` order — there are four, read off the
+/// `FLD`/`FMUL`/`FADDP` stream from `0x7bdfc4` to `0x7be09b`. Transcribed, not
+/// derived.
+const MULTIPLY_K_ORDER: [[usize; 3]; 9] = [
+    [2, 1, 0],
+    [0, 2, 1],
+    [2, 0, 1],
+    [0, 2, 1],
+    [2, 1, 0],
+    [2, 0, 1],
+    [2, 1, 0],
+    [1, 0, 2],
+    [1, 0, 2],
+];
+
 /// 3x3 * 3x3 matrix product `out = a * b`, row-major: `out[r*3+c] = sum_k a[r*3+k]*b[k*3+c]`.
+///
+/// Each element sums its three products in that element's own
+/// [`MULTIPLY_K_ORDER`], starting from the first product rather than a zero
+/// seed, and narrows once. The original keeps seven of the nine elements on the
+/// x87 stack until a run of trailing `FSTP m32` at `0x7be09d` and spills the
+/// other two early (`0x7be061`, `0x7be079`) — different moments, but one
+/// narrowing each either way.
 pub fn c33_matrix__multiply__7bdfc0(a: &[f32; 9], b: &[f32; 9]) -> [f32; 9] {
     let mut out = [0.0f32; 9];
     for r in 0..3 {
         for c in 0..3 {
-            let mut acc = a[r * 3] * b[c];
-            acc += a[r * 3 + 1] * b[3 + c];
-            acc += a[r * 3 + 2] * b[6 + c];
-            out[r * 3 + c] = acc;
+            let ks = MULTIPLY_K_ORDER[r * 3 + c];
+            let term = |k: usize| f64::from(a[r * 3 + k]) * f64::from(b[k * 3 + c]);
+            let mut acc = term(ks[0]);
+            acc += term(ks[1]);
+            acc += term(ks[2]);
+            out[r * 3 + c] = super::f64_to_f32(acc);
         }
     }
     out
@@ -238,6 +262,58 @@ pub fn c33_matrix__multiply__7bdfc0(a: &[f32; 9], b: &[f32; 9]) -> [f32; 9] {
 #[cfg(test)]
 mod tests_c33_matrix__multiply__7bdfc0 {
     use super::c33_matrix__multiply__7bdfc0 as mul;
+
+    #[test]
+    fn per_element_order_and_single_narrowing() {
+        // Six of the nine elements move between the original's per-element
+        // orders at register width and the uniform k = 0..2 per-step f32 form
+        // this used to compute. Bit patterns, not decimals.
+        let a = [
+            f32::from_bits(0xc03a_62ea),
+            f32::from_bits(0xbda2_cc0d),
+            f32::from_bits(0x4032_85af),
+            f32::from_bits(0xc027_3545),
+            f32::from_bits(0x3e7c_7221),
+            f32::from_bits(0xbe51_84ee),
+            f32::from_bits(0x3f1b_d90d),
+            f32::from_bits(0xc01d_d9f1),
+            f32::from_bits(0x3ef2_b23e),
+        ];
+        let b = [
+            f32::from_bits(0xbfb0_f555),
+            f32::from_bits(0x3ead_5c5f),
+            f32::from_bits(0x3f5e_287f),
+            f32::from_bits(0xbde9_066b),
+            f32::from_bits(0xbf5e_5a49),
+            f32::from_bits(0xbfc0_a6b3),
+            f32::from_bits(0x4026_784f),
+            f32::from_bits(0xbe8f_3127),
+            f32::from_bits(0x3e39_4f7a),
+        ];
+        let got = mul(&a, &b);
+
+        let mut moved = 0;
+        for r in 0..3 {
+            for c in 0..3 {
+                let ks = super::MULTIPLY_K_ORDER[r * 3 + c];
+                let term = |k: usize| f64::from(a[r * 3 + k]) * f64::from(b[k * 3 + c]);
+                let mut acc = term(ks[0]);
+                acc += term(ks[1]);
+                acc += term(ks[2]);
+                let want = super::super::f64_to_f32(acc);
+                assert_eq!(got[r * 3 + c].to_bits(), want.to_bits(), "element {r},{c}");
+
+                let uniform = (a[r * 3] * b[c] + a[r * 3 + 1] * b[3 + c]) + a[r * 3 + 2] * b[6 + c];
+                if got[r * 3 + c].to_bits() != uniform.to_bits() {
+                    moved += 1;
+                }
+            }
+        }
+        assert!(
+            moved >= 5,
+            "fixture no longer separates the orders (only {moved} elements move)"
+        );
+    }
     const I: [f32; 9] = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
     #[test]
     fn a_times_identity() {
