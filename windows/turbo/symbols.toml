@@ -1112,13 +1112,29 @@ ret  = "u32"
 args = ["*const core::ffi::c_void", "*const f32", "*mut u32"]
 preserve = []
 
-# Golden-diff the plane mask (out = arg 2, one u32) alongside the integer return,
-# which the harness compares exactly on its own. The mask is the observable: a
-# plane-dot difference only matters when it flips a bit here.
+# Golden-diff the plane mask (out = arg 2, one u32). The mask IS the observable: a
+# plane-dot difference only matters when it flips a bit here, and it has matched on
+# every call of every run so far.
+#
+# `ret_mask = 0` compares no bits of the return, because the return is not part of
+# this function's contract. All six in-image callers were checked -- 0x68d287,
+# 0x6ac41d, 0x6b8c0e, 0x6b8c1d, 0x6b8c2c and 0x6bb948 -- and not one of them reads
+# EAX: each either overwrites it in its next instruction or never touches it. The
+# only caller that consumes anything (0x6b8c2c) reads the three masks written
+# through the out pointers and `AND`/`TEST`s those. What the original leaves in EAX
+# is a trailing FNSTSW status word, and what this returns is a "last failing plane"
+# bit that was invented to fill the slot; neither is read, so comparing them was
+# reporting an artifact against an invention.
+#
+# It was doing so 9 to 17 MILLION times a session, a hundred times more than
+# everything else in the log combined, which buried every entry that had something
+# real to say. If a future caller reads EAX this is wrong, and then the answer is
+# to reproduce the status word rather than to widen the mask back.
 [functions.CWorldFrustum__ClassifyPoint__686c20.diff]
-mode  = "out"
-out   = { arg = 2, len = 4 }
-float = "bytes"
+mode     = "out"
+out      = { arg = 2, len = 4 }
+float    = "bytes"
+ret_mask = 0x0
 
 [functions.CWorldFrustum__TestOrientedBox__6869c0]
 rva  = 0x2869c0
@@ -1585,9 +1601,22 @@ args = ["*const f32"]
 preserve = []
 
 
-# Integer return, compared exactly. No region: the return is the observable.
+# Integer return, compared over its low byte. No region: the return is the
+# observable.
+#
+# The contract is one byte. All three in-image callers -- 0x670473, 0x698ca5 and
+# 0x69e48d -- do `TEST AL, AL` and branch, and not one of them reads above AL, so
+# the upper 24 bits of EAX are whatever the body happened to leave there. The
+# original leaves 0x100 where this returns 0x0; AL is 0 in both, so every caller
+# takes the same branch and the difference is unobservable by construction.
+#
+# Comparing the full word reported that at ~120k events a session, second only to
+# the frustum classifier, which is a lot of log for a bit nothing reads. The mask
+# is argued from the enumerated call sites above; if a fourth caller appears that
+# reads the high bits, this is wrong and the mask has to go.
 [functions.CWorld__PointInLiquidGrid__69b350.diff]
-mode = "out"
+mode     = "out"
+ret_mask = 0xff
 
 # `EvalPolynomialHorner` at 0x453620 is DELIBERATELY NOT PATCHED, and removing it
 # was a fidelity fix rather than a cleanup.

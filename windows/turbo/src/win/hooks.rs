@@ -20043,7 +20043,14 @@ pub fn storm_archive__find_file_entry__6549a0(
         let ret = delegate();
         if let Some(hit) = predicted {
             if hit.negative {
-                super::diff::scalar_int(&STATS, LABEL, false, 0, ret.cast_unsigned().into());
+                super::diff::scalar_int(
+                    &STATS,
+                    LABEL,
+                    false,
+                    u64::MAX,
+                    0,
+                    ret.cast_unsigned().into(),
+                );
             } else if !out_archive.is_null()
                 && !out_found_in.is_null()
                 && !out_block_entry.is_null()
@@ -20051,7 +20058,14 @@ pub fn storm_archive__find_file_entry__6549a0(
                 // Predicted a scoped positive: stock must have returned 1 with
                 // the same found handle, the requested archive as found-in, and
                 // the same block-table record.
-                super::diff::scalar_int(&STATS, LABEL, false, 1, ret.cast_unsigned().into());
+                super::diff::scalar_int(
+                    &STATS,
+                    LABEL,
+                    false,
+                    u64::MAX,
+                    1,
+                    ret.cast_unsigned().into(),
+                );
                 if ret == 1 {
                     // Return 1 with non-null outs — stock wrote all three.
                     // SAFETY: non-null out-pointer stock wrote through.
@@ -20060,8 +20074,22 @@ pub fn storm_archive__find_file_entry__6549a0(
                     let found_in = unsafe { out_found_in.read_unaligned() };
                     // SAFETY: non-null out-pointer stock wrote through.
                     let entry = unsafe { out_block_entry.read_unaligned() };
-                    super::diff::scalar_int(&STATS, LABEL, false, hit.found.into(), found.into());
-                    super::diff::scalar_int(&STATS, LABEL, false, archive.into(), found_in.into());
+                    super::diff::scalar_int(
+                        &STATS,
+                        LABEL,
+                        false,
+                        u64::MAX,
+                        hit.found.into(),
+                        found.into(),
+                    );
+                    super::diff::scalar_int(
+                        &STATS,
+                        LABEL,
+                        false,
+                        u64::MAX,
+                        archive.into(),
+                        found_in.into(),
+                    );
                     // SAFETY: `found` is live (stock just returned it ref'd);
                     // +0x290 is the block-table base.
                     let block_base = unsafe {
@@ -20069,7 +20097,14 @@ pub fn storm_archive__find_file_entry__6549a0(
                     };
                     let ours = block_base
                         .wrapping_add(hit.block_index.wrapping_mul(STORM_BLOCK_ENTRY_STRIDE));
-                    super::diff::scalar_int(&STATS, LABEL, false, ours.into(), entry.into());
+                    super::diff::scalar_int(
+                        &STATS,
+                        LABEL,
+                        false,
+                        u64::MAX,
+                        ours.into(),
+                        entry.into(),
+                    );
                 }
             }
         }

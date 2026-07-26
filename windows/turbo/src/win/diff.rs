@@ -238,12 +238,25 @@ pub fn scalar_f32(stats: &Stats, label: &str, expected: bool, max_ulp: u32, ours
     });
 }
 
-/// Compare integer returns exactly (widened to `u64` by the generated caller).
-pub fn scalar_int(stats: &Stats, label: &str, expected: bool, ours: u64, orig: u64) {
-    if ours == orig {
+/// Compare integer returns over `mask` (widened to `u64` by the generated caller).
+///
+/// `mask` is every bit unless the manifest narrowed it to the bits the original's
+/// callers actually read; see the `ret_mask` annotation. The report prints the raw
+/// values as well as the masked ones, so a narrowed comparison still shows what
+/// the two sides really returned rather than hiding it.
+pub fn scalar_int(stats: &Stats, label: &str, expected: bool, mask: u64, ours: u64, orig: u64) {
+    if ours & mask == orig & mask {
         return;
     }
     report(stats, label, expected, || {
-        format!("ret: ours {ours:#x} vs orig {orig:#x}")
+        if mask == u64::MAX {
+            format!("ret: ours {ours:#x} vs orig {orig:#x}")
+        } else {
+            format!(
+                "ret: ours {:#x} vs orig {:#x} (masked {mask:#x}; raw ours {ours:#x} vs orig {orig:#x})",
+                ours & mask,
+                orig & mask
+            )
+        }
     });
 }

@@ -104,6 +104,20 @@ struct Diff {
     /// two NaNs as equal, so two different pointers would compare equal.
     #[serde(default)]
     float_from: usize,
+    /// Bits of an integer return that are the function's contract.
+    ///
+    /// Defaults to every bit, which is what an integer return usually means. Set
+    /// it where the original leaves a partial-register artifact above the value:
+    /// a `u32` return whose callers all `TEST AL, AL` has a one-byte contract, and
+    /// the upper bits are whatever happened to be in `EAX`. Comparing those
+    /// reports a difference in bits nothing reads, and at a volume that buries
+    /// the rest of the log.
+    ///
+    /// The mask has to be argued from the CALL SITES, not from the body: it is a
+    /// claim that no caller reads the masked-out bits, so it is only sound with
+    /// the whole caller set enumerated in the entry's comment.
+    #[serde(default = "default_ret_mask")]
+    ret_mask: u64,
     /// `true` marks a function deliberately more precise than the original.
     ///
     /// (f64 intermediates vs x87/SP); divergences count and log at debug, never
@@ -142,6 +156,10 @@ fn default_float() -> String {
 
 const fn default_ulp() -> u32 {
     4
+}
+
+const fn default_ret_mask() -> u64 {
+    u64::MAX
 }
 
 /// Largest snapshot region the generated diff path will stack-allocate.
@@ -999,8 +1017,8 @@ fn emit_ret_compare(out: &mut String, name: &str, screaming: &str, f: &Function,
     } else if is_integer_ret(&f.ret) {
         let _ = writeln!(
             out,
-            "    super::diff::scalar_int(&{screaming}_DIFF_STATS, {name:?}, {}, reimpl_ret as u64, orig_ret as u64);",
-            d.expected
+            "    super::diff::scalar_int(&{screaming}_DIFF_STATS, {name:?}, {}, {:#x}, reimpl_ret as u64, orig_ret as u64);",
+            d.expected, d.ret_mask
         );
     } else if f.ret != "void" {
         // Pointer return — it is the out pointer; nothing to compare. Silence the
