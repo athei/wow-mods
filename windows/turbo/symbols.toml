@@ -65,6 +65,15 @@ ret  = "void"
 args = ["*mut f32"]
 preserve = ["eax", "ecx", "edx"]
 
+
+# Golden-diff the written region, byte compare. Region covers everything the
+# adapter touches, reads included: the argument is swapped for a fixed-size
+# scratch buffer, so a read past the declared length reads past that buffer.
+[functions.C3Vector__Normalize.diff]
+mode  = "inout"
+out   = { arg = 0, len = 12 }
+float = "bytes"
+
 [functions.C44Matrix__Multiply__7bc6a0]
 rva  = 0x003bc6a0
 sig  = "55 8B EC 8B C2 8B 55 08 D9 40 38 D8"
@@ -89,6 +98,15 @@ ret  = "*mut f32"
 args = ["*mut f32", "f32"]
 preserve = ["ecx", "edx"]
 
+
+# Golden-diff the written region, byte compare. Region covers everything the
+# adapter touches, reads included: the argument is swapped for a fixed-size
+# scratch buffer, so a read past the declared length reads past that buffer.
+[functions.C3Vector__ScaleByInverse__4549c0.diff]
+mode  = "inout"
+out   = { arg = 0, len = 12 }
+float = "bytes"
+
 [functions.C3Vector__SquaredMagnitude__4549f0]
 rva  = 0x0549f0
 sig  = "D9 41 08 D9 41 04 D9 01 D9 C0 D8 C9 D9 C2 D8 CB DE C1 D9 C3 D8 CC DE C1"
@@ -110,6 +128,15 @@ ret  = "*mut f32"
 args = ["*mut f32", "*const f32"]
 preserve = ["edx"]
 
+
+# Golden-diff the written region, byte compare. Region covers everything the
+# adapter touches, reads included: the argument is swapped for a fixed-size
+# scratch buffer, so a read past the declared length reads past that buffer.
+[functions.C3Vector__AddInPlace__4841c0.diff]
+mode  = "inout"
+out   = { arg = 0, len = 12 }
+float = "bytes"
+
 [functions.C3Vector__Subtract__4841f0]
 rva  = 0x0841f0
 sig  = "55 8B EC D9 42 08 8B C1 8B 4D 08 D8 61 08 D9 42"
@@ -117,6 +144,15 @@ abi  = "fastcall"
 ret  = "*mut f32"
 args = ["*mut f32", "*const f32", "*const f32"]
 preserve = ["edx"]
+
+
+# Golden-diff the written region, byte compare. Region covers everything the
+# adapter touches, reads included: the argument is swapped for a fixed-size
+# scratch buffer, so a read past the declared length reads past that buffer.
+[functions.C3Vector__Subtract__4841f0.diff]
+mode  = "inout"
+out   = { arg = 0, len = 12 }
+float = "bytes"
 
 [functions.C3Vector__ScaleInPlace__5132f0]
 rva  = 0x1132f0
@@ -126,6 +162,15 @@ ret  = "*mut f32"
 args = ["*mut f32", "f32"]
 preserve = ["ecx", "edx"]
 
+
+# Golden-diff the written region, byte compare. Region covers everything the
+# adapter touches, reads included: the argument is swapped for a fixed-size
+# scratch buffer, so a read past the declared length reads past that buffer.
+[functions.C3Vector__ScaleInPlace__5132f0.diff]
+mode  = "inout"
+out   = { arg = 0, len = 12 }
+float = "bytes"
+
 [functions.C3Vector__Scale__5f8cf0]
 rva  = 0x1f8cf0
 sig  = "55 8B EC D9 45 08 8B C1 D8 4A 08 D9"
@@ -134,6 +179,15 @@ ret  = "*mut f32"
 args = ["*mut f32", "*const f32", "f32"]
 preserve = ["ecx", "edx"]
 
+
+# Golden-diff the written region, byte compare. Region covers everything the
+# adapter touches, reads included: the argument is swapped for a fixed-size
+# scratch buffer, so a read past the declared length reads past that buffer.
+[functions.C3Vector__Scale__5f8cf0.diff]
+mode  = "inout"
+out   = { arg = 0, len = 12 }
+float = "bytes"
+
 [functions.C33Matrix__ScaleByScalar__672d80]
 rva  = 0x272d80
 sig  = "55 8B EC 51 D9 45 08 8B C1 D8 4A 20"
@@ -141,6 +195,15 @@ abi  = "fastcall"
 ret  = "*mut f32"
 args = ["*mut f32", "*const f32", "f32"]
 preserve = ["edx"]
+
+
+# Golden-diff the written region, byte compare. Region covers everything the
+# adapter touches, reads included: the argument is swapped for a fixed-size
+# scratch buffer, so a read past the declared length reads past that buffer.
+[functions.C33Matrix__ScaleByScalar__672d80.diff]
+mode  = "inout"
+out   = { arg = 0, len = 36 }
+float = "bytes"
 
 [functions.C33Matrix__Determinant__7bc040]
 rva  = 0x3bc040
@@ -158,6 +221,15 @@ ret  = "*mut f32"
 args = ["*mut f32", "*const f32", "*const f32"]
 preserve = []
 
+
+# Golden-diff the written region, byte compare. Region covers everything the
+# adapter touches, reads included: the argument is swapped for a fixed-size
+# scratch buffer, so a read past the declared length reads past that buffer.
+[functions.C33Matrix__Multiply__7bdfc0.diff]
+mode  = "inout"
+out   = { arg = 0, len = 36 }
+float = "bytes"
+
 [functions.C33Matrix__FromAxisAngle__7be490]
 rva  = 0x3be490
 sig  = "55 8B EC 83 EC 18 8B 02 89 45 E8 8B 42 04 8B 52 08 89 45 EC 8A 45 0C 84"
@@ -165,6 +237,15 @@ abi  = "fastcall"
 ret  = "*mut f32"
 args = ["*mut f32", "*const f32", "f32", "u8"]
 preserve = ["ecx"]
+
+
+# Golden-diff the written region, byte compare. Region covers everything the
+# adapter touches, reads included: the argument is swapped for a fixed-size
+# scratch buffer, so a read past the declared length reads past that buffer.
+[functions.C33Matrix__FromAxisAngle__7be490.diff]
+mode  = "inout"
+out   = { arg = 0, len = 36 }
+float = "bytes"
 
 [functions.C33Matrix__FromRotationZ__7be5b0]
 rva  = 0x3be5b0
@@ -174,6 +255,15 @@ ret  = "*mut f32"
 args = ["*mut f32", "f32"]
 preserve = ["ecx"]
 
+
+# Golden-diff the written region, byte compare. Region covers everything the
+# adapter touches, reads included: the argument is swapped for a fixed-size
+# scratch buffer, so a read past the declared length reads past that buffer.
+[functions.C33Matrix__FromRotationZ__7be5b0.diff]
+mode  = "inout"
+out   = { arg = 0, len = 36 }
+float = "bytes"
+
 [functions.C33Matrix__ScaleRows__7be6d0]
 rva  = 0x3be6d0
 sig  = "55 8B EC 8B 45 08 D9 00 D9 C0 D8 09 D9 19 D9 C0 D8 49 04 D9 59 04 D8 49"
@@ -182,6 +272,15 @@ ret  = "*const f32"
 args = ["*mut f32", "*const f32"]
 preserve = ["ecx", "edx"]
 
+
+# Golden-diff the written region, byte compare. Region covers everything the
+# adapter touches, reads included: the argument is swapped for a fixed-size
+# scratch buffer, so a read past the declared length reads past that buffer.
+[functions.C33Matrix__ScaleRows__7be6d0.diff]
+mode  = "inout"
+out   = { arg = 0, len = 36 }
+float = "bytes"
+
 [functions.C44Matrix__BuildBasisFromDir__710a80]
 rva  = 0x310a80
 sig  = "55 8B EC 83 EC 0C D9 42 08 53 D8 49"
@@ -189,6 +288,15 @@ abi  = "fastcall"
 ret  = "void"
 args = ["*const f32", "*mut f32"]
 preserve = []
+
+
+# Golden-diff the written region, byte compare. Region covers everything the
+# adapter touches, reads included: the argument is swapped for a fixed-size
+# scratch buffer, so a read past the declared length reads past that buffer.
+[functions.C44Matrix__BuildBasisFromDir__710a80.diff]
+mode  = "inout"
+out   = { arg = 1, len = 64 }
+float = "bytes"
 
 [functions.C44Matrix__TransformPoint__7bb290]
 rva  = 0x3bb290
@@ -206,6 +314,15 @@ ret  = "*mut f32"
 args = ["*mut f32", "*const f32", "f32", "u8"]
 preserve = ["ecx"]
 
+
+# Golden-diff the written region, byte compare. Region covers everything the
+# adapter touches, reads included: the argument is swapped for a fixed-size
+# scratch buffer, so a read past the declared length reads past that buffer.
+[functions.C44Matrix__SetRotationAxisAngle__7bb860.diff]
+mode  = "inout"
+out   = { arg = 0, len = 48 }
+float = "bytes"
+
 [functions.C44Matrix__TranslateLocal__7bb990]
 rva  = 0x3bb990
 sig  = "55 8B EC 8B 45 08 D9 41 0C D8 48 04 D9 41 18 D8"
@@ -213,6 +330,15 @@ abi  = "thiscall"
 ret  = "*const f32"
 args = ["*mut f32", "*const f32"]
 preserve = ["ecx", "edx"]
+
+
+# Golden-diff the written region, byte compare. Region covers everything the
+# adapter touches, reads included: the argument is swapped for a fixed-size
+# scratch buffer, so a read past the declared length reads past that buffer.
+[functions.C44Matrix__TranslateLocal__7bb990.diff]
+mode  = "inout"
+out   = { arg = 0, len = 48 }
+float = "bytes"
 
 [functions.C44Matrix__Add__7bc290]
 rva  = 0x3bc290
@@ -222,6 +348,15 @@ ret  = "*mut f32"
 args = ["*mut f32", "*const f32", "*const f32"]
 preserve = []
 
+
+# Golden-diff the written region, byte compare. Region covers everything the
+# adapter touches, reads included: the argument is swapped for a fixed-size
+# scratch buffer, so a read past the declared length reads past that buffer.
+[functions.C44Matrix__Add__7bc290.diff]
+mode  = "inout"
+out   = { arg = 0, len = 64 }
+float = "bytes"
+
 [functions.C44Matrix__MultiplyScalar__7bc8e0]
 rva  = 0x3bc8e0
 sig  = "55 8B EC 83 EC 20 D9 45 08 8B C1 D8 4A 3C D9 45 08 D8 4A 38 D9 45 08 D8"
@@ -230,6 +365,15 @@ ret  = "*mut f32"
 args = ["*mut f32", "*const f32", "f32"]
 preserve = []
 
+
+# Golden-diff the written region, byte compare. Region covers everything the
+# adapter touches, reads included: the argument is swapped for a fixed-size
+# scratch buffer, so a read past the declared length reads past that buffer.
+[functions.C44Matrix__MultiplyScalar__7bc8e0.diff]
+mode  = "inout"
+out   = { arg = 0, len = 64 }
+float = "bytes"
+
 [functions.AABB__MinLessThanMax__6acb40]
 rva  = 0x2acb40
 sig  = "D9 01 D8 1A DF E0 F6 C4 41 7A 20 D9"
@@ -237,6 +381,11 @@ abi  = "fastcall"
 ret  = "i32"
 args = ["*const f32", "*const f32"]
 preserve = ["ecx", "edx"]
+
+
+# Integer return, compared exactly. No region: the return is the observable.
+[functions.AABB__MinLessThanMax__6acb40.diff]
+mode = "out"
 
 [functions.BoundsFit__AccumulateCentroid__71bc70]
 rva  = 0x31bc70
@@ -270,6 +419,15 @@ ret  = "*mut f32"
 args = ["*mut f32", "f32"]
 preserve = ["ecx"]
 
+
+# Golden-diff the written region, byte compare. Region covers everything the
+# adapter touches, reads included: the argument is swapped for a fixed-size
+# scratch buffer, so a read past the declared length reads past that buffer.
+[functions.BuildRotationMatrix2x2__7c42f0.diff]
+mode  = "inout"
+out   = { arg = 0, len = 16 }
+float = "bytes"
+
 [functions.C33Matrix__FromEulerAngles__7bf4b0]
 rva  = 0x3bf4b0
 sig  = "55 8B EC ?? ?? ?? ?? 00 00 56 57 8B F9 8D 45 FC 8D 4D F8 89 45 F4 89 4D"
@@ -277,6 +435,15 @@ abi  = "thiscall"
 ret  = "void"
 args = ["*mut f32", "f32", "f32", "f32"]
 preserve = []
+
+
+# Golden-diff the written region, byte compare. Region covers everything the
+# adapter touches, reads included: the argument is swapped for a fixed-size
+# scratch buffer, so a read past the declared length reads past that buffer.
+[functions.C33Matrix__FromEulerAngles__7bf4b0.diff]
+mode  = "inout"
+out   = { arg = 0, len = 36 }
+float = "bytes"
 
 [functions.C33Matrix__FromEulerXYZ__7bed30]
 rva  = 0x3bed30
@@ -293,6 +460,15 @@ abi  = "thiscall"
 ret  = "void"
 args = ["*mut f32", "f32", "f32", "f32"]
 preserve = []
+
+
+# Golden-diff the written region, byte compare. Region covers everything the
+# adapter touches, reads included: the argument is swapped for a fixed-size
+# scratch buffer, so a read past the declared length reads past that buffer.
+[functions.C33Matrix__FromEulerXZY__7beeb0.diff]
+mode  = "inout"
+out   = { arg = 0, len = 36 }
+float = "bytes"
 
 [functions.C33Matrix__FromEulerYXZ__7bf030]
 rva  = 0x3bf030
@@ -326,6 +502,15 @@ ret  = "*mut f32"
 args = ["*mut f32", "*const f32", "*const f32"]
 preserve = []
 
+
+# Golden-diff the written region, byte compare. Region covers everything the
+# adapter touches, reads included: the argument is swapped for a fixed-size
+# scratch buffer, so a read past the declared length reads past that buffer.
+[functions.C34Matrix__Multiply__7bae60.diff]
+mode  = "inout"
+out   = { arg = 0, len = 48 }
+float = "bytes"
+
 [functions.C3Vector__AddScalar__6372d0]
 rva  = 0x2372d0
 sig  = "55 8B EC D9 45 08 8B C1 D8 00 D9 18"
@@ -333,6 +518,15 @@ abi  = "thiscall"
 ret  = "*mut f32"
 args = ["*mut f32", "f32"]
 preserve = ["ecx", "edx"]
+
+
+# Golden-diff the written region, byte compare. Region covers everything the
+# adapter touches, reads included: the argument is swapped for a fixed-size
+# scratch buffer, so a read past the declared length reads past that buffer.
+[functions.C3Vector__AddScalar__6372d0.diff]
+mode  = "inout"
+out   = { arg = 0, len = 12 }
+float = "bytes"
 
 [functions.C3Vector__Add__621160]
 rva  = 0x221160
@@ -342,6 +536,15 @@ ret  = "*mut f32"
 args = ["*mut f32", "*const f32", "*const f32"]
 preserve = ["edx"]
 
+
+# Golden-diff the written region, byte compare. Region covers everything the
+# adapter touches, reads included: the argument is swapped for a fixed-size
+# scratch buffer, so a read past the declared length reads past that buffer.
+[functions.C3Vector__Add__621160.diff]
+mode  = "inout"
+out   = { arg = 0, len = 12 }
+float = "bytes"
+
 [functions.C3Vector__Cross__672130]
 rva  = 0x272130
 sig  = "55 8B EC D9 02 56 8B 75 08 D8 4E 04"
@@ -349,6 +552,15 @@ abi  = "fastcall"
 ret  = "*mut f32"
 args = ["*mut f32", "*const f32", "*const f32"]
 preserve = ["ecx", "edx"]
+
+
+# Golden-diff the written region, byte compare. Region covers everything the
+# adapter touches, reads included: the argument is swapped for a fixed-size
+# scratch buffer, so a read past the declared length reads past that buffer.
+[functions.C3Vector__Cross__672130.diff]
+mode  = "inout"
+out   = { arg = 0, len = 12 }
+float = "bytes"
 
 [functions.C3Vector__Dot__602630]
 rva  = 0x202630
@@ -373,6 +585,15 @@ ret  = "*mut f32"
 args = ["*const f32", "*mut f32"]
 preserve = ["ecx", "edx"]
 
+
+# Golden-diff the written region, byte compare. Region covers everything the
+# adapter touches, reads included: the argument is swapped for a fixed-size
+# scratch buffer, so a read past the declared length reads past that buffer.
+[functions.C3Vector__Negate__637330.diff]
+mode  = "inout"
+out   = { arg = 1, len = 12 }
+float = "bytes"
+
 [functions.C3Vector__SubtractScalar__637300]
 rva  = 0x237300
 sig  = "55 8B EC 8B C1 D9 00 D8 65 08 D9 18"
@@ -380,6 +601,15 @@ abi  = "thiscall"
 ret  = "*mut f32"
 args = ["*mut f32", "f32"]
 preserve = ["ecx", "edx"]
+
+
+# Golden-diff the written region, byte compare. Region covers everything the
+# adapter touches, reads included: the argument is swapped for a fixed-size
+# scratch buffer, so a read past the declared length reads past that buffer.
+[functions.C3Vector__SubtractScalar__637300.diff]
+mode  = "inout"
+out   = { arg = 0, len = 12 }
+float = "bytes"
 
 [functions.C44Matrix__InvertOrthonormal__7bd700]
 rva  = 0x3bd700
@@ -389,6 +619,15 @@ ret  = "*mut f32"
 args = ["*const f32", "*mut f32"]
 preserve = []
 
+
+# Golden-diff the written region, byte compare. Region covers everything the
+# adapter touches, reads included: the argument is swapped for a fixed-size
+# scratch buffer, so a read past the declared length reads past that buffer.
+[functions.C44Matrix__InvertOrthonormal__7bd700.diff]
+mode  = "inout"
+out   = { arg = 1, len = 64 }
+float = "bytes"
+
 [functions.C44Matrix__RotateQuaternion__7bddb0]
 rva  = 0x3bddb0
 sig  = "55 8B EC ?? ?? ?? ?? 00 00 8B 45 08 D9 00 56 DC"
@@ -396,6 +635,15 @@ abi  = "thiscall"
 ret  = "void"
 args = ["*mut f32", "*const f32"]
 preserve = []
+
+
+# Golden-diff the written region, byte compare. Region covers everything the
+# adapter touches, reads included: the argument is swapped for a fixed-size
+# scratch buffer, so a read past the declared length reads past that buffer.
+[functions.C44Matrix__RotateQuaternion__7bddb0.diff]
+mode  = "inout"
+out   = { arg = 0, len = 64 }
+float = "bytes"
 
 [functions.C44Matrix__ScaleRowsVec__7bdca0]
 rva  = 0x3bdca0
@@ -424,6 +672,15 @@ ret  = "void"
 args = ["*mut f32", "f32", "f32", "f32"]
 preserve = ["eax", "ecx", "edx"]
 
+
+# Golden-diff the written region, byte compare. Region covers everything the
+# adapter touches, reads included: the argument is swapped for a fixed-size
+# scratch buffer, so a read past the declared length reads past that buffer.
+[functions.C44Matrix__ScaleRows__7be670.diff]
+mode  = "inout"
+out   = { arg = 0, len = 36 }
+float = "bytes"
+
 [functions.C44Matrix__SetRotationAxisAngle__7bdb00]
 rva  = 0x3bdb00
 sig  = "55 8B EC 83 EC 18 8B 02 89 45 E8 8B 42 04 8B 52 08 53 89 45"
@@ -431,6 +688,15 @@ abi  = "fastcall"
 ret  = "*mut f32"
 args = ["*mut f32", "*const f32", "f32", "u8"]
 preserve = ["ecx"]
+
+
+# Golden-diff the written region, byte compare. Region covers everything the
+# adapter touches, reads included: the argument is swapped for a fixed-size
+# scratch buffer, so a read past the declared length reads past that buffer.
+[functions.C44Matrix__SetRotationAxisAngle__7bdb00.diff]
+mode  = "inout"
+out   = { arg = 0, len = 64 }
+float = "bytes"
 
 [functions.C44Matrix__TransformPoint__7bca80]
 rva  = 0x3bca80
@@ -470,6 +736,15 @@ abi  = "fastcall"
 ret  = "*mut f32"
 args = ["*mut f32", "*const f32", "*const f32"]
 preserve = ["ecx", "edx"]
+
+
+# Golden-diff the written region, byte compare. Region covers everything the
+# adapter touches, reads included: the argument is swapped for a fixed-size
+# scratch buffer, so a read past the declared length reads past that buffer.
+[functions.C44Matrix__TransformVector4__7bcb40.diff]
+mode  = "inout"
+out   = { arg = 0, len = 16 }
+float = "bytes"
 
 [functions.C44Matrix__TransformVertexInPlace__7bcc60]
 rva  = 0x3bcc60
@@ -549,6 +824,15 @@ ret  = "*mut f32"
 args = ["*const f32", "*mut f32"]
 preserve = ["ecx"]
 
+
+# Golden-diff the written region, byte compare. Region covers everything the
+# adapter touches, reads included: the argument is swapped for a fixed-size
+# scratch buffer, so a read past the declared length reads past that buffer.
+[functions.C4Quaternion__Exp__7c0450.diff]
+mode  = "inout"
+out   = { arg = 1, len = 16 }
+float = "bytes"
+
 [functions.C4Quaternion__Log__7c04f0]
 rva  = 0x003c04f0
 sig  = "55 8B EC 51 56 8B F1 D9 46 0C D9 E1"
@@ -556,6 +840,15 @@ abi  = "thiscall"
 ret  = "*mut f32"
 args = ["*const f32", "*mut f32"]
 preserve = []
+
+
+# Golden-diff the written region, byte compare. Region covers everything the
+# adapter touches, reads included: the argument is swapped for a fixed-size
+# scratch buffer, so a read past the declared length reads past that buffer.
+[functions.C4Quaternion__Log__7c04f0.diff]
+mode  = "inout"
+out   = { arg = 1, len = 16 }
+float = "bytes"
 
 [functions.C4Quaternion__SetFromAxisAngle__7c02c0]
 rva  = 0x003c02c0
@@ -565,6 +858,15 @@ ret  = "*const f32"
 args = ["*mut f32", "f32", "*const f32"]
 preserve = ["ecx"]
 
+
+# Golden-diff the written region, byte compare. Region covers everything the
+# adapter touches, reads included: the argument is swapped for a fixed-size
+# scratch buffer, so a read past the declared length reads past that buffer.
+[functions.C4Quaternion__SetFromAxisAngle__7c02c0.diff]
+mode  = "inout"
+out   = { arg = 0, len = 16 }
+float = "bytes"
+
 [functions.C4Quaternion__Slerp__7c0570]
 rva  = 0x003c0570
 sig  = "55 8B EC 83 EC 34 D9 42 08 56 8B F1"
@@ -572,6 +874,15 @@ abi  = "fastcall"
 ret  = "*mut f32"
 args = ["*mut f32", "*const f32", "f32", "*const f32"]
 preserve = []
+
+
+# Golden-diff the written region, byte compare. Region covers everything the
+# adapter touches, reads included: the argument is swapped for a fixed-size
+# scratch buffer, so a read past the declared length reads past that buffer.
+[functions.C4Quaternion__Slerp__7c0570.diff]
+mode  = "inout"
+out   = { arg = 0, len = 16 }
+float = "bytes"
 
 [functions.CAaBox__FromPoints__7c1450]
 rva  = 0x3c1450
@@ -581,6 +892,15 @@ ret  = "*mut f32"
 args = ["*mut f32", "*const f32", "u32"]
 preserve = []
 
+
+# Golden-diff the written region, byte compare. Region covers everything the
+# adapter touches, reads included: the argument is swapped for a fixed-size
+# scratch buffer, so a read past the declared length reads past that buffer.
+[functions.CAaBox__FromPoints__7c1450.diff]
+mode  = "inout"
+out   = { arg = 0, len = 24 }
+float = "bytes"
+
 [functions.CAaBox__IntersectSegment__6dc5a0]
 rva  = 0x2dc5a0
 sig  = "55 8B EC 83 EC 40 8B 45 08 D9 00 53"
@@ -589,6 +909,11 @@ ret  = "i32"
 args = ["*const f32", "*const f32", "*const f32"]
 preserve = []
 
+
+# Integer return, compared exactly. No region: the return is the observable.
+[functions.CAaBox__IntersectSegment__6dc5a0.diff]
+mode = "out"
+
 [functions.CAaBox__TransformBy3x3__6dc470]
 rva  = 0x2dc470
 sig  = "55 8B EC 83 EC 0C 8B 45 08 56 57 8B 7D 0C 89 55"
@@ -596,6 +921,15 @@ abi  = "fastcall"
 ret  = "void"
 args = ["*const f32", "*const f32", "*const f32", "*const f32", "*mut f32"]
 preserve = []
+
+
+# Golden-diff the written region, byte compare. Region covers everything the
+# adapter touches, reads included: the argument is swapped for a fixed-size
+# scratch buffer, so a read past the declared length reads past that buffer.
+[functions.CAaBox__TransformBy3x3__6dc470.diff]
+mode  = "inout"
+out   = { arg = 4, len = 24 }
+float = "bytes"
 
 [functions.CCubicSpline__ArcLengthToSegment__453840]
 rva  = 0x053840
@@ -648,6 +982,13 @@ ret  = "f32"
 args = ["*const f32"]
 preserve = ["eax", "ecx", "edx"]
 
+
+# Scalar return at `ulp = 0`: `float` selects the region comparator and never
+# reaches a scalar, so exactness must come from the tolerance.
+[functions.CCubicSpline__SqMag2D__454980.diff]
+mode = "out"
+ulp  = 0
+
 [functions.CGGameObjectDisplay_MoTransport__EvalMoveDistance__5f8dc0]
 rva  = 0x1f8dc0
 sig  = "55 8B EC 8B 45 14 85 C0 8B 45 18 0F"
@@ -655,6 +996,15 @@ abi  = "thiscall"
 ret  = "f64"
 args = ["*mut core::ffi::c_void", "f32", "f32", "*mut u32", "i32", "i32"]
 preserve = []
+
+
+# Golden-diff the written region, byte compare. Region covers everything the
+# adapter touches, reads included: the argument is swapped for a fixed-size
+# scratch buffer, so a read past the declared length reads past that buffer.
+[functions.CGGameObjectDisplay_MoTransport__EvalMoveDistance__5f8dc0.diff]
+mode  = "inout"
+out   = { arg = 3, len = 4 }
+float = "bytes"
 
 [functions.CGxLight__UpdateFromSource__593040]
 rva  = 0x193040
@@ -672,6 +1022,13 @@ ret  = "f32"
 args = ["*mut u8", "u32"]
 preserve = ["ecx"]
 
+
+# Scalar return at `ulp = 0`: `float` selects the region comparator and never
+# reaches a scalar, so exactness must come from the tolerance.
+[functions.CMovement__AccelCurveOffset__7c5f30.diff]
+mode = "out"
+ulp  = 0
+
 [functions.CMovement__ApplyAccelCurve__7c5e70]
 rva  = 0x3c5e70
 sig  = "55 8B EC 51 ?? ?? ?? ?? 00 00 20 74"
@@ -679,6 +1036,13 @@ abi  = "thiscall"
 ret  = "f32"
 args = ["*mut u8", "f32"]
 preserve = ["ecx"]
+
+
+# Scalar return at `ulp = 0`: `float` selects the region comparator and never
+# reaches a scalar, so exactness must come from the tolerance.
+[functions.CMovement__ApplyAccelCurve__7c5e70.diff]
+mode = "out"
+ulp  = 0
 
 [functions.CMovement__ComputeForwardVector__7c5880]
 rva  = 0x3c5880
@@ -734,6 +1098,11 @@ ret  = "u32"
 args = ["*const f32", "*const f32", "*const f32", "*const f32"]
 preserve = []
 
+
+# Integer return, compared exactly. No region: the return is the observable.
+[functions.CWorldBsp__AabbTriangleOverlap__6b8b70.diff]
+mode = "out"
+
 [functions.CWorldFrustum__ClassifyPoint__686c20]
 rva  = 0x286c20
 sig  = "55 8B EC 53 56 8B 75 0C 8B C1 57 8B"
@@ -784,6 +1153,13 @@ ret  = "f32"
 args = ["*const f32", "u32", "f32"]
 preserve = ["ecx"]
 
+
+# Scalar return at `ulp = 0`: `float` selects the region comparator and never
+# reaches a scalar, so exactness must come from the tolerance.
+[functions.Cloud_GradientSample__6cf6c0.diff]
+mode = "out"
+ulp  = 0
+
 [functions.CollideBoxBox__7c3780]
 rva  = 0x3c3780
 sig  = "55 8B EC 83 EC 60 D9 02 56 D8 21 57"
@@ -791,6 +1167,11 @@ abi  = "fastcall"
 ret  = "i32"
 args = ["*const f32", "*const f32"]
 preserve = ["ecx", "edx"]
+
+
+# Integer return, compared exactly. No region: the return is the observable.
+[functions.CollideBoxBox__7c3780.diff]
+mode = "out"
 
 [functions.CollideLineTriangleIndexed16__7c29f0]
 rva  = 0x3c29f0
@@ -824,6 +1205,15 @@ ret  = "void"
 args = ["*const f32", "f32", "f32", "*mut f32"]
 preserve = []
 
+
+# Golden-diff the written region, byte compare. Region covers everything the
+# adapter touches, reads included: the argument is swapped for a fixed-size
+# scratch buffer, so a read past the declared length reads past that buffer.
+[functions.Collision_BuildPrismPlanes__631440.diff]
+mode  = "inout"
+out   = { arg = 3, len = 144 }
+float = "bytes"
+
 [functions.Collision_BuildQuadFaceClipPlanes__632f80]
 rva  = 0x232f80
 sig  = "55 8B EC ?? ?? ?? ?? 00 00 53 56 8B 75 10 57 8B FA B8 01 00"
@@ -831,6 +1221,15 @@ abi  = "fastcall"
 ret  = "u32"
 args = ["*const f32", "*const u8", "*const f32", "*const f32", "*mut f32"]
 preserve = []
+
+
+# Golden-diff the written region, byte compare. Region covers everything the
+# adapter touches, reads included: the argument is swapped for a fixed-size
+# scratch buffer, so a read past the declared length reads past that buffer.
+[functions.Collision_BuildQuadFaceClipPlanes__632f80.diff]
+mode  = "inout"
+out   = { arg = 4, len = 80 }
+float = "bytes"
 
 [functions.Collision_RayPlaneIntersectTime__6329e0]
 rva  = 0x2329e0
@@ -847,6 +1246,11 @@ abi  = "thiscall"
 ret  = "u32"
 args = ["*const f32", "*const f32"]
 preserve = []
+
+
+# Integer return, compared exactly. No region: the return is the observable.
+[functions.Frustum__CullBox__686940.diff]
+mode = "out"
 
 [functions.GxLight_PackFogGradientBlock__71c4e0]
 rva  = 0x0031c4e0   # VA 0x71c4e0 − image_base
@@ -880,6 +1284,13 @@ ret  = "f32"
 args = ["f32", "f32", "f32"]
 preserve = ["ecx", "edx"]
 
+
+# Scalar return at `ulp = 0`: `float` selects the region comparator and never
+# reaches a scalar, so exactness must come from the tolerance.
+[functions.LerpClamp01__674ba0.diff]
+mode = "out"
+ulp  = 0
+
 [functions.Math_LerpFloat__6d15f0]
 rva  = 0x2d15f0
 sig  = "55 8B EC D9 45 0C D8 5D 08 DF E0 F6"
@@ -887,6 +1298,13 @@ abi  = "stdcall"
 ret  = "f32"
 args = ["f32", "f32", "f32"]
 preserve = ["ecx", "edx"]
+
+
+# Scalar return at `ulp = 0`: `float` selects the region comparator and never
+# reaches a scalar, so exactness must come from the tolerance.
+[functions.Math_LerpFloat__6d15f0.diff]
+mode = "out"
+ulp  = 0
 
 [functions.Math_ScaleOneThird__6d6e50]
 rva  = 0x2d6e50
@@ -896,6 +1314,13 @@ ret  = "f32"
 args = ["f32"]
 preserve = ["eax", "ecx", "edx"]
 
+
+# Scalar return at `ulp = 0`: `float` selects the region comparator and never
+# reaches a scalar, so exactness must come from the tolerance.
+[functions.Math_ScaleOneThird__6d6e50.diff]
+mode = "out"
+ulp  = 0
+
 [functions.Object_TestValueThreshold__6a4670]
 rva  = 0x2a4670
 sig  = "55 8B EC 8A 81 D4 01 00 00 84 C0 75 06 32 C0 5D C2 04 00"
@@ -903,6 +1328,11 @@ abi  = "thiscall"
 ret  = "bool"
 args = ["*const core::ffi::c_void", "*const f32"]
 preserve = []
+
+
+# Integer return, compared exactly. No region: the return is the observable.
+[functions.Object_TestValueThreshold__6a4670.diff]
+mode = "out"
 
 [functions.QuadElement__SeedFromFill__7bf7b0]
 rva  = 0x3bf7b0
@@ -912,6 +1342,15 @@ ret  = "void"
 args = ["*mut f32", "f32"]
 preserve = ["ecx"]
 
+
+# Golden-diff the written region, byte compare. Region covers everything the
+# adapter touches, reads included: the argument is swapped for a fixed-size
+# scratch buffer, so a read past the declared length reads past that buffer.
+[functions.QuadElement__SeedFromFill__7bf7b0.diff]
+mode  = "inout"
+out   = { arg = 0, len = 52 }
+float = "bytes"
+
 [functions.Sphere_TestCellDirection__7c2040]
 rva  = 0x3c2040
 sig  = "55 8B EC 83 EC 08 8B 42 0C 89 45 F8 D9 45 F8 53 D8 4D F8 56 8B 75 08 83"
@@ -919,6 +1358,11 @@ abi  = "fastcall"
 ret  = "u32"
 args = ["*const f32", "*const f32", "i32"]
 preserve = ["ecx", "edx"]
+
+
+# Integer return, compared exactly. No region: the return is the observable.
+[functions.Sphere_TestCellDirection__7c2040.diff]
+mode = "out"
 
 [functions.SqDistPointTriangleEdges__6dc900]
 rva  = 0x2dc900
@@ -928,6 +1372,13 @@ ret  = "f32"
 args = ["*const f32", "*const f32", "*const f32", "*const f32"]
 preserve = ["edx"]
 
+
+# Scalar return at `ulp = 0`: `float` selects the region comparator and never
+# reaches a scalar, so exactness must come from the tolerance.
+[functions.SqDistPointTriangleEdges__6dc900.diff]
+mode = "out"
+ulp  = 0
+
 [functions.luaH_arrayindex__6fa4a0]
 rva  = 0x2fa4a0
 sig  = "55 8B EC 51 56 8B F1 83 3E 03 75 32"
@@ -935,6 +1386,11 @@ abi  = "thiscall"
 ret  = "i32"
 args = ["*const u8"]
 preserve = []
+
+
+# Integer return, compared exactly. No region: the return is the observable.
+[functions.luaH_arrayindex__6fa4a0.diff]
+mode = "out"
 
 [functions.BoundsFit__AccumulateMoment__71bce0]
 rva  = 0x31bce0
@@ -952,6 +1408,11 @@ ret  = "i32"
 args = ["*const f32", "*const f32"]
 preserve = ["ecx", "edx"]
 
+
+# Integer return, compared exactly. No region: the return is the observable.
+[functions.C3Vector__GreaterEqualAll__699330.diff]
+mode = "out"
+
 [functions.C3Vector__IsValid__6337d0]
 rva  = 0x2337d0
 sig  = "55 8B EC 51 8B 45 08 8B 48 08 D9 00"
@@ -959,6 +1420,11 @@ abi  = "stdcall"
 ret  = "u8"
 args = ["*const f32"]
 preserve = []
+
+
+# Integer return, compared exactly. No region: the return is the observable.
+[functions.C3Vector__IsValid__6337d0.diff]
+mode = "out"
 
 [functions.C3Vector__MaxInPlace__6b11f0]
 rva  = 0x2b11f0
@@ -968,6 +1434,15 @@ ret  = "void"
 args = ["*mut f32", "*const f32"]
 preserve = ["ecx"]
 
+
+# Golden-diff the written region, byte compare. Region covers everything the
+# adapter touches, reads included: the argument is swapped for a fixed-size
+# scratch buffer, so a read past the declared length reads past that buffer.
+[functions.C3Vector__MaxInPlace__6b11f0.diff]
+mode  = "inout"
+out   = { arg = 0, len = 12 }
+float = "bytes"
+
 [functions.C3Vector__Max__6992c0]
 rva  = 0x2992c0
 sig  = "55 8B EC D9 42 08 56 8B 75 08 D9 46 08 DE D9 DF E0 F6 C4 05"
@@ -975,6 +1450,15 @@ abi  = "fastcall"
 ret  = "*mut f32"
 args = ["*mut f32", "*const f32", "*const f32"]
 preserve = ["ecx", "edx"]
+
+
+# Golden-diff the written region, byte compare. Region covers everything the
+# adapter touches, reads included: the argument is swapped for a fixed-size
+# scratch buffer, so a read past the declared length reads past that buffer.
+[functions.C3Vector__Max__6992c0.diff]
+mode  = "inout"
+out   = { arg = 0, len = 12 }
+float = "bytes"
 
 [functions.CGxBatch__FillSpriteQuads__5c8710]
 rva  = 0x1c8710
@@ -1001,6 +1485,15 @@ preserve = []
 # device/staging state, so the differential double-run would double-write;
 # validated in-game instead (an instrumented build showed calls reaching
 # 0x5a2570 collapse ~2.5M/s -> ~410k/s with the inlined slots' hits gone).
+
+# Golden-diff the written region, byte compare. Region covers everything the
+# adapter touches, reads included: the argument is swapped for a fixed-size
+# scratch buffer, so a read past the declared length reads past that buffer.
+[functions.CGxDevice__CopyCurrentMatrix__592730.diff]
+mode  = "inout"
+out   = { arg = 1, len = 64 }
+float = "bytes"
+
 [functions.CM2Scene__ApplyLightingState__5a1b60]
 rva  = 0x001a1b60
 sig  = "53 56 57 8B F9 8B 87 24 28 00 00"
@@ -1033,6 +1526,15 @@ ret  = "void"
 args = ["*mut core::ffi::c_void"]
 preserve = ["ecx"]
 
+
+# Golden-diff the written region, byte compare. Region covers everything the
+# adapter touches, reads included: the argument is swapped for a fixed-size
+# scratch buffer, so a read past the declared length reads past that buffer.
+[functions.CMapChunk__BuildGridVertices__68d540.diff]
+mode  = "inout"
+out   = { arg = 0, len = 1024 }
+float = "bytes"
+
 [functions.CMapChunk__DecompressVertexNormals__6aff10]
 rva  = 0x2aff10
 sig  = "55 8B EC 51 8B 81 18 0F 00 00"
@@ -1057,6 +1559,15 @@ ret  = "*mut f32"
 args = ["*mut u8", "f32", "*const f32", "*mut f32"]
 preserve = []
 
+
+# Golden-diff the written region, byte compare. Region covers everything the
+# adapter touches, reads included: the argument is swapped for a fixed-size
+# scratch buffer, so a read past the declared length reads past that buffer.
+[functions.CMovement__IntegrateArc_FlatTurn__7c52c0.diff]
+mode  = "inout"
+out   = { arg = 3, len = 12 }
+float = "bytes"
+
 [functions.CMovement__IntegrateArc_FwdTurnPitch__7c4fd0]
 rva  = 0x3c4fd0
 sig  = "55 8B EC 83 EC 40 56 8B F1 8B 86 84"
@@ -1065,6 +1576,15 @@ ret  = "void"
 args = ["*mut u8", "f32", "*const f32", "*mut f32"]
 preserve = []
 
+
+# Golden-diff the written region, byte compare. Region covers everything the
+# adapter touches, reads included: the argument is swapped for a fixed-size
+# scratch buffer, so a read past the declared length reads past that buffer.
+[functions.CMovement__IntegrateArc_FwdTurnPitch__7c4fd0.diff]
+mode  = "inout"
+out   = { arg = 3, len = 12 }
+float = "bytes"
+
 [functions.CMovement__IntegrateArc_TurnPitch__7c5180]
 rva  = 0x3c5180
 sig  = "55 8B EC 83 EC 1C 56 8B F1 8B 86 84"
@@ -1072,6 +1592,15 @@ abi  = "thiscall"
 ret  = "void"
 args = ["*mut u8", "f32", "*mut f32"]
 preserve = []
+
+
+# Golden-diff the written region, byte compare. Region covers everything the
+# adapter touches, reads included: the argument is swapped for a fixed-size
+# scratch buffer, so a read past the declared length reads past that buffer.
+[functions.CMovement__IntegrateArc_TurnPitch__7c5180.diff]
+mode  = "inout"
+out   = { arg = 2, len = 12 }
+float = "bytes"
 
 [functions.CParticleEmitter__UpdateParticlePhysics__7b2680]
 rva  = 0x3b2680
@@ -1088,6 +1617,11 @@ abi  = "fastcall"
 ret  = "u32"
 args = ["*const f32"]
 preserve = []
+
+
+# Integer return, compared exactly. No region: the return is the observable.
+[functions.CWorld__PointInLiquidGrid__69b350.diff]
+mode = "out"
 
 [functions.EvalPolynomialHorner__453620]
 rva  = 0x053620
@@ -1111,6 +1645,15 @@ ret  = "*mut f32"
 args = ["*mut f32", "*const f32", "*const f32"]
 preserve = ["ecx", "edx"]
 
+
+# Golden-diff the written region, byte compare. Region covers everything the
+# adapter touches, reads included: the argument is swapped for a fixed-size
+# scratch buffer, so a read past the declared length reads past that buffer.
+[functions.Frustum_ComputeC3Vector__699250.diff]
+mode  = "inout"
+out   = { arg = 0, len = 12 }
+float = "bytes"
+
 [functions.GxLight_ClampColorComponentToByte__71ca80]
 rva  = 0x31ca80
 sig  = "55 8B EC 83 EC 0C 8B 45 0C D9 45 0C"
@@ -1127,6 +1670,11 @@ ret  = "i32"
 args = ["u32", "u32", "*const u8"]
 preserve = ["ecx", "edx"]
 
+
+# Integer return, compared exactly. No region: the return is the observable.
+[functions.M2BatchSortCompare__70a060.diff]
+mode = "out"
+
 [functions.OsGui_ScaleX__41ae60]
 rva  = 0x1ae60
 sig  = "55 8B EC D9 05 ?? ?? ?? ?? D8 4D 08 5D C2 04 00"
@@ -1134,6 +1682,13 @@ abi  = "stdcall"
 ret  = "f32"
 args = ["f32"]
 preserve = ["eax", "ecx", "edx"]
+
+
+# Scalar return at `ulp = 0`: `float` selects the region comparator and never
+# reaches a scalar, so exactness must come from the tolerance.
+[functions.OsGui_ScaleX__41ae60.diff]
+mode = "out"
+ulp  = 0
 
 [functions.OsGui_ScaleY__41ae70]
 rva  = 0x1ae70
@@ -1143,6 +1698,13 @@ ret  = "f32"
 args = ["f32"]
 preserve = ["eax", "ecx", "edx"]
 
+
+# Scalar return at `ulp = 0`: `float` selects the region comparator and never
+# reaches a scalar, so exactness must come from the tolerance.
+[functions.OsGui_ScaleY__41ae70.diff]
+mode = "out"
+ulp  = 0
+
 [functions.OsGui_UnscaleX__41ae40]
 rva  = 0x1ae40
 sig  = "55 8B EC D9 45 08 D8 35 ?? ?? ?? ?? 5D C2 04 00"
@@ -1151,6 +1713,13 @@ ret  = "f32"
 args = ["f32"]
 preserve = ["eax", "ecx", "edx"]
 
+
+# Scalar return at `ulp = 0`: `float` selects the region comparator and never
+# reaches a scalar, so exactness must come from the tolerance.
+[functions.OsGui_UnscaleX__41ae40.diff]
+mode = "out"
+ulp  = 0
+
 [functions.OsGui_UnscaleY__41ae50]
 rva  = 0x1ae50
 sig  = "55 8B EC D9 45 08 D8 35 ?? ?? ?? ?? 5D C2 04 00"
@@ -1158,6 +1727,13 @@ abi  = "stdcall"
 ret  = "f32"
 args = ["f32"]
 preserve = ["eax", "ecx", "edx"]
+
+
+# Scalar return at `ulp = 0`: `float` selects the region comparator and never
+# reaches a scalar, so exactness must come from the tolerance.
+[functions.OsGui_UnscaleY__41ae50.diff]
+mode = "out"
+ulp  = 0
 
 [functions.Plane_IntersectRayParam__7c22b0]
 rva  = 0x3c22b0
@@ -1179,6 +1755,13 @@ preserve = ["ecx"]
 # selected by movement flag 0x200000, surface-crossing detection fires the
 # splash sound + ripples, and the liquid-event handlers dispatch by flag
 # bits. Un-diffable: state writes + sound/ripple/dispatch delegates.
+
+# Scalar return at `ulp = 0`: `float` selects the region comparator and never
+# reaches a scalar, so exactness must come from the tolerance.
+[functions.SnapCoordToPixelY__5c7010.diff]
+mode = "out"
+ulp  = 0
+
 [functions.CGUnit_C__UpdateWaterInteraction__6030c0]
 rva  = 0x2030c0
 sig  = "55 8B EC 83 EC 10 56 8B F1 8B 86 18 01 00 00"
@@ -1408,6 +1991,15 @@ preserve = []
 
 # Page texture create: CGxTexFlags ctor + callback-fed CGxTex. Deviates:
 # texture dims. Un-diffable by design (deviating hook).
+
+# Golden-diff the written region, byte compare. Region covers everything the
+# adapter touches, reads included: the argument is swapped for a fixed-size
+# scratch buffer, so a read past the declared length reads past that buffer.
+[functions.CGxFont__SetGlyphTexCoords__5c7f80.diff]
+mode  = "inout"
+out   = { arg = 0, len = 112 }
+float = "bytes"
+
 [functions.GlyphCachePage__CreateTexture__5cf4d0]
 rva  = 0x1cf4d0
 sig  = "55 8B EC 56 6A 00 6A 01 8B F1 8B 4D 08"
@@ -1478,6 +2070,13 @@ preserve = []
 # Byte-identical twin of SnapCoordToPixelY__5c7010 scaling by the X device
 # pixel-scale global (0xc2b9a0) instead of Y. Un-diffable: f32 ST0 return
 # only, no pointer-out args.
+
+# Scalar return at `ulp = 0`: `float` selects the region comparator and never
+# reaches a scalar, so exactness must come from the tolerance.
+[functions.CGxFont__SubPixelAdvance__5cb080.diff]
+mode = "out"
+ulp  = 0
+
 [functions.Object__SnapValueToUnit__5c6fa0]
 rva  = 0x1c6fa0
 sig  = "55 8B EC 83 EC 08 85 C9 74 09 D9 45 08 8B E5 5D C2 04 00"
@@ -1486,6 +2085,13 @@ ret  = "f32"
 args = ["*mut core::ffi::c_void", "f32"]
 preserve = ["ecx"]
 
+
+# Scalar return at `ulp = 0`: `float` selects the region comparator and never
+# reaches a scalar, so exactness must come from the tolerance.
+[functions.Object__SnapValueToUnit__5c6fa0.diff]
+mode = "out"
+ulp  = 0
+
 [functions.UIFrame_RectOverlapDistance__509220]
 rva  = 0x109220
 sig  = "55 8B EC C1 E1 04 81 C1 ?? ?? ?? ??"
@@ -1493,6 +2099,15 @@ abi  = "fastcall"
 ret  = "u32"
 args = ["i32", "*const f32", "u32", "*mut f32"]
 preserve = ["edx"]
+
+
+# Golden-diff the written region, byte compare. Region covers everything the
+# adapter touches, reads included: the argument is swapped for a fixed-size
+# scratch buffer, so a read past the declared length reads past that buffer.
+[functions.UIFrame_RectOverlapDistance__509220.diff]
+mode  = "inout"
+out   = { arg = 3, len = 4 }
+float = "bytes"
 
 [functions.luaH_hashnum__6fa260]
 rva  = 0x2fa260
@@ -1509,6 +2124,11 @@ abi  = "fastcall"
 ret  = "bool"
 args = ["*const i32", "*const i32"]
 preserve = ["ecx", "edx"]
+
+
+# Integer return, compared exactly. No region: the return is the observable.
+[functions.luaO_rawequalObj__6f58b0.diff]
+mode = "out"
 
 [functions.CM2Shared__GetBoundsCenter__713680]
 rva  = 0x313680
@@ -1550,6 +2170,15 @@ ret  = "*mut f32"
 args = ["*const f32", "*mut f32", "f32"]
 preserve = []
 
+
+# Golden-diff the written region, byte compare. Region covers everything the
+# adapter touches, reads included: the argument is swapped for a fixed-size
+# scratch buffer, so a read past the declared length reads past that buffer.
+[functions.C44Matrix__InvertWithScale__7bd820.diff]
+mode  = "inout"
+out   = { arg = 1, len = 64 }
+float = "bytes"
+
 [functions.CCubicSpline__EvalSegmentTangent__454250]
 rva  = 0x054250
 sig  = "55 8B EC 83 EC 40 A1 ?? ?? ?? ?? 8B 15 ?? ?? ?? ??"
@@ -1557,6 +2186,15 @@ abi  = "thiscall"
 ret  = "void"
 args = ["*mut core::ffi::c_void", "i32", "f32", "*mut f32"]
 preserve = []
+
+
+# Golden-diff the written region, byte compare. Region covers everything the
+# adapter touches, reads included: the argument is swapped for a fixed-size
+# scratch buffer, so a read past the declared length reads past that buffer.
+[functions.CCubicSpline__EvalSegmentTangent__454250.diff]
+mode  = "inout"
+out   = { arg = 3, len = 12 }
+float = "bytes"
 
 [functions.CDataStore__PutInt32_dup__4183d0]
 rva  = 0x000183d0
@@ -1638,6 +2276,15 @@ ret  = "void"
 args = ["*mut core::ffi::c_void", "i32", "*mut i16", "*mut u32"]
 preserve = []
 
+
+# Golden-diff the written region, byte compare. Region covers everything the
+# adapter touches, reads included: the argument is swapped for a fixed-size
+# scratch buffer, so a read past the declared length reads past that buffer.
+[functions.CM2Shared__SampleQuatTrack__713ea0.diff]
+mode  = "inout"
+out   = { arg = 3, len = 56 }
+float = "bytes"
+
 [functions.CM2_SetAnimatedVec3Masked__7ac250]
 rva  = 0x3ac250
 sig  = "55 8B EC 83 EC 18 56 57 8D 45 F4"
@@ -1654,6 +2301,13 @@ ret  = "f32"
 args = ["f32"]
 preserve = ["ecx"]
 
+
+# Scalar return at `ulp = 0`: `float` selects the region comparator and never
+# reaches a scalar, so exactness must come from the tolerance.
+[functions.CMath_WrapAngle__7abbe0.diff]
+mode = "out"
+ulp  = 0
+
 [functions.CMovement__ComputeBoxGroundNormal__6332a0]
 rva  = 0x2332a0
 sig  = "55 8B EC 83 EC 6C 53 56 57 8B F1"
@@ -1669,6 +2323,11 @@ abi  = "fastcall"
 ret  = "i32"
 args = ["*mut core::ffi::c_void"]
 preserve = []
+
+
+# Integer return, compared exactly. No region: the return is the observable.
+[functions.CMovement__IsPositionFinite__616bf0.diff]
+mode = "out"
 
 [functions.CMovement__StepSplineAndSnapPosition__616af0]
 rva  = 0x216af0
@@ -1763,6 +2422,11 @@ ret  = "i32"
 args = ["u32", "u32", "i32"]
 preserve = []
 
+
+# Integer return, compared exactly. No region: the return is the observable.
+[functions.CWorldView__CompareDrawListOpaque__70ae10.diff]
+mode = "out"
+
 [functions.CWorldView__CompareDrawListByTexture__70aa00]
 rva  = 0x0030aa00
 sig  = "55 8B EC 8B 45 08 8B 40 34"
@@ -1776,6 +2440,11 @@ preserve = []
 # prologue. The reimpl is called by name; the entry exists so a sig-refusal of the
 # BuildDrawList hook still lands on it. `CWorldView__CompareDrawListOpaque__70ae10`
 # has the same dead-thunk shape.
+
+
+# Integer return, compared exactly. No region: the return is the observable.
+[functions.CWorldView__CompareDrawListByTexture__70aa00.diff]
+mode = "out"
 
 [functions.CWorldView__CompareDrawListExtended__70aa30]
 rva  = 0x0030aa30
@@ -1819,6 +2488,11 @@ ret  = "u32"
 args = ["*const u8", "*const u8", "*const f32", "*const f32", "*mut f32"]
 preserve = []
 
+
+# Integer return, compared exactly. No region: the return is the observable.
+[functions.Collision_BuildFaceEdgePlanes__632460.diff]
+mode = "out"
+
 [functions.Collision_ClipPolygonByPlane__6318c0]
 rva  = 0x2318c0
 sig  = "55 8B EC 81 EC 64 01 00 00 53 56 8B DA"
@@ -1847,6 +2521,11 @@ abi  = "fastcall"
 ret  = "u32"
 args = ["i32", "*const f32"]
 preserve = []
+
+
+# Integer return, compared exactly. No region: the return is the observable.
+[functions.Collision_PlaneBoxClearanceTest__6335d0.diff]
+mode = "out"
 
 [functions.Collision_RayPolygonSweepDistance__632830]
 rva  = 0x232830
@@ -1920,6 +2599,11 @@ ret  = "u32"
 args = ["*const f32", "u32"]
 preserve = []
 
+
+# Integer return, compared exactly. No region: the return is the observable.
+[functions.HeightBucket__TestBox__686180.diff]
+mode = "out"
+
 [functions.HeightBucket__TestSphere__686000]
 rva  = 0x286000
 sig  = "55 8B EC 83 EC 28 F6 05 ?? ?? ?? ?? 20"
@@ -1927,6 +2611,11 @@ abi  = "fastcall"
 ret  = "u32"
 args = ["*const f32", "u32", "f32"]
 preserve = []
+
+
+# Integer return, compared exactly. No region: the return is the observable.
+[functions.HeightBucket__TestSphere__686000.diff]
+mode = "out"
 
 [functions.Light_AnimateColorAndIntensity__69e770]
 rva  = 0x29e770
@@ -1943,6 +2632,15 @@ abi  = "thiscall"
 ret  = "void"
 args = ["*mut core::ffi::c_void", "*const f32"]
 preserve = []
+
+
+# Golden-diff the written region, byte compare. Region covers everything the
+# adapter touches, reads included: the argument is swapped for a fixed-size
+# scratch buffer, so a read past the declared length reads past that buffer.
+[functions.Orientation__SetYaw__7acc40.diff]
+mode  = "inout"
+out   = { arg = 0, len = 40 }
+float = "bytes"
 
 [functions.SetClampedValue01__453480]
 rva  = 0x53480
@@ -2040,6 +2738,15 @@ ret  = "*mut u32"
 args = ["*mut core::ffi::c_void", "u32", "i32", "*mut i16", "*mut u32"]
 preserve = []
 
+
+# Golden-diff the written region, byte compare. Region covers everything the
+# adapter touches, reads included: the argument is swapped for a fixed-size
+# scratch buffer, so a read past the declared length reads past that buffer.
+[functions.CM2Shared__FindKeyframeInterval__713d50.diff]
+mode  = "inout"
+out   = { arg = 4, len = 12 }
+float = "bytes"
+
 [functions.CMapChunk__RasterizeChunkTriangles__6ad7e0]
 rva  = 0x002ad7e0
 sig  = "55 8B EC ?? ?? ?? ?? 00 00 53 56 8B F2 8B 16"
@@ -2063,6 +2770,15 @@ abi  = "fastcall"
 ret  = "void"
 args = ["*mut core::ffi::c_void", "i32", "*mut i16", "*mut u32"]
 preserve = []
+
+
+# Golden-diff the written region, byte compare. Region covers everything the
+# adapter touches, reads included: the argument is swapped for a fixed-size
+# scratch buffer, so a read past the declared length reads past that buffer.
+[functions.M2Track__SampleByte__71ae90.diff]
+mode  = "inout"
+out   = { arg = 3, len = 32 }
+float = "bytes"
 
 [functions.M2Track__SampleFloatLerp__71af20]
 rva  = 0x31af20
@@ -2116,6 +2832,15 @@ ret  = "*mut f32"
 args = ["*mut f32", "*const f32"]
 preserve = ["ecx", "edx"]
 
+
+# Golden-diff the written region, byte compare. Region covers everything the
+# adapter touches, reads included: the argument is swapped for a fixed-size
+# scratch buffer, so a read past the declared length reads past that buffer.
+[functions.D3dx_MatrixRotationQuaternion__74b6bb.diff]
+mode  = "inout"
+out   = { arg = 0, len = 64 }
+float = "bytes"
+
 [functions.D3dx_QuaternionSlerp__74d11a]
 rva  = 0x34d11a
 sig  = "8B FF 55 8B EC 51 8B 4D 0C"
@@ -2123,6 +2848,15 @@ abi  = "stdcall"
 ret  = "*mut f32"
 args = ["*mut f32", "*const f32", "*const f32", "f32"]
 preserve = []
+
+
+# Golden-diff the written region, byte compare. Region covers everything the
+# adapter touches, reads included: the argument is swapped for a fixed-size
+# scratch buffer, so a read past the declared length reads past that buffer.
+[functions.D3dx_QuaternionSlerp__74d11a.diff]
+mode  = "inout"
+out   = { arg = 0, len = 16 }
+float = "bytes"
 
 [functions.BuildMeshTrianglePlanes__671cc0]
 rva  = 0x271cc0
@@ -2331,6 +3065,15 @@ abi  = "thiscall"
 ret  = "f64"
 args = ["*mut f32", "f64", "f64", "f64"]
 preserve = []
+
+
+# Golden-diff the written region, byte compare. Region covers everything the
+# adapter touches, reads included: the argument is swapped for a fixed-size
+# scratch buffer, so a read past the declared length reads past that buffer.
+[functions.PerlinNoise3D__452960.diff]
+mode  = "inout"
+out   = { arg = 0, len = 12 }
+float = "bytes"
 
 [functions.ScanDoubleToken__747560]
 rva  = 0x347560
@@ -2586,6 +3329,11 @@ ret  = "u32"
 args = ["*const f32", "*const f32"]
 preserve = ["ecx"]
 
+
+# Integer return, compared exactly. No region: the return is the observable.
+[functions.CAaBox__ContainsPoint__637350.diff]
+mode = "out"
+
 [functions.Collision_BuildSweepPrism__631be0]
 rva  = 0x231be0
 sig  = "55 8B EC 83 EC 18 8B 45 10 8B 55 0C 53 56 8B 75 08"
@@ -2620,6 +3368,15 @@ preserve = ["ecx"]
 # lighting bug). Hooking the thunk with the x87pow naked shim replaces thunk +
 # core in one balanced contract and also retires Math::Exp2 (0x744b00), whose
 # sole caller is the core.
+
+# Golden-diff the written region, byte compare. Region covers everything the
+# adapter touches, reads included: the argument is swapped for a fixed-size
+# scratch buffer, so a read past the declared length reads past that buffer.
+[functions.Orientation__SetPosition__7adcd0.diff]
+mode  = "inout"
+out   = { arg = 0, len = 40 }
+float = "bytes"
+
 [functions.Math__Pow_x87]
 rva  = 0x33f940
 sig  = "83 EC 10 D9 C9 DD 1C 24 DD 54 24 08 8B 44 24 0C E8 ?? ?? ?? ??"
@@ -2690,6 +3447,13 @@ preserve = []
 # Writes device state at this+0xf34.. (high offset, and stateful: re-running on
 # the already-updated `this` would disagree on the dirty flag) => not safely
 # golden-diffable via the out-region harness; validated by host tests.
+
+# Scalar return at `ulp = 0`: `float` selects the region comparator and never
+# reaches a scalar, so exactness must come from the tolerance.
+[functions.NormalizeAngleToPi__6084f0.diff]
+mode = "out"
+ulp  = 0
+
 [functions.CGxDevice__SetViewport__592530]
 rva  = 0x192530   # VA 0x592530 − image_base
 sig  = "55 8B EC D9 81 38 0F 00 00 D8 5D 08"
@@ -2745,6 +3509,15 @@ preserve = []
 # No .diff: the result is written by the delegated setter at `0x7c0190` through
 # `this` (a call-out with side effects), not by this fn into an owned pointer arg,
 # so the differential double-run is not side-effect free / cleanly golden-diffable.
+
+
+# Golden-diff the written region, byte compare. Region covers everything the
+# adapter touches, reads included: the argument is swapped for a fixed-size
+# scratch buffer, so a read past the declared length reads past that buffer.
+[functions.C33Matrix__SetTransposed__7c0120.diff]
+mode  = "inout"
+out   = { arg = 0, len = 16 }
+float = "bytes"
 
 [functions.ScaleStoredVec3ByFactor__7c4ed0]
 rva  = 0x3c4ed0   # VA 0x7c4ed0 − image_base
@@ -3163,6 +3936,11 @@ preserve = []
 # re-appends tied contacts (non-idempotent); coverage is transitive via
 # the diffable SweepVolume parent 0x632ba0, which calls this adapter
 # directly (its SWEEP_BOX_VA delegate is devirtualized by this hook).
+
+# Integer return, compared exactly. No region: the return is the observable.
+[functions.CGxAabb16__TestFloatBox__6b4d10.diff]
+mode = "out"
+
 [functions.Collision_SweepBoxFaces__632280]
 rva  = 0x232280   # VA 0x632280 − image_base
 sig  = "55 8B EC 83 EC 70 53 56 57 89 4D F0"
