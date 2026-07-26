@@ -12,14 +12,22 @@
 /// A strictly serial multiply-add dependency chain (no `mul_add`: the baseline
 /// has no hardware FMA, so it would lower to a slow libm call and change
 /// rounding versus the reference's x87 `FMUL`/`FADD` loop).
+///
+/// The accumulator is `f64` because the original's never leaves the x87 stack:
+/// `0x453623` loads the leading coefficient and the loop at `0x453630` is a bare
+/// `FMUL`/`FADD` pair with no store in it or after it, so the whole chain runs
+/// at register width however long the polynomial is and the result leaves in
+/// `ST(0)` for the caller to narrow. Rounding to `f32` after every step, as this
+/// did, compounds that error once per degree.
 pub fn eval_polynomial_horner__453620(degree: u32, coeffs: &[f32], x: f32) -> f32 {
-    let mut acc = coeffs[0];
+    let x = f64::from(x);
+    let mut acc = f64::from(coeffs[0]);
     let mut i = 1u32;
     while i <= degree {
-        acc = acc * x + coeffs[i as usize];
+        acc = acc * x + f64::from(coeffs[i as usize]);
         i += 1;
     }
-    acc
+    crate::math::f64_to_f32(acc)
 }
 
 #[cfg(test)]
@@ -60,11 +68,27 @@ mod tests_eval_polynomial_horner__453620 {
 
     #[test]
     fn matches_explicit_horner_reference() {
-        // Independent explicit expansion for a cubic at an arbitrary x.
+        // Independent explicit expansion for a cubic at an arbitrary x, at the
+        // width the original evaluates it: the accumulator never leaves the x87
+        // stack, so the chain is carried wide and narrowed once at the end.
         let c = [0.5f32, -1.25, 2.0, -0.75];
         let x = 1.7f32;
-        let want = ((c[0] * x + c[1]) * x + c[2]) * x + c[3];
+        let xw = f64::from(x);
+        let want = crate::math::f64_to_f32(
+            ((f64::from(c[0]) * xw + f64::from(c[1])) * xw + f64::from(c[2])) * xw
+                + f64::from(c[3]),
+        );
         assert_eq!(horner(3, &c, x).to_bits(), want.to_bits());
+
+        // This fixture separates the two shapes, so the assertion above is not
+        // vacuous. Before the width fix the reference was written per-step in
+        // f32 and this test pinned the defect rather than the original.
+        let per_step = ((c[0] * x + c[1]) * x + c[2]) * x + c[3];
+        assert_ne!(
+            want.to_bits(),
+            per_step.to_bits(),
+            "fixture no longer separates narrow-once from narrow-per-step"
+        );
     }
 }
 

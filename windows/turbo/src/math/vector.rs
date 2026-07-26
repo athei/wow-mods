@@ -247,12 +247,42 @@ mod tests_c3_vector__scale__5f8cf0 {
 
 /// Returns the squared magnitude `x*x + y*y + z*z` of a vec3.
 pub fn c3_vector__squared_magnitude__4549f0(v: &[f32; 3]) -> f32 {
-    v[0] * v[0] + v[1] * v[1] + v[2] * v[2]
+    // `(x² + y²) + z²`, which is the order stock uses (`0x4549f8` onwards) — so
+    // unlike its sibling dot product this one was never wrong about order. It
+    // was wrong about width: the body contains no store, the three squares and
+    // two sums stay on the x87 stack, and the result leaves in `ST(0)`.
+    let sq = |x: f32| f64::from(x) * f64::from(x);
+    f64_to_f32((sq(v[0]) + sq(v[1])) + sq(v[2]))
 }
 
 #[cfg(test)]
 mod tests_c3_vector__squared_magnitude__4549f0 {
     use super::c3_vector__squared_magnitude__4549f0 as f;
+
+    #[test]
+    fn squares_carry_wide_to_a_single_narrowing() {
+        // Also un-diffable (f32 in ST(0), no out region), so this pin is the
+        // only check there is. The order was already the original's; only the
+        // width moved.
+        let v = [
+            f32::from_bits(0x41ef_4ad4),
+            f32::from_bits(0xc18b_466c),
+            f32::from_bits(0xc1cf_9aee),
+        ];
+        let got = f(&v);
+
+        let sq = |x: f32| f64::from(x) * f64::from(x);
+        let want = super::f64_to_f32((sq(v[0]) + sq(v[1])) + sq(v[2]));
+        assert_eq!(got.to_bits(), want.to_bits());
+
+        let per_step = v[0] * v[0] + v[1] * v[1] + v[2] * v[2];
+        assert_ne!(
+            got.to_bits(),
+            per_step.to_bits(),
+            "fixture no longer separates narrow-once from narrow-per-step"
+        );
+    }
+
     #[test]
     fn known_value() {
         assert_eq!(f(&[3.0, 4.0, 0.0]), 25.0);
@@ -442,15 +472,55 @@ mod tests_c3_vector__cross__672130 {
 
 /// Dot product of two 3-component vectors.
 pub fn c3_vector__dot__602630(a: &[f32; 3], b: &[f32; 3]) -> f32 {
-    let mut acc = a[0] * b[0];
-    acc += a[1] * b[1];
-    acc += a[2] * b[2];
-    acc
+    // Stock sums z, then y, then x — exactly the reverse of the obvious reading
+    // (`0x602630`: the z product is formed first, the y product is folded into
+    // it, and x arrives last). The body has no store of any kind; the result
+    // leaves in `ST(0)` and the caller decides whether to narrow it, so the
+    // chain carries an `f64` significand throughout. Our declared `f32` return
+    // forces one narrowing that stock does not necessarily perform, but one is
+    // strictly closer than rounding after every step.
+    let m = |x: f32, y: f32| f64::from(x) * f64::from(y);
+    f64_to_f32((m(a[2], b[2]) + m(a[1], b[1])) + m(a[0], b[0]))
 }
 
 #[cfg(test)]
 mod tests_c3_vector__dot__602630 {
     use super::c3_vector__dot__602630 as dot;
+
+    #[test]
+    fn sums_z_then_y_then_x_at_register_width() {
+        // This entry returns f32 in ST(0) with no out region, so the harness
+        // cannot see it at all - arming that shape garbled every glyph in a DIFF
+        // build. It is verified from the bytes and pinned here or nowhere.
+        let a = [
+            f32::from_bits(0x41ef_4ad4),
+            f32::from_bits(0xc18b_466c),
+            f32::from_bits(0xc1cf_9aee),
+        ];
+        let b = [
+            f32::from_bits(0x4201_05b9),
+            f32::from_bits(0xc219_f999),
+            f32::from_bits(0xc018_15ab),
+        ];
+        let got = dot(&a, &b);
+
+        let m = |x: f32, y: f32| f64::from(x) * f64::from(y);
+        let want = super::f64_to_f32((m(a[2], b[2]) + m(a[1], b[1])) + m(a[0], b[0]));
+        assert_eq!(got.to_bits(), want.to_bits());
+
+        // The old form: left to right over x, y, z, rounding after each step.
+        let old = {
+            let mut acc = a[0] * b[0];
+            acc += a[1] * b[1];
+            acc += a[2] * b[2];
+            acc
+        };
+        assert_ne!(
+            got.to_bits(),
+            old.to_bits(),
+            "fixture no longer separates the stock shape from the old one"
+        );
+    }
 
     #[test]
     fn known_value() {
