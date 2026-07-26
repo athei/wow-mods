@@ -91,6 +91,19 @@ struct Diff {
     /// Max ULP per `f32` lane before a divergence is reported.
     #[serde(default = "default_ulp")]
     ulp: u32,
+    /// Byte offset in the `out` region where the `f32` lanes begin.
+    ///
+    /// For a region that is not uniformly float: bytes before it are compared
+    /// exactly and bytes from it on are compared as lanes within `ulp`. Only
+    /// meaningful with `float = "f32"`; the default of 0 is the ordinary
+    /// whole-region lane compare.
+    ///
+    /// This exists because the alternative for a mixed region is to compare the
+    /// whole thing as lanes, which silently *loses* coverage — an arbitrary
+    /// pointer can carry a NaN bit pattern, and the lane comparator treats any
+    /// two NaNs as equal, so two different pointers would compare equal.
+    #[serde(default)]
+    float_from: usize,
     /// `true` marks a function deliberately more precise than the original.
     ///
     /// (f64 intermediates vs x87/SP); divergences count and log at debug, never
@@ -178,6 +191,26 @@ fn validate_diff(name: &str, f: &Function) {
             );
         }
     };
+    assert!(
+        d.float_from == 0 || d.float == "f32",
+        "{name}: diff float_from is only meaningful with float = \"f32\"",
+    );
+    if d.float_from != 0 {
+        let out = d.out.as_ref().unwrap_or_else(|| {
+            panic!("{name}: diff float_from needs an `out` region to offset into")
+        });
+        assert!(
+            d.float_from.is_multiple_of(4) && d.float_from < out.len,
+            "{name}: diff float_from {} must be 4-aligned and inside the {}-byte out region",
+            d.float_from,
+            out.len,
+        );
+        assert!(
+            (out.len - d.float_from).is_multiple_of(4),
+            "{name}: diff out region tail from {} is not a whole number of f32 lanes",
+            d.float_from,
+        );
+    }
     if d.mode == "inout" {
         let out = d.out.as_ref().unwrap_or_else(|| {
             panic!("{name}: diff mode \"inout\" requires an `out` region (the in-place buffer)")
@@ -910,6 +943,12 @@ fn emit_diff_compare(
                 out,
                 "    super::diff::region_bytes(&{screaming}_DIFF_STATS, {name:?}, {}, &scratch.0, orig_out);",
                 d.expected
+            );
+        } else if d.float_from != 0 {
+            let _ = writeln!(
+                out,
+                "    super::diff::region_split(&{screaming}_DIFF_STATS, {name:?}, {}, {}, {}, &scratch.0, orig_out);",
+                d.expected, d.ulp, d.float_from
             );
         } else {
             let _ = writeln!(

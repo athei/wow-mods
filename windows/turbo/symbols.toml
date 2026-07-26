@@ -2492,13 +2492,26 @@ args = ["*mut core::ffi::c_void", "*const f32"]
 preserve = []
 
 
-# Golden-diff the written region, byte compare. Region covers everything the
-# adapter touches, reads included: the argument is swapped for a fixed-size
-# scratch buffer, so a read past the declared length reads past that buffer.
+# Golden-diff the written region. Region covers everything the adapter touches,
+# reads included: the argument is swapped for a fixed-size scratch buffer, so a
+# read past the declared length reads past that buffer.
+#
+# Split compare. Bytes 0..0x1c are the vtable pointer and the flags byte at
+# +0xd, compared exactly. From 0x1c the region is three f32 — the cached yaw,
+# cos and sin — and those take a 2-ulp bound, because this hook is the one place
+# a trig difference is the WHOLE output: the kernel is a `sin_cos` call and
+# nothing else. The original uses the hardware FSINCOS; we use the branchless
+# polynomial the surrounding kernels need in order to vectorize, and the two
+# cannot agree to the bit. Measured over the wrapped input range the polynomial
+# is within 1 ulp of a correctly-rounded reference for both sin and cos, so 2 is
+# a bound with a single ulp of headroom, not a shrug. Anything larger is a real
+# divergence and still reports.
 [functions.Orientation__SetYaw__7acc40.diff]
 mode  = "inout"
 out   = { arg = 0, len = 40 }
-float = "bytes"
+float = "f32"
+ulp   = 2
+float_from = 0x1c
 
 [functions.SetClampedValue01__453480]
 rva  = 0x53480

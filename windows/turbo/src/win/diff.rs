@@ -138,6 +138,53 @@ pub fn region_f32(
     });
 }
 
+/// Compare a region whose head is raw bytes and whose tail is `f32` lanes.
+///
+/// For an output region that is not uniformly float — a game object where only
+/// a trailing span holds the floats a kernel computes, with a vtable pointer and
+/// flag bytes ahead of it. The head is compared exactly, so nothing there is
+/// weakened; only the tail takes the `max_ulp` tolerance. Comparing such a
+/// region wholly as lanes would be worse than useless: an arbitrary pointer can
+/// carry a NaN bit pattern, and any two NaNs compare equal regardless of
+/// payload, so two *different* pointers would pass.
+///
+/// `float_from` is a byte offset into the region and is validated at build time
+/// to be within it and 4-byte aligned.
+pub fn region_split(
+    stats: &Stats,
+    label: &str,
+    expected: bool,
+    max_ulp: u32,
+    float_from: usize,
+    ours: &[u8],
+    orig: &[u8],
+) {
+    if let Some(at) = ulp::first_divergence_bytes(&ours[..float_from], &orig[..float_from]) {
+        report(stats, label, expected, || {
+            format!(
+                "out byte {at}: ours {:#04x} vs orig {:#04x}",
+                ours[at], orig[at],
+            )
+        });
+        return;
+    }
+    let Some(d) = ulp::first_divergence_f32(&ours[float_from..], &orig[float_from..], max_ulp)
+    else {
+        return;
+    };
+    report(stats, label, expected, || {
+        format!(
+            "out lane {} (byte {}): ours {:?} ({:#010x}) vs orig {:?} ({:#010x})",
+            d.lane,
+            float_from + d.lane * 4,
+            f32::from_bits(d.ours),
+            d.ours,
+            f32::from_bits(d.orig),
+            d.orig,
+        )
+    });
+}
+
 /// Compare an output region byte-exactly; report the first diverging offset.
 pub fn region_bytes(stats: &Stats, label: &str, expected: bool, ours: &[u8], orig: &[u8]) {
     let Some(at) = ulp::first_divergence_bytes(ours, orig) else {
