@@ -885,13 +885,28 @@ pub fn c44_matrix__scale_rows_vec__7bdca0(this: *mut f32, scale_xyz: *const f32)
         return scale_xyz;
     }
     // SAFETY: the receiver `this` addresses a `C44Matrix` — 16 contiguous, aligned
-    // `f32` (4-float row stride); non-null checked above. Scaled in place.
-    let mut m = unsafe { this.cast::<[f32; 16]>().read_unaligned() };
+    // `f32` (4-float row stride); non-null checked above. Only the upper-left 3x3
+    // is scaled, so eleven floats span every element the original loads and the
+    // read stops short of the translation row rather than covering the object.
+    let head = unsafe { this.cast::<[f32; 11]>().read_unaligned() };
     // SAFETY: `scale_xyz` addresses three contiguous, possibly-unaligned `f32`; read-only.
     let s = &unsafe { scale_xyz.cast::<[f32; 3]>().read_unaligned() };
+    let mut m = [0.0f32; 16];
+    m[..11].copy_from_slice(&head);
     crate::math::matrix44::c44_matrix__scale_rows_vec__7bdca0(&mut m, s);
-    // SAFETY: write the scaled matrix back to the same caller storage.
-    unsafe { this.cast::<[f32; 16]>().write_unaligned(m) };
+    // SAFETY: `this` addresses the writable first row — three contiguous `f32`.
+    unsafe { this.cast::<[f32; 3]>().write_unaligned([m[0], m[1], m[2]]) };
+    // SAFETY: the receiver holds at least the eleven floats read above, so the
+    // second row, one 4-float stride on, is in bounds.
+    let row1 = unsafe { this.add(4) };
+    // SAFETY: `row1` addresses the writable second row — three contiguous `f32`.
+    unsafe { row1.cast::<[f32; 3]>().write_unaligned([m[4], m[5], m[6]]) };
+    // SAFETY: the third row, two strides on, is in bounds for the same reason.
+    let row2 = unsafe { this.add(8) };
+    // SAFETY: `row2` addresses the writable third row. These nine floats are the
+    // whole of what the kernel changed, and the whole of what the original stores;
+    // the pads and translation row keep the caller's bytes.
+    unsafe { row2.cast::<[f32; 3]>().write_unaligned([m[8], m[9], m[10]]) };
     scale_xyz
 }
 
@@ -954,9 +969,14 @@ pub fn c44_matrix__transform_point__7bca80(
     }
     // SAFETY: `in_vec3` is a non-null caller-owned C3Vector (3 contiguous f32).
     let p = &unsafe { in_vec3.cast::<[f32; 3]>().read_unaligned() };
-    // SAFETY: `mat4x4` is a non-null caller-owned C44Matrix (16 contiguous f32).
-    let m = &unsafe { mat4x4.cast::<[f32; 16]>().read_unaligned() };
-    let r = crate::math::matrix44::c44_matrix__transform_point__7bca80(p, m);
+    // SAFETY: `mat4x4` is a non-null caller-owned C44Matrix. The kernel consumes
+    // the rotation block and the last row, so fifteen floats span every element it
+    // reads; the trailing pad is never touched, which keeps the read inside a
+    // caller that supplied only the live floats.
+    let head = unsafe { mat4x4.cast::<[f32; 15]>().read_unaligned() };
+    let mut m = [0.0f32; 16];
+    m[..15].copy_from_slice(&head);
+    let r = crate::math::matrix44::c44_matrix__transform_point__7bca80(p, &m);
     // SAFETY: `out_vec3` is non-null and addresses 3 writable contiguous f32.
     unsafe { out_vec3.cast::<[f32; 3]>().write_unaligned(r) };
     out_vec3
@@ -974,11 +994,16 @@ pub fn c44_matrix__transform_point__7bcae0(
     if out.is_null() || mat.is_null() || input.is_null() {
         return out;
     }
-    // SAFETY: `mat` is a non-null caller-owned C44Matrix (16 contiguous f32).
-    let m = &unsafe { mat.cast::<[f32; 16]>().read_unaligned() };
+    // SAFETY: `mat` is a non-null caller-owned C44Matrix. This overload reads the
+    // translation from the last column, so it consumes only the first twelve
+    // floats and stops a whole row short of the object; nothing past element 11 is
+    // touched, which keeps the read inside a caller holding just the live block.
+    let head = unsafe { mat.cast::<[f32; 12]>().read_unaligned() };
+    let mut m = [0.0f32; 16];
+    m[..12].copy_from_slice(&head);
     // SAFETY: `input` is a non-null caller-owned C3Vector (3 contiguous f32).
     let p = &unsafe { input.cast::<[f32; 3]>().read_unaligned() };
-    let r = crate::math::matrix44::c44_matrix__transform_point__7bcae0(m, p);
+    let r = crate::math::matrix44::c44_matrix__transform_point__7bcae0(&m, p);
     // SAFETY: `out` is non-null and addresses 3 writable contiguous f32.
     unsafe { out.cast::<[f32; 3]>().write_unaligned(r) };
     out
@@ -1020,9 +1045,14 @@ pub fn c44_matrix__transform_vertex_in_place__7bcc60(
     // SAFETY: `vec` is a non-null caller-owned C3Vector (3 contiguous f32); read
     // before the result overwrites it.
     let v = &unsafe { vec.cast::<[f32; 3]>().read_unaligned() };
-    // SAFETY: `mat` is a non-null caller-owned C44Matrix (16 contiguous f32).
-    let m = &unsafe { mat.cast::<[f32; 16]>().read_unaligned() };
-    let r = crate::math::matrix44::c44_matrix__transform_vertex_in_place__7bcc60(v, m);
+    // SAFETY: `mat` is a non-null caller-owned C44Matrix. The kernel consumes the
+    // affine block only, so fifteen floats span every element it reads; stopping
+    // there matches the original's twelve loads, none of which reach the trailing
+    // pad, and keeps the read inside a caller that supplied only the live floats.
+    let head = unsafe { mat.cast::<[f32; 15]>().read_unaligned() };
+    let mut m = [0.0f32; 16];
+    m[..15].copy_from_slice(&head);
+    let r = crate::math::matrix44::c44_matrix__transform_vertex_in_place__7bcc60(v, &m);
     // SAFETY: `vec` is non-null and addresses 3 writable contiguous f32; the
     // original writes the transformed vertex back in place.
     unsafe { vec.cast::<[f32; 3]>().write_unaligned(r) };
@@ -1040,8 +1070,12 @@ pub fn c44_matrix__translate__7bdc40(this: *mut f32, trans: *const f32) -> *cons
     }
     // SAFETY: the receiver `this` addresses a `C44Matrix` — 16 contiguous, aligned
     // `f32` (4-float row stride); non-null checked above. The kernel reads the
-    // rotation block and read-modify-writes the translation in place.
-    let mut m = unsafe { this.cast::<[f32; 16]>().read_unaligned() };
+    // rotation block and read-modify-writes the translation in place, so fifteen
+    // floats span every element the original touches; the trailing pad is neither
+    // read nor written, which keeps the access inside a caller's affine block.
+    let head = unsafe { this.cast::<[f32; 15]>().read_unaligned() };
+    let mut m = [0.0f32; 16];
+    m[..15].copy_from_slice(&head);
     // `trans` is three contiguous `f32`, but the caller's vector can sit
     // at a 2-byte-aligned offset inside a packed game structure (the
     // stock x86 code reads it with an unaligned load). Copy it out with
@@ -1054,8 +1088,18 @@ pub fn c44_matrix__translate__7bdc40(this: *mut f32, trans: *const f32) -> *cons
     // yet the trace still sees NaN, the facing/rotate corrupted it instead.
     trip_nonfinite("C44Matrix.Translate", &[], &t_arr);
     crate::math::matrix44::c44_matrix__translate__7bdc40(&mut m, &t_arr);
-    // SAFETY: write the updated matrix back to the same caller storage.
-    unsafe { this.cast::<[f32; 16]>().write_unaligned(m) };
+    // SAFETY: the receiver holds at least the fifteen floats read above, so the
+    // translation row at element 12 is in bounds.
+    let trans_row = unsafe { this.add(12) };
+    // SAFETY: `trans_row` addresses the three writable translation floats. The
+    // kernel adds into that row and leaves the rest of the matrix as it was read,
+    // so those three are the whole of what changed — and the only row the
+    // original stores.
+    unsafe {
+        trans_row
+            .cast::<[f32; 3]>()
+            .write_unaligned([m[12], m[13], m[14]]);
+    }
     trans
 }
 
@@ -6653,10 +6697,11 @@ pub fn cm2_model__get_attachment_world_pos__712d50(
 /// quaternions by the search's factor (`out_quat[2]`). When a secondary
 /// animation is active (`animCtx+0x10c` differs from the host sentinel and
 /// `track[1]==-1`) it samples the second track, lerps into `out_quat[10..14]`
-/// and blends the two with the D3DX quaternion-slerp dispatched through the
-/// host runtime pointer. Both the keyframe search and the slerp run the stock
-/// code by absolute VA; the sentinel is read from its `.data` slot (base
-/// verified at load; client non-`DYNAMICBASE`).
+/// and blends the two with a D3DX quaternion slerp. Both that slerp and the
+/// keyframe search are this crate's own reimplementations (`0x74d11a` and
+/// `0x713d50`), called directly rather than through the host image; the
+/// sentinel is still read from its `.data` slot (base verified at load; client
+/// non-`DYNAMICBASE`).
 pub fn cm2_shared__sample_quat_track__713ea0(
     this: *mut core::ffi::c_void,
     anim_ctx: i32,
@@ -8981,14 +9026,21 @@ pub fn collision_clip_polygon_by_plane__6318c0(
     // relies on the buffer being sized for the count).
     let count = unsafe { count_slot.cast::<i32>().read() }.clamp(0, 15) as usize;
 
-    // `polygon+0` addresses the 45 contiguous vertex floats (15 verts).
-    let verts_slot = polygon.cast::<[f32; 45]>();
-    // SAFETY: `verts_slot` is the initialized vertex buffer of the live polygon.
-    let mut verts = unsafe { verts_slot.read() };
-    // SAFETY: `polygon+0xb4` addresses the 15 contiguous per-vertex tag floats.
-    let tags_slot = unsafe { polygon.add(0xb4).cast::<[f32; 15]>() };
-    // SAFETY: `tags_slot` is the live tag array of the polygon.
-    let mut tags = unsafe { tags_slot.read() };
+    // `polygon+0` addresses the vertex floats, three to a vertex.
+    let verts_base = polygon.cast::<f32>();
+    let mut verts = [0.0f32; 45];
+    // SAFETY: the polygon's first `count` vertices are initialized, and `count` is
+    // clamped to the 15-vertex buffer above, so `count * 3` floats are in bounds.
+    // Slots past the live count stay zero — the kernel reads only below the count,
+    // and the original copies just the live prefix rather than the whole buffer.
+    verts[..count * 3]
+        .copy_from_slice(unsafe { core::slice::from_raw_parts(verts_base, count * 3) });
+    // SAFETY: `polygon+0xb4` is the in-bounds start of the per-vertex tag floats,
+    // one to a vertex, within the live polygon record.
+    let tags_base = unsafe { polygon.add(0xb4).cast::<f32>() };
+    let mut tags = [0.0f32; 15];
+    // SAFETY: the first `count` tags are initialized and in bounds, as above.
+    tags[..count].copy_from_slice(unsafe { core::slice::from_raw_parts(tags_base, count) });
 
     const EPS_NEG: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x40_dff0) as *const f32;
     const EPS_POS: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x40_dfec) as *const f32;
@@ -9007,10 +9059,19 @@ pub fn collision_clip_polygon_by_plane__6318c0(
         eps_pos,
     );
 
-    // SAFETY: `verts_slot` addresses the writable 45-float vertex buffer.
-    unsafe { verts_slot.write(verts) };
-    // SAFETY: `tags_slot` addresses the writable 15-float tag buffer.
-    unsafe { tags_slot.write(tags) };
+    // SAFETY: `verts_base` addresses the writable vertex buffer. `new_count` is
+    // the kernel's emitted vertex count, bounded by the 15-vertex capacity, so
+    // `new_count * 3` floats are in bounds. Only that prefix is stored, matching
+    // the original, which leaves everything past the new count as the caller had
+    // it. The wholly-outside early-out returns zero and so stores nothing; the
+    // wholly-inside one returns the count unchanged and rewrites the prefix with
+    // the values just read, which is a copy the original does not make but leaves
+    // the buffer identical either way.
+    unsafe { core::slice::from_raw_parts_mut(verts_base, new_count * 3) }
+        .copy_from_slice(&verts[..new_count * 3]);
+    // SAFETY: `tags_base` addresses the writable tag buffer, bounded as above.
+    unsafe { core::slice::from_raw_parts_mut(tags_base, new_count) }
+        .copy_from_slice(&tags[..new_count]);
     // SAFETY: `count_slot` is the writable integer count; store the new count.
     unsafe { count_slot.cast::<i32>().write(new_count as i32) };
 }
@@ -11590,8 +11651,8 @@ pub fn c_particle_emitter__advance_trail__7b7e60(this: *mut u8, advance: f32, sp
 /// differs from the host zero sentinel, `track[1] == -1`) it repeats the
 /// search for the secondary timestamp (`animCtx+0xc4`/`+0xc8`) into
 /// `out[4..7]` and copies that lo key's byte into `out` byte `0x1c`. The
-/// keyframe search runs the stock code by absolute VA (base verified at load;
-/// client non-`DYNAMICBASE`).
+/// keyframe search is this crate's own reimplementation of `0x713d50`, called
+/// directly rather than through the host image.
 pub fn m2_track__sample_byte__71ae90(
     this: *mut core::ffi::c_void,
     anim_ctx: i32,
@@ -11687,8 +11748,8 @@ pub fn m2_track__sample_byte__71ae90(
 /// sentinel and `track[1] == -1`) it repeats the search for the secondary
 /// timestamp (`animCtx+0xc4`/`+0xc8`) into `out[4..7]`, lerps that pair into
 /// `out[7]`, and cross-fades `out[3]` toward it by the blend factor. The
-/// keyframe search runs the stock code by absolute VA (base verified at load;
-/// client non-`DYNAMICBASE`).
+/// keyframe search is this crate's own reimplementation of `0x713d50`, called
+/// directly rather than through the host image.
 pub fn m2_track__sample_float_lerp__71af20(
     this: *mut core::ffi::c_void,
     anim_ctx: i32,

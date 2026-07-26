@@ -377,6 +377,17 @@ ret  = "*const f32"
 args = ["*mut f32", "*const f32"]
 preserve = ["ecx", "edx"]
 
+# Golden-diff the scaled receiver (inout = arg 0). len = 64 covers the whole
+# C44Matrix: the adapter touches only the nine upper-left floats, but arg 0 is
+# redirected to a fixed-size scratch buffer, so the region has to span at least
+# what the reimpl reads, and the lanes neither side writes compare equal because
+# the scratch is seeded from the live pre-call matrix. Arg 1 is `*const` and
+# read-only, so it needs no snapshot.
+[functions.C44Matrix__ScaleRowsVec__7bdca0.diff]
+mode  = "inout"
+out   = { arg = 0, len = 64 }
+float = "f32"
+
 [functions.C44Matrix__ScaleRows__7be670]
 rva  = 0x3be670
 sig  = "55 8B EC D9 45 08 D8 09 D9 19 D9 45 08 D8 49 04 D9 59 04 D9 45 08 D8 49"
@@ -425,6 +436,21 @@ ret  = "*mut f32"
 args = ["*mut f32", "*mut f32", "*const f32"]
 preserve = ["ecx"]
 
+# Golden-diff the transformed vertex (out = arg 0, three f32). `ins` on arg 1 is
+# required for correctness, not documentation: the adapter transforms `vec` in
+# place, and the original runs first, so without a snapshot the reimpl would be
+# handed an already-transformed vertex and diverge on every call. Snapshotting
+# redirects that write into scratch instead of live memory.
+# `double_run_safe`: the write through `vec` is the in-place store the name
+# advertises; under the compare path it lands in the snapshot, so replaying the
+# reimpl applies no live-state side effect.
+[functions.C44Matrix__TransformVertexInPlace__7bcc60.diff]
+mode  = "out"
+out   = { arg = 0, len = 12 }
+ins   = [{ arg = 1, len = 12 }]
+float = "f32"
+double_run_safe = true
+
 [functions.C44Matrix__Translate__7bdc40]
 rva  = 0x3bdc40
 sig  = "55 8B EC 8B 45 08 D9 41 20 D8 48 08"
@@ -432,6 +458,21 @@ abi  = "thiscall"
 ret  = "*const f32"
 args = ["*mut f32", "*const f32"]
 preserve = ["ecx", "edx"]
+
+# Golden-diff the receiver (inout = arg 0). len = 64 spans the whole C44Matrix
+# even though only the translation row is stored: arg 0 is redirected to a
+# fixed-size scratch buffer, so the region must cover everything the reimpl
+# reads, and the rotation lanes compare equal because the scratch is seeded from
+# the live pre-call matrix. The three-term dot folded into the translation is
+# exactly where a rounding difference would show.
+# `double_run_safe`: the only call-out is the non-finite tripwire, which touches
+# no live game state — it bumps a counter and may log — so replaying the reimpl
+# is side-effect free apart from double-counting that telemetry while armed.
+[functions.C44Matrix__Translate__7bdc40.diff]
+mode  = "inout"
+out   = { arg = 0, len = 64 }
+float = "f32"
+double_run_safe = true
 
 [functions.C4Plane__FromTriangle__637480]
 rva  = 0x237480
@@ -1686,6 +1727,19 @@ ret  = "void"
 args = ["*const f32", "*mut u8", "f32"]
 preserve = []
 
+# Golden-diff the clipped polygon (inout = arg 1). len = 0xf4 is forced by the
+# record's own shape: 45 vertex floats at +0, 15 tag floats at +0xb4 and the
+# vertex count at +0xf0, so the highest byte written is 0xf3 and a shorter
+# region would put the count store past the end of the scratch buffer.
+# `bytes` rather than `f32` because that last dword is an integer count: read as
+# a float lane, counts 0..15 are subnormal bit patterns whose ULP distance is
+# their integer difference, so the default tolerance would accept a count of 3
+# where 5 was expected — the single most diagnostic output this function has.
+[functions.Collision_ClipPolygonByPlane__6318c0.diff]
+mode  = "inout"
+out   = { arg = 1, len = 0xf4 }
+float = "bytes"
+
 [functions.Collision_PlaneBoxClearanceTest__6335d0]
 rva  = 0x2335d0
 sig  = "55 8B EC 83 EC 54 53 56 57 89 55 F8"
@@ -1917,6 +1971,26 @@ abi  = "fastcall"
 ret  = "void"
 args = ["*mut core::ffi::c_void", "i32", "*mut i16", "*mut u32"]
 preserve = []
+
+# Golden-diff the sampled result block (out = arg 3). len = 32 spans the whole
+# block: the primary search triple at out[0..3], the primary result at out[3],
+# the secondary search triple at out[4..7] and the secondary result at out[7].
+# A region starts at the argument pointer, so it cannot be narrowed to the
+# result lanes alone, and comparing the search triples is useful anyway — they
+# are what the lerp consumes.
+# `bytes` is the point of this entry. The question it exists to answer is
+# whether the lerp should round each step to f32 or carry the chain at the
+# client's 53-bit precision and narrow once; that difference is one or two ULP,
+# which the default float tolerance would hide. The four index dwords in the
+# search triples are integers and want an exact compare for the same reason.
+# `double_run_safe`: the keyframe search this calls is read-only outside its own
+# out block, which under the compare path is the scratch buffer, so replaying
+# the reimpl applies no live-state side effect.
+[functions.M2Track__SampleFloatLerp__71af20.diff]
+mode  = "out"
+out   = { arg = 3, len = 32 }
+float = "bytes"
+double_run_safe = true
 
 [functions.OsGetTimeMs__42b790]
 rva  = 0x2b790

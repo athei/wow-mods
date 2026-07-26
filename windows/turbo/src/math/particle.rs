@@ -1084,7 +1084,7 @@ mod tests_c_particle_system__update_spawn_transform__7b76c0 {
         assert_eq!(out[15].to_bits(), 1.0f32.to_bits());
     }
 
-    /// Law: the basis extractor pulls row0 from `m[0..3]`, row2 from `m[8..11]`.
+    /// Law: the basis extractor pulls row0 from `m[4..7]`, row2 from `m[8..11]`.
     ///
     /// The translation comes from `m[12..15]` of the accumulated matrix —
     /// exactly the slots the adapter caches into the emitter struct.

@@ -9,8 +9,11 @@
 //! Rust left for LLVM to auto-vectorize** — the parity experiment measures how
 //! close that gets to the reference DLL's hand-written SSE before any intrinsics
 //! are introduced. Kernels compute in `f32` (matching the reference's SSE lane
-//! width) unless a specific function must track an x87 80-bit original, in which
-//! case it computes in `f64` and narrows through [`f64_to_f32`].
+//! width) unless a specific function must track a value the original kept in an
+//! x87 register across operations, in which case it computes in `f64` and
+//! narrows through [`f64_to_f32`]. The client sets 53-bit precision control at
+//! entry, so a register-resident intermediate carries an `f64` significand and
+//! `f64` tracks it exactly within the normal range.
 
 // <<MODULES>> managed by tools/re/assemble.py — do not edit between sentinels.
 pub mod aabb;
@@ -66,9 +69,10 @@ pub mod ulp;
 
 /// Narrowing `f64 → f32`.
 ///
-/// A kernel that computes in `f64` to track an x87 80-bit original narrows each
-/// result into an `f32` field, where the mantissa loss is acceptable. Most
-/// kernels compute directly in `f32` and never need this.
+/// A kernel that computes in `f64` to track a value the original held in an x87
+/// register narrows each result into an `f32` field, where the mantissa loss is
+/// the same one the original's store performed. Most kernels compute directly in
+/// `f32` and never need this.
 const fn f64_to_f32(v: f64) -> f32 {
     v as f32
 }

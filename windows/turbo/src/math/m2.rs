@@ -1113,9 +1113,9 @@ mod tests_m2_fixed16_to_f32__714260 {
 /// original reads just `eax` of the `__ftol` `edx:eax` pair).
 ///
 /// The i32 tick delta enters the FPU exactly (`fild`) and the product is
-/// rounded once to single precision (the host runs with a 24-bit-significand
-/// control word); the `f64` intermediate reproduces that single rounding for
-/// every product needing <= 53 bits.
+/// rounded once on its way to the `f32` slot: with 53-bit precision control the
+/// x87 product carries an `f64` significand, so the store is the only narrowing
+/// and the `f64` intermediate reproduces both steps.
 pub fn seq_ticks(delta: i32, rate: f32) -> i32 {
     let prod = (f64::from(delta) * f64::from(rate)) as f32;
     crate::math::misc::ftol__40a2b0(f64::from(prod)) as i32
