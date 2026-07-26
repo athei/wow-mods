@@ -119,6 +119,32 @@ pub fn note_armed(armed: &::core::sync::atomic::AtomicBool, label: &str, delegat
     }
 }
 
+/// Report an original that does not agree with itself on the same arguments.
+///
+/// Run twice back to back on identical arguments, so a difference means the
+/// original is not a function of its declared inputs: something outside the call
+/// is changing what it reads. That matters because it makes every divergence for
+/// the entry unattributable — the comparison is measuring the client against
+/// itself, and no work on the reimplementation can quiet it.
+///
+/// This exists because `note_input_drift` cannot see the case that produced it.
+/// Drift compares the snapshot against live memory *after* the original returns,
+/// which catches a value that changed and stayed changed, not one that changed and
+/// changed back. A sign bit on a zero is exactly that shape.
+pub fn note_nondeterministic(stats: &Stats, label: &str, arg: usize, first: &[u8], second: &[u8]) {
+    let Some(at) = ulp::first_divergence_bytes(first, second) else {
+        return;
+    };
+    report(stats, label, false, || {
+        format!(
+            "ORIGINAL NOT SELF-CONSISTENT: two runs on the same arguments disagree at \
+             out arg{arg} byte {at} ({:#04x} then {:#04x}) — divergences for this entry \
+             are not attributable to the reimplementation",
+            first[at], second[at]
+        )
+    });
+}
+
 /// How far two `f32` lanes may differ before the comparison reports them.
 ///
 /// Both rulers are needed and a lane must exceed BOTH to count. `ulp` is the

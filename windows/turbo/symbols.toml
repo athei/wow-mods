@@ -95,11 +95,27 @@ preserve = []
 # report in an armed session — one event, because it needs an aliasing caller.
 # Our own adapter reads both inputs into locals before writing, so the hook is
 # correct unarmed either way; this is about the harness telling the truth.
+#
+# `orig_twice` runs the original a second time on the same arguments and reports if
+# it disagrees with itself. Safe here: the body writes only its destination matrix
+# and its own stack temps, reads its two source matrices, and calls nothing that
+# touches global state, so a second run recomputes the same thing and the game
+# consumes it exactly as it would the first.
+#
+# It is on because this entry reports a signed zero that the reimplementation is
+# proven not to cause: replaying the operands the harness dumped shows all four
+# products of the failing lane are a positive zero times a negative value, so the
+# sum is negative zero under every rounding mode and every regrouping, while the
+# original returned positive zero. Those bytes cannot produce that, so the original
+# did not read those bytes. `ins` drift cannot see it, because drift compares the
+# snapshot against live memory only after the original returns and this is a value
+# that changed and changed back. This probe is what distinguishes the two.
 [functions.C44Matrix__Multiply__7bc6a0.diff]
 mode  = "out"
 out   = { arg = 0, len = 64 }
 ins   = [{ arg = 1, len = 64 }, { arg = 2, len = 64 }]
 float = "bytes"
+orig_twice = true
 
 [functions.C3Vector__ScaleByInverse__4549c0]
 rva  = 0x0549c0
@@ -649,6 +665,12 @@ preserve = []
 # Golden-diff the written region, byte compare. Region covers everything the
 # adapter touches, reads included: the argument is swapped for a fixed-size
 # scratch buffer, so a read past the declared length reads past that buffer.
+# No `orig_twice` here even though this reports the identical signed zero on the
+# identical lane, because the mode is `inout`: the out region is also an input, so a
+# second run of the original would read the first run's output and disagree with it
+# for a reason that says nothing about the client. The probe is on
+# `C44Matrix__Multiply__7bc6a0`, which this one `call`s at 0x7bded7, and that is the
+# right place for it — if the multiply is not self-consistent this inherits it.
 [functions.C44Matrix__RotateQuaternion__7bddb0.diff]
 mode  = "inout"
 out   = { arg = 0, len = 64 }

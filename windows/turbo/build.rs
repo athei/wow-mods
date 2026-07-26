@@ -73,6 +73,11 @@ struct Region {
 ///
 /// `out`/`inout` run the original and the reimpl on the same inputs and compare
 /// the output region; `capture` runs only the original and logs the live call.
+// Each bool is an independent key in the manifest's `[functions.X.diff]` table, so
+// this struct's shape is the file's shape rather than a design choice. Grouping them
+// into a nested struct to satisfy the lint would change the on-disk schema of every
+// annotated entry to make a deserialization type read better.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Deserialize)]
 struct Diff {
     /// `"out"` | `"inout"` | `"capture"`.
@@ -130,6 +135,22 @@ struct Diff {
     /// Default 0, which reduces to the plain ULP compare.
     #[serde(default)]
     abs: f32,
+    /// Run the ORIGINAL twice and compare it against itself.
+    ///
+    /// A divergence is only attributable to the reimplementation if the original
+    /// is a function of its declared inputs. When it is not — a value rewritten by
+    /// another thread between the snapshot and the original's read, then rewritten
+    /// back before the drift check can see it — the comparison is measuring the
+    /// client against itself and no amount of work on the kernel will quiet it.
+    /// This is the probe that tells the two cases apart, and it needs no theory
+    /// about which thread.
+    ///
+    /// **Opt-in, because it runs the original a second time.** Only set it where
+    /// the original is argued side-effect free beyond its own output region; the
+    /// entry's comment has to carry that argument. The game consumes the second
+    /// run's output, which for a deterministic function is the first run's.
+    #[serde(default)]
+    orig_twice: bool,
     /// `true` marks a function deliberately more precise than the original.
     ///
     /// (f64 intermediates vs x87/SP); divergences count and log at debug, never
@@ -241,6 +262,20 @@ fn validate_diff(name: &str, f: &Function) {
             d.float_from,
         );
     }
+    // `orig_twice` re-runs the original on the same arguments and expects the same
+    // answer. That only holds when the out region is pure output: an in-place
+    // function reads it, so a second run would compute from the FIRST run's result
+    // and report a difference that means nothing. Rejected rather than documented,
+    // because a probe that reports spuriously is worse than no probe.
+    assert!(
+        !(d.orig_twice && d.mode == "inout"),
+        "{name}: diff orig_twice cannot be used with mode = \"inout\" — the second \
+         run would read the first run's output as its input",
+    );
+    assert!(
+        !d.orig_twice || d.out.is_some(),
+        "{name}: diff orig_twice needs an `out` region to compare the two runs over",
+    );
     if d.mode == "inout" {
         let out = d.out.as_ref().unwrap_or_else(|| {
             panic!("{name}: diff mode \"inout\" requires an `out` region (the in-place buffer)")
@@ -925,6 +960,37 @@ fn emit_diff_compare(
         out,
         "    {bind_orig}self::originals::{snake}()({orig_call_args});"
     );
+
+    // Determinism probe: capture the first run's output, run the original again on
+    // the same arguments, and report if the two disagree.
+    if d.orig_twice
+        && let Some(region_out) = &d.out
+    {
+        {
+            let (arg, len) = (region_out.arg, region_out.len);
+            let _ = writeln!(
+                out,
+                "    let mut first_out = super::diff::Buf::<{len}>::zeroed();"
+            );
+            let _ = writeln!(
+                out,
+                "    // SAFETY: arg{arg} is non-null and addresses {len} bytes (manifest diff.out region)."
+            );
+            let _ = writeln!(
+                out,
+                "    unsafe {{ ::core::ptr::copy_nonoverlapping(arg{arg} as *const u8, first_out.0.as_mut_ptr(), {len}) }};"
+            );
+            let _ = writeln!(out, "    self::originals::{snake}()({orig_call_args});");
+            let _ = writeln!(
+                out,
+                "    // SAFETY: arg{arg} still addresses the same {len} writable bytes."
+            );
+            let _ = writeln!(
+                out,
+                "    super::diff::note_nondeterministic(&{screaming}_DIFF_STATS, {name:?}, {arg}, &first_out.0, unsafe {{ ::core::slice::from_raw_parts(arg{arg} as *const u8, {len}) }});"
+            );
+        }
+    }
 
     // Run the reimpl against the snapshots: out → scratch, each annotated input →
     // its snapshot, everything else passed through live (read-only by contract).
