@@ -27,6 +27,22 @@ export WOW_TURBO_DIFF := 1
 $(info ==> DIFF=1: wow_turbo differential harness compiled in (arm at runtime via WOW_TURBO_DIFF_ARM=all|Name))
 endif
 
+# FP=1 layers .cargo/fp.toml over config.toml, appending
+# `-C force-frame-pointers=yes` to the existing rustflags (config arrays are
+# JOINED, so the xwin -Lnative paths and the nehalem baseline survive). Without
+# it EBP is not a frame pointer and x87sidecar's guest-pc sampler cannot walk a
+# stack out of the Rust DLLs. Own target dir, so switching FP on and off does
+# not invalidate the ordinary build cache. Profiling only: see fp.toml for why
+# this is not the shipping configuration.
+ifeq ($(FP),1)
+PE_OVERLAY := --config .cargo/fp.toml
+PE_TARGET_DIR := target/fp
+$(info ==> FP=1: frame pointers forced for the PE build (profiling; own target dir))
+else
+PE_OVERLAY :=
+PE_TARGET_DIR := target
+endif
+
 # WoW 1.12 is 32-bit only, so the PE side builds i686 exclusively (no x64).
 PE_i386     := i686-pc-windows-msvc
 # The unix `.so` must be x86_64 Mach-O (Wine's unix-call boundary), so shipped
@@ -35,7 +51,7 @@ UNIX_RELEASE_TARGET := x86_64-apple-darwin
 # The unix host-target legs (tests + clippy) reach the native host — aarch64 on
 # Apple Silicon, no Rosetta — by omitting `--target`, per unix/.cargo/config.toml.
 
-OUT_i386 := windows/target/$(PE_i386)/$(PROFILE)
+OUT_i386 := windows/$(PE_TARGET_DIR)/$(PE_i386)/$(PROFILE)
 OUT_avx  := windows/target/avx/$(PE_i386)/$(PROFILE)
 OUT_unix := unix/target/$(UNIX_RELEASE_TARGET)/$(PROFILE)
 
@@ -74,7 +90,8 @@ require-wow-exe:
 all: windows unix
 
 windows: require-wine-sdk
-	cd windows && cargo build --profile $(PROFILE) --target $(PE_i386)
+	cd windows && cargo build --profile $(PROFILE) --target $(PE_i386) \
+	    --target-dir $(PE_TARGET_DIR) $(PE_OVERLAY)
 	# Wine builtins: version.dll (the injector) and wow_mods.dll (the unixlib
 	# bridge that pairs wow_mods.so). The mods themselves (wow_turbo.dll,
 	# wow_translate.dll) are native and are NOT stamped.

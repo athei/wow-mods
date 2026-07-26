@@ -1,0 +1,30 @@
+# Frame-pointer overlay for profiling builds, loaded on top of config.toml via
+# `cargo --config .cargo/fp.toml` (FP=1 in the Makefile).
+#
+# The guest-pc sampler in x87sidecar recovers call stacks by walking the guest
+# frame-pointer chain, because return addresses on the guest stack are already
+# guest x86 addresses. Release builds omit frame pointers, so EBP is not a frame
+# pointer and the walk stops at the leaf: in a 104k-sample capture of the live
+# client, 44.5% of samples had no stack at all, 23293 of them inside
+# wow_turbo.dll alone. This overlay restores them.
+#
+# It is NOT the shipping configuration. i686 has 8 GPRs and ESP is already
+# fixed, so pinning EBP cuts usable general registers from 7 to 6 — a far bigger
+# cost than the ~1% quoted for x86-64, and it lands as spills in hot loops
+# rather than as two prologue instructions. Measure before considering it for
+# release: the `wow::events` line in gamelauncher.log reports handler time per
+# second and is the cheapest A/B signal available.
+#
+# rustflags ARRAYS from merged config sources are JOINED, with this file's
+# entries placed later, so the -Lnative xwin paths and the nehalem baseline in
+# config.toml survive. [env] STRINGS are REPLACED wholesale, so the -idirafter
+# include list is repeated below — keep it in sync with config.toml.
+[target.i686-pc-windows-msvc]
+rustflags = ["-C", "force-frame-pointers=yes"]
+
+# The C/C++ dependencies (snmalloc-sys is the big one) need the same treatment:
+# an allocator frame without a frame pointer truncates the stack right where an
+# allocation-heavy path gets interesting.
+[env]
+CFLAGS_i686-pc-windows-msvc   = "-march=nehalem -mbmi -mbmi2 -mlzcnt -fno-omit-frame-pointer -idirafter /opt/xwin/crt/include -idirafter /opt/xwin/sdk/include/ucrt -idirafter /opt/xwin/sdk/include/um -idirafter /opt/xwin/sdk/include/shared"
+CXXFLAGS_i686-pc-windows-msvc = "-march=nehalem -mbmi -mbmi2 -mlzcnt -fno-omit-frame-pointer -idirafter /opt/xwin/crt/include -idirafter /opt/xwin/sdk/include/ucrt -idirafter /opt/xwin/sdk/include/um -idirafter /opt/xwin/sdk/include/shared"
