@@ -85,9 +85,20 @@ preserve = []
 # Golden-diff the product (out = arg 0, the whole 16-float matrix). Byte compare:
 # each element is an independent four-term dot, so a per-element order or width
 # difference is exactly one ulp and a tolerant compare would pass it.
+#
+# Both inputs are declared `ins` so they are snapshotted before the original
+# runs. Without that the entry reports a false divergence whenever a caller
+# aliases the destination over an input: the original is alias-safe (it builds
+# all sixteen elements in stack temps and only then assigns), so callers may do
+# it, and the compare path would then replay our adapter against an `a` the
+# original had already overwritten. It showed up as a single lane-2 signed-zero
+# report in an armed session — one event, because it needs an aliasing caller.
+# Our own adapter reads both inputs into locals before writing, so the hook is
+# correct unarmed either way; this is about the harness telling the truth.
 [functions.C44Matrix__Multiply__7bc6a0.diff]
 mode  = "out"
 out   = { arg = 0, len = 64 }
+ins   = [{ arg = 1, len = 64 }, { arg = 2, len = 64 }]
 float = "bytes"
 
 [functions.C3Vector__ScaleByInverse__4549c0]
@@ -2507,18 +2518,16 @@ preserve = []
 # a bound with a single ulp of headroom, not a shrug. Anything larger is a real
 # divergence and still reports.
 #
-# TEMPORARILY ulp = 0 rather than the 2 argued above. The split comparator is
-# new and has never run: `win` is x86-only and this module is behind the diff
-# cfg, so it cannot be host-tested, and at ulp = 2 a working comparator and one
-# that never reports produce the same silence. At 0 the trig difference must
-# show, which both proves the comparator fires and measures the residual against
-# the real FSINCOS instead of the correctly-rounded reference the 2 was derived
-# from. Restore 2 once a run has printed the lane.
+# The 2 is measured, not assumed. An armed run at ulp = 0 reported lanes 1 and 2
+# (bytes 32 and 36, the cos and sin slots) differing by exactly one ulp against
+# the live client, e.g. ours 0x3ed8616c vs orig 0x3ed8616b. Lane 0, the cached
+# yaw, never diverged, which is right because it is the wrapped input rather
+# than a trig result, and the exact-compared head never diverged either.
 [functions.Orientation__SetYaw__7acc40.diff]
 mode  = "inout"
 out   = { arg = 0, len = 40 }
 float = "f32"
-ulp   = 0
+ulp   = 2
 float_from = 0x1c
 
 [functions.SetClampedValue01__453480]
