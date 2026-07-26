@@ -290,19 +290,34 @@ mod tests_c_cubic_spline__sq_mag2_d__454980 {
 ///
 /// `control` holds 4 contiguous polynomial rows (4 coefficients each, highest
 /// degree first); `basis` holds the matching 4 rows of 3-component weights.
+///
+/// Three shape facts come off the x87 body and none of them survive being
+/// written as a plain accumulate loop:
+/// - the three output words are **zeroed as integers** first (`0x453590`) and
+///   every row, including the first, adds into them. Peeling the first row to
+///   seed the accumulator is not the same number: `-0.0 + 0.0` is `+0.0`, so the
+///   seed turns a negative zero positive.
+/// - the Horner chain never leaves `ST(0)` (`0x453630`..`0x45363a`), so all four
+///   terms accumulate wide and only the weighted products narrow.
+/// - the `x` product is **not** narrowed before its accumulate. It stays in the
+///   register across `FADD [esi]` (`0x4535f0`), while `y` and `z` are spilled to
+///   `f32` stack slots (`0x4535df`, `0x4535ed`) and reloaded for theirs.
 pub fn c_spline_eval_point__453580(control: &[f32; 16], basis: &[f32; 12], t: f32) -> [f32; 3] {
-    // Seed the accumulator with the first row's contribution (autovec-friendly:
-    // no zero-init then +=).
-    let w0 = (((control[0] * t + control[1]) * t + control[2]) * t) + control[3];
-    let mut out = [w0 * basis[0], w0 * basis[1], w0 * basis[2]];
-    let mut i = 1;
+    let t = f64::from(t);
+    let mut out = [0.0f32; 3];
+    let mut i = 0;
     while i < 4 {
         let c = i * 4;
         let b = i * 3;
-        let w = (((control[c] * t + control[c + 1]) * t + control[c + 2]) * t) + control[c + 3];
-        out[0] += w * basis[b];
-        out[1] += w * basis[b + 1];
-        out[2] += w * basis[b + 2];
+        let w = ((f64::from(control[c]) * t + f64::from(control[c + 1])) * t
+            + f64::from(control[c + 2]))
+            * t
+            + f64::from(control[c + 3]);
+        out[0] = super::f64_to_f32(w * f64::from(basis[b]) + f64::from(out[0]));
+        let py = super::f64_to_f32(w * f64::from(basis[b + 1]));
+        let pz = super::f64_to_f32(w * f64::from(basis[b + 2]));
+        out[1] = super::f64_to_f32(f64::from(py) + f64::from(out[1]));
+        out[2] = super::f64_to_f32(f64::from(pz) + f64::from(out[2]));
         i += 1;
     }
     out
@@ -316,8 +331,12 @@ mod tests_c_spline_eval_point__453580 {
         ((c[0] * t + c[1]) * t + c[2]) * t + c[3]
     }
 
-    // Reference implementation mirroring the stock loop exactly.
-    fn reference(control: &[f32; 16], basis: &[f32; 12], t: f32) -> [f32; 3] {
+    /// The narrow-per-step form, kept only as a separation witness.
+    ///
+    /// Same loop, same term order, every intermediate rounded to `f32` instead of
+    /// left on the x87 stack. Numerically indistinguishable at any tolerance a
+    /// test would pick, which is why the pins below compare bit patterns.
+    fn per_step_f32(control: &[f32; 16], basis: &[f32; 12], t: f32) -> [f32; 3] {
         let mut out = [0.0f32; 3];
         for i in 0..4 {
             let c = [
@@ -339,7 +358,7 @@ mod tests_c_spline_eval_point__453580 {
     }
 
     #[test]
-    fn matches_reference_loop() {
+    fn agrees_with_the_plain_loop_to_tolerance() {
         let control: [f32; 16] = [
             0.1, -0.2, 0.3, 1.0, 0.5, 0.4, -0.3, 0.2, -0.1, 0.6, 0.7, -0.8, 0.9, -0.05, 0.15, 0.25,
         ];
@@ -348,7 +367,7 @@ mod tests_c_spline_eval_point__453580 {
         ];
         for &t in &[0.0f32, 0.25, 0.5, 0.75, 1.0, -0.5, 2.0] {
             let got = c_spline_eval_point__453580(&control, &basis, t);
-            let exp = reference(&control, &basis, t);
+            let exp = per_step_f32(&control, &basis, t);
             assert!(approx(got, exp, 1e-4), "t={t}: got {got:?} exp {exp:?}");
         }
     }
@@ -395,6 +414,184 @@ mod tests_c_spline_eval_point__453580 {
         for k in 0..3 {
             assert!((b[k] - a[k] * 2.5).abs() <= 1e-4, "axis {k}: {a:?} {b:?}");
         }
+    }
+
+    /// A control block, weight block and `t` that separate the three widths.
+    ///
+    /// Bit patterns, not decimal literals: a rounded literal is a different float
+    /// and stops separating them.
+    const WIDTH_CONTROL: [u32; 16] = [
+        0x3fc2_3657,
+        0x3f97_f1e0,
+        0x3fe3_75c9,
+        0xbe14_a733,
+        0x3f1a_f44d,
+        0xbf97_1816,
+        0x3f63_4319,
+        0x3fa2_fe30,
+        0x3f11_03dd,
+        0x3f5e_e2c7,
+        0xbf92_caca,
+        0x3fcc_caab,
+        0x3ff6_0333,
+        0x3ff4_6856,
+        0x3e17_5fce,
+        0x3f94_e20d,
+    ];
+    const WIDTH_BASIS: [u32; 12] = [
+        0xbf37_ea72,
+        0x3fd1_ea2c,
+        0x3fb6_2940,
+        0xbf1b_20f8,
+        0xbfd5_9ed5,
+        0xbe72_1197,
+        0x3e4e_0965,
+        0x3f89_55e7,
+        0xbd4d_a909,
+        0xbff1_7432,
+        0x3f9e_479e,
+        0xbfdf_33f0,
+    ];
+    const WIDTH_T: u32 = 0x3f4c_c39e;
+
+    /// The same, chosen so `x` alone separates on the wide-product accumulate.
+    const ASYM_CONTROL: [u32; 16] = [
+        0x3fab_b2ed,
+        0xbf80_d7fa,
+        0x3fe7_2d5f,
+        0xbfd7_c4f7,
+        0x3e7e_0a07,
+        0x3e2b_461e,
+        0xbf87_a384,
+        0x3e79_3bfa,
+        0xbdef_cdfd,
+        0xbe4e_7586,
+        0x3f5f_9f0f,
+        0xbffd_fb51,
+        0xbefb_8ab5,
+        0x3f92_3a4a,
+        0xbfb7_5db0,
+        0x3fbc_1aa5,
+    ];
+    const ASYM_BASIS: [u32; 12] = [
+        0xbf97_c2f9,
+        0x3f39_7966,
+        0xbfa7_56dc,
+        0xbe4f_91a5,
+        0xbe9e_9dfb,
+        0xbfd6_1e59,
+        0x3f4c_65b0,
+        0xbda2_682e,
+        0x3f41_8bbc,
+        0x3e20_4a4f,
+        0x3e64_d8d2,
+        0x3dd6_07a6,
+    ];
+    const ASYM_T: u32 = 0x3e98_7887;
+
+    /// Wide Horner and wide `y`/`z`, but `x` narrowed before its accumulate.
+    ///
+    /// Isolates the one asymmetry in the loop: only `x` keeps its product in the
+    /// register across the add.
+    fn x_narrowed_like_yz(control: &[f32; 16], basis: &[f32; 12], t: f32) -> [f32; 3] {
+        let t = f64::from(t);
+        let mut out = [0.0f32; 3];
+        for i in 0..4 {
+            let (c, b) = (i * 4, i * 3);
+            let w = ((f64::from(control[c]) * t + f64::from(control[c + 1])) * t
+                + f64::from(control[c + 2]))
+                * t
+                + f64::from(control[c + 3]);
+            for k in 0..3 {
+                let p = super::super::f64_to_f32(w * f64::from(basis[b + k]));
+                out[k] = super::super::f64_to_f32(f64::from(p) + f64::from(out[k]));
+            }
+        }
+        out
+    }
+
+    /// Wide throughout, but the first row seeds the accumulator instead of `0`.
+    ///
+    /// Isolates the integer zero-init: identical on every finite value, and the
+    /// sign of a zero output apart.
+    fn peeled_first_row(control: &[f32; 16], basis: &[f32; 12], t: f32) -> [f32; 3] {
+        let t = f64::from(t);
+        let w0 = ((f64::from(control[0]) * t + f64::from(control[1])) * t + f64::from(control[2]))
+            * t
+            + f64::from(control[3]);
+        let mut out = [0.0f32; 3];
+        for k in 0..3 {
+            out[k] = super::super::f64_to_f32(w0 * f64::from(basis[k]));
+        }
+        for i in 1..4 {
+            let (c, b) = (i * 4, i * 3);
+            let w = ((f64::from(control[c]) * t + f64::from(control[c + 1])) * t
+                + f64::from(control[c + 2]))
+                * t
+                + f64::from(control[c + 3]);
+            out[0] = super::super::f64_to_f32(w * f64::from(basis[b]) + f64::from(out[0]));
+            for k in 1..3 {
+                let p = super::super::f64_to_f32(w * f64::from(basis[b + k]));
+                out[k] = super::super::f64_to_f32(f64::from(p) + f64::from(out[k]));
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn horner_and_products_stay_wide() {
+        let control = WIDTH_CONTROL.map(f32::from_bits);
+        let basis = WIDTH_BASIS.map(f32::from_bits);
+        let t = f32::from_bits(WIDTH_T);
+        let want = [0xc113_8aa5u32, 0x40ff_ea80, 0xc021_2854];
+        let got = c_spline_eval_point__453580(&control, &basis, t);
+        for k in 0..3 {
+            assert_eq!(got[k].to_bits(), want[k], "axis {k}");
+        }
+        let narrow = per_step_f32(&control, &basis, t);
+        assert!(
+            (0..3).any(|k| got[k].to_bits() != narrow[k].to_bits()),
+            "fixture no longer separates narrow-once from narrow-per-step"
+        );
+    }
+
+    #[test]
+    fn x_keeps_its_product_wide_across_the_accumulate() {
+        let control = ASYM_CONTROL.map(f32::from_bits);
+        let basis = ASYM_BASIS.map(f32::from_bits);
+        let t = f32::from_bits(ASYM_T);
+        let want = [0x3e60_19deu32, 0xbeed_69dc, 0x3ee8_e53e];
+        let got = c_spline_eval_point__453580(&control, &basis, t);
+        for k in 0..3 {
+            assert_eq!(got[k].to_bits(), want[k], "axis {k}");
+        }
+        let symmetric = x_narrowed_like_yz(&control, &basis, t);
+        assert_ne!(
+            got[0].to_bits(),
+            symmetric[0].to_bits(),
+            "fixture no longer separates the wide x product from a narrowed one"
+        );
+    }
+
+    #[test]
+    fn every_row_adds_into_an_integer_zero() {
+        // All four rows evaluate to -1 and every weight is +0.0, so each product
+        // is -0.0. Stock's zeroed output words make the sum +0.0; seeding the
+        // accumulator with the first row's product leaves it -0.0.
+        let control: [f32; 16] = [
+            0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, -1.0,
+        ];
+        let basis = [0.0f32; 12];
+        let t = 0.5f32;
+        let got = c_spline_eval_point__453580(&control, &basis, t);
+        for (k, v) in got.iter().enumerate() {
+            assert_eq!(v.to_bits(), 0.0f32.to_bits(), "axis {k}");
+        }
+        let peeled = peeled_first_row(&control, &basis, t);
+        assert!(
+            (0..3).any(|k| got[k].to_bits() != peeled[k].to_bits()),
+            "fixture no longer separates the zero seed from a peeled first row"
+        );
     }
 }
 

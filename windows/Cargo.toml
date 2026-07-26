@@ -65,7 +65,7 @@ too_many_lines = "allow"                # 65
 # has no hardware FMA, so `mul_add` lowers to an `fmaf` libcall. (The AVX2
 # native-Windows variant does have FMA, which is why the faithfulness argument
 # is the one that carries this and not the ISA.)
-suboptimal_flops = "allow"              # 1198
+suboptimal_flops = "allow"              # 1199
 # Stricter unsafe discipline.
 missing_safety_doc = "warn"
 not_unsafe_ptr_arg_deref = "warn"
@@ -101,7 +101,7 @@ cast_ptr_alignment = "allow"            # 911 — reads are already `read_unalig
 unreadable_literal = "allow"            # 372 — addresses and bit masks, verbatim
 similar_names = "allow"                 # 216
 semicolon_if_nothing_returned = "allow" # 143
-many_single_char_names = "allow"        # 38
+many_single_char_names = "allow"        # 41
 
 # Numeric conversions that must truncate, wrap and round exactly as the
 # original did. The usual fix — `try_from(..).expect(..)` — turns a silent
@@ -132,7 +132,7 @@ imprecise_flops = "allow"               # 5
 # satisfy them moves code away from the shape being reproduced, for no change
 # in what the function does.
 missing_const_for_fn = "allow"          # 82
-useless_let_if_seq = "allow"            # 19
+useless_let_if_seq = "allow"            # 20
 if_not_else = "allow"                   # 12
 suspicious_operation_groupings = "allow" # 12
 # The tail `match` of a transcribed function: the arms ARE the original's branch

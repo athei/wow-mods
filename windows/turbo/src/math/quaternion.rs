@@ -588,22 +588,36 @@ mod tests_d3dx_quaternion_slerp__74d11a {
 /// Constants from the original: the threshold `0.0` at `0x7ffd74`, `1.0` at
 /// `0x7ff9d8`, `0.5` at `0x7ffa24`, and the `NEXT` index table `[1, 2, 0]` at
 /// `0x81d994`. Pure leaf: no callees, writes only the quat.
+///
+/// Neither branch spills. The trace sum, the `+ 1.0`, the `FSQRT` and the
+/// `FDIVR` reciprocal all stay on the x87 stack, and the only stores are the
+/// four output `FSTP m32` (`0x7c01bf`..`0x7c01e5`, `0x7c025d`..`0x7c02a7`), so
+/// every intermediate is wide and each lane narrows exactly once. In particular
+/// the scale `0.5 / s` is taken from the **unnarrowed** root, not from the `f32`
+/// component stored just before it, and the differences and sums feeding the
+/// three off-diagonal lanes are `f32`-minus-`f32`, which is exact.
 pub fn c4_quaternion__from_matrix33__7c0190(m: &[f32; 9]) -> [f32; 4] {
-    // x87 accumulation order: FLD m11; FADD m00; FADD m22.
-    let trace = m[4] + m[0] + m[8];
+    // x87 accumulation order: FLD m11; FADD m00; FADD m22, all in-register, so
+    // the compare below sees the wide sum.
+    let trace = f64::from(m[4]) + f64::from(m[0]) + f64::from(m[8]);
     let mut q = [0.0f32; 4];
     if trace > 0.0 {
         // Ordered `trace > 0`: quaternion dominated by the scalar (w) part.
         let s = (trace + 1.0).sqrt();
-        q[3] = 0.5 * s; // w = 0.5 * sqrt(trace + 1)
+        q[3] = super::f64_to_f32(0.5 * s); // w = 0.5 * sqrt(trace + 1)
         let t = 0.5 / s;
-        q[0] = (m[7] - m[5]) * t; // (m21 - m12) * t
-        q[1] = (m[2] - m[6]) * t; // (m02 - m20) * t
-        q[2] = (m[3] - m[1]) * t; // (m10 - m01) * t
+        // (m21 - m12) * t
+        q[0] = super::f64_to_f32((f64::from(m[7]) - f64::from(m[5])) * t);
+        // (m02 - m20) * t
+        q[1] = super::f64_to_f32((f64::from(m[2]) - f64::from(m[6])) * t);
+        // (m10 - m01) * t
+        q[2] = super::f64_to_f32((f64::from(m[3]) - f64::from(m[1])) * t);
     } else {
         // NEXT[i] cycle used by the largest-diagonal branch.
         const NEXT: [usize; 3] = [1, 2, 0];
-        // Pick the largest diagonal element; strict `>` so ties/NaN keep i.
+        // Pick the largest diagonal element; strict `>` so ties/NaN keep i. Both
+        // compares are `f32` against `f32` with nothing accumulated, so their
+        // width is not in question.
         let mut i = 0usize;
         if m[4] > m[0] {
             i = 1;
@@ -613,13 +627,14 @@ pub fn c4_quaternion__from_matrix33__7c0190(m: &[f32; 9]) -> [f32; 4] {
         }
         let j = NEXT[i];
         let k = NEXT[j];
-        // s = sqrt(m[i][i] - m[j][j] - m[k][k] + 1).
-        let s = (m[i * 4] - m[j * 4] - m[k * 4] + 1.0).sqrt();
-        q[i] = 0.5 * s;
+        // s = sqrt(m[i][i] - m[j][j] - m[k][k] + 1), all four steps in-register.
+        let s = (f64::from(m[i * 4]) - f64::from(m[j * 4]) - f64::from(m[k * 4]) + 1.0).sqrt();
+        q[i] = super::f64_to_f32(0.5 * s);
         let t = 0.5 / s;
-        q[3] = (m[k * 3 + j] - m[j * 3 + k]) * t; // w
-        q[j] = (m[i * 3 + j] + m[j * 3 + i]) * t;
-        q[k] = (m[i * 3 + k] + m[k * 3 + i]) * t;
+        // w
+        q[3] = super::f64_to_f32((f64::from(m[k * 3 + j]) - f64::from(m[j * 3 + k])) * t);
+        q[j] = super::f64_to_f32((f64::from(m[i * 3 + j]) + f64::from(m[j * 3 + i])) * t);
+        q[k] = super::f64_to_f32((f64::from(m[i * 3 + k]) + f64::from(m[k * 3 + i])) * t);
     }
     q
 }
@@ -740,5 +755,107 @@ mod tests_c4_quaternion__from_matrix33__7c0190 {
         let m = [f32::NAN, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
         let out = from_matrix(&m);
         assert!(out.iter().any(|v| v.is_nan()));
+    }
+
+    /// A rotation matrix that takes the trace branch, as bit patterns.
+    ///
+    /// Rounded decimal literals are different floats and stop separating the two
+    /// widths, so both fixtures are spelled in bits.
+    const TRACE_M: [u32; 9] = [
+        0x3e9e_b27f,
+        0x3f65_a9e0,
+        0xbea1_2d1b,
+        0xbf72_ae2b,
+        0x3ea2_43b5,
+        0xbcf7_7945,
+        0x3d94_d16c,
+        0x3e9d_9596,
+        0x3f72_dc91,
+    ];
+
+    /// A rotation matrix that takes the largest-diagonal branch with `i = 1`.
+    const DIAGONAL_M: [u32; 9] = [
+        0xbed1_1c82,
+        0x3ec9_722e,
+        0xbf52_da5e,
+        0x3f65_4f84,
+        0xba59_0226,
+        0xbee3_9e75,
+        0xbe33_cfac,
+        0xbf6b_5a42,
+        0xbeb4_4565,
+    ];
+
+    /// The narrow-per-step form, kept only to prove the fixtures separate.
+    ///
+    /// Identical term order; every intermediate rounded to `f32` rather than left
+    /// on the x87 stack. This is what the kernel computed before the widths were
+    /// read off the stores.
+    fn per_step(m: &[f32; 9]) -> [f32; 4] {
+        const NEXT: [usize; 3] = [1, 2, 0];
+        let trace = m[4] + m[0] + m[8];
+        let mut q = [0.0f32; 4];
+        if trace > 0.0 {
+            let s = (trace + 1.0).sqrt();
+            q[3] = 0.5 * s;
+            let t = 0.5 / s;
+            q[0] = (m[7] - m[5]) * t;
+            q[1] = (m[2] - m[6]) * t;
+            q[2] = (m[3] - m[1]) * t;
+        } else {
+            let mut i = 0usize;
+            if m[4] > m[0] {
+                i = 1;
+            }
+            if m[8] > m[i * 4] {
+                i = 2;
+            }
+            let j = NEXT[i];
+            let k = NEXT[j];
+            let s = (m[i * 4] - m[j * 4] - m[k * 4] + 1.0).sqrt();
+            q[i] = 0.5 * s;
+            let t = 0.5 / s;
+            q[3] = (m[k * 3 + j] - m[j * 3 + k]) * t;
+            q[j] = (m[i * 3 + j] + m[j * 3 + i]) * t;
+            q[k] = (m[i * 3 + k] + m[k * 3 + i]) * t;
+        }
+        q
+    }
+
+    /// Trace branch: the whole chain stays wide, each lane narrows at its store.
+    #[test]
+    fn trace_branch_narrows_once_at_each_store() {
+        let m = TRACE_M.map(f32::from_bits);
+        let want = [0x3dd7_a8f7u32, 0xbdf7_39d2, 0xbf13_2939, 0x3f4d_6bdb];
+        let got = from_matrix(&m);
+        for i in 0..4 {
+            assert_eq!(got[i].to_bits(), want[i], "lane {i}");
+        }
+    }
+
+    /// Largest-diagonal branch, `i = 1`: same, including `w` off the wide scale.
+    #[test]
+    fn diagonal_branch_narrows_once_at_each_store() {
+        let m = DIAGONAL_M.map(f32::from_bits);
+        let want = [0x3ef8_cb63u32, 0x3f29_cbc5, 0xbf03_9b71, 0xbe7a_2059];
+        let got = from_matrix(&m);
+        for i in 0..4 {
+            assert_eq!(got[i].to_bits(), want[i], "lane {i}");
+        }
+    }
+
+    #[test]
+    fn fixtures_separate_from_the_per_step_f32_form() {
+        // Without this the width half of the fix is unpinned: the tolerance-based
+        // tests above pass under either form.
+        for (name, bits) in [("trace", TRACE_M), ("diagonal", DIAGONAL_M)] {
+            let m = bits.map(f32::from_bits);
+            let stock = from_matrix(&m);
+            let narrow = per_step(&m);
+            assert!(
+                (0..4).any(|i| stock[i].to_bits() != narrow[i].to_bits()),
+                "{name} fixture no longer separates narrow-once from narrow-per-step"
+            );
+        }
     }
 }

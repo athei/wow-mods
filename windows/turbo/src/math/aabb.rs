@@ -374,39 +374,42 @@ mod tests_c_aa_box__intersect_segment__6dc5a0 {
 
 /// Accumulates a 3x3-matrix box transform.
 ///
-/// For each component `i` and base `j`, adds the smaller of `col_j[i]*mat[j]`
-/// and `col_j[i]*mat[j+3]` into the running min and the larger into the running
-/// max (separating-axis box transform). `dst_in` is the running box
-/// `[minX,minY,minZ,maxX,maxY,maxZ]`.
+/// For each component `i` and row `j`, adds the smaller of `row_j[i]*src[j]` and
+/// `row_j[i]*src[j+3]` into the running min and the larger into the running max
+/// (separating-axis box transform). `src_box` is the source box's two corners and
+/// `dst_in` the running box, both `[minX,minY,minZ,maxX,maxY,maxZ]`.
+///
+/// The two products are not treated alike. `p0` stays on the x87 stack across
+/// both the compare and its accumulate, so it contributes the exact `f32 * f32`
+/// product; `p1` is spilled to an `f32` slot at `0x6dc4a4` and reloaded, so it
+/// contributes a rounded one. The accumulators themselves narrow on every add
+/// (`FSTP` at `0x6dc4b3` / `0x6dc4c8`), which is what an `f32 +=` already does.
+///
+/// The branch is `FCOM` + `TEST AH,0x5` + `JP` (`0x6dc4af`), so the jump is taken
+/// on `p0 >= p1` **and on unordered**: a NaN sends `p1` to the min and `p0` to
+/// the max. Written `if p0 < p1` for exactly that reason — the negation of a
+/// `<=` would swap the NaN case.
 pub fn c_aa_box__transform_by3x3__6dc470(
-    col0: &[f32; 3],
-    col1: &[f32; 3],
-    col2: &[f32; 3],
-    mat3x3: &[f32; 9],
+    row0: &[f32; 3],
+    row1: &[f32; 3],
+    row2: &[f32; 3],
+    src_box: &[f32; 6],
     dst_in: &[f32; 6],
 ) -> [f32; 6] {
-    let cols = [col0, col1, col2];
+    let rows = [row0, row1, row2];
     let mut out = *dst_in;
     let mut i = 0usize;
     while i < 3 {
-        let mut lo = out[i];
-        let mut hi = out[i + 3];
         let mut j = 0usize;
         while j < 3 {
-            let src = cols[j][i];
-            let p0 = src * mat3x3[j];
-            let p1 = mat3x3[j + 3] * src;
-            if p1 <= p0 {
-                lo += p1;
-                hi += p0;
-            } else {
-                lo += p0;
-                hi += p1;
-            }
+            let src = f64::from(rows[j][i]);
+            let p0 = src * f64::from(src_box[j]);
+            let p1 = f64::from(super::f64_to_f32(f64::from(src_box[j + 3]) * src));
+            let (lo_add, hi_add) = if p0 < p1 { (p0, p1) } else { (p1, p0) };
+            out[i] = super::f64_to_f32(lo_add + f64::from(out[i]));
+            out[i + 3] = super::f64_to_f32(hi_add + f64::from(out[i + 3]));
             j += 1;
         }
-        out[i] = lo;
-        out[i + 3] = hi;
         i += 1;
     }
     out
@@ -416,23 +419,26 @@ pub fn c_aa_box__transform_by3x3__6dc470(
 mod tests_c_aa_box__transform_by3x3__6dc470 {
     use super::c_aa_box__transform_by3x3__6dc470 as xf;
 
-    // Reference: straight transcription of the accumulation, to
-    // guard against off-by-one / lane-swap regressions in the kernel.
-    fn reference(
-        col0: &[f32; 3],
-        col1: &[f32; 3],
-        col2: &[f32; 3],
-        mat: &[f32; 9],
+    /// Both products narrowed, and the NaN-naive branch, kept as a witness.
+    ///
+    /// The shape the kernel had before the widths and the compare polarity were
+    /// read off the bytes: `p0` rounded to `f32` like `p1`, and `p1 <= p0`
+    /// selecting the min, which sends `p0` to the min on an unordered compare.
+    fn narrowed_and_nan_naive(
+        row0: &[f32; 3],
+        row1: &[f32; 3],
+        row2: &[f32; 3],
+        src_box: &[f32; 6],
         dst: &[f32; 6],
     ) -> [f32; 6] {
-        let cols = [col0, col1, col2];
+        let rows = [row0, row1, row2];
         let mut out = *dst;
         for i in 0..3usize {
             for j in 0..3usize {
-                let src = cols[j][i];
-                let f1 = src * mat[j];
-                let f2 = mat[j + 3] * src;
-                let (mn, mx) = if f2 <= f1 { (f2, f1) } else { (f1, f2) };
+                let src = rows[j][i];
+                let p0 = src * src_box[j];
+                let p1 = src_box[j + 3] * src;
+                let (mn, mx) = if p1 <= p0 { (p1, p0) } else { (p0, p1) };
                 out[i] += mn;
                 out[i + 3] += mx;
             }
@@ -441,14 +447,16 @@ mod tests_c_aa_box__transform_by3x3__6dc470 {
     }
 
     #[test]
-    fn matches_reference_random() {
-        let c0 = [0.5f32, -1.25, 2.0];
-        let c1 = [3.0f32, 0.25, -0.5];
-        let c2 = [-2.0f32, 1.5, 0.75];
-        let mat = [1.0f32, -0.5, 0.25, 2.0, -1.0, 0.5, 9.0, 9.0, 9.0];
+    fn agrees_with_the_plain_form_on_exact_inputs() {
+        // Every intermediate here is exactly representable, so the two widths
+        // cannot disagree and this pins the indexing alone.
+        let r0 = [0.5f32, -1.25, 2.0];
+        let r1 = [3.0f32, 0.25, -0.5];
+        let r2 = [-2.0f32, 1.5, 0.75];
+        let src_box = [1.0f32, -0.5, 0.25, 2.0, -1.0, 0.5];
         let dst = [10.0f32, 20.0, 30.0, 40.0, 50.0, 60.0];
-        let got = xf(&c0, &c1, &c2, &mat, &dst);
-        let exp = reference(&c0, &c1, &c2, &mat, &dst);
+        let got = xf(&r0, &r1, &r2, &src_box, &dst);
+        let exp = narrowed_and_nan_naive(&r0, &r1, &r2, &src_box, &dst);
         for k in 0..6 {
             assert_eq!(got[k].to_bits(), exp[k].to_bits(), "lane {k}");
         }
@@ -456,12 +464,12 @@ mod tests_c_aa_box__transform_by3x3__6dc470 {
 
     #[test]
     fn min_le_max_invariant() {
-        let c0 = [1.0f32, 2.0, 3.0];
-        let c1 = [-1.0f32, -2.0, -3.0];
-        let c2 = [0.5f32, 0.5, 0.5];
-        let mat = [1.0f32, 1.0, 1.0, -1.0, -1.0, -1.0, 0.0, 0.0, 0.0];
+        let r0 = [1.0f32, 2.0, 3.0];
+        let r1 = [-1.0f32, -2.0, -3.0];
+        let r2 = [0.5f32, 0.5, 0.5];
+        let src_box = [1.0f32, 1.0, 1.0, -1.0, -1.0, -1.0];
         let dst = [0.0f32; 6];
-        let out = xf(&c0, &c1, &c2, &mat, &dst);
+        let out = xf(&r0, &r1, &r2, &src_box, &dst);
         for i in 0..3 {
             assert!(out[i] <= out[i + 3], "min<=max axis {i}");
         }
@@ -469,18 +477,85 @@ mod tests_c_aa_box__transform_by3x3__6dc470 {
 
     #[test]
     fn known_value() {
-        // Single nonzero contribution: col0=[2,0,0], mat[0]=3, mat[3]=-1.
+        // Single nonzero contribution: row0=[2,0,0], src_box[0]=3, src_box[3]=-1.
         // i=0,j=0: src=2 -> p0=6, p1=-2 -> min=-2,max=6.
-        let c0 = [2.0f32, 0.0, 0.0];
-        let c1 = [0.0f32; 3];
-        let c2 = [0.0f32; 3];
-        let mat = [3.0f32, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        let r0 = [2.0f32, 0.0, 0.0];
+        let r1 = [0.0f32; 3];
+        let r2 = [0.0f32; 3];
+        let src_box = [3.0f32, 0.0, 0.0, -1.0, 0.0, 0.0];
         let dst = [100.0f32, 0.0, 0.0, 100.0, 0.0, 0.0];
-        let out = xf(&c0, &c1, &c2, &mat, &dst);
+        let out = xf(&r0, &r1, &r2, &src_box, &dst);
         assert_eq!(out[0].to_bits(), 98.0f32.to_bits());
         assert_eq!(out[3].to_bits(), 106.0f32.to_bits());
         assert_eq!(out[1].to_bits(), 0.0f32.to_bits());
         assert_eq!(out[4].to_bits(), 0.0f32.to_bits());
+    }
+
+    /// Rows, source box and running box that separate `p0`'s width, in bits.
+    const WIDTH_ROWS: [[u32; 3]; 3] = [
+        [0x3fd2_cc59, 0xbeea_8d0e, 0xbedd_7585],
+        [0x3fb4_2c6b, 0xbf9b_6887, 0xbf50_6fc7],
+        [0x3fa8_f8d8, 0xbfde_2e22, 0x3fac_2cb7],
+    ];
+    const WIDTH_SRC_BOX: [u32; 6] = [
+        0x3f47_4adb,
+        0xbe89_959d,
+        0xbf5a_c429,
+        0x3f8f_bbbb,
+        0x3fd2_4413,
+        0xbfb6_f219,
+    ];
+    const WIDTH_DST: [u32; 6] = [
+        0xbeb0_d809,
+        0x3f49_1832,
+        0xbd17_eae1,
+        0xc02d_5347,
+        0xc0b1_64d0,
+        0x3faf_d34d,
+    ];
+
+    #[test]
+    fn p0_stays_wide_across_its_accumulate() {
+        let rows = WIDTH_ROWS.map(|r| r.map(f32::from_bits));
+        let src_box = WIDTH_SRC_BOX.map(f32::from_bits);
+        let dst = WIDTH_DST.map(f32::from_bits);
+        let want = [
+            0xbfaa_077au32,
+            0xbe75_c741,
+            0xc072_199a,
+            0x3ea6_88e2,
+            0xc045_f44f,
+            0x3dd9_8ed6,
+        ];
+        let got = xf(&rows[0], &rows[1], &rows[2], &src_box, &dst);
+        for k in 0..6 {
+            assert_eq!(got[k].to_bits(), want[k], "lane {k}");
+        }
+        let narrow = narrowed_and_nan_naive(&rows[0], &rows[1], &rows[2], &src_box, &dst);
+        assert!(
+            (0..6).any(|k| got[k].to_bits() != narrow[k].to_bits()),
+            "fixture no longer separates the wide p0 from a narrowed one"
+        );
+    }
+
+    #[test]
+    fn unordered_compare_sends_p1_to_the_min() {
+        // `p0 = 2 * NaN` is NaN and `p1 = 3 * 2` is 6, so the compare is
+        // unordered and the `JP` arm runs: 6 into the min, NaN into the max. The
+        // naive `p1 <= p0` reads false and puts them the other way round.
+        let r0 = [2.0f32, 0.0, 0.0];
+        let zero = [0.0f32; 3];
+        let src_box = [f32::NAN, 0.0, 0.0, 3.0, 0.0, 0.0];
+        let dst = [10.0f32, 0.0, 0.0, 20.0, 0.0, 0.0];
+        let got = xf(&r0, &zero, &zero, &src_box, &dst);
+        assert_eq!(got[0].to_bits(), 16.0f32.to_bits());
+        assert!(got[3].is_nan(), "max lane should carry the NaN: {}", got[3]);
+        let naive = narrowed_and_nan_naive(&r0, &zero, &zero, &src_box, &dst);
+        assert!(
+            naive[0].is_nan(),
+            "fixture no longer separates the polarity"
+        );
+        assert_eq!(naive[3].to_bits(), 26.0f32.to_bits());
     }
 }
 

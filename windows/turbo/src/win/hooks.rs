@@ -1312,29 +1312,35 @@ pub fn c_aa_box__intersect_segment__6dc5a0(
     crate::math::aabb::c_aa_box__intersect_segment__6dc5a0(b, s, e)
 }
 
-/// `CAaBox::TransformBy3x3` — `__fastcall(ecx = col0, edx = col1, stack = col2, mat3x3, dstBox)`.
+/// `CAaBox::TransformBy3x3` — `__fastcall(ecx = row0, edx = row1, stack = row2, srcBox, dstBox)`.
 ///
 /// Accumulates a separating-axis box transform: per component adds
-/// `min(col_j[i]*mat[j], col_j[i]*mat[j+3])` into the running min and the max
+/// `min(row_j[i]*src[j], row_j[i]*src[j+3])` into the running min and the max
 /// into the running max. `dst_box` is read and written in place.
+///
+/// The three register/stack pointers are the 3x3's rows (`matrix+0`, `+0xc`,
+/// `+0x18` at the two wrappers `0x6dc4e0` / `0x6dc540`); the fourth is the source
+/// box, from which the body reads exactly six `f32` — offsets 0, 4, 8 and 0xc,
+/// 0x10, 0x14 off `EDI`, and nothing beyond.
 pub fn c_aa_box__transform_by3x3__6dc470(
-    col0: *const f32,
-    col1: *const f32,
-    col2: *const f32,
-    mat3x3: *const f32,
+    row0: *const f32,
+    row1: *const f32,
+    row2: *const f32,
+    src_box: *const f32,
     dst_box: *mut f32,
 ) {
-    if col0.is_null() || col1.is_null() || col2.is_null() || mat3x3.is_null() || dst_box.is_null() {
+    if row0.is_null() || row1.is_null() || row2.is_null() || src_box.is_null() || dst_box.is_null()
+    {
         return;
     }
-    // SAFETY: `col0` is a non-null caller-owned `C3Vector` of 3 contiguous f32.
-    let c0 = &unsafe { col0.cast::<[f32; 3]>().read_unaligned() };
-    // SAFETY: `col1` is a non-null caller-owned `C3Vector` of 3 contiguous f32.
-    let c1 = &unsafe { col1.cast::<[f32; 3]>().read_unaligned() };
-    // SAFETY: `col2` is a non-null caller-owned `C3Vector` of 3 contiguous f32.
-    let c2 = &unsafe { col2.cast::<[f32; 3]>().read_unaligned() };
-    // SAFETY: `mat3x3` is a non-null caller-owned 3x3 matrix of 9 contiguous f32.
-    let m = &unsafe { mat3x3.cast::<[f32; 9]>().read_unaligned() };
+    // SAFETY: `row0` is a non-null caller-owned `C3Vector` of 3 contiguous f32.
+    let c0 = &unsafe { row0.cast::<[f32; 3]>().read_unaligned() };
+    // SAFETY: `row1` is a non-null caller-owned `C3Vector` of 3 contiguous f32.
+    let c1 = &unsafe { row1.cast::<[f32; 3]>().read_unaligned() };
+    // SAFETY: `row2` is a non-null caller-owned `C3Vector` of 3 contiguous f32.
+    let c2 = &unsafe { row2.cast::<[f32; 3]>().read_unaligned() };
+    // SAFETY: `src_box` is a non-null caller-owned `CAaBox` of 6 contiguous f32.
+    let m = &unsafe { src_box.cast::<[f32; 6]>().read_unaligned() };
     // SAFETY: `dst_box` addresses 6 readable contiguous f32 (the running box).
     let din = &unsafe { dst_box.cast::<[f32; 6]>().read_unaligned() };
 
@@ -27248,36 +27254,19 @@ pub fn world__query_object_boxes__6ad330(
 
             // World AABB via the existing 6dc470 kernel. The stock path 6dc3f0
             // zeroes the dst then tailcalls 6dc470, passing the three matrix rows
-            // (matrix+0/+0xc/+0x18) as `col0/col1/col2`, the recentered SOURCE
-            // box as the param the wrapper names `mat3x3`, and the dst box. We
-            // reproduce that exactly: zeroed running box + matrix rows as the
-            // columns + recentered box as the box param. The wrapper dereferences
-            // its box param as `[f32; 9]`, so the recentered box is widened to 9
-            // floats (the kernel only reads indices 0..6; the pad is never read).
-            let recentered9: [f32; 9] = [
-                recentered[0],
-                recentered[1],
-                recentered[2],
-                recentered[3],
-                recentered[4],
-                recentered[5],
-                0.0,
-                0.0,
-                0.0,
-            ];
+            // (matrix+0/+0xc/+0x18), the recentered SOURCE box, and the dst box.
             let mut world_box = [0.0f32; 6];
             c_aa_box__transform_by3x3__6dc470(
-                // col0/col1/col2 = the three matrix rows.
+                // row0/row1/row2 = the three matrix rows.
                 mat3x3.as_ptr(),
                 // SAFETY: `mat3x3` is a local `[f32; 9]`, so index 3 — row 1 — is in
-                // bounds, and the callee reads exactly three `f32` from each column
+                // bounds, and the callee reads exactly three `f32` from each row
                 // pointer.
                 unsafe { mat3x3.as_ptr().add(3) },
                 // SAFETY: index 6 starts row 2 of the same local `[f32; 9]`, and the
                 // callee reads three `f32` from it, so indices 6..9 stay in bounds.
                 unsafe { mat3x3.as_ptr().add(6) },
-                // the recentered source box (widened to satisfy the [f32;9] read).
-                recentered9.as_ptr(),
+                recentered.as_ptr(),
                 world_box.as_mut_ptr(),
             );
             // Re-add the world center to both corners (two `C3Vector::AddInPlace`:
