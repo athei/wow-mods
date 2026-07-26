@@ -590,16 +590,53 @@ mod tests_m2_track__sample_byte__71ae90 {
 
 /// Linear keyframe interpolation.
 ///
-/// `(v1 - v0) * t + v0`, each step rounded to `f32` (the original's
-/// single-precision x87 sequence). The secondary sub-track cross-fade is the
-/// same operation applied as `(primary, secondary, blend)`.
+/// `(v1 - v0) * t + v0`, carried at register precision and narrowed once. The
+/// original runs `FSUB`, `FMUL m32`, `FADD` with the value never leaving `ST(0)`
+/// until a single `FSTP m32`, and the client's 53-bit precision control makes
+/// that register an `f64` significand, so rounding each step to `f32` would add
+/// two narrowings the original does not have. The secondary sub-track cross-fade
+/// is the same operation applied as `(primary, secondary, blend)`.
 pub fn m2_track__sample_float_lerp__71af20(v0: f32, v1: f32, t: f32) -> f32 {
-    (v1 - v0) * t + v0
+    super::f64_to_f32((f64::from(v1) - f64::from(v0)) * f64::from(t) + f64::from(v0))
 }
 
 #[cfg(test)]
 mod tests_m2_track__sample_float_lerp__71af20 {
     use super::m2_track__sample_float_lerp__71af20 as lerp;
+
+    /// Narrowing pin: the chain is carried wide and rounded once, not per step.
+    ///
+    /// Every other test here uses exactly-representable inputs whose
+    /// intermediates are exact, so both conventions agree and neither is
+    /// pinned. These three triples are chosen so the two disagree in the last
+    /// bit; the expected values are the single-narrowing results, which is what
+    /// the original's `ST(0)`-resident chain produces.
+    #[test]
+    fn narrows_once_not_per_step() {
+        // Bit patterns, not decimal literals: a rounded decimal is a different
+        // float and stops separating the two conventions.
+        for &(v0, v1, t, want) in &[
+            (
+                0xbfc1_3b1b_u32,
+                0x40d1_2f74_u32,
+                0x3dfd_8be2_u32,
+                0xbf03_6fc3_u32,
+            ),
+            (0xc0b1_2087, 0x4023_1d51, 0x3f72_9d0e, 0x4008_0f8f),
+            (0x40ca_5225, 0xc0cc_55ca, 0x3f14_e3c0, 0xbf88_c2e4),
+        ] {
+            let (v0, v1, t) = (f32::from_bits(v0), f32::from_bits(v1), f32::from_bits(t));
+            let got = lerp(v0, v1, t);
+            assert_eq!(got.to_bits(), want, "lerp({v0}, {v1}, {t}) = {got}");
+            // The per-step form these inputs were picked to separate.
+            let per_step = (v1 - v0) * t + v0;
+            assert_ne!(
+                per_step.to_bits(),
+                want,
+                "inputs no longer separate the two"
+            );
+        }
+    }
 
     #[test]
     fn endpoints_bit_exact() {
