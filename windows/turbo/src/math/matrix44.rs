@@ -760,40 +760,94 @@ mod tests_c44_matrix__translate_local__7bb990 {
 /// Inverse of a rotation (orthonormal 3×3) plus translation matrix. The inverse
 /// rotation is the transpose of the 3×3 block (rows at indices 0/1/2, 4/5/6,
 /// 8/9/10); the inverse translation is `-t · R` where `t` is the source
-/// translation (indices 12/13/14). Returns a 16-float row-major matrix with last
-/// row `[it0, it1, it2, 1]`.
+/// translation (indices 12/13/14).
+///
+/// The original does not compute that last row as three dot products. It
+/// transposes the 3×3 into a fresh matrix whose translation row is **zero**,
+/// negates each source translation component into an `f32` slot
+/// (`0x7bd767`..`0x7bd7bb`), and then `call`s `C44Matrix::Translate` at
+/// `0x7bd7fc`. Doing the same here is what makes the last row match: it
+/// inherits Translate's `z, y, x` summation and its single narrowing instead of
+/// a left-to-right per-step `f32` dot, and it inherits the trailing add of the
+/// zeroed translation, which is not a no-op — it turns a `-0.0` row into `+0.0`.
 pub fn c44_matrix__invert_orthonormal__7bd700(src: &[f32; 16]) -> [f32; 16] {
-    let r00 = src[0];
-    let r01 = src[1];
-    let r02 = src[2];
-    let r10 = src[4];
-    let r11 = src[5];
-    let r12 = src[6];
-    let r20 = src[8];
-    let r21 = src[9];
-    let r22 = src[10];
-
-    let tx = src[12];
-    let ty = src[13];
-    let tz = src[14];
-
-    // Inverse rotation is the transpose; inverse translation is -t·R
-    // (component k = -(t · row_k of R)).
-    let it0 = -(r00 * tx + r01 * ty + r02 * tz);
-    let it1 = -(r10 * tx + r11 * ty + r12 * tz);
-    let it2 = -(r20 * tx + r21 * ty + r22 * tz);
-
-    [
-        r00, r10, r20, 0.0, //
-        r01, r11, r21, 0.0, //
-        r02, r12, r22, 0.0, //
-        it0, it1, it2, 1.0,
-    ]
+    let mut out = [
+        src[0], src[4], src[8], 0.0, //
+        src[1], src[5], src[9], 0.0, //
+        src[2], src[6], src[10], 0.0, //
+        0.0, 0.0, 0.0, 1.0,
+    ];
+    c44_matrix__translate__7bdc40(&mut out, &[-src[12], -src[13], -src[14]]);
+    out
 }
 
 #[cfg(test)]
 mod tests_c44_matrix__invert_orthonormal__7bd700 {
     use super::c44_matrix__invert_orthonormal__7bd700 as invert;
+
+    #[test]
+    fn last_row_goes_through_translate_not_a_dot_product() {
+        // Separates the original's shape - transpose, zero translation, then
+        // Translate with the negated translation - from the three left-to-right
+        // per-step f32 dot products this used to compute. All three components
+        // differ on this fixture. Bit patterns, not decimals.
+        let src = [
+            f32::from_bits(0x3fa9_7fda),
+            f32::from_bits(0x3fc4_e0e7),
+            f32::from_bits(0xbec7_e3e8),
+            f32::from_bits(0xbfc1_7f6e),
+            f32::from_bits(0x3f16_16a3),
+            f32::from_bits(0x3f9f_27ba),
+            f32::from_bits(0x3fee_fb64),
+            f32::from_bits(0x3fb1_eb2b),
+            f32::from_bits(0x3f5a_9220),
+            f32::from_bits(0xbf6f_66dc),
+            f32::from_bits(0xbf7f_26d3),
+            f32::from_bits(0xbfaf_ec4d),
+            f32::from_bits(0x41be_a747),
+            f32::from_bits(0xc1b0_6e1e),
+            f32::from_bits(0x3f0f_5abc),
+            f32::from_bits(0x3f82_8002),
+        ];
+        let got = invert(&src);
+
+        // The rotation block is the plain transpose and must be bit-identical.
+        assert_eq!(
+            [
+                got[0], got[1], got[2], got[4], got[5], got[6], got[8], got[9], got[10]
+            ],
+            [
+                src[0], src[4], src[8], src[1], src[5], src[9], src[2], src[6], src[10]
+            ]
+        );
+
+        let transposed = [
+            src[0], src[4], src[8], 0.0, //
+            src[1], src[5], src[9], 0.0, //
+            src[2], src[6], src[10], 0.0, //
+            0.0, 0.0, 0.0, 1.0,
+        ];
+        let neg = [
+            f64::from(-src[12]),
+            f64::from(-src[13]),
+            f64::from(-src[14]),
+        ];
+        for i in 0..3 {
+            let elem = |j: usize| f64::from(transposed[j]);
+            let want = super::super::f64_to_f32(
+                ((elem(8 + i) * neg[2] + elem(4 + i) * neg[1]) + elem(i) * neg[0]) + elem(12 + i),
+            );
+            assert_eq!(got[12 + i].to_bits(), want.to_bits(), "component {i}");
+
+            let dot =
+                -((src[4 * i] * src[12] + src[4 * i + 1] * src[13]) + src[4 * i + 2] * src[14]);
+            assert_ne!(
+                got[12 + i].to_bits(),
+                dot.to_bits(),
+                "fixture no longer separates component {i}"
+            );
+        }
+    }
 
     // Row-major 4x4 multiply for verifying inv·M == I.
     fn mul(a: &[f32; 16], b: &[f32; 16]) -> [f32; 16] {
@@ -897,37 +951,55 @@ pub fn c44_matrix__rotate_quaternion__7bddb0(m: &[f32; 16], quat: &[f32; 4]) -> 
     let z = quat[2];
     let w = quat[3];
 
+    // `q + q` is exact at any precision, so the doubled components need no
+    // width care even though the original leaves two of them on the x87 stack.
     let x2 = x + x;
     let y2 = y + y;
     let z2 = z + z;
 
-    let xw = x2 * w;
-    let yw = y2 * w;
-    let zw = z2 * w;
-    let xx = x2 * x;
-    let yx = y2 * x;
-    let zx = z2 * x;
-    let zy = z2 * y;
-    let yy = y2 * y;
-    let zz = z2 * z;
+    let mul = |a: f32, b: f32| f64::from(a) * f64::from(b);
+
+    // Seven products are narrowed at their own `FSTP m32` and read back as f32.
+    let xw = super::f64_to_f32(mul(x2, w));
+    let yw = super::f64_to_f32(mul(y2, w));
+    let zw = super::f64_to_f32(mul(z2, w));
+    let xx = super::f64_to_f32(mul(x2, x));
+    let yx = super::f64_to_f32(mul(y2, x));
+    let zx = super::f64_to_f32(mul(z2, x));
+    let zy = super::f64_to_f32(mul(z2, y));
+
+    // Two are not, and this is where the diagonal stops being symmetric.
+    // `yy` never leaves the x87 stack at all, and `zz` is stored by `FST m32`
+    // at 0x7bde1f - which writes an f32 copy but *keeps* the wide value live.
+    // So each diagonal term mixes the two differently:
+    //   [0]  uses the wide zz and the wide yy   (0x7bde22)
+    //   [5]  reloads the narrowed zz, plus xx   (0x7bde4b)
+    //   [10] uses the wide yy, plus xx          (0x7bde8d)
+    let yy = mul(y2, y);
+    let zz_wide = mul(z2, z);
+    let zz = super::f64_to_f32(zz_wide);
+
+    let one = 1.0_f64;
+    let sub = |a: f32, b: f32| f64::from(a) - f64::from(b);
+    let add = |a: f32, b: f32| f64::from(a) + f64::from(b);
 
     let r = [
-        1.0 - (zz + yy), // [0]
-        yx + zw,         // [1]
-        zx - yw,         // [2]
-        0.0,             // [3]
-        yx - zw,         // [4]
-        1.0 - (zz + xx), // [5]
-        zy + xw,         // [6]
-        0.0,             // [7]
-        zx + yw,         // [8]
-        zy - xw,         // [9]
-        1.0 - (yy + xx), // [10]
-        0.0,             // [11]
-        0.0,             // [12]
-        0.0,             // [13]
-        0.0,             // [14]
-        1.0,             // [15]
+        super::f64_to_f32(one - (zz_wide + yy)),       // [0]
+        super::f64_to_f32(add(yx, zw)),                // [1]
+        super::f64_to_f32(sub(zx, yw)),                // [2]
+        0.0,                                           // [3]
+        super::f64_to_f32(sub(yx, zw)),                // [4]
+        super::f64_to_f32(one - add(zz, xx)),          // [5]
+        super::f64_to_f32(add(zy, xw)),                // [6]
+        0.0,                                           // [7]
+        super::f64_to_f32(add(zx, yw)),                // [8]
+        super::f64_to_f32(sub(zy, xw)),                // [9]
+        super::f64_to_f32(one - (yy + f64::from(xx))), // [10]
+        0.0,                                           // [11]
+        0.0,                                           // [12]
+        0.0,                                           // [13]
+        0.0,                                           // [14]
+        1.0,                                           // [15]
     ];
 
     super::matrix44::c44_matrix__multiply__7bc6a0(&r, m)
@@ -936,6 +1008,50 @@ pub fn c44_matrix__rotate_quaternion__7bddb0(m: &[f32; 16], quat: &[f32; 4]) -> 
 #[cfg(test)]
 mod tests_c44_matrix__rotate_quaternion__7bddb0 {
     use super::c44_matrix__rotate_quaternion__7bddb0 as rotq;
+
+    #[test]
+    fn diagonal_terms_do_not_share_one_width() {
+        // Composed against the identity so the product passes the rotation
+        // through unchanged and the diagonal is read directly. Diagonal [0]
+        // takes both squares wide, [10] takes yy wide against a narrowed xx,
+        // and [5] takes both narrowed - so computing all three in f32, as this
+        // used to, moves [0] and [10] but not [5]. This fixture separates
+        // exactly those two.
+        let quat = [
+            f32::from_bits(0xbf5d_00ca),
+            f32::from_bits(0x3f06_3c15),
+            f32::from_bits(0xbf6a_c781),
+            f32::from_bits(0xbf49_ff68),
+        ];
+        let got = rotq(&IDENTITY, &quat);
+
+        let (x, y, z) = (quat[0], quat[1], quat[2]);
+        let (x2, y2, z2) = (x + x, y + y, z + z);
+        let xx = super::super::f64_to_f32(f64::from(x2) * f64::from(x));
+        let yy = f64::from(y2) * f64::from(y);
+        let zz_wide = f64::from(z2) * f64::from(z);
+        let zz = super::super::f64_to_f32(zz_wide);
+
+        let want0 = super::super::f64_to_f32(1.0_f64 - (zz_wide + yy));
+        let want5 = super::super::f64_to_f32(1.0_f64 - (f64::from(zz) + f64::from(xx)));
+        let want10 = super::super::f64_to_f32(1.0_f64 - (yy + f64::from(xx)));
+        assert_eq!(got[0].to_bits(), want0.to_bits(), "diagonal 0");
+        assert_eq!(got[5].to_bits(), want5.to_bits(), "diagonal 5");
+        assert_eq!(got[10].to_bits(), want10.to_bits(), "diagonal 10");
+
+        // The all-f32 form this replaced, for comparison.
+        let (yy32, zz32) = (y2 * y, z2 * z);
+        assert_ne!(
+            got[0].to_bits(),
+            (1.0f32 - (zz32 + yy32)).to_bits(),
+            "fixture no longer separates diagonal 0"
+        );
+        assert_ne!(
+            got[10].to_bits(),
+            (1.0f32 - (yy32 + xx)).to_bits(),
+            "fixture no longer separates diagonal 10"
+        );
+    }
 
     const IDENTITY: [f32; 16] = [
         1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
@@ -2175,8 +2291,16 @@ pub fn c44_matrix__invert_with_scale__7bd820(
     let m21 = src[9];
     let m22 = src[10];
 
-    // Transpose, then row-scale by k / scale².
-    let f = k / (scale * scale);
+    // Transpose, then row-scale by k / scale². The reciprocal is built wide:
+    // `scale * scale` is formed on the x87 stack (0x7bd8b2), divided under
+    // `FDIVR` (0x7bd8ca) and only narrowed by the `FSTP m32` that passes it as
+    // the row-scale argument (0x7bd938). Squaring in `f32` first rounds a
+    // product that is exact at this precision, and gives a different `f`.
+    let f = super::f64_to_f32(f64::from(k) / (f64::from(scale) * f64::from(scale)));
+
+    // Each element is `f * m` narrowed at its own store (0x7bdd00 onwards).
+    // A product of two `f32` needs 48 bits and is exact here, so plain `f32`
+    // multiplies reproduce those nine stores exactly.
     let i00 = m00 * f;
     let i01 = m10 * f;
     let i02 = m20 * f;
@@ -2187,22 +2311,18 @@ pub fn c44_matrix__invert_with_scale__7bd820(
     let i21 = m12 * f;
     let i22 = m22 * f;
 
-    // Inverse translation: scaled-transpose · (-t), reading the inverse rotation
-    // by columns ({i00,i10,i20}, {i01,i11,i21}, {i02,i12,i22}).
-    let tx = -src[12];
-    let ty = -src[13];
-    let tz = -src[14];
-
-    let it0 = i00 * tx + i10 * ty + i20 * tz;
-    let it1 = i01 * tx + i11 * ty + i21 * tz;
-    let it2 = i02 * tx + i12 * ty + i22 * tz;
-
-    [
+    // As on the orthonormal path, the original does not dot the last row out.
+    // It negates the source translation into `f32` slots (0x7bd940..0x7bd959)
+    // and `call`s Translate at 0x7bd95f, so the row inherits that kernel's
+    // `z, y, x` order and single narrowing.
+    let mut out = [
         i00, i01, i02, 0.0, //
         i10, i11, i12, 0.0, //
         i20, i21, i22, 0.0, //
-        it0, it1, it2, 1.0,
-    ]
+        0.0, 0.0, 0.0, 1.0,
+    ];
+    c44_matrix__translate__7bdc40(&mut out, &[-src[12], -src[13], -src[14]]);
+    out
 }
 
 #[cfg(test)]
