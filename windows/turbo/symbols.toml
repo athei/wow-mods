@@ -2803,7 +2803,7 @@ preserve = []
 # out block, which under the compare path is the scratch buffer, so replaying
 # the reimpl applies no live-state side effect.
 [functions.M2Track__SampleFloatLerp__71af20.diff]
-mode  = "out"
+mode  = "inout"
 out   = { arg = 3, len = 32 }
 float = "bytes"
 double_run_safe = true
@@ -3345,6 +3345,7 @@ preserve = []
 [functions.Collision_BuildSweepPrism__631be0.diff]
 mode  = "out"
 out   = { arg = 4, len = 108 }
+ins   = [{ arg = 3, len = 144 }, { arg = 5, len = 32 }]
 float = "f32"
 # Besides `out_verts` (compared), the adapter also writes `out_edge_table` (a
 # fixed 32-byte constant) and `out_planes` (deterministic, via the prism-plane
@@ -3631,23 +3632,6 @@ abi  = "stdcall"
 ret  = "void"
 args = ["*const f32", "u32", "*mut *mut f32", "*mut u32"]
 preserve = []
-
-# Golden-diff the clipped vertex count (out = arg 3, one u32), exact bytes.
-# The static-buffer clip is deterministic for identical inputs (the ping-pong
-# globals, distance/class scratch and returned buffer VA are pure functions of
-# the input polygon + the read-only plane table), so the double-run is
-# idempotent (`double_run_safe`, no call-outs). Only `out_count` is
-# arg-window-diffable: the polygon payload lives at fixed global VAs
-# (0xcbe138/0xcbe1f8) and is returned as an aliasing pointer, not written
-# through a caller-owned region.
-[functions.PolyClip__ClipToScreenRect__6b4a80.diff]
-mode  = "out"
-out   = { arg = 3, len = 4 }
-float = "bytes"
-double_run_safe = true
-# No `.diff`: void return + the conditional republish callee `0x69e280` mutates
-# world liquid/color state outside the entity (side effect), so the differential
-# double-run is not provably idempotent — not golden-diffable. Host-tested.
 [functions.CGRenderEntity__UpdateTransform__6717d0]
 rva  = 0x2717d0   # VA 0x6717d0 − image_base
 sig  = "55 8B EC 83 EC 6C 53 56 8B DA"
@@ -3838,27 +3822,6 @@ abi  = "thiscall"
 ret  = "u32"
 args = ["*mut core::ffi::c_void", "*const u8", "*const f32", "f32", "*mut u32", "*mut f32", "*mut u32", "*mut f32", "*const f32"]
 preserve = []
-
-# Golden-diff the hit-record array (up to 5 x 16-byte plane records). The
-# double-run is safe: the delegated sub-queries are deterministic functions
-# of their inputs — the world gather is frame-coherent (the second run hits
-# the cached-box early-out and reuses the identical global triangle list) —
-# and every aux write (outFaceFlags/outHitCount/outDist, the ctx-local
-# scratch) recomputes to the same values on both runs.
-[functions.Collision_SweepVolumeAgainstWorldPlanes__632ba0.diff]
-mode  = "out"
-out   = { arg = 5, len = 80 }
-float = "f32"
-double_run_safe = true
-
-# Sky-dome per-vertex ARGB rebuild (wave-4 driver #3, 3.05%). Zenith + 4 band
-# rings + horizon ring + final fog vertex; per-channel u8->FILD->lerp->FISTP
-# glue lives in math/light.rs kernels; the gradient + lerp leaves run as
-# native Rust (no crossings); LerpRGB/ScaleColorValue/SetRGBKeepAlpha are
-# delegated by VA. Not golden-diffable (void; output behind dome+0x14) —
-# host tests + in-game eyeball (sky tint at dawn/dusk, lightning, weather
-# override). The sun-side ScaleRGB in stock is dead code (result overwritten
-# before read) and is deliberately skipped.
 [functions.SkyDome__ComputeVertexColors__6d0f50]
 rva  = 0x2d0f50   # VA 0x6d0f50 − image_base
 sig  = "55 8B EC 83 EC 74 53 8B 59 14"
@@ -4110,6 +4073,7 @@ preserve = []
 [functions.AngleTable__FindWrappedIntervalFraction__6d63e0.diff]
 mode  = "out"
 out   = { arg = 3, len = 4 }
+ins   = [{ arg = 4, len = 4 }, { arg = 5, len = 4 }]
 float = "f32"
 double_run_safe = true
 
