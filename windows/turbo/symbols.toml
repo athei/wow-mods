@@ -2506,11 +2506,19 @@ preserve = []
 # is within 1 ulp of a correctly-rounded reference for both sin and cos, so 2 is
 # a bound with a single ulp of headroom, not a shrug. Anything larger is a real
 # divergence and still reports.
+#
+# TEMPORARILY ulp = 0 rather than the 2 argued above. The split comparator is
+# new and has never run: `win` is x86-only and this module is behind the diff
+# cfg, so it cannot be host-tested, and at ulp = 2 a working comparator and one
+# that never reports produce the same silence. At 0 the trig difference must
+# show, which both proves the comparator fires and measures the residual against
+# the real FSINCOS instead of the correctly-rounded reference the 2 was derived
+# from. Restore 2 once a run has printed the lane.
 [functions.Orientation__SetYaw__7acc40.diff]
 mode  = "inout"
 out   = { arg = 0, len = 40 }
 float = "f32"
-ulp   = 2
+ulp   = 0
 float_from = 0x1c
 
 [functions.SetClampedValue01__453480]
