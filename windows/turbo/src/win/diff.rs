@@ -119,6 +119,18 @@ pub fn note_armed(armed: &::core::sync::atomic::AtomicBool, label: &str, delegat
     }
 }
 
+/// How far two `f32` lanes may differ before the comparison reports them.
+///
+/// Both rulers are needed and a lane must exceed BOTH to count. `ulp` is the
+/// right measure for a lane whose magnitude is representative; `abs` is the
+/// escape for one produced by cancellation, where the true value has almost
+/// vanished and a fixed absolute error becomes an unbounded ULP distance. `abs`
+/// of 0 reduces this to a plain ULP compare.
+pub struct Tolerance {
+    pub ulp: u32,
+    pub abs: f32,
+}
+
 /// Print the operands and every differing lane on a hook's first divergence.
 ///
 /// The region comparators name the first byte or lane that disagrees, which is
@@ -202,18 +214,18 @@ impl core::fmt::Display for Hex<'_> {
     }
 }
 
-/// Compare an output region lane-by-lane as little-endian `f32`s within `max_ulp`.
+/// Compare an output region lane-by-lane as little-endian `f32`s within `tol`.
 ///
 /// Report the first diverging lane.
 pub fn region_f32(
     stats: &Stats,
     label: &str,
     expected: bool,
-    max_ulp: u32,
+    tol: &Tolerance,
     ours: &[u8],
     orig: &[u8],
 ) {
-    let Some(d) = ulp::first_divergence_f32(ours, orig, max_ulp) else {
+    let Some(d) = ulp::first_divergence_f32(ours, orig, tol.ulp, tol.abs) else {
         return;
     };
     report(stats, label, expected, || {
@@ -233,7 +245,7 @@ pub fn region_f32(
 /// For an output region that is not uniformly float — a game object where only
 /// a trailing span holds the floats a kernel computes, with a vtable pointer and
 /// flag bytes ahead of it. The head is compared exactly, so nothing there is
-/// weakened; only the tail takes the `max_ulp` tolerance. Comparing such a
+/// weakened; only the tail takes `tol`. Comparing such a
 /// region wholly as lanes would be worse than useless: an arbitrary pointer can
 /// carry a NaN bit pattern, and any two NaNs compare equal regardless of
 /// payload, so two *different* pointers would pass.
@@ -244,7 +256,7 @@ pub fn region_split(
     stats: &Stats,
     label: &str,
     expected: bool,
-    max_ulp: u32,
+    tol: &Tolerance,
     float_from: usize,
     ours: &[u8],
     orig: &[u8],
@@ -258,7 +270,8 @@ pub fn region_split(
         });
         return;
     }
-    let Some(d) = ulp::first_divergence_f32(&ours[float_from..], &orig[float_from..], max_ulp)
+    let Some(d) =
+        ulp::first_divergence_f32(&ours[float_from..], &orig[float_from..], tol.ulp, tol.abs)
     else {
         return;
     };

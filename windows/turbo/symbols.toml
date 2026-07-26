@@ -702,23 +702,34 @@ preserve = ["ecx"]
 # Golden-diff the written region, byte compare. Region covers everything the
 # adapter touches, reads included: the argument is swapped for a fixed-size
 # scratch buffer, so a read past the declared length reads past that buffer.
-# Lane compare with a 2-ulp bound, and the 2 is measured rather than assumed.
+# Lane compare with BOTH a ulp and an absolute bound, because one ruler cannot
+# describe this residual.
 #
-# The whole 3x3 is built from `cos`, `sin` and `1 - cos`, and the original's trig
-# is the hardware `FSINCOS` where this is a polynomial, so a residual is certain
-# and the only question was its size. The arithmetic was rebuilt from the bytes
-# first, so what is left here is the trig and nothing else; then an armed run at
-# `ulp = 0` reported the size. Every one of its reports was **exactly one ulp**,
-# on lanes 0 and 1 only, including one that carried across a byte boundary
-# (`0xbf3b39ff` against `0xbf3b3a00`) and so reads like more than it is. 2 leaves
-# a single ulp of headroom; anything larger would be a real difference and should
-# fail. Every lane of the region is an f32, so there is no mixed head to split off
-# with `float_from`.
+# The 3x3 is built from `cos`, `sin` and `1 - cos`, and the original's trig is the
+# hardware `FSINCOS` where this is a polynomial, so a residual is certain. The
+# arithmetic was rebuilt from the bytes first, so what is left is the trig alone.
+#
+# A `ulp = 0` run then measured it at **exactly one ulp** on lanes 0 and 1, and 2
+# looked like a bound with headroom. It was not. A later run caught the same entry
+# at a right angle, where the diagonal is `x*x*(1 - cos) + cos` with `cos` at a
+# zero crossing: ours `0x324cde20` against the original's `0x324cde2e`, a value of
+# 1.19e-8 and a distance of **14 ulp** — from an absolute error of about 1.3e-15.
+# That is not a worse residual, it is the same residual measured against a value
+# that has almost cancelled to nothing. As the angle approaches exactly 90 degrees
+# the ULP distance grows without bound while the absolute error does not move, so
+# no `ulp` is conservative enough and picking a bigger one is guesswork dressed as
+# measurement.
+#
+# So `abs` carries the near-zero lanes and `ulp` carries the rest, and a lane has
+# to exceed BOTH to report. 1e-13 is the measured 1.3e-15 with two orders of
+# headroom for angles nearer the crossing; it is still nine orders below anything
+# that could move a rendered vertex. Every lane is an f32, so no `float_from`.
 [functions.C44Matrix__SetRotationAxisAngle__7bdb00.diff]
 mode  = "inout"
 out   = { arg = 0, len = 64 }
 float = "f32"
 ulp   = 2
+abs   = 1e-13
 
 [functions.C44Matrix__TransformPoint__7bca80]
 rva  = 0x3bca80

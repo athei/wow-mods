@@ -143,6 +143,91 @@ mod tests_c44_matrix__multiply__7bc6a0 {
         );
     }
 
+    /// The live client case the differential harness reported, replayed.
+    ///
+    /// Two composed right-angle rotations, captured operand-for-operand off a real
+    /// call that the harness flagged on lane 6. Every one of that lane's four
+    /// products is `+0.0 * negative`, so the sum is `-0.0` under every IEEE
+    /// rounding mode and no summation order can change it — a sum of zeros is
+    /// negative exactly when all its addends are. The original reported `+0.0`,
+    /// which those bytes cannot produce, so it did not read these bytes: the
+    /// snapshot is compared against live memory only *after* the original returns,
+    /// which catches a value that changed and stayed changed, not one that changed
+    /// and changed back. A sign-bit flip on a zero is what a matrix being rebuilt
+    /// on another thread looks like.
+    ///
+    /// So this pins the kernel against real client data rather than against a
+    /// transcription, and it is why lane 6's divergence is a harness artifact
+    /// rather than an arithmetic bug.
+    #[test]
+    fn matches_the_captured_client_case_on_the_signed_zero_lane() {
+        const A: [u32; 16] = [
+            0xb33b_bd2e,
+            0x3f80_0000,
+            0,
+            0,
+            0xbf80_0000,
+            0xb33b_bd2e,
+            0,
+            0,
+            0,
+            0,
+            0x3f7f_ffff,
+            0,
+            0,
+            0,
+            0,
+            0x3f80_0000,
+        ];
+        const B: [u32; 16] = [
+            0x3f62_2204,
+            0xb280_0000,
+            0,
+            0,
+            0xb280_0000,
+            0xbf62_2204,
+            0,
+            0,
+            0,
+            0x3200_0000,
+            0xbf62_2204,
+            0,
+            0xbf59_87d2,
+            0x3f9c_ee05,
+            0xbe81_714e,
+            0x3f7f_ffff,
+        ];
+        let (a, b) = (A.map(f32::from_bits), B.map(f32::from_bits));
+        let got = stock(&a, &b);
+
+        // Every product feeding lane 6 is a positive zero times a negative value.
+        for k in super::MULTIPLY_K_ORDER[6] {
+            let (fa, fb) = (a[4 + k], b[k * 4 + 2]);
+            assert_eq!(
+                (fa * fb).to_bits(),
+                (-0.0f32).to_bits(),
+                "k={k}: {fa} * {fb} should be -0.0"
+            );
+        }
+        assert_eq!(
+            got[6].to_bits(),
+            (-0.0f32).to_bits(),
+            "lane 6 must be -0.0; a sum of negative zeros cannot be +0.0"
+        );
+
+        // And the sign survives any regrouping, which is what rules out the
+        // summation order as an explanation.
+        let mut ascending = f64::from(a[4]) * f64::from(b[2]);
+        for k in [1usize, 2, 3] {
+            ascending += f64::from(a[4 + k]) * f64::from(b[k * 4 + 2]);
+        }
+        assert_eq!(
+            super::super::f64_to_f32(ascending).to_bits(),
+            (-0.0f32).to_bits(),
+            "k-ascending regrouping must also be -0.0"
+        );
+    }
+
     #[test]
     fn separates_from_the_zero_seeded_k_ascending_form() {
         // The fixture has to actually distinguish the two summations, otherwise

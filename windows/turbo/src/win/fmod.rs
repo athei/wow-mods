@@ -466,7 +466,14 @@ fn antialias_diff(
     let live = unsafe { core::slice::from_raw_parts(buf.cast::<u8>(), len_bytes) };
     // ±1 ULP: the kernel carries f64 where the original carries the x87 stack,
     // so a double-rounding can move the narrowed f32 by one bit.
-    super::diff::region_f32(&STATS, LABEL, false, 1, &shadow.0[..len_bytes], live);
+    super::diff::region_f32(
+        &STATS,
+        LABEL,
+        false,
+        &super::diff::Tolerance { ulp: 1, abs: 0.0 },
+        &shadow.0[..len_bytes],
+        live,
+    );
     true
 }
 
@@ -701,7 +708,14 @@ fn dct36_diff(
     // both implementations, so it stays at the exact 1-ULP compare.
     // SAFETY: the original just rewrote the live 18-float `inbuf`.
     let live_in = unsafe { core::slice::from_raw_parts(inbuf.cast::<u8>(), LINE_CAP) };
-    super::diff::region_f32(&STATS, LABEL, false, 1, &shadow_in.0, live_in);
+    super::diff::region_f32(
+        &STATS,
+        LABEL,
+        false,
+        &super::diff::Tolerance { ulp: 1, abs: 0.0 },
+        &shadow_in.0,
+        live_in,
+    );
     // The windowed outputs carry the DCT spill noise; see [`DCT_ABS_EPS`].
     for lane in 0..18 {
         let ours = f32::from_bits(u32::from_le_bytes(

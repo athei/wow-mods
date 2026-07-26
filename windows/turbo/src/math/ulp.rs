@@ -42,10 +42,22 @@ pub fn f32_within_ulp(a: f32, b: f32, max_ulp: u32) -> bool {
 
 /// First diverging `f32` lane between two equal-length regions.
 ///
-/// `None` when every lane is within `max_ulp`. Trailing bytes past the last
-/// whole lane are ignored (region lengths are validated to whole lanes at
+/// `None` when every lane is within `max_ulp` or `max_abs`. Trailing bytes past
+/// the last whole lane are ignored (region lengths are validated to whole lanes at
 /// build time).
-pub fn first_divergence_f32(ours: &[u8], orig: &[u8], max_ulp: u32) -> Option<LaneDiff> {
+// The absolute escape is written `!(diff <= max_abs)` rather than
+// `diff > max_abs` because the two differ on NaN, and the difference decides
+// whether a NaN lane is reported. `NaN <= max_abs` is false, so the negated form
+// yields true and the lane is reported; `NaN > max_abs` is also false, which would
+// silence it. A comparator that hides a NaN divergence is worse than no
+// comparator, so the negation is load-bearing.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
+pub fn first_divergence_f32(
+    ours: &[u8],
+    orig: &[u8],
+    max_ulp: u32,
+    max_abs: f32,
+) -> Option<LaneDiff> {
     let (our_lanes, _) = ours.as_chunks::<4>();
     let (orig_lanes, _) = orig.as_chunks::<4>();
     for (lane, (o, g)) in our_lanes.iter().zip(orig_lanes).enumerate() {
@@ -54,7 +66,12 @@ pub fn first_divergence_f32(ours: &[u8], orig: &[u8], max_ulp: u32) -> Option<La
         if ours == orig {
             continue;
         }
-        if !f32_within_ulp(f32::from_bits(ours), f32::from_bits(orig), max_ulp) {
+        let (o, g) = (f32::from_bits(ours), f32::from_bits(orig));
+        // ULP is the wrong ruler for a lane produced by cancellation: as the true
+        // value approaches zero the ULP distance grows without bound while the
+        // absolute error stays put. `max_abs` is the escape, and a lane has to
+        // exceed BOTH to count, so neither ruler alone can hide a difference.
+        if !f32_within_ulp(o, g, max_ulp) && !((o - g).abs() <= max_abs) {
             return Some(LaneDiff { lane, ours, orig });
         }
     }
@@ -108,11 +125,11 @@ mod tests {
             ours[i * 4..i * 4 + 4].copy_from_slice(&v.to_le_bytes());
             orig[i * 4..i * 4 + 4].copy_from_slice(&v.to_le_bytes());
         }
-        assert_eq!(first_divergence_f32(&ours, &orig, 0), None);
+        assert_eq!(first_divergence_f32(&ours, &orig, 0, 0.0), None);
 
         orig[8..12].copy_from_slice(&4.0f32.to_le_bytes());
         assert_eq!(
-            first_divergence_f32(&ours, &orig, 4),
+            first_divergence_f32(&ours, &orig, 4, 0.0),
             Some(LaneDiff {
                 lane: 2,
                 ours: 3.0f32.to_bits(),
@@ -125,8 +142,8 @@ mod tests {
     fn region_tolerates_within_ulp_lanes() {
         let ours = 1.0f32.to_le_bytes();
         let orig = f32::from_bits(1.0f32.to_bits() + 2).to_le_bytes();
-        assert_eq!(first_divergence_f32(&ours, &orig, 2), None);
-        assert!(first_divergence_f32(&ours, &orig, 1).is_some());
+        assert_eq!(first_divergence_f32(&ours, &orig, 2, 0.0), None);
+        assert!(first_divergence_f32(&ours, &orig, 1, 0.0).is_some());
     }
 
     #[test]

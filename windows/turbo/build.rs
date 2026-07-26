@@ -118,6 +118,18 @@ struct Diff {
     /// the whole caller set enumerated in the entry's comment.
     #[serde(default = "default_ret_mask")]
     ret_mask: u64,
+    /// Absolute tolerance per `f32` lane, applied together with `ulp`.
+    ///
+    /// A lane must exceed BOTH to be reported, so neither ruler alone can hide a
+    /// difference. It exists because ULP is the wrong ruler for a lane produced by
+    /// cancellation: `x*x*(1 - cos) + cos` at a right angle is a tiny residue of
+    /// two near-equal terms, so a fixed absolute error becomes an unbounded ULP
+    /// distance as the true value approaches zero. Bounding that in ULP is not
+    /// conservative, it is impossible.
+    ///
+    /// Default 0, which reduces to the plain ULP compare.
+    #[serde(default)]
+    abs: f32,
     /// `true` marks a function deliberately more precise than the original.
     ///
     /// (f64 intermediates vs x87/SP); divergences count and log at debug, never
@@ -983,14 +995,14 @@ fn emit_diff_compare(
         } else if d.float_from != 0 {
             let _ = writeln!(
                 out,
-                "    super::diff::region_split(&{screaming}_DIFF_STATS, {name:?}, {}, {}, {}, &scratch.0, orig_out);",
-                d.expected, d.ulp, d.float_from
+                "    super::diff::region_split(&{screaming}_DIFF_STATS, {name:?}, {}, &super::diff::Tolerance {{ ulp: {}, abs: {:?} }}, {}, &scratch.0, orig_out);",
+                d.expected, d.ulp, d.abs, d.float_from
             );
         } else {
             let _ = writeln!(
                 out,
-                "    super::diff::region_f32(&{screaming}_DIFF_STATS, {name:?}, {}, {}, &scratch.0, orig_out);",
-                d.expected, d.ulp
+                "    super::diff::region_f32(&{screaming}_DIFF_STATS, {name:?}, {}, &super::diff::Tolerance {{ ulp: {}, abs: {:?} }}, &scratch.0, orig_out);",
+                d.expected, d.ulp, d.abs
             );
         }
         // After the compare, so the dump describes the divergence just reported.
