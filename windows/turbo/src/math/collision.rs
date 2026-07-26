@@ -2110,6 +2110,17 @@ mod tests_collision_build_face_edge_planes__632460 {
 // Both band tests stay negated so a NaN distance takes the early return the
 // original takes; `min_dist > eps_neg` / `max_dist < eps_pos` would instead
 // fall through into the clip loop.
+//
+// The 15-vertex buffer has NO headroom: the worst case fills it exactly. One
+// clip emits at most `count + 1` (a convex polygon has two sign transitions,
+// and the band gates guarantee a vertex on each side), every polygon is seeded
+// at 3, and the deepest chain is `collision_sweep_polygon_against_faces__632700`
+// with 4 face planes then `collision_ray_polygon_sweep_distance__632830` with 8
+// prism planes: 3 + 4 + 8 = 15, highest index written 14. `clip_emit_vertex`
+// does not bounds-check, and it does not need to. Adding a plane to either
+// caller overflows this. Do not "fix" that with a runtime check, which would
+// silently clamp instead of surfacing the mistake; grow the buffer, and grow
+// stock's matching 15-slot scratch reasoning with it.
 #[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn collision_clip_polygon_by_plane__6318c0(
     verts: &mut [f32; 45],
