@@ -702,10 +702,17 @@ preserve = ["ecx"]
 # Golden-diff the written region, byte compare. Region covers everything the
 # adapter touches, reads included: the argument is swapped for a fixed-size
 # scratch buffer, so a read past the declared length reads past that buffer.
+# Lane compare at `ulp = 0`, which is a MEASUREMENT and not a bound. The whole
+# 3x3 is built from `cos`, `sin` and `1 - cos`, and the original's trig is the
+# hardware `FSINCOS` where this is a polynomial, so a residual is certain and the
+# only question is its size. A byte compare answers "differs"; this answers "by
+# how much", which is what sizing the bound needs. Every lane of the region is an
+# f32, so there is no mixed head to split off with `float_from`.
 [functions.C44Matrix__SetRotationAxisAngle__7bdb00.diff]
 mode  = "inout"
 out   = { arg = 0, len = 64 }
-float = "bytes"
+float = "f32"
+ulp   = 0
 
 [functions.C44Matrix__TransformPoint__7bca80]
 rva  = 0x3bca80
