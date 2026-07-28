@@ -78,14 +78,16 @@ pub const fn detour_target(va: usize) -> Option<usize> {
     }
 }
 
-/// File name of the module owning `va`, or `None` if nothing claims it.
+/// File name and base of the module owning `va`, or `None` if nothing claims it.
 ///
 /// A bare address is only readable by someone holding that process's module
 /// map, which the reader of a captured log never is: bases differ per run, so
 /// the same number means a different module elsewhere. One point lookup per
-/// finding — not an enumeration — is what makes such a line portable.
+/// finding — not an enumeration — is what makes such a line portable. The base
+/// comes along because `va - base` is stable across processes: it identifies
+/// the function, and thereby the module version, that a log line points at.
 #[must_use]
-pub fn module_of(va: usize) -> Option<String> {
+pub fn module_of(va: usize) -> Option<(String, usize)> {
     // Declared in the width the call takes, so the buffer and the length it is
     // told about cannot drift apart and no conversion can fail.
     const PATH_CAP: u32 = 260;
@@ -103,7 +105,8 @@ pub fn module_of(va: usize) -> Option<String> {
         return None;
     }
     let path = String::from_utf8_lossy(&buf[..n]).into_owned();
-    Some(path.rsplit(['\\', '/']).next().unwrap_or(&path).to_owned())
+    let name = path.rsplit(['\\', '/']).next().unwrap_or(&path).to_owned();
+    Some((name, module))
 }
 
 /// Who owns the prologue at `va`, phrased for a log line.
@@ -112,13 +115,19 @@ pub fn module_of(va: usize) -> Option<String> {
 /// that finds it cannot tell them apart: another module detoured the function,
 /// or this is simply not the build the signature was recorded against. Decoding
 /// the jump separates them, and naming the module it lands in is what turns a
-/// refusal into something actionable in somebody else's capture.
+/// refusal into something actionable in somebody else's capture. The offset
+/// within that module comes too: the absolute target is meaningless outside
+/// this process, but name plus offset pins the exact handler, and so the
+/// version of the module that owns it.
 #[must_use]
 pub fn prologue_owner(va: usize) -> String {
     let Some(target) = detour_target(va) else {
         return String::from("no detour decoded — likely a different host build");
     };
-    let owner = module_of(target).unwrap_or_else(|| String::from("an unnamed module"));
+    let owner = module_of(target).map_or_else(
+        || String::from("an unnamed module"),
+        |(name, base)| format!("{name}+{:#x}", target.wrapping_sub(base)),
+    );
     format!("detoured to {target:#010x} by {owner}")
 }
 

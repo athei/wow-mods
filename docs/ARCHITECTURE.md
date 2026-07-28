@@ -59,6 +59,10 @@ The generated `install_thunk` refuses to patch unless `wow_hook::signature_match
 
 That single mechanism is the entire compatibility story with other mods, with no per-mod special-casing: a prologue somebody else already detoured fails the check, and `wow_turbo` yields that function and keeps the rest.
 
+`sig` may also be a **list** of patterns, which widens what "verified" means without weakening it. A function another mod replaces wholesale has more than one prologue it can legitimately be found with, and if our reimplementation reproduces that mod's behaviour as well as stock, both are shapes we can stand in for; any listed pattern matching permits the patch, and matching none is still the refusal. `GetName` is the case: it accepts its stock bytes or a five-byte jump.
+
+A jump pattern says a jump is there, not whose it is, so an entry that accepts one carries the rest of the question into its adapter. `GetName`'s identifies the module owning the displaced code before `install_all` — by name and by the offset within it, which pins the exact handler and therefore the version — and only a prologue that is stock, or a replacement whose body has been read, lets the reimplementation answer calls itself. Anything else runs the code it displaced. That keeps the mod-owned rule intact where it matters: never swallow behaviour we have not reproduced.
+
 `EXPECTED_IMAGE_BASE` is asserted at attach **before** any install, because reimplementations read host globals by absolute address with no per-call base lookup.
 
 ## The hook lifecycle

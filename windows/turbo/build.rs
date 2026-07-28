@@ -32,7 +32,7 @@ struct Manifest {
 #[derive(Deserialize)]
 struct Function {
     rva: i64,
-    sig: String,
+    sig: Signature,
     abi: String,
     ret: String,
     args: Vec<String>,
@@ -58,6 +58,42 @@ struct Function {
     /// exactly as without the harness.
     #[serde(default)]
     diff: Option<Diff>,
+}
+
+/// The prologue byte pattern(s) an entry is willing to patch over.
+///
+/// One pattern is the ordinary case. A list is for a function whose entry can
+/// legitimately hold more than one known prologue — a hot script method another
+/// mod replaces wholesale, where our reimplementation reproduces that mod's
+/// behaviour as well as stock, so either is a shape we can stand in for. Order
+/// carries no meaning; a match against any listed pattern permits the patch,
+/// and matching none is the refusal that guards against an unknown build.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum Signature {
+    One(String),
+    Any(Vec<String>),
+}
+
+impl Signature {
+    /// Every accepted pattern, whichever spelling the manifest used.
+    fn patterns(&self) -> &[String] {
+        match self {
+            Self::One(sig) => core::slice::from_ref(sig),
+            Self::Any(sigs) => sigs,
+        }
+    }
+
+    /// The patterns as a generated Rust slice literal.
+    fn literal(&self) -> String {
+        let items = self
+            .patterns()
+            .iter()
+            .map(|sig| format!("{sig:?}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("&[{items}]")
+    }
 }
 
 /// A contiguous pointer-addressed memory region.
@@ -599,7 +635,7 @@ fn render(m: &Manifest) -> String {
         );
         let _ = writeln!(install_body, "{ind}        image_base,");
         let _ = writeln!(install_body, "{ind}        {:#010x},", f.rva);
-        let _ = writeln!(install_body, "{ind}        {:?},", f.sig);
+        let _ = writeln!(install_body, "{ind}        {},", f.sig.literal());
         let _ = writeln!(
             install_body,
             "{ind}        {snake}_thunk as *mut ::core::ffi::c_void,"
@@ -1066,23 +1102,25 @@ fn is_integer_ret(ret: &str) -> bool {
 
 /// The fixed `install_thunk` helper appended to the generated module.
 ///
-/// Refuse unless the bytes at the target match the recorded signature, then
-/// create the hook over the generated thunk, let the caller publish the original
-/// (the `store` closure runs before enabling, so the lazy resolver can never see
-/// an empty slot), then queue the enable — `install_all` applies the whole queue
-/// in one thread-freeze at the end.
+/// Refuse unless the bytes at the target match one of the recorded signatures,
+/// then create the hook over the generated thunk, let the caller publish the
+/// original (the `store` closure runs before enabling, so the lazy resolver can
+/// never see an empty slot), then queue the enable — `install_all` applies the
+/// whole queue in one thread-freeze at the end.
 const INSTALL_THUNK: &str = r#"
 /// Install one hook; returns whether it was queued for enabling.
 ///
-/// Patching is refused unless the bytes at the target match the recorded `sig` —
-/// a `0` RVA, a signature mismatch, or a `MinHook` failure logs and skips. A hook
-/// must never crash the host, and must never patch an unverified address. The
-/// enable is only queued; `install_all`'s single `apply_queued` makes the batch
-/// live.
+/// Patching is refused unless the bytes at the target match one of the recorded
+/// `sigs` — a `0` RVA, no matching signature, or a `MinHook` failure logs and
+/// skips. A hook must never crash the host, and must never patch an unverified
+/// address. Most entries list one pattern; an entry lists several when its
+/// reimplementation stands in for more than one known prologue at that address.
+/// The enable is only queued; `install_all`'s single `apply_queued` makes the
+/// batch live.
 fn install_thunk(
     image_base: usize,
     rva: usize,
-    sig: &str,
+    sigs: &[&str],
     thunk: *mut ::core::ffi::c_void,
     label: &str,
     store: impl FnOnce(*mut ::core::ffi::c_void),
@@ -1108,7 +1146,7 @@ fn install_thunk(
     let va = image_base + rva;
     // SAFETY: `va` is the live image base plus the function's manifest RVA, which
     // lies within the host image's mapped code.
-    if !unsafe { ::wow_hook::signature_matches(va, sig) } {
+    if !sigs.iter().any(|sig| unsafe { ::wow_hook::signature_matches(va, sig) }) {
         ::log::warn!(
             target: super::LOG_TARGET,
             "{label} signature mismatch at {va:#010x} ({}) — refusing to patch",
@@ -1234,7 +1272,7 @@ fn emit_x87st0(
     let _ = writeln!(install_body, "    queued += usize::from(install_thunk(");
     let _ = writeln!(install_body, "        image_base,");
     let _ = writeln!(install_body, "        {:#010x},", f.rva);
-    let _ = writeln!(install_body, "        {:?},", f.sig);
+    let _ = writeln!(install_body, "        {},", f.sig.literal());
     let _ = writeln!(
         install_body,
         "        {snake}_thunk as *mut ::core::ffi::c_void,"
@@ -1351,7 +1389,7 @@ fn emit_x87pow(
     let _ = writeln!(install_body, "    queued += usize::from(install_thunk(");
     let _ = writeln!(install_body, "        image_base,");
     let _ = writeln!(install_body, "        {:#010x},", f.rva);
-    let _ = writeln!(install_body, "        {:?},", f.sig);
+    let _ = writeln!(install_body, "        {},", f.sig.literal());
     let _ = writeln!(
         install_body,
         "        {snake}_thunk as *mut ::core::ffi::c_void,"
@@ -1476,7 +1514,7 @@ fn emit_tap(
     let _ = writeln!(install_body, "    queued += usize::from(install_thunk(");
     let _ = writeln!(install_body, "        image_base,");
     let _ = writeln!(install_body, "        {:#010x},", f.rva);
-    let _ = writeln!(install_body, "        {:?},", f.sig);
+    let _ = writeln!(install_body, "        {},", f.sig.literal());
     let _ = writeln!(
         install_body,
         "        {snake}_thunk as *mut ::core::ffi::c_void,"

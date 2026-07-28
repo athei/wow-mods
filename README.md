@@ -244,6 +244,15 @@ accelerate; loaded after those mods it sees their detour on the prologue, fails
 the signature check, and yields — the same mechanism as every other function,
 no exception.
 
+One function is an exception, and it is an exception by having *more* verified
+shapes rather than fewer. `GetName` is called tens of thousands of times a
+second, and SuperWoW replaces it outright to add a second form that returns a
+unit's GUID. `wow_turbo` reproduces both that form and the stock one, so it
+accepts either prologue at that address and answers the calls itself, caching
+results a repeat call would otherwise recompute. It still checks which module
+it is standing in for: an unrecognized handler there is left to run unchanged,
+and the log line names it.
+
 - **`libSiliconPatch.dll` — replaced; remove it.** Its full hook set was the
   explicit parity target and is covered. Where the two are directly
   comparable, `wow_turbo`'s code generation matches or beats it: packed SSE on

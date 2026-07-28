@@ -41034,3 +41034,19 @@ pub fn frame_script__execute_function_formatted_v__704f10(
         fs_settop(l, -arg_count - 1);
     }
 }
+
+/// `GetName` script method — serves repeats from a memo, delegates the rest.
+///
+/// `fastcall(ecx = L)`, `RET 0`, returns the Lua result count. A thin adapter:
+/// the memo, its guards and the delegate all live in `crate::win::getname`.
+pub fn script_get_name__7a1390(l: i32) -> i32 {
+    super::getname::get_name(l)
+}
+
+/// `FrameScript::Shutdown` — drops the `GetName` memo, then runs stock.
+///
+/// `cdecl`, no arguments, void. Wrapper only: the memo's registry refs index
+/// the state this tears down, so they are dropped before `lua_close` runs.
+pub fn frame_script_shutdown__703ba0() {
+    super::getname::shutdown();
+}

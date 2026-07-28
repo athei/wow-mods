@@ -1102,6 +1102,10 @@ fn maybe_emit(st: &mut State) {
     let cum_ms = super::hooks::clock_ticks_to_ms(span(st.cumulative_emit, now));
     if cum_ms >= CUMULATIVE_MS {
         emit_tables(&st.cumulative, cum_ms, TOP_CUMULATIVE, "total ");
+        // A memo that never hits looks exactly like one that works: its target
+        // is reached from a script, not through the dispatch this gauge
+        // measures, so no table above can show it.
+        super::getname::emit_cumulative();
         st.cumulative_emit = now;
     }
     let spent = span(now, wow_shared::tsc::rdtsc());

@@ -10,6 +10,7 @@
 mod diff;
 mod events;
 mod fmod;
+mod getname;
 mod hooks;
 mod symbols;
 
@@ -235,6 +236,9 @@ fn attach_process(instance: *mut c_void) {
     // loader lock). One-time cost at this early, single-threaded mod load.
     hooks::init_engine_clock(wow_shared::tsc::tsc_hz());
     log_foreign_detours(image_base);
+    // Reads whoever owns the `GetName` prologue, which only this side of
+    // `install_all` can see — afterwards those bytes are our own detour.
+    getname::detect_underlying(image_base);
     symbols::install_all(image_base);
     // fmod is a separate, packed module (not Wow.exe), so it gets its own install
     // path: hook its FSOUND_Init export now so the mixer reimpl patches in once,

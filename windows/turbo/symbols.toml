@@ -10,7 +10,10 @@
 #   rva      — located address in this build (VA − image_base)
 #   sig      — entry-anchored wildcard byte signature ("55 8B EC ?? …"); the
 #              installer matches it against the bytes at `rva` and REFUSES TO PATCH
-#              on a mismatch
+#              on a mismatch. A LIST of patterns is also accepted, for an entry
+#              whose reimpl stands in for more than one known prologue at that
+#              address (a hot method a mod replaces wholesale); any one matching
+#              permits the patch, matching none is still the refusal.
 #   abi      — cdecl | stdcall | thiscall | fastcall; governs argument passing
 #              (ecx/edx for thiscall/fastcall), the return-value location, and the
 #              `ret` stack cleanup
@@ -2706,6 +2709,39 @@ sig  = "55 8B EC 83 EC 08 89 4D F8 8B 4D 08"
 abi  = "fastcall"
 ret  = "*mut u8"
 args = ["i32", "*const u8", "u32"]
+preserve = []
+
+# The `GetName` script method shared by every frame class, and one of the
+# hottest entries in the script API. TWO accepted prologues: the stock one, and
+# a five-byte jump, which is what a mod that replaces this method wholesale
+# leaves behind. The reimpl covers both behaviours — the frame name, and the
+# unit GUID a replacement returns for a truthy second argument — so either is a
+# shape it can stand in for. The jump pattern alone does not say WHOSE jump it
+# is, so the adapter checks the owning module before serving anything itself and
+# otherwise runs the code it displaced. NO diff table is possible: both sides
+# push onto the live Lua stack, so running them together would push twice.
+# Verification is in-game observation plus the armed hit/miss counters.
+[functions.Script_GetName__7a1390]
+rva  = 0x3a1390
+sig  = [
+  "A1 3C 0C CF 00 85 C0 56 8B F1 75 10 A1 6C EF CE",
+  "E9 ?? ?? ?? ??",
+]
+abi  = "fastcall"
+ret  = "i32"
+args = ["i32"]
+preserve = []
+
+# Tears down the FrameScript state: `lua_close` on the global `L` (its one
+# xref), reached by /reload, world entry and logout. The adapter clears the
+# `GetName` memo BEFORE delegating — the memo's registry refs index the state
+# being closed, and a recycled allocation must not inherit them.
+[functions.FrameScript_Shutdown__703ba0]
+rva  = 0x303ba0
+sig  = "8B 0D 74 EF CE 00 E8 ?? ?? ?? ?? C7 05 74 EF CE"
+abi  = "cdecl"
+ret  = "void"
+args = []
 preserve = []
 
 [functions.CCubicSpline__EvalFrameAtDistance__454580]
