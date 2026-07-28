@@ -1176,7 +1176,8 @@ fn install_thunk(
     if !unsafe { ::wow_hook::signature_matches(va, sig) } {
         ::log::warn!(
             target: super::LOG_TARGET,
-            "{label} signature mismatch at {va:#010x} — refusing to patch",
+            "{label} signature mismatch at {va:#010x} ({}) — refusing to patch",
+            ::wow_hook::prologue_owner(va),
         );
         return false;
     }

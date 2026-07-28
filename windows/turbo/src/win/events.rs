@@ -44,7 +44,15 @@
 //! the Lua runtime under it. `api` covers only calls made inside a timed body,
 //! which is what keeps it comparable with the `bodies` number beside it; the
 //! `api:` line then ranks those C functions by their entry address, left
-//! unresolved on purpose so no table of names has to ship in the mod.
+//! unresolved on purpose so no table of names has to ship in the mod. An
+//! address outside the client's own image carries a trailing `*`: other loaded
+//! modules register script API too, and one of theirs can rank high enough to
+//! read as a target when nothing in this tree could ever reimplement it.
+//!
+//! A `rejects N` in the header means the counter came back below where a span
+//! started N times, and those spans were dropped rather than accumulated. The
+//! clause is absent when nothing was dropped, so its presence is the signal:
+//! a window carrying one is under-reporting by whatever those spans held.
 //!
 //! Do not read the event rows as a partition of `signals`. Rows are billed at
 //! every depth while the totals count depth zero only, so a dispatch nested
@@ -256,6 +264,11 @@ struct Tables {
     dropped: u64,
     /// Ticks behind `dropped`, so the overflow row carries a cost too.
     dropped_ticks: u64,
+    /// Spans this window discarded because the counter went backwards.
+    ///
+    /// Printed only when non-zero, so the ordinary line is unchanged and a
+    /// window that lost a span says so instead of quietly under-reporting.
+    span_rejects: u64,
 }
 
 /// Gauge state: the rolling one-second window plus the cumulative tables.
@@ -330,6 +343,37 @@ fn add_ticks(counter: &AtomicU64, ticks: u64) {
         counter.load(Ordering::Relaxed).wrapping_add(ticks),
         Ordering::Relaxed,
     );
+}
+
+/// Spans rejected because the counter came back below where it started.
+static SPAN_REJECTS: AtomicU32 = AtomicU32::new(0);
+
+/// The address range the client's own image occupies.
+///
+/// Other loaded modules register script API of their own, and those entries
+/// rank in the same table as the client's. Without the range there is nothing
+/// in a row to say which is which — an address outside the image reads like any
+/// other hex number, and a reimplementation cannot target one.
+static HOST_IMAGE: LazyLock<std::ops::Range<usize>> = LazyLock::new(|| {
+    let base = wow_hook::host_image_base();
+    base..base + wow_hook::host_image_size()
+});
+
+/// Ticks between two counter reads, or zero if the counter did not advance.
+///
+/// A read that returns below its predecessor turns the subtraction into a value
+/// near `u64::MAX`, and every accumulator it reaches then carries that for the
+/// rest of the window — which surfaces as the one constant `ticks_to_us`
+/// saturates to, in a line where nothing else looks wrong. Rejecting the span
+/// where it is formed keeps one bad read inside one call, and the counter is
+/// what stops that being silent: a window that rejected nothing is a window
+/// whose totals are known to be sound, not merely assumed to be.
+fn span(t0: u64, t1: u64) -> u64 {
+    if t1 >= t0 {
+        return t1 - t0;
+    }
+    SPAN_REJECTS.fetch_add(1, Ordering::Relaxed);
+    0
 }
 
 /// Nesting depth of timed C-API calls; only the outermost is measured.
@@ -596,7 +640,7 @@ pub fn time_body<T>(chunk: impl FnOnce() -> (usize, u32), body: impl FnOnce() ->
     let t0 = wow_shared::tsc::rdtsc();
     let out = body();
     let t1 = wow_shared::tsc::rdtsc();
-    let dt = t1.wrapping_sub(t0);
+    let dt = span(t0, t1);
     BODY_DEPTH.fetch_sub(1, Ordering::Relaxed);
     // A script error inside a C function does not return through `precall` — it
     // longjmps to the protected call that just returned here, so that call's
@@ -607,16 +651,16 @@ pub fn time_body<T>(chunk: impl FnOnce() -> (usize, u32), body: impl FnOnce() ->
     API_DEPTH.store(0, Ordering::Relaxed);
     // What the C API cost inside this body, and what measuring it cost. Both
     // counters free-run, so the difference across the body is this body's share.
-    let api_dt = API_TICKS.load(Ordering::Relaxed).wrapping_sub(api_in);
+    let api_dt = API_TICKS.load(Ordering::Relaxed).saturating_sub(api_in);
     let api_self_dt = API_SELF_TICKS
         .load(Ordering::Relaxed)
-        .wrapping_sub(api_self_in);
+        .saturating_sub(api_self_in);
     let mut st = state();
     st.window.body_ticks += dt;
     st.window.body_calls += 1;
     st.window.api_ticks += api_dt;
     st.window.body_gauge_ticks += api_self_dt;
-    st.window.vm_calls += VM_CALLS.load(Ordering::Relaxed).wrapping_sub(vm_calls_in);
+    st.window.vm_calls += VM_CALLS.load(Ordering::Relaxed).saturating_sub(vm_calls_in);
     let us = ticks_to_us(dt);
     let bucket = BODY_BUCKET_US
         .iter()
@@ -631,7 +675,7 @@ pub fn time_body<T>(chunk: impl FnOnce() -> (usize, u32), body: impl FnOnce() ->
     stat.max_ticks = stat.max_ticks.max(dt);
     stat.api_ticks += api_dt;
     let gauge_out = wow_shared::tsc::rdtsc();
-    st.window.gauge_ticks += t0.wrapping_sub(gauge_in) + gauge_out.wrapping_sub(t1);
+    st.window.gauge_ticks += span(gauge_in, t0) + span(t1, gauge_out);
     drop(st);
     out
 }
@@ -666,10 +710,7 @@ pub fn precall(l: i32, func: i32) -> i32 {
     let gauge_in = wow_shared::tsc::rdtsc();
     let Some(entry) = c_entry(func) else {
         add_ticks(&VM_CALLS, 1);
-        add_ticks(
-            &API_SELF_TICKS,
-            wow_shared::tsc::rdtsc().wrapping_sub(gauge_in),
-        );
+        add_ticks(&API_SELF_TICKS, span(gauge_in, wow_shared::tsc::rdtsc()));
         return original(l, func);
     };
     API_DEPTH.store(1, Ordering::Relaxed);
@@ -680,15 +721,11 @@ pub fn precall(l: i32, func: i32) -> i32 {
     // Raw here, counter-read latency and all: the correction is a fraction of a
     // tick, so it is applied once against the call count when the window is
     // reported rather than truncated to zero on every call.
-    let dt = t1.wrapping_sub(t0);
+    let dt = span(t0, t1);
     add_ticks(&API_TICKS, dt);
     record_api(entry, dt);
     let gauge_out = wow_shared::tsc::rdtsc();
-    add_ticks(
-        &API_SELF_TICKS,
-        t0.wrapping_sub(gauge_in)
-            .wrapping_add(gauge_out.wrapping_sub(t1)),
-    );
+    add_ticks(&API_SELF_TICKS, span(gauge_in, t0) + span(t1, gauge_out));
     out
 }
 
@@ -879,7 +916,7 @@ pub fn signal_event(event_id: i32) {
     let depth = DEPTH.fetch_add(1, Ordering::Relaxed);
     let t0 = wow_shared::tsc::rdtsc();
     original(event_id);
-    let dt = wow_shared::tsc::rdtsc().wrapping_sub(t0);
+    let dt = span(t0, wow_shared::tsc::rdtsc());
     DEPTH.fetch_sub(1, Ordering::Relaxed);
     WRAPPER_EVENT.store(prev, Ordering::Relaxed);
     record_signal(event_id, dt, depth == 0);
@@ -945,7 +982,7 @@ pub fn invoke_handler(frame: *mut core::ffi::c_void, handler_slot: *mut u32) {
     let depth = DEPTH.fetch_add(1, Ordering::Relaxed);
     let t0 = wow_shared::tsc::rdtsc();
     original(frame, handler_slot);
-    let dt = wow_shared::tsc::rdtsc().wrapping_sub(t0);
+    let dt = span(t0, wow_shared::tsc::rdtsc());
     DEPTH.fetch_sub(1, Ordering::Relaxed);
     record_handler(&name, dt, ctx, depth == 0, false);
 }
@@ -970,7 +1007,7 @@ pub fn invoke_handler_formatted_v(
     let depth = DEPTH.fetch_add(1, Ordering::Relaxed);
     let t0 = wow_shared::tsc::rdtsc();
     original(frame, handler_slot, format, args);
-    let dt = wow_shared::tsc::rdtsc().wrapping_sub(t0);
+    let dt = span(t0, wow_shared::tsc::rdtsc());
     DEPTH.fetch_sub(1, Ordering::Relaxed);
     PARAM_EVENT.store(ctx, Ordering::Relaxed);
     record_handler(&name, dt, ctx, depth == 0, true);
@@ -1049,20 +1086,25 @@ fn record_handler(name: &NameBuf, dt: u64, ctx: u32, depth_zero: bool, param_pat
 /// reported has already been printed.
 fn maybe_emit(st: &mut State) {
     let now = wow_shared::tsc::rdtsc();
-    let window_ms = super::hooks::clock_ticks_to_ms(now.wrapping_sub(st.window_start));
+    let window_ms = super::hooks::clock_ticks_to_ms(span(st.window_start, now));
     if window_ms < WINDOW_MS {
         return;
     }
+    // Rejections are counted on the hot path, which cannot take this lock, so
+    // the running counter is drained here — once per window, into the window it
+    // belongs to, and from there into the cumulative tables by the ordinary
+    // merge.
+    st.window.span_rejects += u64::from(SPAN_REJECTS.swap(0, Ordering::Relaxed));
     emit_tables(&st.window, window_ms, TOP_PER_SECOND, "");
     let window = std::mem::take(&mut st.window);
     merge(&mut st.cumulative, window);
     st.window_start = now;
-    let cum_ms = super::hooks::clock_ticks_to_ms(now.wrapping_sub(st.cumulative_emit));
+    let cum_ms = super::hooks::clock_ticks_to_ms(span(st.cumulative_emit, now));
     if cum_ms >= CUMULATIVE_MS {
         emit_tables(&st.cumulative, cum_ms, TOP_CUMULATIVE, "total ");
         st.cumulative_emit = now;
     }
-    let spent = wow_shared::tsc::rdtsc().wrapping_sub(now);
+    let spent = span(now, wow_shared::tsc::rdtsc());
     if BODY_DEPTH.load(Ordering::Relaxed) == 0 {
         if DEPTH.load(Ordering::Relaxed) != 0 {
             st.window.gauge_ticks += spent;
@@ -1093,6 +1135,7 @@ fn merge(cum: &mut Tables, w: Tables) {
     }
     cum.dropped += w.dropped;
     cum.dropped_ticks += w.dropped_ticks;
+    cum.span_rejects += w.span_rejects;
     for (id, row) in w.events {
         let dst = cum.events.entry(id).or_insert_with(|| EventRow {
             name: row.name,
@@ -1238,7 +1281,8 @@ fn emit_api(t: &Tables, label: &str) {
     rows.sort_by_key(|r| std::cmp::Reverse(r.1.ticks));
     let mut line = format!("{label}api:");
     for (entry, stat) in rows.iter().take(TOP_API) {
-        let _ = write!(line, " {entry:#010x} x{} ", stat.count);
+        let mark = if HOST_IMAGE.contains(entry) { "" } else { "*" };
+        let _ = write!(line, " {entry:#010x}{mark} x{} ", stat.count);
         push_ms(&mut line, stat.ticks);
         line.push_str(" ms;");
     }
@@ -1257,11 +1301,8 @@ fn emit_api(t: &Tables, label: &str) {
     log::debug!(target: "wow::events", "{line}");
 }
 
-/// Emit one events line and one handlers line for a window.
-fn emit_tables(t: &Tables, span_ms: u64, top: usize, label: &str) {
-    if t.signals == 0 && t.handler_calls == 0 {
-        return;
-    }
+/// Build the header: the window total, split both ways, then the api/vm split.
+fn header_line(t: &Tables, span_ms: u64, label: &str) -> String {
     let mut line = format!(
         "{label}events: {} signals, {} handlers, ",
         t.signals, t.handler_calls
@@ -1295,7 +1336,19 @@ fn emit_tables(t: &Tables, span_ms: u64, top: usize, label: &str) {
     );
     line.push_str(" + gauge ");
     push_ms(&mut line, t.gauge_ticks + t.body_gauge_ticks + read_ticks);
+    if t.span_rejects > 0 {
+        let _ = write!(line, ", rejects {}", t.span_rejects);
+    }
     line.push_str(") |");
+    line
+}
+
+/// Emit one events line and one handlers line for a window.
+fn emit_tables(t: &Tables, span_ms: u64, top: usize, label: &str) {
+    if t.signals == 0 && t.handler_calls == 0 {
+        return;
+    }
+    let mut line = header_line(t, span_ms, label);
     let mut rows: Vec<&EventRow> = t.events.values().collect();
     rows.sort_by_key(|r| std::cmp::Reverse(r.ticks));
     for row in rows.iter().take(top) {

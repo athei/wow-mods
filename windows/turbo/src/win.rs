@@ -142,6 +142,44 @@ fn log_windows_version(ntdll: usize) {
     );
 }
 
+/// Hot script-API entries checked for a prologue another module has patched.
+///
+/// Only functions this mod does NOT hook. Every hooked entry already reports a
+/// patched prologue on its own: the signature check refuses to patch and names
+/// the owner, over all of `symbols.toml` rather than a list somebody curated.
+/// What is left is the addresses nothing here installs on and so nothing would
+/// otherwise look at — measured top rows of the script-API ranking whose cost
+/// includes whatever another module does to them.
+const PROBED_ENTRIES: [(usize, &str); 4] = [
+    (0x003a_1390, "GetName"),
+    (0x003a_1460, "GetParent"),
+    (0x0011_7020, "UnitName"),
+    (0x002f_3890, "lua_pushstring"),
+];
+
+/// Report unhooked script-API entries another module has already detoured.
+fn log_foreign_detours(image_base: usize) {
+    let mut found = 0;
+    for (rva, label) in PROBED_ENTRIES {
+        let va = image_base + rva;
+        if wow_hook::detour_target(va).is_some() {
+            found += 1;
+            log::info!(
+                target: LOG_TARGET,
+                "{label} @ {va:#010x} {}",
+                wow_hook::prologue_owner(va),
+            );
+        }
+    }
+    if found == 0 {
+        log::info!(
+            target: LOG_TARGET,
+            "script API: {} unhooked entries checked, none detoured",
+            PROBED_ENTRIES.len(),
+        );
+    }
+}
+
 /// The 1.12 client is non-`DYNAMICBASE` and always loads here.
 ///
 /// The reimpls read fixed host globals by absolute address (no per-call base
@@ -182,6 +220,7 @@ fn attach_process(instance: *mut c_void) {
     // thread, no thread spawned (unlike a `CreateThread`, which would deadlock the
     // loader lock). One-time cost at this early, single-threaded mod load.
     hooks::init_engine_clock(wow_shared::tsc::tsc_hz());
+    log_foreign_detours(image_base);
     symbols::install_all(image_base);
     // fmod is a separate, packed module (not Wow.exe), so it gets its own install
     // path: hook its FSOUND_Init export now so the mixer reimpl patches in once,

@@ -23,6 +23,103 @@ const LOG_TARGET: &str = "wow::hook";
 unsafe extern "system" {
     fn DisableThreadLibraryCalls(lib_module: *mut c_void) -> i32;
     fn GetModuleHandleA(module_name: *const u8) -> usize;
+    fn GetModuleHandleExA(flags: u32, module_name: *const u8, module: *mut usize) -> i32;
+    fn GetModuleFileNameA(module: usize, filename: *mut u8, size: u32) -> u32;
+}
+
+/// Resolve a module handle from an address inside it, taking no reference.
+///
+/// `FROM_ADDRESS | UNCHANGED_REFCOUNT`: this only wants to read a name, so
+/// pinning the module would outlive the question.
+const MODULE_FROM_ADDRESS: u32 = 0x0000_0004 | 0x0000_0002;
+
+/// Where a patched prologue jumps, or `None` if it is the host's own code.
+///
+/// The three encodings a hooking library reaches for on i386: a relative `jmp`
+/// (`E9 rel32`), an indirect one through a pointer slot (`FF 25 abs32`), and a
+/// `push imm32` / `ret` pair. A short `jmp` (`EB rel8`) cannot leave the image
+/// and so is the host's own branch, never a detour.
+#[must_use]
+pub const fn detour_target(va: usize) -> Option<usize> {
+    // SAFETY: `va` is a host function's entry point, so its first byte is
+    // mapped code.
+    let opcode = unsafe { *(va as *const u8) };
+    match opcode {
+        0xe9 => {
+            // SAFETY: an `E9` instruction carries a four-byte displacement at
+            // `+1`, mapped as part of the instruction that owns it.
+            let rel = unsafe { ((va + 1) as *const i32).read_unaligned() };
+            Some(va.wrapping_add(5).wrapping_add_signed(rel as isize))
+        }
+        0xff => {
+            // SAFETY: the second opcode byte of a two-byte form is mapped with
+            // the first.
+            if unsafe { *((va + 1) as *const u8) } != 0x25 {
+                return None;
+            }
+            // SAFETY: an `FF 25` instruction carries the address of its pointer
+            // slot at `+2`.
+            let slot = unsafe { ((va + 2) as *const usize).read_unaligned() };
+            // SAFETY: the slot is the indirection this instruction dereferences
+            // on every call, so it is mapped wherever the installer placed it.
+            Some(unsafe { *(slot as *const usize) })
+        }
+        0x68 => {
+            // SAFETY: the `ret` that turns a `push imm32` into a jump sits at
+            // `+5`, inside the same six-byte prologue.
+            if unsafe { *((va + 5) as *const u8) } != 0xc3 {
+                return None;
+            }
+            // SAFETY: the pushed target is the dword at `+1` of the same
+            // instruction.
+            Some(unsafe { ((va + 1) as *const usize).read_unaligned() })
+        }
+        _ => None,
+    }
+}
+
+/// File name of the module owning `va`, or `None` if nothing claims it.
+///
+/// A bare address is only readable by someone holding that process's module
+/// map, which the reader of a captured log never is: bases differ per run, so
+/// the same number means a different module elsewhere. One point lookup per
+/// finding — not an enumeration — is what makes such a line portable.
+#[must_use]
+pub fn module_of(va: usize) -> Option<String> {
+    // Declared in the width the call takes, so the buffer and the length it is
+    // told about cannot drift apart and no conversion can fail.
+    const PATH_CAP: u32 = 260;
+    let mut module = 0usize;
+    // SAFETY: the published signature; `FROM_ADDRESS` reads `va` as an address
+    // rather than a name, and the handle is written only on success.
+    let ok = unsafe { GetModuleHandleExA(MODULE_FROM_ADDRESS, va as *const u8, &raw mut module) };
+    if ok == 0 || module == 0 {
+        return None;
+    }
+    let mut buf = [0u8; PATH_CAP as usize];
+    // SAFETY: the handle is live and the buffer's length is passed with it.
+    let n = unsafe { GetModuleFileNameA(module, buf.as_mut_ptr(), PATH_CAP) } as usize;
+    if n == 0 || n >= buf.len() {
+        return None;
+    }
+    let path = String::from_utf8_lossy(&buf[..n]).into_owned();
+    Some(path.rsplit(['\\', '/']).next().unwrap_or(&path).to_owned())
+}
+
+/// Who owns the prologue at `va`, phrased for a log line.
+///
+/// A changed prologue has two very different meanings and the byte comparison
+/// that finds it cannot tell them apart: another module detoured the function,
+/// or this is simply not the build the signature was recorded against. Decoding
+/// the jump separates them, and naming the module it lands in is what turns a
+/// refusal into something actionable in somebody else's capture.
+#[must_use]
+pub fn prologue_owner(va: usize) -> String {
+    let Some(target) = detour_target(va) else {
+        return String::from("no detour decoded — likely a different host build");
+    };
+    let owner = module_of(target).unwrap_or_else(|| String::from("an unnamed module"));
+    format!("detoured to {target:#010x} by {owner}")
 }
 
 /// Standard `DLL_PROCESS_ATTACH` setup for an injected helper DLL.
@@ -54,6 +151,27 @@ pub fn host_image_base() -> usize {
     // SAFETY: GetModuleHandleA(null) returns the module handle of the calling
     // process's own image, which is its load base. No handle is opened.
     unsafe { GetModuleHandleA(core::ptr::null()) }
+}
+
+/// Mapped size of the host process image, read from its own PE headers.
+///
+/// With [`host_image_base`] this is the address range the client's own code
+/// occupies, which is what tells a call into the client apart from a call into
+/// some other module loaded beside it. `e_lfanew` is the dword at `+0x3c` of
+/// the DOS header, and a PE32 optional header keeps `SizeOfImage` `0x50` past
+/// the start of the NT headers.
+#[must_use]
+pub fn host_image_size() -> usize {
+    let base = host_image_base();
+    if base == 0 {
+        return 0;
+    }
+    // SAFETY: `base` is the loaded image's own base, so its DOS header is
+    // mapped and `e_lfanew` is the dword at `+0x3c`.
+    let nt = base + unsafe { *((base + 0x3c) as *const u32) } as usize;
+    // SAFETY: `nt` is the NT header the DOS stub points at, mapped in the same
+    // image; `SizeOfImage` is the dword at `+0x50`.
+    unsafe { *((nt + 0x50) as *const u32) as usize }
 }
 
 /// Create a `MinHook` detour at `target_va` without enabling it.
