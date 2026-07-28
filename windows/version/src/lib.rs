@@ -2,6 +2,8 @@ mod inject;
 
 use core::ffi::c_void;
 
+use wow_shared::identity;
+
 const LOG_TARGET: &str = "version";
 const DLL_PROCESS_ATTACH: u32 = 1;
 
@@ -55,7 +57,22 @@ fn attach_process(instance: *mut c_void) {
     // SAFETY: `instance` is the HINSTANCE the loader passed to DllMain; Win32 accepts it as-is.
     unsafe { DisableThreadLibraryCalls(instance) };
     wow_shared::init_logger();
+    log_identity(instance);
     crate::inject::run();
+}
+
+/// Name this build in the log, as the first line the injector emits.
+///
+/// [`identity::BUILD`] says which release the source came from; the image ID is
+/// the PDB GUID the linker assigned, which names this exact binary and picks
+/// the `.pdb` that symbolicates it out of the release's debug archive.
+fn log_identity(instance: *mut c_void) {
+    // SAFETY: `instance` is the HINSTANCE the loader passed to DllMain, so this
+    // image is mapped in full.
+    let id = unsafe { identity::image_id(instance) };
+    let id = id.as_deref().unwrap_or("no-image-id");
+    let build = identity::BUILD;
+    log::info!(target: LOG_TARGET, "version.dll {build} {id} loaded");
 }
 
 #[unsafe(export_name = "VerInstallFileA")]

@@ -1,7 +1,7 @@
 use core::ffi::{c_char, c_void};
 
-use log::debug;
-use wow_shared::{InPtrMut, TranslateParams, TranslateStatus};
+use log::{debug, info};
+use wow_shared::{InPtrMut, TranslateParams, TranslateStatus, identity};
 
 use crate::LOG_TARGET;
 
@@ -19,10 +19,23 @@ pub extern "C" fn init_logger_handler(_args: *mut c_void) -> i32 {
     static INIT: std::sync::Once = std::sync::Once::new();
     INIT.call_once(|| {
         wow_shared::init_logger();
+        log_identity();
         // Map the shared crash crumb (cfg-gated no-op unless WOW_CRUMB=1).
         wow_shared::crumb::init();
     });
     STATUS_SUCCESS
+}
+
+/// Name this build in the log, as the first line the unix side emits.
+///
+/// [`identity::BUILD`] says which release the source came from; the image ID is
+/// the Mach-O `LC_UUID` the linker assigned, which names this exact binary and
+/// picks the `.dSYM` that symbolicates it out of the release's debug archive.
+fn log_identity() {
+    let id = identity::image_id();
+    let id = id.as_deref().unwrap_or("no-image-id");
+    let build = identity::BUILD;
+    info!(target: LOG_TARGET, "wow_mods.so {build} {id} initialized");
 }
 
 pub extern "C" fn translate_handler(args: *mut c_void) -> i32 {

@@ -25,6 +25,11 @@ them yourself with `make bundle` (see [Building](#building)):
 - **`version_loader-<version>.zip`** — an optional standalone loader for
   setups without one. The mods don't care how they get loaded — any mod
   loader works, and most modded clients already ship one.
+- **`wow_mods-debug-<version>.zip`** — debug symbols for everything above, for
+  reading a crash report. Nothing to install. Each DLL logs its version and its
+  linker-assigned image ID as it loads, and the archive's `BUILD` file names the
+  release it belongs to, so a captured log identifies the archive that
+  symbolicates it.
 
 Each unpacks into directories that mirror where the files go: merge `game/`
 into the game folder (next to `WoW.exe`) and `wine/` into the Wine build the
@@ -309,10 +314,12 @@ unix/        x86_64 Mach-O workspace: bridge (wow_mods.so), translate-sys (swift
 addon/       the WoWTranslate Lua addon
 ```
 
-`make` builds, `make bundle` stages the four release archives under `dist/`
-(always at the production profile — fat LTO — and including the AVX2
-native-Windows build of `wow_turbo`), and `make install` deploys straight
-into a local setup. Destinations come from the environment, not the Makefile:
+`make` builds, `make bundle` stages the four release archives plus their debug
+symbols under `dist/` (always at the production profile — fat LTO — and
+including the AVX2 native-Windows build of `wow_turbo`), and `make install`
+deploys straight into a local setup, symbols included: a `.pdb` beside every PE
+and a `.dSYM` beside the `.so` (on Mach-O the DWARF otherwise stays behind in
+the compiler's object files, so `make` runs `dsymutil` to gather it). Destinations come from the environment, not the Makefile:
 `WOW_EXE` is the path to the client's `WoW.exe` (native mods deploy next to
 it) and `WINE_SDK` — plus an optional `WINE_INSTALL_DIR` — names the Wine
 trees the builtins install into.
@@ -340,5 +347,6 @@ about whether a reimplementation still matches the original; see the
 reimplementation contract in `docs/CONVENTIONS.md`.**
 
 Releases: pushing a `v*` tag opens a draft release through the GitHub
-workflow; upload the `dist/` zips from a local `make bundle`, generate the
-release notes, and publish.
+workflow, which first checks the tag against both workspace versions and fails
+if they disagree; upload the `dist/` zips from a local `make bundle`, generate
+the release notes, and publish.

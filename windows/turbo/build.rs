@@ -19,7 +19,7 @@
 // the formatting-args lint is a false positive here.
 #![allow(clippy::literal_string_with_formatting_args)]
 
-use std::{collections::BTreeMap, env, fmt::Write as _, fs, path::PathBuf, process::Command};
+use std::{collections::BTreeMap, env, fmt::Write as _, fs, path::PathBuf};
 
 use serde::Deserialize;
 
@@ -311,74 +311,9 @@ fn validate_diff(name: &str, f: &Function) {
     }
 }
 
-/// `git describe` of the build commit, for the startup log line.
-///
-/// `--tags` so a release build reads as its tag rather than the nearest
-/// annotated one, `--always` so a shallow or tagless clone still yields a short
-/// object name, and `--dirty` so a build carrying uncommitted edits says so.
-/// Outside a checkout (a source tarball) the whole thing degrades to `unknown`
-/// rather than failing the build.
-///
-/// Reruns are keyed on `HEAD` and on whichever ref it names (loose or packed),
-/// so a plain checkout or a new revision re-stamps the string. Dirtiness needs
-/// the sources too, which the caller watches by directory: any edit that could
-/// change the binary re-derives the identity that describes it, and since such
-/// an edit rebuilds the crate anyway, the accuracy is free.
-///
-/// The watched set is what this crate compiles, so a `dirty` worktree whose
-/// only edits are elsewhere still stamps clean. That is the intended reading:
-/// the marker answers "was this binary built from committed sources", not
-/// "was every file in the repository committed".
-fn build_id() -> String {
-    let git = |args: &[&str]| {
-        Command::new("git")
-            .args(args)
-            .output()
-            .ok()
-            .filter(|o| o.status.success())
-            .and_then(|o| String::from_utf8(o.stdout).ok())
-            .map(|s| s.trim().to_owned())
-            .filter(|s| !s.is_empty())
-    };
-    if let Some(dir) = git(&["rev-parse", "--absolute-git-dir"]) {
-        let dir = PathBuf::from(dir);
-        // Tags matter as much as commits here: `--tags` means cutting a
-        // release changes the identity without touching a single source file
-        // or moving HEAD, and a release artifact stamped with the previous
-        // version is the one mistake this whole line exists to prevent.
-        let mut watch = vec![
-            dir.join("HEAD"),
-            dir.join("packed-refs"),
-            dir.join("refs").join("tags"),
-        ];
-        if let Some(head_ref) = git(&["symbolic-ref", "--quiet", "HEAD"]) {
-            watch.push(dir.join(head_ref));
-        }
-        for path in watch.iter().filter(|p| p.exists()) {
-            println!("cargo:rerun-if-changed={}", path.display());
-        }
-    }
-    git(&["describe", "--tags", "--always", "--dirty"]).unwrap_or_else(|| "unknown".to_owned())
-}
-
 fn main() {
     println!("cargo:rerun-if-changed=symbols.toml");
     println!("cargo:rerun-if-changed=build.rs");
-    // Directories are scanned recursively, so this covers every source that
-    // ends up in the binary — this crate's own, and the two it links. Watching
-    // them is what lets the build identity below notice an uncommitted edit;
-    // watching the workspace root instead would sweep in the target dirs and
-    // rebuild forever.
-    println!("cargo:rerun-if-changed=src");
-    println!("cargo:rerun-if-changed=Cargo.toml");
-    println!("cargo:rerun-if-changed=../hook/src");
-    println!("cargo:rerun-if-changed=../../unix/shared/src");
-
-    // Stamp the build's own identity into the binary so a captured log names the
-    // build that produced it. Without it a log can only be fingerprinted by
-    // indirect evidence (how many hooks installed, which names appear), which is
-    // slow and ambiguous when two builds differ by a handful of entries.
-    println!("cargo:rustc-env=WOW_TURBO_BUILD={}", build_id());
 
     // Diagnostic-only: `WOW_CRUMB=1` makes each generated thunk record a
     // breadcrumb (which hook ran + its output pointer) into the shared mmap ring

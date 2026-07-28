@@ -3,6 +3,7 @@ use strum::{EnumCount, VariantArray};
 pub mod crumb;
 pub mod ffi_boundary;
 pub mod ftol;
+pub mod identity;
 mod log_filter;
 mod log_helpers;
 mod params;

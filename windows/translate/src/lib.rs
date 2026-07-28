@@ -26,6 +26,8 @@ mod unix_call;
 
 use core::ffi::c_void;
 
+use wow_shared::identity;
+
 const LOG_TARGET: &str = "wow_translate";
 const DLL_PROCESS_ATTACH: u32 = 1;
 
@@ -40,6 +42,7 @@ pub extern "system" fn dll_main(instance: *mut c_void, reason: u32, _reserved: *
 fn attach_process(instance: *mut c_void) {
     // SAFETY: `instance` is the HINSTANCE the loader passed to DllMain.
     unsafe { wow_hook::on_dll_attach(instance) };
+    log_identity(instance);
 
     // Register the unix-side logger through the bridge before any translate
     // thunk can run. Importing `wow_mods_unix_call` has already forced Wine to
@@ -48,4 +51,18 @@ fn attach_process(instance: *mut c_void) {
     let _ = unix_call::call(&mut params);
 
     hook::install();
+}
+
+/// Name this build in the log, as the first line this mod emits.
+///
+/// [`identity::BUILD`] says which release the source came from; the image ID is
+/// the PDB GUID the linker assigned, which names this exact binary and picks
+/// the `.pdb` that symbolicates it out of the release's debug archive.
+fn log_identity(instance: *mut c_void) {
+    // SAFETY: `instance` is the HINSTANCE the loader passed to DllMain, so this
+    // image is mapped in full.
+    let id = unsafe { identity::image_id(instance) };
+    let id = id.as_deref().unwrap_or("no-image-id");
+    let build = identity::BUILD;
+    log::info!(target: LOG_TARGET, "wow_translate {build} {id} initialized");
 }

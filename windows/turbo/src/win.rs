@@ -15,14 +15,23 @@ mod symbols;
 
 use core::ffi::c_void;
 
+use wow_shared::identity;
+
 const LOG_TARGET: &str = "wow_turbo";
 const DLL_PROCESS_ATTACH: u32 = 1;
 
-/// Build identity, stamped in by `build.rs` from `git describe`.
+/// ISA baseline this DLL was compiled for.
 ///
-/// Named in the startup line so a captured session log says which build wrote
-/// it; `unknown` when built outside a checkout.
-const BUILD: &str = env!("WOW_TURBO_BUILD");
+/// Two artifacts ship under this same filename: the nehalem build for the
+/// Wine-on-macOS stack, whose translated vector unit is 128-bit, and the
+/// haswell build for native Windows (`.cargo/avx.toml`). They are otherwise
+/// indistinguishable in a log, and the numeric kernels differ between them, so
+/// the startup line has to say which one is running.
+const ISA: &str = if cfg!(target_feature = "avx2") {
+    "avx2"
+} else {
+    "sse"
+};
 
 unsafe extern "system" {
     fn GetModuleHandleA(module_name: *const u8) -> usize;
@@ -202,9 +211,14 @@ fn attach_process(instance: *mut c_void) {
     // land in the same mmap the crash handler dumps (no-op unless wow_crumb).
     wow_shared::crumb::init();
     let image_base = wow_hook::host_image_base();
+    // SAFETY: `instance` is the HINSTANCE the loader passed to DllMain, so this
+    // image is mapped in full.
+    let id = unsafe { identity::image_id(instance) };
+    let id = id.as_deref().unwrap_or("no-image-id");
+    let build = identity::BUILD;
     log::info!(
         target: LOG_TARGET,
-        "wow_turbo {BUILD} initialized, image_base = {image_base:#010x}",
+        "wow_turbo {build} {ISA} {id} initialized, image_base = {image_base:#010x}",
     );
     log_host();
     // The reimplementations read host globals by absolute address, valid only at

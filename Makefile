@@ -111,15 +111,28 @@ windows-avx: require-wine-sdk
 
 unix: require-wine-sdk
 	cd unix && cargo build --profile $(PROFILE) --target $(UNIX_RELEASE_TARGET)
+	# On Mach-O the DWARF stays behind in the compiler's `.o` files, with only a
+	# debug map in the dylib pointing at them by absolute path; `dsymutil` walks
+	# that map and gathers the DWARF into a `.dSYM`, the shippable equivalent of
+	# an MSVC `.pdb`. Run it on a copy already named `wow_mods.so`, because it
+	# stamps the inner DWARF file after the input's basename and lldb looks it up
+	# by that name — renaming the bundle afterwards produces one lldb won't find.
+	cp $(OUT_unix)/libwow_mods.dylib $(OUT_unix)/wow_mods.so
+	rm -rf $(OUT_unix)/wow_mods.so.dSYM
+	dsymutil $(OUT_unix)/wow_mods.so
 
 install: all require-wow-exe
 	# Wine builtins → the wine dirs: the i686 version.dll + wow_mods.dll and the
 	# companion wow_mods.so. WoW is 32-bit, so the 32-bit bridge pairs the x86_64
-	# `.so` over Wine's wow64 path.
+	# `.so` over Wine's wow64 path. Symbols travel with each binary: the `.pdb`
+	# beside every PE, the `.dSYM` beside the `.so`, so a local crash
+	# symbolicates against the installed files with no extra flags.
 	for dir in $(INSTALL_DIRS); do \
 	    cp $(OUT_i386)/version.dll   $(OUT_i386)/version.pdb   $$dir/lib/wine/i386-windows/ ; \
 	    cp $(OUT_i386)/wow_mods.dll  $(OUT_i386)/wow_mods.pdb  $$dir/lib/wine/i386-windows/ ; \
-	    cp $(OUT_unix)/libwow_mods.dylib $$dir/lib/wine/x86_64-unix/wow_mods.so ; \
+	    cp $(OUT_unix)/wow_mods.so       $$dir/lib/wine/x86_64-unix/ ; \
+	    rm -rf $$dir/lib/wine/x86_64-unix/wow_mods.so.dSYM ; \
+	    cp -R $(OUT_unix)/wow_mods.so.dSYM $$dir/lib/wine/x86_64-unix/ ; \
 	    cp $(OUT_i386)/wow_mods.fake.dll $$dir/lib/wine/i386-windows/ ; \
 	done
 	# Native game-side mods → the app bundle's game mods/ dir (loaded by path via
@@ -132,7 +145,8 @@ install: all require-wow-exe
 	cp $(OUT_i386)/wow_translate.dll  $(OUT_i386)/wow_translate.pdb  $(GAME_MODS)/
 
 # Compose the user-facing release archives from the build outputs. Four zips,
-# one per shippable artifact; the layouts mirror the install destinations
+# one per shippable artifact, plus a fifth holding their debug symbols; the
+# layouts of the first four mirror the install destinations
 # documented in the README: merge game/ into the game folder next to WoW.exe,
 # merge wine/ into the Wine distribution. The loader (version.dll + dlls.txt)
 # is deliberately its own artifact — the mods load with any loader, and the
@@ -143,7 +157,16 @@ TURBO_MAC      := wow_turbo-$(BUNDLE_VERSION)-mac
 TURBO_WIN      := wow_turbo-$(BUNDLE_VERSION)-windows-avx
 TRANSLATE      := wow_translate-$(BUNDLE_VERSION)
 LOADER         := version_loader-$(BUNDLE_VERSION)
-BUNDLE_NAMES   := $(TURBO_MAC) $(TURBO_WIN) $(TRANSLATE) $(LOADER)
+# A fifth zip nobody installs: the symbols for every artifact above, so a crash
+# report from a release build can be read. One archive for both ISA baselines,
+# split by subdirectory because the two wow_turbo builds share a filename.
+DEBUG          := wow_mods-debug-$(BUNDLE_VERSION)
+BUNDLE_NAMES   := $(TURBO_MAC) $(TURBO_WIN) $(TRANSLATE) $(LOADER) $(DEBUG)
+# The identity the binaries themselves log (`unix/shared/build.rs`), which drops
+# the `--dirty` marker BUNDLE_VERSION carries. Written into the debug archive so
+# it can be paired with a captured log without guessing.
+BUILD_ID       := $(shell git describe --tags --always 2>/dev/null || \
+                          sed -n 's/^version = "\(.*\)"/v\1/p' windows/Cargo.toml)
 
 bundle: all windows-avx
 	rm -rf $(addprefix dist/,$(BUNDLE_NAMES) $(addsuffix .zip,$(BUNDLE_NAMES)))
@@ -160,12 +183,23 @@ bundle: all windows-avx
 	cp -R addon/WoWTranslate          dist/$(TRANSLATE)/game/Interface/AddOns/
 	cp $(OUT_i386)/wow_mods.dll       dist/$(TRANSLATE)/wine/lib/wine/i386-windows/
 	cp $(OUT_i386)/wow_mods.fake.dll  dist/$(TRANSLATE)/wine/lib/wine/i386-windows/
-	cp $(OUT_unix)/libwow_mods.dylib  dist/$(TRANSLATE)/wine/lib/wine/x86_64-unix/wow_mods.so
+	cp $(OUT_unix)/wow_mods.so        dist/$(TRANSLATE)/wine/lib/wine/x86_64-unix/
 	# The standalone loader: version.dll injects every mod listed in dlls.txt
 	# (ships with both mods listed — users drop the lines they don't want).
 	mkdir -p dist/$(LOADER)/game dist/$(LOADER)/wine/lib/wine/i386-windows
 	printf 'mods/wow_turbo.dll\nmods/wow_translate.dll\n' > dist/$(LOADER)/game/dlls.txt
 	cp $(OUT_i386)/version.dll  dist/$(LOADER)/wine/lib/wine/i386-windows/
+	# The symbols for exactly the binaries staged above. Grouped by ISA baseline
+	# rather than by install destination: debug info has no install route, and
+	# the split is what keeps the two wow_turbo.pdb files apart.
+	mkdir -p dist/$(DEBUG)/mac dist/$(DEBUG)/windows-avx
+	echo $(BUILD_ID)                     > dist/$(DEBUG)/BUILD
+	cp $(OUT_i386)/version.pdb             dist/$(DEBUG)/mac/
+	cp $(OUT_i386)/wow_mods.pdb            dist/$(DEBUG)/mac/
+	cp $(OUT_i386)/wow_turbo.pdb           dist/$(DEBUG)/mac/
+	cp $(OUT_i386)/wow_translate.pdb       dist/$(DEBUG)/mac/
+	cp -R $(OUT_unix)/wow_mods.so.dSYM     dist/$(DEBUG)/mac/
+	cp $(OUT_avx)/wow_turbo.pdb            dist/$(DEBUG)/windows-avx/
 	for name in $(BUNDLE_NAMES); do \
 	    (cd dist && zip -qr $$name.zip $$name) ; \
 	    echo "==> dist/$$name.zip" ; \
