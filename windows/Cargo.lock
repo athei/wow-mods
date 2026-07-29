@@ -526,7 +526,7 @@ checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 
 [[package]]
 name = "version-dll"
-version = "1.4.0"
+version = "1.4.1"
 dependencies = [
  "log",
  "wow-shared",
@@ -555,7 +555,7 @@ checksum = "0592e1c9d151f854e6fd382574c3a0855250e1d9b2f99d9281c6e6391af352f1"
 
 [[package]]
 name = "wow-hook"
-version = "1.4.0"
+version = "1.4.1"
 dependencies = [
  "log",
  "minhook",
@@ -564,7 +564,7 @@ dependencies = [
 
 [[package]]
 name = "wow-mods-bridge"
-version = "1.4.0"
+version = "1.4.1"
 dependencies = [
  "log",
  "wow-shared",
@@ -572,7 +572,7 @@ dependencies = [
 
 [[package]]
 name = "wow-shared"
-version = "1.4.0"
+version = "1.4.1"
 dependencies = [
  "env_logger",
  "libc",
@@ -582,7 +582,7 @@ dependencies = [
 
 [[package]]
 name = "wow-translate-dll"
-version = "1.4.0"
+version = "1.4.1"
 dependencies = [
  "log",
  "wow-hook",
@@ -591,7 +591,7 @@ dependencies = [
 
 [[package]]
 name = "wow-turbo-dll"
-version = "1.4.0"
+version = "1.4.1"
 dependencies = [
  "libm",
  "log",

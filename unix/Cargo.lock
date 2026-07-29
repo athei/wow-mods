@@ -366,7 +366,7 @@ dependencies = [
 
 [[package]]
 name = "wow-mods-unix"
-version = "1.4.0"
+version = "1.4.1"
 dependencies = [
  "log",
  "objc2",
@@ -377,7 +377,7 @@ dependencies = [
 
 [[package]]
 name = "wow-shared"
-version = "1.4.0"
+version = "1.4.1"
 dependencies = [
  "env_logger",
  "libc",
@@ -387,4 +387,4 @@ dependencies = [
 
 [[package]]
 name = "wow-translate-sys"
-version = "1.4.0"
+version = "1.4.1"
