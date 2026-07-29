@@ -2744,6 +2744,37 @@ ret  = "void"
 args = []
 preserve = []
 
+# The `__index` metamethod of the one metatable every frame object shares, so
+# every `frame:Method()` in every addon resolves through it: the hottest entry
+# in the script API. Stock re-resolves on every call (the method is never
+# written back), hashing the whole name once per class in the resolver chain.
+# The reimpl memoizes (class vtable, interned name) -> the class table's own
+# registry ref, and a hit reproduces the `lua_rawgeti` push with zero client
+# calls. NO diff table is possible: both sides push onto the live Lua stack,
+# so running them together would push twice. Verification is in-game
+# observation plus the armed hit/miss counters.
+[functions.FrameScript_MetaIndex__7020b0]
+rva  = 0x3020b0
+sig  = "56 BA 01 00 00 00 8B F1 E8 ?? ?? ?? ?? 83 F8 05"
+abi  = "fastcall"
+ret  = "i32"
+args = ["i32"]
+preserve = []
+
+# One class's script-method resolver: hash the name, walk the class table's
+# bucket, and on a match `lua_rawgeti` the entry's registry ref and return 1;
+# on a miss return 0, which is what sends the caller on to the parent class's
+# resolver. Reimplemented so the ref it resolves can be recorded for the
+# `__index` memo above; behaviour is otherwise identical, and has to be, since
+# resolver chains also reach this without going through `__index` at all.
+[functions.FrameScript_Object__LookupScriptMethod__702000]
+rva  = 0x302000
+sig  = "55 8B EC 83 EC 08 53 56 8B 75 08 83 7E 24 FF"
+abi  = "fastcall"
+ret  = "i32"
+args = ["i32", "*const u8", "*mut u8"]
+preserve = []
+
 [functions.CCubicSpline__EvalFrameAtDistance__454580]
 rva  = 0x054580
 sig  = "55 8B EC 83 EC 1C 8B 55 08 53"

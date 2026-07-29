@@ -98,7 +98,7 @@ undocumented_unsafe_blocks = "warn"
 # behaviour it has to match.
 items_after_statements = "allow"        # 864
 cast_ptr_alignment = "allow"            # 911 — reads are already `read_unaligned`
-unreadable_literal = "allow"            # 373 — addresses and bit masks, verbatim
+unreadable_literal = "allow"            # 375 — addresses and bit masks, verbatim
 similar_names = "allow"                 # 217
 semicolon_if_nothing_returned = "allow" # 144
 many_single_char_names = "allow"        # 41

@@ -642,16 +642,15 @@ fn release_ref(anchor: u32) {
     lua_l_unref(ls, LUA_REGISTRYINDEX, anchor.cast_signed());
 }
 
-/// Clear both memos, then run the stock `FrameScript` teardown.
+/// Drop both memos wholesale, without unref-ing.
 ///
-/// Ordering is the point: the registry refs index the state `lua_close` is
-/// about to destroy, so they die with it — dropped here wholesale, never
-/// unref-ed one by one into a state mid-teardown — and a recycled allocation
-/// for the next state cannot inherit a stale entry.
-pub fn shutdown() {
+/// Called from the `FrameScript_Shutdown` adapter before the stock teardown
+/// runs `lua_close`: the registry refs index the state being closed, so they
+/// die with it (never unref-ed one by one into a state mid-teardown), and a
+/// recycled allocation for the next state cannot inherit a stale entry.
+pub fn forget() {
     NAMES.clear();
     GUIDS.clear();
-    (super::symbols::originals::frame_script_shutdown__703ba0())();
 }
 
 /// One cumulative counters line on the events gauge's 60-second cadence.

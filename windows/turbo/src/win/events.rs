@@ -1106,6 +1106,7 @@ fn maybe_emit(st: &mut State) {
         // is reached from a script, not through the dispatch this gauge
         // measures, so no table above can show it.
         super::getname::emit_cumulative();
+        super::script_method::emit_cumulative();
         st.cumulative_emit = now;
     }
     let spent = span(now, wow_shared::tsc::rdtsc());

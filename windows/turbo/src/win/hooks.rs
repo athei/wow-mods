@@ -41043,10 +41043,33 @@ pub fn script_get_name__7a1390(l: i32) -> i32 {
     super::getname::get_name(l)
 }
 
-/// `FrameScript::Shutdown` — drops the `GetName` memo, then runs stock.
+/// `FrameScript::Shutdown` — drops every Lua-state memo, then runs stock.
 ///
-/// `cdecl`, no arguments, void. Wrapper only: the memo's registry refs index
-/// the state this tears down, so they are dropped before `lua_close` runs.
+/// `cdecl`, no arguments, void. Wrapper only: the memos' registry refs index
+/// the state this tears down, so they are all dropped before `lua_close` runs.
 pub fn frame_script_shutdown__703ba0() {
-    super::getname::shutdown();
+    super::getname::forget();
+    super::script_method::forget();
+    (super::symbols::originals::frame_script_shutdown__703ba0())();
+}
+
+/// `__index` of the frame metatable — serves repeats from a memo.
+///
+/// `fastcall(ecx = L)`, `RET 0`, returns the Lua result count. A thin adapter:
+/// the memo, its guards and the delegate all live in `crate::win::script_method`.
+pub fn frame_script_meta_index__7020b0(l: i32) -> i32 {
+    super::script_method::index(l)
+}
+
+/// One class's script-method resolver — stock behaviour plus a ref recorder.
+///
+/// `fastcall(ecx = L, edx = name)` plus the class table on the stack, `RET 4`,
+/// returns 1 with the method pushed or 0 for not-in-this-table. A thin
+/// adapter: the walk and the recorder live in `crate::win::script_method`.
+pub fn frame_script_object__lookup_script_method__702000(
+    l: i32,
+    name: *const u8,
+    table: *mut u8,
+) -> i32 {
+    super::script_method::lookup(l, name, table)
 }

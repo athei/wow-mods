@@ -12,6 +12,7 @@ mod events;
 mod fmod;
 mod getname;
 mod hooks;
+mod script_method;
 mod symbols;
 
 use core::ffi::c_void;
