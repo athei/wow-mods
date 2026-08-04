@@ -109,6 +109,23 @@ const HANDLER_TABLE_CAP: usize = 512;
 /// stored name, so an entry costs a fraction of a handler row, and because a
 /// bound that binds makes the tail unrankable however many rows are printed.
 const API_TABLE_CAP: usize = 2_048;
+/// Microseconds past which a C-API span is quarantined rather than ranked.
+///
+/// A span this size inside a handler body is one of two things: a real hitch a
+/// player felt, or a counter artifact — spans of whole seconds have been
+/// recorded inside bodies whose own bracket measured milliseconds, with the
+/// frame counts running uninterrupted, which no monotonic counter can produce.
+/// The two cannot be told apart here, but both poison the ranked table and the
+/// api/vm split if folded in (`api` exceeding `bodies` is the visible symptom),
+/// so past this bound the span goes to its own table and the body-level
+/// numbers arbitrate offline: a real hitch shows up in the body histogram and
+/// the handler max, an artifact does not.
+const API_SUSPECT_US: u64 = 100_000;
+/// Suspect-table size cap; past it new addresses fall into the overflow row.
+///
+/// Quarantined spans are rare by definition — the cap exists so a machine that
+/// produces them wholesale cannot grow a table on the hot path.
+const API_SUSPECT_CAP: usize = 64;
 /// Chunk-memo cap; a client cannot load more script files than this.
 const OWNER_TABLE_CAP: usize = 4_096;
 /// Bound on the addon-directory walk, so a diagnostic cannot wander.
@@ -145,9 +162,17 @@ static ARMED: LazyLock<bool> = LazyLock::new(|| {
     if armed {
         // Force the counter's read-cost calibration here rather than leaving it
         // to the first C call, which would run it inside a handler body and
-        // bill a millisecond of it to whatever script was unlucky.
-        let _ = wow_shared::tsc::read_cost_milli_ticks();
-        log::debug!(target: "wow::events", "event gauge armed");
+        // bill a millisecond of it to whatever script was unlucky. The armed
+        // line prints the result: a counter read is emulated on this platform
+        // and its cost varies by orders of magnitude between machines, which
+        // decides how much of every span below is the clock rather than the
+        // client. A reader needs that number to judge the rest of the log.
+        // Milli-ticks through the linear microsecond scale is nanoseconds.
+        let read_cost_ns = ticks_to_us(wow_shared::tsc::read_cost_milli_ticks());
+        log::debug!(
+            target: "wow::events",
+            "event gauge armed, counter read cost {read_cost_ns} ns",
+        );
     }
     armed
 });
@@ -247,6 +272,15 @@ struct Tables {
     api_dropped: u64,
     /// Ticks behind `api_dropped`, so the overflow row carries a cost too.
     api_dropped_ticks: u64,
+    /// Quarantined C-API spans, keyed like `api` (see [`API_SUSPECT_US`]).
+    ///
+    /// Kept out of `api_ticks` and `api_calls` entirely: the split and the
+    /// ranked table stay meaningful, and this table says what was set aside.
+    api_suspect: HashMap<usize, Stat>,
+    /// Suspect spans dropped on the suspect-table cap (reported, never silent).
+    api_suspect_dropped: u64,
+    /// Ticks behind `api_suspect_dropped`, so the overflow carries a cost too.
+    api_suspect_dropped_ticks: u64,
     /// Ticks this gauge itself spent inside the span it is measuring.
     ///
     /// Resolving a handler's owner and folding it into the tables happens
@@ -722,8 +756,12 @@ pub fn precall(l: i32, func: i32) -> i32 {
     // tick, so it is applied once against the call count when the window is
     // reported rather than truncated to zero on every call.
     let dt = span(t0, t1);
-    add_ticks(&API_TICKS, dt);
-    record_api(entry, dt);
+    if ticks_to_us(dt) >= API_SUSPECT_US {
+        record_api_suspect(entry, dt);
+    } else {
+        add_ticks(&API_TICKS, dt);
+        record_api(entry, dt);
+    }
     let gauge_out = wow_shared::tsc::rdtsc();
     add_ticks(&API_SELF_TICKS, span(gauge_in, t0) + span(t1, gauge_out));
     out
@@ -780,6 +818,28 @@ fn record_api(entry: usize, dt: u64) {
         st.window.api_dropped_ticks += dt;
     } else {
         let stat = st.window.api.entry(entry).or_default();
+        stat.count += 1;
+        stat.ticks += dt;
+        stat.max_ticks = stat.max_ticks.max(dt);
+    }
+    drop(st);
+}
+
+/// Quarantine one over-threshold C-API span (see [`API_SUSPECT_US`]).
+///
+/// Deliberately touches none of the ordinary api accumulators: a span set
+/// aside here must not move `api_calls` or the free-running total either, or
+/// the per-call averages and the body-level split inherit exactly the
+/// distortion the quarantine exists to remove.
+fn record_api_suspect(entry: usize, dt: u64) {
+    let mut st = state();
+    let over_cap = st.window.api_suspect.len() >= API_SUSPECT_CAP
+        && !st.window.api_suspect.contains_key(&entry);
+    if over_cap {
+        st.window.api_suspect_dropped += 1;
+        st.window.api_suspect_dropped_ticks += dt;
+    } else {
+        let stat = st.window.api_suspect.entry(entry).or_default();
         stat.count += 1;
         stat.ticks += dt;
         stat.max_ticks = stat.max_ticks.max(dt);
@@ -1107,6 +1167,11 @@ fn maybe_emit(st: &mut State) {
         // measures, so no table above can show it.
         super::getname::emit_cumulative();
         super::script_method::emit_cumulative();
+        // A hook whose prologue another module rewrote is silently dead — the
+        // install log still says it is live, its counters just stop. Checked
+        // here because this cadence is the armed session's heartbeat and the
+        // check is a five-byte read per hook.
+        wow_hook::verify_patches();
         st.cumulative_emit = now;
     }
     let spent = span(now, wow_shared::tsc::rdtsc());
@@ -1134,6 +1199,8 @@ fn merge(cum: &mut Tables, w: Tables) {
     cum.body_gauge_ticks += w.body_gauge_ticks;
     cum.api_dropped += w.api_dropped;
     cum.api_dropped_ticks += w.api_dropped_ticks;
+    cum.api_suspect_dropped += w.api_suspect_dropped;
+    cum.api_suspect_dropped_ticks += w.api_suspect_dropped_ticks;
     for i in 0..BODY_BUCKETS {
         cum.body_hist_ticks[i] += w.body_hist_ticks[i];
         cum.body_hist_calls[i] += w.body_hist_calls[i];
@@ -1168,6 +1235,17 @@ fn merge(cum: &mut Tables, w: Tables) {
             continue;
         }
         let dst = cum.api.entry(entry).or_default();
+        dst.count += stat.count;
+        dst.ticks += stat.ticks;
+        dst.max_ticks = dst.max_ticks.max(stat.max_ticks);
+    }
+    for (entry, stat) in w.api_suspect {
+        if cum.api_suspect.len() >= API_SUSPECT_CAP && !cum.api_suspect.contains_key(&entry) {
+            cum.api_suspect_dropped += stat.count;
+            cum.api_suspect_dropped_ticks += stat.ticks;
+            continue;
+        }
+        let dst = cum.api_suspect.entry(entry).or_default();
         dst.count += stat.count;
         dst.ticks += stat.ticks;
         dst.max_ticks = dst.max_ticks.max(stat.max_ticks);
@@ -1306,6 +1384,34 @@ fn emit_api(t: &Tables, label: &str) {
     log::debug!(target: "wow::events", "{line}");
 }
 
+/// Emit the quarantined C-API spans, when any exist (see [`API_SUSPECT_US`]).
+///
+/// One row per entry address with count, total and worst span, so the reader
+/// can decide per address which of the two meanings applies. Printed after the
+/// ranked table it was kept out of.
+fn emit_api_suspect(t: &Tables, label: &str) {
+    if t.api_suspect.is_empty() && t.api_suspect_dropped == 0 {
+        return;
+    }
+    let mut rows: Vec<(&usize, &Stat)> = t.api_suspect.iter().collect();
+    rows.sort_by_key(|r| std::cmp::Reverse(r.1.ticks));
+    let mut line = format!("{label}api suspect:");
+    for (entry, stat) in rows {
+        let mark = if HOST_IMAGE.contains(entry) { "" } else { "*" };
+        let _ = write!(line, " {entry:#010x}{mark} x{} ", stat.count);
+        push_ms(&mut line, stat.ticks);
+        line.push_str(" ms (max ");
+        push_ms(&mut line, stat.max_ticks);
+        line.push_str(");");
+    }
+    if t.api_suspect_dropped > 0 {
+        let _ = write!(line, " (+{} spans past the cap, ", t.api_suspect_dropped);
+        push_ms(&mut line, t.api_suspect_dropped_ticks);
+        line.push_str(" ms)");
+    }
+    log::debug!(target: "wow::events", "{line}");
+}
+
 /// Build the header: the window total, split both ways, then the api/vm split.
 fn header_line(t: &Tables, span_ms: u64, label: &str) -> String {
     let mut line = format!(
@@ -1398,6 +1504,7 @@ fn emit_tables(t: &Tables, span_ms: u64, top: usize, label: &str) {
     emit_owners(t, top, label);
     emit_body_histogram(t, label);
     emit_api(t, label);
+    emit_api_suspect(t, label);
     if t.handlers.is_empty() {
         return;
     }

@@ -731,6 +731,9 @@ fn render(m: &Manifest) -> String {
         );
         out.push_str("    // ABI-matching thunk; the batch goes live here.\n");
         out.push_str("    if unsafe { ::wow_hook::apply_queued(\"install_all\") } {\n");
+        out.push_str("        // The patches are live now, so what the prologues hold is what\n");
+        out.push_str("        // this process wrote — the baseline the overwrite check reads.\n");
+        out.push_str("        ::wow_hook::snapshot_patches();\n");
         out.push_str("        ::log::info!(\n");
         out.push_str("            target: super::LOG_TARGET,\n");
         out.push_str("            \"install_all: {queued} hooks enabled in {} ms\",\n");
@@ -1161,7 +1164,13 @@ fn install_thunk(
     };
     store(trampoline);
     // SAFETY: `va` is the hook just created above.
-    unsafe { ::wow_hook::queue_enable_hook(va, label) }
+    let queued = unsafe { ::wow_hook::queue_enable_hook(va, label) };
+    if queued {
+        // Registered now, snapshotted after the batch is applied: a prologue
+        // another module rewrites later would leave this hook silently dead.
+        ::wow_hook::watch_patch(va, label);
+    }
+    queued
 }
 "#;
 

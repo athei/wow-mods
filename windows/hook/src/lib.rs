@@ -131,6 +131,94 @@ pub fn prologue_owner(va: usize) -> String {
     format!("detoured to {target:#010x} by {owner}")
 }
 
+/// Bytes of a live prologue patch, recorded so a later read can spot a change.
+///
+/// Five bytes is the whole patch on i386 — the `E9 rel32` the hooking library
+/// writes over the prologue — so a change anywhere in them means the hook no
+/// longer receives calls.
+const PATCH_LEN: usize = 5;
+
+/// One watched prologue: where it is, what it is called, what was written.
+struct Patch {
+    va: usize,
+    label: String,
+    /// The prologue as it read right after the enable batch went live.
+    ///
+    /// `None` until [`snapshot_patches`] runs: enables are queued, so at
+    /// registration time the prologue still holds the pre-patch bytes.
+    bytes: Option<[u8; PATCH_LEN]>,
+    /// Whether a divergence was already reported, so each entry warns once.
+    reported: bool,
+}
+
+/// Every prologue registered for the overwrite check, in install order.
+static PATCHES: std::sync::Mutex<Vec<Patch>> = std::sync::Mutex::new(Vec::new());
+
+/// Register a queued hook's prologue for the periodic overwrite check.
+///
+/// Call after the enable was queued; the bytes are read later, by
+/// [`snapshot_patches`], once the batch is live.
+pub fn watch_patch(va: usize, label: &str) {
+    if let Ok(mut patches) = PATCHES.lock() {
+        patches.push(Patch {
+            va,
+            label: label.to_owned(),
+            bytes: None,
+            reported: false,
+        });
+    }
+}
+
+/// Read the prologue at `va`, which stays mapped code for the process lifetime.
+const fn prologue_bytes(va: usize) -> [u8; PATCH_LEN] {
+    // SAFETY: `va` is a hooked function's entry point in the host image or a
+    // loaded module, mapped as code for the life of the process.
+    unsafe { *(va as *const [u8; PATCH_LEN]) }
+}
+
+/// Record the live prologue bytes of every watched patch.
+///
+/// Call once, right after the queued enables were applied: what the prologues
+/// hold at that moment is what this process installed, and it is the baseline
+/// the periodic check compares against.
+pub fn snapshot_patches() {
+    if let Ok(mut patches) = PATCHES.lock() {
+        for patch in patches.iter_mut().filter(|p| p.bytes.is_none()) {
+            patch.bytes = Some(prologue_bytes(patch.va));
+        }
+    }
+}
+
+/// Warn once per watched prologue that no longer holds the bytes we installed.
+///
+/// A hook whose prologue changed underneath it is still "installed" by every
+/// record this process keeps, while receiving no calls at all — the failure is
+/// silent by construction, which is why this check exists. Naming the module
+/// the rewritten jump lands in (via [`prologue_owner`]) is what turns the line
+/// into something actionable in somebody else's capture. Cheap enough for a
+/// periodic caller: one five-byte read per watched entry.
+pub fn verify_patches() {
+    let Ok(mut patches) = PATCHES.lock() else {
+        return;
+    };
+    for patch in patches.iter_mut().filter(|p| !p.reported) {
+        let Some(expected) = patch.bytes else {
+            continue;
+        };
+        if prologue_bytes(patch.va) == expected {
+            continue;
+        }
+        patch.reported = true;
+        log::warn!(
+            target: LOG_TARGET,
+            "{} prologue overwritten at {:#010x} ({}) — this hook no longer receives calls",
+            patch.label,
+            patch.va,
+            prologue_owner(patch.va),
+        );
+    }
+}
+
 /// Standard `DLL_PROCESS_ATTACH` setup for an injected helper DLL.
 ///
 /// Opt out of per-thread loader notifications and bring up the shared logger.
