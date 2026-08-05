@@ -46,6 +46,32 @@ const VERIFIED_HANDLER_OFFSETS: [usize; 2] = [0x3da0, 0x36a0];
 /// Module those offsets belong to.
 const VERIFIED_HANDLER_MODULE: &str = "SuperWoWhook.dll";
 
+/// A module that installs its own handler after this one is already live.
+///
+/// Its handler is a full replacement, read end to end: the name half is the
+/// stock sequence, and the optional second argument selects the same GUID at
+/// object `+0x4e8` rendered by the same uppercase `0x%016X`. It writes no
+/// globals and keeps no per-call state, so nothing is lost by not running it.
+///
+/// It classifies that argument differently, though — a numeric conversion
+/// where the other replacement takes the broader optional-boolean reading, so
+/// the two disagree for a boolean argument. That is why reclaiming the entry
+/// drops to [`MODE_STOCK`]: the name behaviour every implementation shares is
+/// served here, and anything that reads past the frame argument goes to the
+/// displaced code instead of being answered under the wrong dialect.
+const LATE_HANDLER_MODULE: &str = "nampower.dll";
+
+/// In-module offset of [`LATE_HANDLER_MODULE`]'s handler.
+const LATE_HANDLER_OFFSET: usize = 0x7_2990;
+
+/// Opening bytes of that handler: `sub esp,8` then the four register saves.
+///
+/// Checked before the entry is reclaimed, because the offset alone would name
+/// whatever a different build of that module happens to put there, and what
+/// this reimplementation stands in for is the body that was read, not an
+/// address.
+const LATE_HANDLER_PROLOGUE: [u8; 6] = [0x83, 0xec, 0x08, 0x53, 0x55, 0x56];
+
 /// Type token the frame classes' `IsA` predicate is queried with.
 ///
 /// Allocated lazily out of a shared counter by whichever script method runs
@@ -252,6 +278,97 @@ pub fn detect_underlying(image_base: usize) {
         },
         Ordering::Relaxed,
     );
+}
+
+/// Whether the handler whose body was read is what the entry now runs.
+///
+/// The prologue does not point at that handler: it points at a thunk the
+/// other module generates in private memory, which belongs to no module, sits
+/// somewhere different every run, and opens with padding and a register save
+/// rather than a jump — so there is nothing to follow, and the handler's
+/// address is nowhere in it. What is checked is therefore what can be
+/// checked: the module is loaded, and the bytes at the offset are the body
+/// that was read rather than whatever a different build puts there.
+///
+/// That leaves one step unproven — that this thunk belongs to that install
+/// rather than to some third party. It is accepted rather than proven,
+/// because the module's own image carries the entry's address beside the
+/// handler's, so what it does with this function is not in doubt; because it
+/// is the only loaded module besides the one displaced at attach whose image
+/// mentions the entry at all; and because reclaiming loses nothing either
+/// way: what is served afterwards is the name behaviour every implementation
+/// of this function shares, and everything else goes to the displaced code.
+fn late_handler_owns(thunk: usize) -> bool {
+    let Some(base) = wow_hook::module_base(LATE_HANDLER_MODULE) else {
+        log::info!(
+            target: super::LOG_TARGET,
+            "getname: the entry went to unnamed memory at {thunk:#010x} \
+             [{}] and {LATE_HANDLER_MODULE} is not loaded — leaving it",
+            wow_hook::thunk_bytes(thunk),
+        );
+        return false;
+    };
+    let handler = base + LATE_HANDLER_OFFSET;
+    // SAFETY: `handler` is an offset into a loaded module's image, and the
+    // read stays inside the body whose first instructions these are.
+    let seen: [u8; 6] = unsafe { *(handler as *const [u8; 6]) };
+    if seen != LATE_HANDLER_PROLOGUE {
+        log::info!(
+            target: super::LOG_TARGET,
+            "getname: {LATE_HANDLER_MODULE}+{LATE_HANDLER_OFFSET:#x} is not the body \
+             that was read — leaving the entry alone",
+        );
+        return false;
+    }
+    log::info!(
+        target: super::LOG_TARGET,
+        "getname: the entry went to a thunk at {thunk:#010x} [{}] and \
+         {LATE_HANDLER_MODULE}+{LATE_HANDLER_OFFSET:#x} is loaded and unchanged",
+        wow_hook::thunk_bytes(thunk),
+    );
+    true
+}
+
+/// Decide whether to reclaim the entry from whoever overwrote the prologue.
+///
+/// Called once, from the periodic prologue check, with the address the
+/// rewritten entry now jumps to. Two conditions have to hold together, and
+/// both are about not destroying behaviour rather than about ownership.
+///
+/// The new owner must be the handler whose body has been read, so that what
+/// stops running is understood rather than merely displaced. And this hook
+/// must have gone in over the replacement it was written against, because the
+/// GUID reading it declines to serve is answered by the displaced code — over
+/// a stock prologue there is no such answer, and reclaiming would take a
+/// working behaviour away from whoever asked for it.
+fn reclaim_entry(owner_va: usize) -> bool {
+    // The prologue points at a thunk in private memory, not at the handler,
+    // and that allocation sits somewhere different every run — so ask where
+    // the jumps end up rather than where the first one lands.
+    if !late_handler_owns(owner_va) {
+        return false;
+    }
+    if MODE.load(Ordering::Relaxed) != MODE_VERIFIED {
+        log::info!(
+            target: super::LOG_TARGET,
+            "getname: {LATE_HANDLER_MODULE} owns the entry and nothing underneath \
+             serves its extra reading — leaving it",
+        );
+        return false;
+    }
+    // The name half is shared by every implementation; the argument dialects
+    // differ, so those calls go to the displaced code from here on.
+    MODE.store(MODE_STOCK, Ordering::Relaxed);
+    log::info!(
+        target: super::LOG_TARGET,
+        "getname: reclaiming the entry from {LATE_HANDLER_MODULE}, names only",
+    );
+    true
+}
+
+/// Register the reclaim policy for the periodic prologue check.
+pub fn arm_reclaim(image_base: usize) {
+    wow_hook::on_overwrite(image_base + GET_NAME_RVA, reclaim_entry);
 }
 
 /// The `GetName` reimplementation; `fastcall(ecx = L)`, returns result count.

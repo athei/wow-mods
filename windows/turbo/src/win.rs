@@ -13,6 +13,7 @@ mod fmod;
 mod getname;
 mod hooks;
 mod script_method;
+mod seam_probe;
 mod symbols;
 
 use core::ffi::c_void;
@@ -241,6 +242,10 @@ fn attach_process(instance: *mut c_void) {
     // `install_all` can see — afterwards those bytes are our own detour.
     getname::detect_underlying(image_base);
     symbols::install_all(image_base);
+    // Another module installs over this entry after world entry, which the
+    // periodic prologue check is what notices; the policy for what to do about
+    // it belongs to the entry, so register it now that the hook exists.
+    getname::arm_reclaim(image_base);
     // fmod is a separate, packed module (not Wow.exe), so it gets its own install
     // path: hook its FSOUND_Init export now so the mixer reimpl patches in once,
     // right after sound init — no per-frame/per-call poll.

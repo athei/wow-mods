@@ -1167,11 +1167,7 @@ fn maybe_emit(st: &mut State) {
         // measures, so no table above can show it.
         super::getname::emit_cumulative();
         super::script_method::emit_cumulative();
-        // A hook whose prologue another module rewrote is silently dead — the
-        // install log still says it is live, its counters just stop. Checked
-        // here because this cadence is the armed session's heartbeat and the
-        // check is a five-byte read per hook.
-        wow_hook::verify_patches();
+        super::seam_probe::emit_cumulative();
         st.cumulative_emit = now;
     }
     let spent = span(now, wow_shared::tsc::rdtsc());

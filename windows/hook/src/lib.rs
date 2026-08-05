@@ -13,7 +13,10 @@
 
 #![cfg(target_arch = "x86")]
 
-use core::ffi::c_void;
+use core::{
+    ffi::c_void,
+    sync::atomic::{AtomicU32, Ordering},
+};
 
 use minhook::MinHook;
 
@@ -149,6 +152,15 @@ struct Patch {
     bytes: Option<[u8; PATCH_LEN]>,
     /// Whether a divergence was already reported, so each entry warns once.
     reported: bool,
+    /// Called once, if set, when this prologue is found overwritten.
+    ///
+    /// Returning `true` asks for the patch to be re-asserted. The owner of
+    /// the entry decides that, because whether reclaiming an entry is
+    /// legitimate depends on what the new owner does and on what the
+    /// displaced code underneath can still serve.
+    on_overwrite: Option<fn(owner_va: usize) -> bool>,
+    /// Whether the one-shot re-assert has already been attempted.
+    reasserted: bool,
 }
 
 /// Every prologue registered for the overwrite check, in install order.
@@ -165,8 +177,55 @@ pub fn watch_patch(va: usize, label: &str) {
             label: label.to_owned(),
             bytes: None,
             reported: false,
+            on_overwrite: None,
+            reasserted: false,
         });
     }
+}
+
+/// Ask to be consulted, once, if `va`'s prologue is found overwritten.
+///
+/// The callback receives the address the rewritten prologue now jumps to and
+/// returns whether this hook should be re-asserted over it. Reclaiming an
+/// entry another module took is only correct when the caller can say that the
+/// new owner's behaviour is reproduced and that the displaced code underneath
+/// still serves whatever the caller does not reproduce — which is a question
+/// only the entry's owner can answer, so the policy lives there and the
+/// mechanism lives here.
+pub fn on_overwrite(va: usize, decide: fn(owner_va: usize) -> bool) {
+    if let Ok(mut patches) = PATCHES.lock()
+        && let Some(patch) = patches.iter_mut().find(|p| p.va == va)
+    {
+        patch.on_overwrite = Some(decide);
+    }
+}
+
+/// Re-assert a hook whose prologue another module overwrote.
+///
+/// Disabling restores the bytes this process displaced at create time, which
+/// removes the other module's jump; enabling writes this hook's own jump back
+/// over them. Both halves freeze the process's threads, which is why the
+/// sequence goes through `MinHook` rather than poking the five bytes directly.
+/// The trampoline is untouched, so the delegate path still reaches whatever
+/// code was there when this hook was created.
+///
+/// # Safety
+///
+/// `target_va` must be the VA of a hook created and enabled by this process.
+#[must_use]
+pub unsafe fn reassert_hook(target_va: usize, label: &str) -> bool {
+    let target = target_va as *mut c_void;
+    // SAFETY: per the contract, `target_va` is a live hook of this process.
+    if let Err(e) = unsafe { MinHook::disable_hook(target) } {
+        log::warn!(target: LOG_TARGET, "MinHook::disable_hook({label}) failed: {e}");
+        return false;
+    }
+    // SAFETY: the hook still exists; only its patch was just withdrawn.
+    if let Err(e) = unsafe { MinHook::enable_hook(target) } {
+        log::warn!(target: LOG_TARGET, "MinHook::enable_hook({label}) failed: {e}");
+        return false;
+    }
+    true
 }
 
 /// Read the prologue at `va`, which stays mapped code for the process lifetime.
@@ -187,6 +246,78 @@ pub fn snapshot_patches() {
             patch.bytes = Some(prologue_bytes(patch.va));
         }
     }
+}
+
+/// Follow a detour to the first address that belongs to a loaded module.
+///
+/// A hooking library often points the prologue at a thunk it generated in
+/// private memory rather than straight at its handler, and that allocation
+/// belongs to no module and sits at a different address every run. Returns
+/// `va` itself when it is already inside a module, so a caller can resolve
+/// the name and the in-module offset from one address. Bounded, because a
+/// chain that long is a loop rather than a hook.
+#[must_use]
+pub fn detour_endpoint(va: usize) -> Option<usize> {
+    let mut at = va;
+    for _ in 0..4 {
+        if module_of(at).is_some() {
+            return Some(at);
+        }
+        at = detour_target(at)?;
+    }
+    None
+}
+
+/// Base address of a loaded module, by file name.
+///
+/// The companion to [`module_of`] for the case where the name is known and the
+/// address is not — resolving a handler inside a module this process never
+/// hooked.
+#[must_use]
+pub fn module_base(name: &str) -> Option<usize> {
+    let mut owned = String::with_capacity(name.len() + 1);
+    owned.push_str(name);
+    owned.push('\0');
+    // SAFETY: the published signature; the pointer is a NUL-terminated name
+    // living for the call, and the returned handle is a base address or null.
+    let module = unsafe { GetModuleHandleA(owned.as_ptr()) };
+    (module != 0).then_some(module)
+}
+
+/// The first bytes of a generated thunk, for a report that cannot name it.
+///
+/// When the chain above dead-ends, what it dead-ended *on* is the only thing
+/// that makes the next attempt possible, so it goes in the log rather than
+/// being summarised away.
+#[must_use]
+pub fn thunk_bytes(va: usize) -> String {
+    use core::fmt::Write as _;
+
+    let mut out = String::new();
+    for i in 0..8 {
+        // SAFETY: `va` is the target of a jump this process just decoded out
+        // of a patched prologue, so it is mapped code.
+        let byte = unsafe { *((va + i) as *const u8) };
+        let sep = if i == 0 { "" } else { " " };
+        let _ = write!(out, "{sep}{byte:02x}");
+    }
+    out
+}
+
+/// Drive [`verify_patches`] from a per-frame caller, cheaply.
+///
+/// The check has to run whether or not anything is instrumented: an entry
+/// another module takes is dead for every player, not only the one who armed
+/// a gauge. Every call is a counter bump, and only one in `period` reaches the
+/// real check. Single-writer load-add-store — the caller is the game thread.
+pub fn verify_periodically(period: u32) {
+    static TICKS: AtomicU32 = AtomicU32::new(0);
+    let n = TICKS.load(Ordering::Relaxed);
+    TICKS.store(n.wrapping_add(1), Ordering::Relaxed);
+    if period == 0 || !n.is_multiple_of(period) {
+        return;
+    }
+    verify_patches();
 }
 
 /// Warn once per watched prologue that no longer holds the bytes we installed.
@@ -216,6 +347,38 @@ pub fn verify_patches() {
             patch.va,
             prologue_owner(patch.va),
         );
+        let Some(decide) = patch.on_overwrite.filter(|_| !patch.reasserted) else {
+            continue;
+        };
+        // One attempt per entry for the life of the process. A module that
+        // re-patches on a timer would otherwise turn this into a patch war,
+        // and losing that war quietly is worse than losing the entry.
+        patch.reasserted = true;
+        let Some(owner) = detour_target(patch.va) else {
+            continue;
+        };
+        if !decide(owner) {
+            log::info!(
+                target: LOG_TARGET,
+                "{}: leaving the new owner in place",
+                patch.label,
+            );
+            continue;
+        }
+        // SAFETY: `patch.va` names a hook this process created and enabled —
+        // that is what put it on the watch list.
+        if unsafe { reassert_hook(patch.va, &patch.label) } {
+            // Re-baseline against what is live now, so a later overwrite by
+            // anyone (including this same module) is still detected.
+            patch.bytes = Some(prologue_bytes(patch.va));
+            patch.reported = false;
+            log::info!(
+                target: LOG_TARGET,
+                "{} re-asserted at {:#010x}",
+                patch.label,
+                patch.va,
+            );
+        }
     }
 }
 

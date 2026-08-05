@@ -18571,8 +18571,10 @@ pub fn cm2_shared__animate_bones__714260(
     let stamp = unsafe { anim_u32(clock, 0x10) };
     // SAFETY: `this+0x40` is the last-animated frame stamp.
     if unsafe { anim_u32(inst, 0x40) } == stamp {
+        super::seam_probe::anim_entry(true);
         return;
     }
+    super::seam_probe::anim_entry(false);
     // SAFETY: `this+0x30` is the live shared-model pointer.
     let shared = unsafe { anim_ptr(inst, 0x30) };
     // SAFETY: `shared+0x130` is the model-header pointer.
@@ -20470,6 +20472,8 @@ enum GcJobKind {
     Mark,
     /// String-table sweep over bucket ranges.
     Sweep,
+    /// No-op wake/ack round trip; workers bump the cursor and go back to sleep.
+    Probe,
 }
 
 /// A pool job: what to run and the parameters to run it on.
@@ -20532,6 +20536,19 @@ impl GcJob {
             spans_len,
         }
     }
+
+    /// An empty wake/ack job for the round-trip probe.
+    const fn probe() -> Self {
+        Self {
+            epoch: 0,
+            kind: GcJobKind::Probe,
+            g: 0,
+            strt_hash: 0,
+            strt_size: 0,
+            spans_ptr: 0,
+            spans_len: 0,
+        }
+    }
 }
 
 /// Shared state of the parallel mark worker pool.
@@ -20575,6 +20592,8 @@ struct GcParShared {
     job: std::sync::Mutex<GcJob>,
     /// Wakes the workers for a new job.
     cv: std::sync::Condvar,
+    /// Worker-thread count, fixed at pool creation; the probe's ack target.
+    workers: usize,
 }
 
 /// A mark participant's view of the collect: local stack + shared routing.
@@ -20827,6 +20846,11 @@ fn gc_par_worker(shared: &GcParShared) {
         match job.kind {
             GcJobKind::Mark => gc_par_propagate(shared, job.g, false),
             GcJobKind::Sweep => gc_par_sweep_strt(shared, &job),
+            GcJobKind::Probe => {
+                shared
+                    .bucket_cursor
+                    .fetch_add(1, core::sync::atomic::Ordering::SeqCst);
+            }
         }
     }
 }
@@ -20851,6 +20875,35 @@ fn gc_par_begin(shared: &GcParShared, mut spec: GcJob) -> GcJob {
     spec
 }
 
+/// Publish an empty job and measure the wake-to-ack round trip, in ticks.
+///
+/// The pool's cost as a fork substrate at frame rate is exactly this round
+/// trip. The probe publishes a no-op job, spins (yielding) until every worker
+/// has bumped the ack cursor, and returns the elapsed ticks. It bails out at
+/// roughly 50 ms so a stalled worker degrades to one visibly huge sample
+/// instead of a hang.
+fn gc_par_probe_roundtrip() -> u64 {
+    let shared = gc_pool();
+    let t0 = wow_shared::tsc::rdtsc();
+    let deadline = t0.wrapping_add(wow_shared::tsc::secs_to_cycles(1) / 20);
+    gc_par_begin(shared, GcJob::probe());
+    while shared
+        .bucket_cursor
+        .load(core::sync::atomic::Ordering::SeqCst)
+        < shared.workers
+    {
+        if wow_shared::tsc::rdtsc() >= deadline {
+            break;
+        }
+        std::thread::yield_now();
+    }
+    let dt = wow_shared::tsc::rdtsc().wrapping_sub(t0);
+    shared
+        .done
+        .store(true, core::sync::atomic::Ordering::SeqCst);
+    dt
+}
+
 /// The worker pool, created on the game thread at the first collect.
 ///
 /// Never from `DllMain`. Workers park on the condvar between passes and
@@ -20860,6 +20913,9 @@ fn gc_par_begin(shared: &GcParShared, mut spec: GcJob) -> GcJob {
 fn gc_pool() -> &'static GcParShared {
     static POOL: std::sync::OnceLock<std::sync::Arc<GcParShared>> = std::sync::OnceLock::new();
     POOL.get_or_init(|| {
+        let workers = std::thread::available_parallelism()
+            .map_or(2, |p| p.get().saturating_sub(1))
+            .clamp(1, 3);
         let shared = std::sync::Arc::new(GcParShared {
             injector: std::sync::Mutex::new(Vec::new()),
             thread_q: std::sync::Mutex::new(Vec::new()),
@@ -20872,10 +20928,8 @@ fn gc_pool() -> &'static GcParShared {
             freed_strings: core::sync::atomic::AtomicU32::new(0),
             job: std::sync::Mutex::new(GcJob::mark(0)),
             cv: std::sync::Condvar::new(),
+            workers,
         });
-        let workers = std::thread::available_parallelism()
-            .map_or(2, |p| p.get().saturating_sub(1))
-            .clamp(1, 3);
         for i in 0..workers {
             let s = std::sync::Arc::clone(&shared);
             std::thread::Builder::new()
@@ -23506,6 +23560,7 @@ pub fn c_particle_emitter__render__7b3d20(this: *mut u8, parent_matrix: *const f
         let decl = get_decl(index);
         let buf = resize(0, decl, stride.wrapping_mul(cap));
         let cursor = lock(buf) as usize;
+        super::seam_probe::particle_lock();
         // The 9-dword stream context handed to RenderParticles:
         // {ptr0, ptr3, ptr4, ptr5, decl, decl3, decl4, decl5, quadCount}.
         let decl_u = decl as usize as u32;
@@ -24633,6 +24688,7 @@ pub extern "thiscall" fn weather_draw_rain_drops__675ac0(this: *mut core::ffi::c
             // Reserve count*3 vertices (lea ecx,[eax+2*eax]) of fmt 0x14.
             let buffer = resize(0, 0x14, drop_count.wrapping_mul(3));
             let mut vstream = lock(buffer);
+            super::seam_probe::rain_lock();
             let mut vert_count: u32 = 0;
 
             if drop_count != 0 {
@@ -29612,12 +29668,43 @@ fn bdl_animate_bones_identity(base: *mut u8, node: *const u8) {
     );
 }
 
+/// One timed animate dispatch for the armed seam probe.
+///
+/// Brackets the identity-transform call with tick reads and folds the cost
+/// into the walk's running sum/max. Only reached when the probe is armed, so
+/// the unarmed walk never pays the two clock reads.
+fn bdl_animate_root_timed(
+    base: *mut u8,
+    node: *const u8,
+    roots: &mut u32,
+    ticks_sum: &mut u64,
+    ticks_max: &mut u64,
+) {
+    let t0 = wow_shared::tsc::rdtsc();
+    bdl_animate_bones_identity(base, node);
+    let dt = wow_shared::tsc::rdtsc().wrapping_sub(t0);
+    *roots = roots.wrapping_add(1);
+    *ticks_sum = ticks_sum.wrapping_add(dt);
+    if dt > *ticks_max {
+        *ticks_max = dt;
+    }
+}
+
 /// The per-list animation phase (0x707757..0x707843).
 ///
 /// Bone animation over the visible-list head `this+0x20` (camera-relative
 /// double-hop walk gated by `[view+4]&4`, else the plain single-hop walk), then
 /// a particle update pass.
 fn bdl_anim_phase(base: *mut u8) {
+    // Whether a hook of ours is still installed is not a question only an
+    // instrumented session gets to ask: an entry another module takes is dead
+    // for every player. This is the cheapest always-on tick available — one
+    // counter bump per frame, the real check once every 120.
+    wow_hook::verify_periodically(120);
+    let probe = super::seam_probe::armed();
+    let mut roots: u32 = 0;
+    let mut ticks_sum: u64 = 0;
+    let mut ticks_max: u64 = 0;
     // SAFETY: `base` is the non-null `CWorldView` `this` the draw-list build was entered with
     // (null-checked at its entry), and `+0x4` is its view pointer field, which the revision
     // compare at 0x70768c already loaded and read `+0x8` through before this phase runs.
@@ -29625,7 +29712,8 @@ fn bdl_anim_phase(base: *mut u8) {
     // SAFETY: `view` is that same view object, live enough for the caller's `+0x8` revision
     // load; `+0x4` is the flags dword the stock gate `[view+4]&4` at the head of this phase
     // tests bit 2 of.
-    if (unsafe { bdl_rd32(view, 4) } & 4) != 0 {
+    let worker_arm = (unsafe { bdl_rd32(view, 4) } & 4) != 0;
+    if worker_arm {
         // 0x707760: sub_706cd0(ecx = view, 0x707600 callback, this).
         const CB: u32 = (crate::win::EXPECTED_IMAGE_BASE + 0x30_7600) as u32;
         const SUB_706CD0: usize = crate::win::EXPECTED_IMAGE_BASE + 0x30_6cd0;
@@ -29644,7 +29732,11 @@ fn bdl_anim_phase(base: *mut u8) {
             // the same pointer handed to `AnimateBones` below; `+0x1cc` is the dword the
             // stock walk gates that call on.
             if unsafe { bdl_rd32(node, 0x1cc) } == 0 {
-                bdl_animate_bones_identity(base, node);
+                if probe {
+                    bdl_animate_root_timed(base, node, &mut roots, &mut ticks_sum, &mut ticks_max);
+                } else {
+                    bdl_animate_bones_identity(base, node);
+                }
             }
             // SAFETY: `node` is still that non-null list node; `+0x48` is the forward link
             // the visible list is chained through.
@@ -29674,7 +29766,11 @@ fn bdl_anim_phase(base: *mut u8) {
             // the same pointer handed to `AnimateBones` below; `+0x1cc` is the dword the
             // stock walk gates that call on.
             if unsafe { bdl_rd32(node, 0x1cc) } == 0 {
-                bdl_animate_bones_identity(base, node);
+                if probe {
+                    bdl_animate_root_timed(base, node, &mut roots, &mut ticks_sum, &mut ticks_max);
+                } else {
+                    bdl_animate_bones_identity(base, node);
+                }
             }
             // SAFETY: `node` is still that non-null list node; `+0x48` is the forward link
             // the visible list is chained through.
@@ -29685,11 +29781,22 @@ fn bdl_anim_phase(base: *mut u8) {
     // SAFETY: `base` is that same `CWorldView`; `+0x20` is its visible-list head pointer
     // field, re-read here because the stock code at 0x707830 reloads the head for this pass.
     let mut node = unsafe { bdl_rdp(base, 0x20) };
+    let mut list_len: u32 = 0;
     while !node.is_null() {
+        list_len = list_len.wrapping_add(1);
         cm2_model__update_particles_and_children__718960(node as *mut core::ffi::c_void);
         // SAFETY: `node` is non-null by the loop condition; `+0x48` is the forward link the
         // visible list is chained through.
         node = unsafe { bdl_rdp(node, 0x48) };
+    }
+    if probe {
+        super::seam_probe::anim_phase(worker_arm, roots, ticks_sum, ticks_max, list_len);
+        // Price the fork substrate only where a fork would run: the
+        // multi-root passes. Single-model views would only measure an idle
+        // pool over and over.
+        if roots > 1 {
+            super::seam_probe::gc_roundtrip(gc_par_probe_roundtrip());
+        }
     }
 }
 
@@ -29739,6 +29846,8 @@ fn bdl_finalize(base: *mut u8) {
     // `+0x40` is the element-count dword of its bucket-0 index header at `+0x3c`.
     let count = unsafe { bdl_rd32(base, 0x40) };
     if count > 1 {
+        let mut probe_steps: u32 = 0;
+        let mut cmp_calls: u32 = 0;
         // 0x7086a7: clear the 251-dword scratch to -1.
         for i in 0..0xfbusize {
             // SAFETY: `TABLE` is the client's static 251-dword dedup scratch at 0xcefff8 and
@@ -29768,6 +29877,7 @@ fn bdl_finalize(base: *mut u8) {
             let mut edi = start;
             loop {
                 edi += 1;
+                probe_steps = probe_steps.wrapping_add(1);
                 if edi >= 0xfb {
                     edi = 0;
                 }
@@ -29783,6 +29893,7 @@ fn bdl_finalize(base: *mut u8) {
                     unsafe { probe.write(rec_idx) };
                     break;
                 }
+                cmp_calls = cmp_calls.wrapping_add(1);
                 if bdl_draw_list_equal(rec_idx, entry, base) == 0 {
                     break;
                 }
@@ -29798,6 +29909,9 @@ fn bdl_finalize(base: *mut u8) {
             // SAFETY: `rec_idx` came off bucket-0, which the builder fills with indices into
             // that 0x40-stride record array; `+0x24` is the record's canonical-index dword.
             unsafe { ((recbase2 + (rec_idx as usize) * 0x40 + 0x24) as *mut u32).write(canonical) };
+        }
+        if super::seam_probe::armed() {
+            super::seam_probe::finalize_stats(count, probe_steps, cmp_calls);
         }
     }
 
