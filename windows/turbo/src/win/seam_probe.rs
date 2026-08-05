@@ -8,8 +8,11 @@
 //! the `+0x40` stamp (the aliasing hazard a fork must exclude); what does an
 //! empty publish/join round trip on the worker pool cost at frame rate; how
 //! full does the draw-list dedup scratch run and how much probing it costs;
-//! and how many dynamic-buffer lock cycles the particle and precipitation
-//! paths pay per session.
+//! how many dynamic-buffer lock cycles the particle and precipitation paths
+//! pay per session; and what grain the per-emitter particle draws offer a
+//! fork (draws per second, live particles per draw with a histogram whose
+//! buckets end at 4/16/64/256, the quad build's cost spread, and how much of
+//! an up-front output reservation the emitted counts would waste).
 //!
 //! Counters ride the same arm as the event gauge (`wow::events` at debug):
 //! unarmed, every entry point is a load and a branch. All writers are the
@@ -44,6 +47,25 @@ static FIN_CMP_CALLS: AtomicU64 = AtomicU64::new(0);
 
 static PARTICLE_LOCKS: AtomicU32 = AtomicU32::new(0);
 static RAIN_LOCKS: AtomicU32 = AtomicU32::new(0);
+
+static PART_DRAWS: AtomicU32 = AtomicU32::new(0);
+static PART_CLAMPED: AtomicU32 = AtomicU32::new(0);
+static PART_COUNT_SUM: AtomicU64 = AtomicU64::new(0);
+static PART_COUNT_MAX: AtomicU32 = AtomicU32::new(0);
+static PART_CAP_SUM: AtomicU64 = AtomicU64::new(0);
+static PART_EMITTED_SUM: AtomicU64 = AtomicU64::new(0);
+static PART_HIST: [AtomicU32; PART_HIST_EDGES.len() + 1] = [
+    AtomicU32::new(0),
+    AtomicU32::new(0),
+    AtomicU32::new(0),
+    AtomicU32::new(0),
+    AtomicU32::new(0),
+];
+static PART_BUILD_TICKS_SUM: AtomicU64 = AtomicU64::new(0);
+static PART_BUILD_TICKS_MAX: AtomicU64 = AtomicU64::new(0);
+
+/// Upper edges for the live-particles-per-draw histogram; one bucket past.
+const PART_HIST_EDGES: [u32; 4] = [4, 16, 64, 256];
 
 /// Whether the probe counters are live (the event gauge's arm).
 #[inline]
@@ -155,6 +177,36 @@ pub fn rain_lock() {
     }
 }
 
+/// One per-emitter particle draw: its grain and what the quad build cost.
+///
+/// `count` is the live-particle count the draw walked, `cap` the capacity the
+/// vertex buffer was clamped to, `emitted` how far the build advanced the
+/// stream cursor, and the `t0..t1` bracket is the whole per-emitter quad
+/// build. Together they size the per-emitter fork grain: draws per second
+/// against the frame rate gives the width a frame offers, the histogram and
+/// tick max give the skew a work split has to survive, and `cap` (known
+/// before the lock) against `emitted` says what a build that reserved its
+/// output range up front would waste. Caller gates on [`armed`]; this only
+/// records.
+pub fn particle_draw(count: u32, cap: u32, emitted: u32, t0: u64, t1: u64) {
+    bump32(&PART_DRAWS);
+    if cap < count {
+        bump32(&PART_CLAMPED);
+    }
+    add64(&PART_COUNT_SUM, u64::from(count));
+    max32(&PART_COUNT_MAX, count);
+    add64(&PART_CAP_SUM, u64::from(cap));
+    add64(&PART_EMITTED_SUM, u64::from(emitted));
+    let bucket = PART_HIST_EDGES
+        .iter()
+        .position(|&edge| count <= edge)
+        .unwrap_or(PART_HIST_EDGES.len());
+    bump32(&PART_HIST[bucket]);
+    let dt = t1.saturating_sub(t0);
+    add64(&PART_BUILD_TICKS_SUM, dt);
+    max64(&PART_BUILD_TICKS_MAX, dt);
+}
+
 /// Ticks to microseconds through the calibrated engine clock.
 fn ticks_to_us(ticks: u64) -> u64 {
     super::hooks::clock_ticks_to_ms(ticks.saturating_mul(1000))
@@ -208,5 +260,25 @@ pub fn emit_cumulative() {
     let r = RAIN_LOCKS.load(Ordering::Relaxed);
     if p != 0 || r != 0 {
         log::debug!(target: "wow::events", "seam locks: particle {p}, rain {r}");
+    }
+    let draws = PART_DRAWS.load(Ordering::Relaxed);
+    if draws != 0 {
+        log::debug!(
+            target: "wow::events",
+            "seam particles: {draws} draws ({} clamped), count sum {} max {}, \
+             hist {}/{}/{}/{}/{}, cap sum {}, emitted sum {}, build us sum {} max {}",
+            PART_CLAMPED.load(Ordering::Relaxed),
+            PART_COUNT_SUM.load(Ordering::Relaxed),
+            PART_COUNT_MAX.load(Ordering::Relaxed),
+            PART_HIST[0].load(Ordering::Relaxed),
+            PART_HIST[1].load(Ordering::Relaxed),
+            PART_HIST[2].load(Ordering::Relaxed),
+            PART_HIST[3].load(Ordering::Relaxed),
+            PART_HIST[4].load(Ordering::Relaxed),
+            PART_CAP_SUM.load(Ordering::Relaxed),
+            PART_EMITTED_SUM.load(Ordering::Relaxed),
+            ticks_to_us(PART_BUILD_TICKS_SUM.load(Ordering::Relaxed)),
+            ticks_to_us(PART_BUILD_TICKS_MAX.load(Ordering::Relaxed)),
+        );
     }
 }

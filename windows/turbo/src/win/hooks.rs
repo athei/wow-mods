@@ -23597,11 +23597,25 @@ pub fn c_particle_emitter__render__7b3d20(this: *mut u8, parent_matrix: *const f
         ctx[3] = (cursor.wrapping_add(ofs5 as usize)) as u32;
         ctx[7] = decl_u;
         ctx[8] = 0;
-        // RenderParticles (0x7b3a10) is our own hook — direct call.
+        // RenderParticles (0x7b3a10) is our own hook — direct call. The armed
+        // bracket prices one emitter's whole quad build; with the grain fields
+        // beside it (`count` before the clamp, `cap` after, the cursor advance
+        // in `ctx[8]`) it is what sizes a per-emitter fork of this pass.
+        let probe = super::seam_probe::armed();
+        let probe_t0 = if probe { wow_shared::tsc::rdtsc() } else { 0 };
         c_particle_emitter__render_particles__7b3a10(
             this.cast::<core::ffi::c_void>(),
             ctx.as_mut_ptr().cast::<f32>(),
         );
+        if probe {
+            super::seam_probe::particle_draw(
+                count,
+                cap,
+                ctx[8],
+                probe_t0,
+                wow_shared::tsc::rdtsc(),
+            );
+        }
         unlock(buf, 0);
         apply_preset(buf, index);
         // SAFETY: the blend/render mode dword at +0xa0.
