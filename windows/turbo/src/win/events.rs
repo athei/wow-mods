@@ -49,6 +49,13 @@
 //! modules register script API too, and one of theirs can rank high enough to
 //! read as a target when nothing in this tree could ever reimplement it.
 //!
+//! When the armed line carries `api spans sampled 1-in-N`, this machine's
+//! counter reads are slow enough to dominate the spans they bracket, so only
+//! one C call in N is timed and its span stands for its cohort at that
+//! weight. Every call is still counted exactly; per-entry totals and averages
+//! stay unbiased, `max` describes the sampled subset, and a hitch long enough
+//! for the quarantine is caught one time in N.
+//!
 //! A `rejects N` in the header means the counter came back below where a span
 //! started N times, and those spans were dropped rather than accumulated. The
 //! clause is absent when nothing was dropped, so its presence is the signal:
@@ -67,7 +74,6 @@
 //! the original dispatcher resolves it.
 
 use std::{
-    collections::HashMap,
     ffi::CStr,
     fmt::Write as _,
     sync::{
@@ -75,6 +81,8 @@ use std::{
         atomic::{AtomicU32, AtomicU64, Ordering},
     },
 };
+
+use rustc_hash::FxHashMap;
 
 /// Address holding the event-registry entry count.
 const REGISTRY_COUNT: usize = 0x00ce_ef64;
@@ -126,6 +134,23 @@ const API_SUSPECT_US: u64 = 100_000;
 /// Quarantined spans are rare by definition — the cap exists so a machine that
 /// produces them wholesale cannot grow a table on the hot path.
 const API_SUSPECT_CAP: usize = 64;
+/// Counter-read cost, in nanoseconds, past which C-API spans are sampled.
+///
+/// A timed span is three counter reads and the median C call is under a
+/// microsecond, so on a counter whose reads cost tens of nanoseconds each,
+/// timing every call makes the clock the largest single cost on the thread
+/// being measured: an armed session on such a machine spends more of its
+/// frame inside the counter's emulation than inside any function it ranks.
+/// Below this bound the reads are noise and every call is timed.
+const API_SAMPLE_READ_COST_NS: u64 = 25;
+/// Span-sampling stride on a slow counter: one C-API call in this many.
+///
+/// Cuts the read rate by the same factor while every call is still counted
+/// exactly. Eight keeps a per-second window statistically dense (the hot
+/// entries run tens of thousands of calls a second, so each still gets
+/// thousands of timed spans) while removing seven-eighths of the observer
+/// effect on the machines that need it.
+const API_SAMPLE_STRIDE: u32 = 8;
 /// Chunk-memo cap; a client cannot load more script files than this.
 const OWNER_TABLE_CAP: usize = 4_096;
 /// Bound on the addon-directory walk, so a diagnostic cannot wander.
@@ -169,10 +194,19 @@ static ARMED: LazyLock<bool> = LazyLock::new(|| {
         // client. A reader needs that number to judge the rest of the log.
         // Milli-ticks through the linear microsecond scale is nanoseconds.
         let read_cost_ns = ticks_to_us(wow_shared::tsc::read_cost_milli_ticks());
-        log::debug!(
-            target: "wow::events",
-            "event gauge armed, counter read cost {read_cost_ns} ns",
-        );
+        let stride = *API_SAMPLE;
+        if stride > 1 {
+            log::debug!(
+                target: "wow::events",
+                "event gauge armed, counter read cost {read_cost_ns} ns, \
+                 api spans sampled 1-in-{stride}",
+            );
+        } else {
+            log::debug!(
+                target: "wow::events",
+                "event gauge armed, counter read cost {read_cost_ns} ns",
+            );
+        }
     }
     armed
 });
@@ -181,7 +215,9 @@ static ARMED: LazyLock<bool> = LazyLock::new(|| {
 ///
 /// One read per span, priced by the counter's own calibration — the same place
 /// the tick-to-millisecond scale comes from, since both are properties of the
-/// counter rather than of this gauge.
+/// counter rather than of this gauge. Per call even under sampling: a timed
+/// span carries one read's latency and is scaled by the stride, one timed span
+/// stands for stride calls, so the inflation per counted call is unchanged.
 fn clock_overhead(calls: u64) -> u64 {
     calls.saturating_mul(wow_shared::tsc::read_cost_milli_ticks()) / 1_000
 }
@@ -225,6 +261,12 @@ struct EventRow {
 }
 
 /// One accumulation window (per-second or cumulative).
+///
+/// Every map here is fed under the state mutex from the dispatch and API hot
+/// paths, keyed by an address, an id or a short fixed-size name (nothing an
+/// adversary chooses), so they all use `FxHashMap`: the standard hasher's
+/// collision resistance buys nothing here and its cost lands inside the very
+/// spans this gauge exists to measure.
 #[derive(Default)]
 struct Tables {
     signals: u64,
@@ -236,8 +278,8 @@ struct Tables {
     /// The rest is per-frame script work: `OnUpdate` and the other UI
     /// invokes, which no event row can explain.
     signal_ticks: u64,
-    events: HashMap<i32, EventRow>,
-    handlers: HashMap<NameBuf, Stat>,
+    events: FxHashMap<i32, EventRow>,
+    handlers: FxHashMap<NameBuf, Stat>,
     /// Ticks inside the handler bodies themselves, outermost only.
     ///
     /// The window total minus this is the dispatch and argument-binding
@@ -267,7 +309,7 @@ struct Tables {
     ///
     /// Addresses rather than names: the mapping is a build-side artifact, and
     /// resolving it offline keeps a few hundred strings out of the mod.
-    api: HashMap<usize, Stat>,
+    api: FxHashMap<usize, Stat>,
     /// C functions dropped on the API-table cap (reported, never silent).
     api_dropped: u64,
     /// Ticks behind `api_dropped`, so the overflow row carries a cost too.
@@ -276,7 +318,7 @@ struct Tables {
     ///
     /// Kept out of `api_ticks` and `api_calls` entirely: the split and the
     /// ranked table stay meaningful, and this table says what was set aside.
-    api_suspect: HashMap<usize, Stat>,
+    api_suspect: FxHashMap<usize, Stat>,
     /// Suspect spans dropped on the suspect-table cap (reported, never silent).
     api_suspect_dropped: u64,
     /// Ticks behind `api_suspect_dropped`, so the overflow carries a cost too.
@@ -293,7 +335,7 @@ struct Tables {
     /// Bodies per bucket, so a bucket states both its mass and its count.
     body_hist_calls: [u64; BODY_BUCKETS],
     /// Per-addon body cost, keyed by the folder that owns the script.
-    owners: HashMap<NameBuf, Stat>,
+    owners: FxHashMap<NameBuf, Stat>,
     /// Handler names dropped on the table cap (reported, never silent).
     dropped: u64,
     /// Ticks behind `dropped`, so the overflow row carries a cost too.
@@ -314,16 +356,16 @@ struct State {
     /// Frames declared in addon markup, mapped to their declaring addon.
     ///
     /// Read from disk on first use, never on the load path.
-    frames: Option<rustc_hash::FxHashMap<NameBuf, NameBuf>>,
+    frames: Option<FxHashMap<NameBuf, NameBuf>>,
     /// Chunk-to-addon memo, keyed by a hash of the chunk name.
     ///
-    /// A per-invoke lookup, so it skips the standard hasher: the key is
-    /// already a hash, and hashing it again with `SipHash` is pure cost.
+    /// A per-invoke lookup whose key is already a hash, so hashing it again
+    /// with anything heavier would be pure cost.
     ///
     /// Keyed by content rather than by the string object, so a reload that
     /// re-interns every chunk at a fresh address reuses the entries instead of
     /// doubling them, and a recycled address cannot inherit an owner.
-    owners: rustc_hash::FxHashMap<u64, NameBuf>,
+    owners: FxHashMap<u64, NameBuf>,
 }
 
 static STATE: LazyLock<Mutex<State>> = LazyLock::new(|| {
@@ -334,7 +376,7 @@ static STATE: LazyLock<Mutex<State>> = LazyLock::new(|| {
         window: Tables::default(),
         cumulative: Tables::default(),
         frames: None,
-        owners: rustc_hash::FxHashMap::default(),
+        owners: FxHashMap::default(),
     })
 });
 
@@ -415,6 +457,46 @@ fn span(t0: u64, t1: u64) -> u64 {
 /// A C function that calls back into Lua reaches `luaD_precall` again, and the
 /// time is already inside the outer call's span.
 static API_DEPTH: AtomicU32 = AtomicU32::new(0);
+
+/// C-API span-sampling stride, resolved once beside the arming decision.
+///
+/// 1 on a fast counter, so every C call is timed. Past
+/// [`API_SAMPLE_READ_COST_NS`] the reads themselves dominate what they
+/// bracket, and one call in [`API_SAMPLE_STRIDE`] carries the clock for all
+/// of them.
+static API_SAMPLE: LazyLock<u32> = LazyLock::new(|| {
+    let read_cost_ns = ticks_to_us(wow_shared::tsc::read_cost_milli_ticks());
+    if read_cost_ns >= API_SAMPLE_READ_COST_NS {
+        API_SAMPLE_STRIDE
+    } else {
+        1
+    }
+});
+
+/// Calls seen by the sampling pick, on the same single-thread store scheme.
+static API_SAMPLE_SEEN: AtomicU32 = AtomicU32::new(0);
+
+/// Whether this C-API call's span is timed, and at what weight.
+///
+/// Zero for a call that is only counted; otherwise the factor its measured
+/// span stands in for. The pick multiplies a running counter by a large odd
+/// constant and keeps the low fraction of the hashed range, so the timed
+/// subset spreads pseudo-randomly through the call stream instead of striding
+/// in lockstep with an addon loop that calls a fixed cycle of functions;
+/// a plain modulo would time the same function forever in such a loop.
+fn api_sample_weight() -> u64 {
+    let stride = *API_SAMPLE;
+    if stride == 1 {
+        return 1;
+    }
+    let seen = API_SAMPLE_SEEN.load(Ordering::Relaxed);
+    API_SAMPLE_SEEN.store(seen.wrapping_add(1), Ordering::Relaxed);
+    if seen.wrapping_mul(0x9E37_79B9) < u32::MAX / stride {
+        u64::from(stride)
+    } else {
+        0
+    }
+}
 
 /// Hash a chunk's bytes, to tell one path from another by content.
 ///
@@ -502,8 +584,8 @@ fn owner_of(st: &mut State, chunk: (usize, u32)) -> NameBuf {
 /// Read once, lazily, off the load path: the client is running by the time any
 /// handler fires. A frame absent from every addon's markup came with the client
 /// or was made at runtime, and stays attributed to itself.
-fn build_frame_index() -> rustc_hash::FxHashMap<NameBuf, NameBuf> {
-    let mut index = rustc_hash::FxHashMap::default();
+fn build_frame_index() -> FxHashMap<NameBuf, NameBuf> {
+    let mut index = FxHashMap::default();
     let Some(addons) = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|d| d.join("Interface").join("AddOns")))
@@ -729,24 +811,37 @@ pub fn time_body<T>(chunk: impl FnOnce() -> (usize, u32), body: impl FnOnce() ->
 /// `bodies`, and counting the client's own start-up scripts in it would put the
 /// two on different scales.
 ///
-/// Inside a body, EVERY call pays a bracket, including the Lua-closure calls
-/// this function has nothing to measure. That is the point: this wrapper's own
-/// work runs inside the body the gauge is timing, so leaving the cheap branch
-/// unbracketed would quietly add the cost of one detour per Lua call to the VM
-/// side — the very number the split exists to size. What cannot be measured
-/// from in here is the detour itself and this function's last store, which is
-/// the same irreducible floor every hook in the tree has.
+/// The clock is read only around a timed C span, never on the Lua branch: an
+/// emulated read costs orders of magnitude more than the classification it
+/// would bracket, so measuring the cheap branch was itself the largest cost
+/// on it. What the wrapper leaves unmeasured there (the detour, the
+/// classification, one counted store) is bounded by `vm_calls` times a
+/// per-call constant, which is how the ledger already quotes the one cost no
+/// hook can see from inside.
+///
+/// A C span carries its own bookkeeping between the second read and a third:
+/// that is this gauge's work sitting inside the body the dispatch wrapper is
+/// timing, and bracketing it keeps it out of `machinery`. When the sampling
+/// stride is active the bracket is scaled like the span it follows, so the
+/// untimed cohort's bookkeeping (strictly less of it, one counted store per
+/// call) is estimated slightly high rather than dropped.
 pub fn precall(l: i32, func: i32) -> i32 {
     let original = super::symbols::originals::lua_d_precall__6f6050();
     if BODY_DEPTH.load(Ordering::Relaxed) == 0 || API_DEPTH.load(Ordering::Relaxed) != 0 {
         return original(l, func);
     }
-    let gauge_in = wow_shared::tsc::rdtsc();
     let Some(entry) = c_entry(func) else {
         add_ticks(&VM_CALLS, 1);
-        add_ticks(&API_SELF_TICKS, span(gauge_in, wow_shared::tsc::rdtsc()));
         return original(l, func);
     };
+    let weight = api_sample_weight();
+    if weight == 0 {
+        API_DEPTH.store(1, Ordering::Relaxed);
+        let out = original(l, func);
+        API_DEPTH.store(0, Ordering::Relaxed);
+        record_api_counted(entry);
+        return out;
+    }
     API_DEPTH.store(1, Ordering::Relaxed);
     let t0 = wow_shared::tsc::rdtsc();
     let out = original(l, func);
@@ -759,11 +854,12 @@ pub fn precall(l: i32, func: i32) -> i32 {
     if ticks_to_us(dt) >= API_SUSPECT_US {
         record_api_suspect(entry, dt);
     } else {
-        add_ticks(&API_TICKS, dt);
-        record_api(entry, dt);
+        let weighted = dt.saturating_mul(weight);
+        add_ticks(&API_TICKS, weighted);
+        record_api(entry, dt, weighted);
     }
     let gauge_out = wow_shared::tsc::rdtsc();
-    add_ticks(&API_SELF_TICKS, span(gauge_in, t0) + span(t1, gauge_out));
+    add_ticks(&API_SELF_TICKS, span(t1, gauge_out).saturating_mul(weight));
     out
 }
 
@@ -806,21 +902,44 @@ fn c_entry(func: i32) -> Option<usize> {
 
 /// Record one timed C-API call against its entry address.
 ///
+/// `dt` is the span as measured and `weighted` is what it stands for: the same
+/// value at stride 1, the whole cohort's estimate under sampling. Totals carry
+/// the weight; `max` keeps the span a clock actually saw, because a maximum of
+/// estimates would report a hitch nobody measured.
+///
 /// Deliberately does not emit: this runs inside a handler body, and closing the
 /// window here would print a body that has not finished. The invoke wrappers
 /// emit often enough that a window can never run long.
-fn record_api(entry: usize, dt: u64) {
+fn record_api(entry: usize, dt: u64, weighted: u64) {
     let mut st = state();
     st.window.api_calls += 1;
     let over_cap = st.window.api.len() >= API_TABLE_CAP && !st.window.api.contains_key(&entry);
     if over_cap {
         st.window.api_dropped += 1;
-        st.window.api_dropped_ticks += dt;
+        st.window.api_dropped_ticks += weighted;
     } else {
         let stat = st.window.api.entry(entry).or_default();
         stat.count += 1;
-        stat.ticks += dt;
+        stat.ticks += weighted;
         stat.max_ticks = stat.max_ticks.max(dt);
+    }
+    drop(st);
+}
+
+/// Count one untimed C-API call against its entry address.
+///
+/// The sampling stride's other branch: the call is real and the counts must
+/// stay exact, but no clock was read, so nothing else moves. Runs the same
+/// cap rule as the timed path, so a capped table drops timed and untimed
+/// calls alike instead of skewing the overflow row toward one kind.
+fn record_api_counted(entry: usize) {
+    let mut st = state();
+    st.window.api_calls += 1;
+    let over_cap = st.window.api.len() >= API_TABLE_CAP && !st.window.api.contains_key(&entry);
+    if over_cap {
+        st.window.api_dropped += 1;
+    } else {
+        st.window.api.entry(entry).or_default().count += 1;
     }
     drop(st);
 }

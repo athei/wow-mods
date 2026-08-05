@@ -132,7 +132,7 @@ pub fn secs_to_cycles(seconds: u64) -> u64 {
 /// Thousandths because the cost is a FRACTION of a tick under Rosetta, where
 /// the counter is a scaled ARM timer: it advances in steps far larger than one
 /// nominal tick, so a whole-tick figure would round to nothing. The first call
-/// runs the calibration (about a millisecond); force it off the hot path.
+/// runs the calibration (a few milliseconds); force it off the hot path.
 #[must_use]
 pub fn read_cost_milli_ticks() -> u64 {
     *READ_COST
@@ -141,7 +141,10 @@ pub fn read_cost_milli_ticks() -> u64 {
 static TSC_HZ: LazyLock<u64> = LazyLock::new(calibrate);
 static READ_COST: LazyLock<u64> = LazyLock::new(calibrate_read_cost);
 
-/// Time a long run of reads, because a single pair cannot resolve one.
+/// Reads per calibration pass; long because a single pair cannot resolve one.
+const READ_COST_LOOP: u64 = 4_096;
+
+/// Time long runs of reads two ways, and let the larger estimate win.
 ///
 /// Under Rosetta the counter advances in steps much larger than one nominal
 /// tick, so back-to-back reads usually return the same value and the median
@@ -150,25 +153,87 @@ static READ_COST: LazyLock<u64> = LazyLock::new(calibrate_read_cost);
 /// runs is taken because a run that was descheduled part-way through can only
 /// ever overstate the result, and overstating it means over-subtracting from
 /// every span a caller corrects.
+///
+/// Two estimators, because a bare back-to-back run answers the wrong question:
+/// consecutive invocations of the read's emulation overlap, and the burst
+/// figure comes out an order of magnitude below what the same machine pays for
+/// the isolated reads real measurement brackets are made of. The spaced pass
+/// interleaves every read with a dependent work chain and rotates it through
+/// distinct call sites, then subtracts a work-only baseline, which recovers
+/// most of that difference. Even so a loop keeps its sites hotter than
+/// scattered real code ever is, so the result is a floor, not a ceiling.
 fn calibrate_read_cost() -> u64 {
     const RUNS: usize = 8;
-    const READS: u64 = 4_096;
-    let mut best = u64::MAX;
+    let mut burst_spent = u64::MAX;
+    let mut spaced_spent = u64::MAX;
+    let mut baseline_spent = u64::MAX;
     for _ in 0..RUNS {
-        let start = rdtsc();
-        for _ in 0..READS {
-            std::hint::black_box(rdtsc());
-        }
-        let spent = rdtsc().wrapping_sub(start);
-        best = best.min(spent.saturating_mul(1_000) / READS);
+        burst_spent = burst_spent.min(burst_pass());
+        spaced_spent = spaced_spent.min(spaced_pass(true));
+        baseline_spent = baseline_spent.min(spaced_pass(false));
     }
+    let burst = burst_spent.saturating_mul(1_000) / READ_COST_LOOP;
+    let spaced = spaced_spent
+        .saturating_sub(baseline_spent)
+        .saturating_mul(1_000)
+        / READ_COST_LOOP;
+    let best = burst.max(spaced);
     info!(
         target: LOG_TARGET,
-        "tsc read cost: {}.{:03} ticks",
+        "tsc read cost: {}.{:03} ticks (burst {}.{:03}, spaced {}.{:03})",
         best / 1_000,
         best % 1_000,
+        burst / 1_000,
+        burst % 1_000,
+        spaced / 1_000,
+        spaced % 1_000,
     );
     best
+}
+
+/// One back-to-back run: reads with nothing between them.
+fn burst_pass() -> u64 {
+    let start = rdtsc();
+    for _ in 0..READ_COST_LOOP {
+        std::hint::black_box(rdtsc());
+    }
+    rdtsc().wrapping_sub(start)
+}
+
+/// One interleaved run: the same work chain, with or without a read per step.
+///
+/// The flag goes through `black_box` so the two variants keep one loop body:
+/// letting the compiler specialise a constant `false` would hand the baseline
+/// a differently-optimised loop, and the subtraction would then compare two
+/// different work chains rather than isolate the reads.
+fn spaced_pass(with_reads: bool) -> u64 {
+    let with_reads = std::hint::black_box(with_reads);
+    let start = rdtsc();
+    let mut acc: u64 = 0x9E37_79B9_7F4A_7C15;
+    for i in 0..READ_COST_LOOP {
+        acc = acc.wrapping_mul(0x2545_F491_4F6C_DD1D).rotate_left(23) ^ i;
+        if with_reads {
+            let read = match i & 3 {
+                0 => read_site::<0>(),
+                1 => read_site::<1>(),
+                2 => read_site::<2>(),
+                _ => read_site::<3>(),
+            };
+            std::hint::black_box(read);
+        }
+    }
+    std::hint::black_box(acc);
+    rdtsc().wrapping_sub(start)
+}
+
+/// A read at its own call site, kept out of line so each site translates apart.
+///
+/// Part of the emulation's cost is per-site (one hot site overlaps with
+/// itself in a way scattered sites cannot), so the spaced estimator rotates
+/// through four of these to look more like the brackets real callers write.
+#[inline(never)]
+fn read_site<const SITE: usize>() -> u64 {
+    rdtsc()
 }
 
 fn calibrate() -> u64 {
