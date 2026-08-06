@@ -29619,11 +29619,117 @@ fn bdl_draw_list_equal(a: u32, b: u32, this: *const u8) -> i32 {
     render_batch__compare_sort_key__70a710(a as i32, b as i32, this.cast_mut())
 }
 
+thread_local! {
+    /// Key scratch for the opaque draw-list sort, indexed by element index.
+    static BDL_OPAQUE_KEYS: core::cell::RefCell<Vec<[u32; 9]>> =
+        const { core::cell::RefCell::new(Vec::new()) };
+    /// Key scratch for the bucket-0 (texture-major) sort, indexed by element index.
+    static BDL_TEX_KEYS: core::cell::RefCell<Vec<u32>> =
+        const { core::cell::RefCell::new(Vec::new()) };
+}
+
+/// Largest element index the sort-key scratch tables will size themselves to.
+///
+/// A draw list holds a few thousand elements; an index at or beyond this bound
+/// means a list the keyed path should not size a table for, so the sort falls
+/// back to the comparator chain instead.
+const BDL_KEY_INDEX_CAP: u32 = 0x1_0000;
+
+/// Priority-table value for one element type index (the table at image `+0x47_3184`).
+///
+/// The same read the opaque comparator (0x70ae10) performs on the element type
+/// field when the sort-flags dword has bit 2 set.
+#[inline]
+const fn bdl_prio(type_idx: i32) -> u32 {
+    const PRIO_TABLE: *const u32 = (crate::win::EXPECTED_IMAGE_BASE + 0x47_3184) as *const u32;
+    // SAFETY: `type_idx` indexes the host priority table (same indexing the
+    // stock comparator uses on the element type field).
+    let slot = unsafe { PRIO_TABLE.add(type_idx.cast_unsigned() as usize) };
+    // SAFETY: the slot holds the u32 priority value for that type.
+    unsafe { slot.read() }
+}
+
+/// Keyed opaque-bucket sort: precompute one packed key per element, then heap-sort by key.
+///
+/// Reads the `worldView` fields the comparator (0x70ae10) reads once per
+/// comparison (the element array base `+0x34`, the sort-flags dword `+0x148`,
+/// the priority table) a single time, which is faithful because the sort only
+/// permutes the index array and nothing writes those fields while it runs.
+/// Keys order exactly as the comparator chain decides
+/// (`crate::math::world::draw_elem_sort_key`); equal keys fall through to the
+/// extended comparator (0x70aa30) just as the chain does, so the pairwise
+/// comparison results, and with them the heap-sort permutation, are identical.
+/// Returns `false` without sorting when the view or element base is null, an
+/// element index is at or beyond `BDL_KEY_INDEX_CAP`, or a float key is NaN
+/// (a NaN ties with everything under the chain's ordered tests, which no
+/// total key order can express); the caller then sorts with the comparator
+/// chain itself.
+fn bdl_sort_opaque_keyed(slice: &mut [u32], base: *mut u8, view: i32) -> bool {
+    if base.is_null() {
+        return false;
+    }
+    // SAFETY: `base+0x34` is the in-bounds, aligned element-array base slot.
+    let elem_base_slot = unsafe { base.add(0x34) };
+    // SAFETY: the slot holds the element-array base pointer.
+    let elem_base = unsafe { elem_base_slot.cast::<*const u8>().read_unaligned() };
+    if elem_base.is_null() {
+        return false;
+    }
+    // SAFETY: `base+0x148` is the in-bounds, aligned sort-flags dword.
+    let flags_slot = unsafe { base.add(0x148) };
+    // SAFETY: the slot holds the u32 sort-flags dword.
+    let flags = unsafe { flags_slot.cast::<u32>().read_unaligned() };
+    let prio_enabled = (flags & 4) != 0;
+    let tex_enabled = (flags & 2) != 0;
+    let Some(&max_index) = slice.iter().max() else {
+        return false;
+    };
+    if max_index >= BDL_KEY_INDEX_CAP {
+        return false;
+    }
+    BDL_OPAQUE_KEYS.with(|cell| {
+        let mut keys = cell.borrow_mut();
+        keys.resize(max_index as usize + 1, [0; 9]);
+        for &index in slice.iter() {
+            // SAFETY: `index*0x40` addresses an in-bounds 0x40-byte element
+            // (caller-validated), the same address the comparator computes.
+            let elem = unsafe { elem_base.add(index as usize * 0x40) };
+            let e = read_draw_elem(elem);
+            let prio = if prio_enabled {
+                bdl_prio(e.type_idx)
+            } else {
+                0
+            };
+            let Some(key) =
+                crate::math::world::draw_elem_sort_key(&e, prio_enabled, prio, tex_enabled)
+            else {
+                return false;
+            };
+            keys[index as usize] = key;
+        }
+        let keys = &*keys;
+        crate::math::misc::heap_sort_u_int32__71f860(slice, |a, b| {
+            match keys[a as usize].cmp(&keys[b as usize]) {
+                core::cmp::Ordering::Less => -1,
+                core::cmp::Ordering::Greater => 1,
+                core::cmp::Ordering::Equal => {
+                    c_world_view__compare_draw_list_extended__70aa30(a, b, view)
+                }
+            }
+        });
+        true
+    })
+}
+
 /// Opaque-bucket heap sort with our own `CWorldView__CompareDrawListOpaque` hook (0x70ae10).
 ///
-/// Used as the comparator, called directly through the shared kernel — routing
-/// through the guest VA would detour back into the same Rust fn once per
-/// comparison.
+/// Sorts by precomputed per-element keys when the list admits them (see
+/// `bdl_sort_opaque_keyed`): the comparator chain re-reads both elements'
+/// sort fields on every comparison, so an n-log-n heap sort pays that walk
+/// n-log-n times where one key pass pays it n times. When the keyed path
+/// declines it falls back to the chain comparator, called directly through
+/// the shared kernel — routing through the guest VA would detour back into
+/// the same Rust fn once per comparison.
 fn bdl_sort_opaque(data: *mut u32, count: u32, base: *mut u8) {
     if data.is_null() || count <= 1 {
         return;
@@ -29631,8 +29737,12 @@ fn bdl_sort_opaque(data: *mut u32, count: u32, base: *mut u8) {
     // SAFETY: `data` is non-null and `count` elements of `u32` are valid for
     // the duration of the sort, exactly as the stock caller passes them.
     let slice = unsafe { core::slice::from_raw_parts_mut(data, count as usize) };
+    let view = base as usize as i32;
+    if bdl_sort_opaque_keyed(slice, base, view) {
+        return;
+    }
     crate::math::misc::heap_sort_u_int32__71f860(slice, |a, b| {
-        c_world_view__compare_draw_list_opaque__70ae10(a, b, base as usize as i32)
+        c_world_view__compare_draw_list_opaque__70ae10(a, b, view)
     });
 }
 
@@ -29647,12 +29757,62 @@ fn bdl_cmp_by_tex(a: u32, b: u32, this: *const u8) -> i32 {
     c_world_view__compare_draw_list_by_texture__70aa00(a, b, this)
 }
 
+/// Keyed bucket-0 sort: precompute each element's texture key, then heap-sort by key.
+///
+/// The comparator (0x70aa00) orders by the single unsigned dword at element
+/// `+0x24` and nothing else, so a three-way compare of precomputed keys is
+/// its exact result (equal keys are the comparator's 0, there is no deeper
+/// tier) and the heap-sort permutation is identical. The key pass mirrors the
+/// comparator's address arithmetic, wrapping as the stock `SHL reg,6` does.
+/// Returns `false` without sorting on a null view or element base, or an
+/// element index at or beyond `BDL_KEY_INDEX_CAP`.
+fn bdl_sort_by_tex_keyed(slice: &mut [u32], base: *mut u8) -> bool {
+    if base.is_null() {
+        return false;
+    }
+    // SAFETY: `base+0x34` is the in-bounds, aligned element-array base slot.
+    let elem_base_slot = unsafe { base.add(0x34) };
+    // SAFETY: the slot holds the element-array base pointer.
+    let elem_base = unsafe { elem_base_slot.cast::<*const u8>().read_unaligned() };
+    if elem_base.is_null() {
+        return false;
+    }
+    let Some(&max_index) = slice.iter().max() else {
+        return false;
+    };
+    if max_index >= BDL_KEY_INDEX_CAP {
+        return false;
+    }
+    BDL_TEX_KEYS.with(|cell| {
+        let mut keys = cell.borrow_mut();
+        keys.resize(max_index as usize + 1, 0);
+        for &index in slice.iter() {
+            let offset = (index as usize).wrapping_mul(0x40).wrapping_add(0x24);
+            let slot = elem_base.wrapping_add(offset);
+            // SAFETY: `slot` addresses the element's texture-key dword, exactly
+            // the dword the comparator loads with `MOV EAX,[ECX + 0x24]`.
+            keys[index as usize] = unsafe { slot.cast::<u32>().read_unaligned() };
+        }
+        let keys = &*keys;
+        crate::math::misc::heap_sort_u_int32__71f860(slice, |a, b| {
+            match keys[a as usize].cmp(&keys[b as usize]) {
+                core::cmp::Ordering::Less => -1,
+                core::cmp::Ordering::Greater => 1,
+                core::cmp::Ordering::Equal => 0,
+            }
+        });
+        true
+    })
+}
+
 /// Bucket-0 (texture-major) heap sort with our own `CWorldView__CompareDrawListByTexture` hook.
 ///
-/// The hook (0x70aa00) is used as the comparator, called directly through the
-/// shared kernel. The stock call site passes the comparator's guest VA to
-/// `HeapSortUInt32`, which would make an indirect call into translated guest
-/// code once per comparison — the single hottest indirect branch in the frame.
+/// Sorts by precomputed per-element texture keys when the list admits them
+/// (see `bdl_sort_by_tex_keyed`); otherwise the hook (0x70aa00) is used as
+/// the comparator, called directly through the shared kernel. The stock call
+/// site passes the comparator's guest VA to `HeapSortUInt32`, which would
+/// make an indirect call into translated guest code once per comparison —
+/// the single hottest indirect branch in the frame.
 fn bdl_sort_by_tex(data: *mut u32, count: u32, base: *mut u8) {
     if data.is_null() || count <= 1 {
         return;
@@ -29660,6 +29820,9 @@ fn bdl_sort_by_tex(data: *mut u32, count: u32, base: *mut u8) {
     // SAFETY: `data` is non-null and `count` elements of `u32` are valid for
     // the duration of the sort, exactly as the stock caller passes them.
     let slice = unsafe { core::slice::from_raw_parts_mut(data, count as usize) };
+    if bdl_sort_by_tex_keyed(slice, base) {
+        return;
+    }
     crate::math::misc::heap_sort_u_int32__71f860(slice, |a, b| bdl_cmp_by_tex(a, b, base));
 }
 

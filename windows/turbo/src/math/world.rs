@@ -700,6 +700,66 @@ pub fn c_world_view__compare_draw_list_opaque__70ae10(
     None
 }
 
+/// Packed total-order sort key for one element, equivalent to the opaque comparator chain.
+///
+/// The arrays order lexicographically, one lane per tier in chain order, so for
+/// any two elements the array comparison is `Less`/`Greater` exactly where
+/// [`c_world_view__compare_draw_list_opaque__70ae10`] returns `Some(-1)`/`Some(1)`
+/// and `Equal` exactly where it returns `None`. A sort can therefore compute
+/// every element's key once, compare keys, and consult the extended comparator
+/// only on full key equality, where the chain itself falls through. Descending
+/// tiers (`f14`, `depth_a`, `f18`) are stored inverted; disabled gated tiers
+/// (`prio`, `tex_key`) are stored as zero on every element so they cannot
+/// decide; the `sub_u16` tier is stored as zero for `type_idx >= 3`, which is
+/// faithful because that tier is only reached when the `type_idx` lane already
+/// ties. Returns `None` when `f14` or `f18` is NaN: the chain's ordered `<`
+/// tests make a NaN tie with every value, which is not a total order and
+/// cannot be expressed by any key, so the caller must fall back to sorting
+/// with the comparator chain itself.
+pub fn draw_elem_sort_key(
+    e: &DrawElem,
+    prio_enabled: bool,
+    prio: u32,
+    tex_enabled: bool,
+) -> Option<[u32; 9]> {
+    if e.f14.is_nan() || e.f18.is_nan() {
+        return None;
+    }
+    Some([
+        if prio_enabled { prio } else { 0 },
+        !float_key_ascending(e.f14),
+        !(e.depth_a.cast_unsigned() ^ 0x8000_0000),
+        e.i28.cast_unsigned() ^ 0x8000_0000,
+        if tex_enabled { e.tex_key } else { 0 },
+        !float_key_ascending(e.f18),
+        e.key_u,
+        e.type_idx.cast_unsigned() ^ 0x8000_0000,
+        if e.type_idx < 3 {
+            u32::from(e.sub_u16)
+        } else {
+            0
+        },
+    ])
+}
+
+/// Order-preserving bit map from a non-NaN `f32` to a `u32`.
+///
+/// `a < b` on the floats iff `map(a) < map(b)` on the integers, and equal
+/// floats map equal: `-0.0` is canonicalised to `+0.0` first (the comparator's
+/// `<` tests treat the two zeros as equal, their bit patterns are not).
+/// Non-negative floats set the sign bit, negative floats invert wholesale, so
+/// the integer order runs -inf .. -0/+0 .. +inf.
+const fn float_key_ascending(f: f32) -> u32 {
+    let bits = f.to_bits();
+    // Both zeros have all 31 value bits clear; everything else keeps its bits.
+    let canonical = if bits.trailing_zeros() >= 31 { 0 } else { bits };
+    if canonical & 0x8000_0000 == 0 {
+        canonical | 0x8000_0000
+    } else {
+        !canonical
+    }
+}
+
 #[cfg(test)]
 mod tests_c_world_view__compare_draw_list_opaque__70ae10 {
     use super::{DrawElem, c_world_view__compare_draw_list_opaque__70ae10 as cmp};
@@ -865,6 +925,139 @@ mod tests_c_world_view__compare_draw_list_opaque__70ae10 {
         c.i28 = 100;
         d.i28 = -100;
         assert_eq!(cmp(&c, &d, false, 0, 0, false), Some(-1));
+    }
+}
+
+#[cfg(test)]
+mod tests_draw_elem_sort_key {
+    use super::{
+        DrawElem, c_world_view__compare_draw_list_opaque__70ae10 as cmp, draw_elem_sort_key,
+    };
+
+    /// Xorshift step, the whole PRNG the generator needs.
+    fn next(state: &mut u32) -> u32 {
+        let mut x = *state;
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        *state = x;
+        x
+    }
+
+    /// Element with every field drawn from the PRNG over a small value pool.
+    ///
+    /// Fields collide often on purpose: the equivalence claim is about ties as
+    /// much as about decided orders, and independent 32-bit draws would never
+    /// tie. The float pool covers both zeros, both infinities and both signs.
+    fn random_elem(state: &mut u32) -> DrawElem {
+        const FLOATS: [f32; 9] = [
+            0.0,
+            -0.0,
+            1.0,
+            -1.0,
+            0.5,
+            -3.25,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            123.0,
+        ];
+        let mut pick = |n: u32| next(state) % n;
+        DrawElem {
+            type_idx: pick(6).cast_signed() - 1,
+            key_u: pick(4),
+            depth_a: pick(5).cast_signed() - 2,
+            f14: FLOATS[pick(9) as usize],
+            f18: FLOATS[pick(9) as usize],
+            i28: pick(5).cast_signed() - 2,
+            tex_key: pick(4),
+            sub_u16: u16::try_from(pick(3)).expect("pool bound is 3"),
+        }
+    }
+
+    #[test]
+    fn key_order_matches_comparator_chain() {
+        // For every pair and every gate combination: the key comparison is
+        // Less/Greater exactly where the chain decides -1/1, Equal exactly
+        // where the chain is undecided (None). Priority values are drawn from
+        // a small pool per element, fixed across the pair's two orderings.
+        let mut state = 0x9e37_79b9;
+        for _ in 0..4000 {
+            let a = random_elem(&mut state);
+            let b = random_elem(&mut state);
+            let prio_a = next(&mut state) % 3;
+            let prio_b = next(&mut state) % 3;
+            for (prio_enabled, tex_enabled) in
+                [(false, false), (false, true), (true, false), (true, true)]
+            {
+                let ka = draw_elem_sort_key(&a, prio_enabled, prio_a, tex_enabled)
+                    .expect("pool has no NaN");
+                let kb = draw_elem_sort_key(&b, prio_enabled, prio_b, tex_enabled)
+                    .expect("pool has no NaN");
+                let chain = cmp(&a, &b, prio_enabled, prio_a, prio_b, tex_enabled);
+                let expected = match chain {
+                    Some(-1) => core::cmp::Ordering::Less,
+                    Some(1) => core::cmp::Ordering::Greater,
+                    None => core::cmp::Ordering::Equal,
+                    Some(other) => panic!("comparator returned {other}"),
+                };
+                assert_eq!(
+                    ka.cmp(&kb),
+                    expected,
+                    "gates prio={prio_enabled} tex={tex_enabled} prio_a={prio_a} prio_b={prio_b}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn nan_yields_no_key() {
+        // A NaN in either float tier makes the chain's `<` tests tie with
+        // everything, which no total key order can express, so the builder
+        // must refuse rather than emit a key.
+        let mut e = DrawElem {
+            type_idx: 0,
+            key_u: 0,
+            depth_a: 0,
+            f14: f32::NAN,
+            f18: 0.0,
+            i28: 0,
+            tex_key: 0,
+            sub_u16: 0,
+        };
+        assert!(draw_elem_sort_key(&e, false, 0, false).is_none());
+        e.f14 = 0.0;
+        e.f18 = f32::NAN;
+        assert!(draw_elem_sort_key(&e, false, 0, false).is_none());
+        e.f18 = 0.0;
+        assert!(draw_elem_sort_key(&e, false, 0, false).is_some());
+    }
+
+    #[test]
+    fn zero_signs_tie_in_the_float_tiers() {
+        // -0.0 and +0.0 differ in bits but tie under the chain's `<` tests;
+        // the canonicalisation must make their keys equal too.
+        let mut a = DrawElem {
+            type_idx: 0,
+            key_u: 0,
+            depth_a: 0,
+            f14: 0.0,
+            f18: -0.0,
+            i28: 0,
+            tex_key: 0,
+            sub_u16: 0,
+        };
+        let b = DrawElem {
+            f14: -0.0,
+            f18: 0.0,
+            ..a
+        };
+        let ka = draw_elem_sort_key(&a, false, 0, false).expect("no NaN");
+        let kb = draw_elem_sort_key(&b, false, 0, false).expect("no NaN");
+        assert_eq!(ka, kb);
+        a.f14 = f32::MIN_POSITIVE;
+        let kc = draw_elem_sort_key(&a, false, 0, false).expect("no NaN");
+        // A positive value must still sort after either zero in a descending tier.
+        assert_eq!(kc.cmp(&kb), core::cmp::Ordering::Less);
     }
 }
 
