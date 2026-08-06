@@ -29725,6 +29725,45 @@ fn bdl_sort_opaque_keyed(slice: &mut [u32], base: *mut u8, view: i32) -> bool {
     })
 }
 
+/// The draw-list view pointer as the i32 the comparator ABI carries it in.
+#[inline]
+fn bdl_view_i32(base: *mut u8) -> i32 {
+    base as usize as i32
+}
+
+/// Transparent-bucket heap sort with our own `CWorldView__CompareDrawListExtended` hook.
+///
+/// The comparator (0x70aa30) is pairwise through and through (texture-pointer
+/// walks over variable-length streams), so this bucket has no precomputed-key
+/// form; the win is calling the hook directly through the shared kernel. A
+/// `wow_turbo_diff` build routes through the guest VA instead, on purpose:
+/// the patched prologue enters the thunk, which is the only comparator call
+/// site the thunk-level DIFF harness can observe (the sibling comparators are
+/// reached by name only). A production build has no harness to feed, and
+/// through the VA every comparison would just bounce off the patched prologue
+/// and detour back into the same Rust fn.
+fn bdl_sort_transparent(data: *mut u32, count: u32, base: *mut u8) {
+    #[cfg(wow_turbo_diff)]
+    {
+        const CMP_TRANS: *const core::ffi::c_void =
+            (crate::win::EXPECTED_IMAGE_BASE + 0x30_aa30) as *const core::ffi::c_void;
+        heap_sort_u_int32__71f860(CMP_TRANS, data, count, base.cast());
+    }
+    #[cfg(not(wow_turbo_diff))]
+    {
+        if data.is_null() || count <= 1 {
+            return;
+        }
+        // SAFETY: `data` is non-null and `count` elements of `u32` are valid
+        // for the duration of the sort, exactly as the stock caller passes.
+        let slice = unsafe { core::slice::from_raw_parts_mut(data, count as usize) };
+        let view = bdl_view_i32(base);
+        crate::math::misc::heap_sort_u_int32__71f860(slice, |a, b| {
+            c_world_view__compare_draw_list_extended__70aa30(a, b, view)
+        });
+    }
+}
+
 /// Opaque-bucket heap sort with our own `CWorldView__CompareDrawListOpaque` hook (0x70ae10).
 ///
 /// Sorts by precomputed per-element keys when the list admits them (see
@@ -29741,7 +29780,7 @@ fn bdl_sort_opaque(data: *mut u32, count: u32, base: *mut u8) {
     // SAFETY: `data` is non-null and `count` elements of `u32` are valid for
     // the duration of the sort, exactly as the stock caller passes them.
     let slice = unsafe { core::slice::from_raw_parts_mut(data, count as usize) };
-    let view = base as usize as i32;
+    let view = bdl_view_i32(base);
     if bdl_sort_opaque_keyed(slice, base, view) {
         return;
     }
@@ -30015,13 +30054,6 @@ fn bdl_refresh_phase(base: *mut u8) {
 /// three remaining buckets.
 fn bdl_finalize(base: *mut u8) {
     const TABLE: *mut u32 = (crate::win::EXPECTED_IMAGE_BASE + 0x8e_fff8) as *mut u32;
-    // The transparent-bucket comparator (0x70aa30) is reimplemented as the
-    // `CWorldView__CompareDrawListExtended__70aa30` hook. This sort routes
-    // through the guest VA on purpose: the patched prologue enters the thunk,
-    // which is the only comparator call site the thunk-level DIFF harness can
-    // observe (its two sibling comparators are reached by name only).
-    const CMP_TRANS: *const core::ffi::c_void =
-        (crate::win::EXPECTED_IMAGE_BASE + 0x30_aa30) as *const core::ffi::c_void;
 
     // SAFETY: `base` is the `CWorldView` `this` the draw-list builder null-checked on entry;
     // `+0x40` is the element-count dword of its bucket-0 index header at `+0x3c`.
@@ -30186,7 +30218,7 @@ fn bdl_finalize(base: *mut u8) {
     let t_data = unsafe { bdl_rd32(base, 0x54) } as *mut u32;
     // SAFETY: `+0x50` is that same header's element-count dword.
     let t_cnt = unsafe { bdl_rd32(base, 0x50) };
-    heap_sort_u_int32__71f860(CMP_TRANS, t_data, t_cnt, base.cast());
+    bdl_sort_transparent(t_data, t_cnt, base);
     // SAFETY: live view; `+0x64` is the storage pointer of the index header at `+0x5c`.
     let a_data = unsafe { bdl_rd32(base, 0x64) } as *mut u32;
     // SAFETY: `+0x60` is that same header's element-count dword.
