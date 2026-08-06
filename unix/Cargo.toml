@@ -5,7 +5,7 @@ resolver = "2"
 [workspace.package]
 edition = "2024"
 rust-version = "1.97"
-version = "1.4.4"
+version = "1.4.5"
 license = "MIT"
 description = "WoW 1.12 client mods (perf reimpls + on-device chat translation) for Wine on macOS"
 authors = ["Alexander Theissen <alex.theissen@me.com>"]
