@@ -2864,6 +2864,7 @@ pub fn c_gx_device__copy_current_matrix__592730(this: *mut u8, dst: *mut f32) {
 /// cell size, world origin, and divisor are fixed host globals read by absolute
 /// address (base verified at load; client non-`DYNAMICBASE`).
 pub fn c_map_chunk__build_grid_vertices__68d540(this: *mut core::ffi::c_void) {
+    super::seam_probe::trace_grid_build();
     if this.is_null() {
         return;
     }
@@ -15004,6 +15005,7 @@ pub fn map_chunk__query_wmo_groups__6abc40(
     results: *mut u32,
     query_flags: u32,
 ) -> i32 {
+    super::seam_probe::trace_wmo_query();
     if group_list.is_null() || query_box.is_null() {
         return 1;
     }
@@ -15111,6 +15113,7 @@ pub fn map_chunk__query_doodad_sets__6abe60(
     results: *mut u32,
     query_flags: u32,
 ) -> i32 {
+    super::seam_probe::trace_doodad_query();
     if doodad_set_list.is_null() || query_box.is_null() {
         return 1;
     }
@@ -25310,6 +25313,7 @@ pub fn cm2_scene__trace_line__7089c0(
     end_local: *mut f32,
     p_max_dist: *const f32,
 ) -> i32 {
+    super::seam_probe::trace_scene();
     if this.is_null() || p_scene.is_null() || start_local.is_null() || end_local.is_null() {
         return 0;
     }
@@ -32184,6 +32188,7 @@ pub fn world_trace_line_against_terrain__69c320(
     out_hit_chunk: *mut i32,
 ) {
     const BASE: usize = crate::win::EXPECTED_IMAGE_BASE;
+    super::seam_probe::trace_terrain();
     // SAFETY: fixed `.rdata`/`.data` grid constants in the live host image.
     let center = unsafe { ((BASE + 0x3f_fab4) as *const f32).read() };
     // SAFETY: grid scale.
@@ -34857,6 +34862,7 @@ pub fn collision_sweep_volume_against_world_planes__632ba0(
     /// directly as Rust fns below (no detour).
     const DOWNWARD_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x23_2a30;
 
+    super::seam_probe::trace_sweep();
     if ctx.is_null()
         || plane_set.is_null()
         || dir.is_null()
@@ -37979,6 +37985,7 @@ pub fn c_world__collect_geometry_from_nodes__6aaab0(
     query_flags: u32,
     out_hit_flags: *mut u32,
 ) -> u8 {
+    super::seam_probe::trace_geometry();
     if box_ptr.is_null() || result.is_null() {
         return 0;
     }
@@ -39513,6 +39520,7 @@ pub fn c_movement__step_ground_move__6367b0(
     dist: f32,
     dir2d: *const f32,
 ) -> u32 {
+    super::seam_probe::trace_ground();
     if this.is_null() || dir2d.is_null() {
         return time_ms;
     }

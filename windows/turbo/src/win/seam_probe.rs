@@ -12,7 +12,13 @@
 //! pay per session; and what grain the per-emitter particle draws offer a
 //! fork (draws per second, live particles per draw with a histogram whose
 //! buckets end at 4/16/64/256, the quad build's cost spread, and how much of
-//! an up-front output reservation the emitted counts would waste).
+//! an up-front output reservation the emitted counts would waste); and which
+//! entry family feeds the collision/trace cluster and at what call rate
+//! (per-unit ground movement, swept-volume queries, the terrain and M2-scene
+//! arms of trace lines, spatial-node geometry collection, the chunk WMO and
+//! doodad queries, and grid-vertex rebuilds), which is what apportions a
+//! sampler's collision share when the callers above these entries carry no
+//! frame pointers.
 //!
 //! Counters ride the same arm as the event gauge (`wow::events` at debug):
 //! unarmed, every entry point is a load and a branch. All writers are the
@@ -47,6 +53,15 @@ static FIN_CMP_CALLS: AtomicU64 = AtomicU64::new(0);
 
 static PARTICLE_LOCKS: AtomicU32 = AtomicU32::new(0);
 static RAIN_LOCKS: AtomicU32 = AtomicU32::new(0);
+
+static TRACE_GROUND: AtomicU32 = AtomicU32::new(0);
+static TRACE_SWEEP: AtomicU32 = AtomicU32::new(0);
+static TRACE_TERRAIN: AtomicU32 = AtomicU32::new(0);
+static TRACE_SCENE: AtomicU32 = AtomicU32::new(0);
+static TRACE_GEOMETRY: AtomicU32 = AtomicU32::new(0);
+static TRACE_WMO_QUERY: AtomicU32 = AtomicU32::new(0);
+static TRACE_DOODAD_QUERY: AtomicU32 = AtomicU32::new(0);
+static TRACE_GRID_BUILD: AtomicU32 = AtomicU32::new(0);
 
 static PART_DRAWS: AtomicU32 = AtomicU32::new(0);
 static PART_CLAMPED: AtomicU32 = AtomicU32::new(0);
@@ -177,6 +192,70 @@ pub fn rain_lock() {
     }
 }
 
+/// One ground-move step (`CMovement`), the per-unit movement entry of the collision cluster.
+#[inline]
+pub fn trace_ground() {
+    if armed() {
+        bump32(&TRACE_GROUND);
+    }
+}
+
+/// One swept-volume collision query against the world planes.
+#[inline]
+pub fn trace_sweep() {
+    if armed() {
+        bump32(&TRACE_SWEEP);
+    }
+}
+
+/// One terrain arm of a world trace line.
+#[inline]
+pub fn trace_terrain() {
+    if armed() {
+        bump32(&TRACE_TERRAIN);
+    }
+}
+
+/// One M2-scene arm of a trace line.
+#[inline]
+pub fn trace_scene() {
+    if armed() {
+        bump32(&TRACE_SCENE);
+    }
+}
+
+/// One geometry collection over the world's spatial nodes.
+#[inline]
+pub fn trace_geometry() {
+    if armed() {
+        bump32(&TRACE_GEOMETRY);
+    }
+}
+
+/// One WMO-group query on a map chunk.
+#[inline]
+pub fn trace_wmo_query() {
+    if armed() {
+        bump32(&TRACE_WMO_QUERY);
+    }
+}
+
+/// One doodad-set query on a map chunk.
+#[inline]
+pub fn trace_doodad_query() {
+    if armed() {
+        bump32(&TRACE_DOODAD_QUERY);
+    }
+}
+
+/// One grid-vertex rebuild on a map chunk (terrain streaming).
+#[inline]
+pub fn trace_grid_build() {
+    if armed() {
+        bump32(&TRACE_GRID_BUILD);
+    }
+}
+
 /// One per-emitter particle draw: its grain and what the quad build cost.
 ///
 /// `count` is the live-particle count the draw walked, `cap` the capacity the
@@ -260,6 +339,21 @@ pub fn emit_cumulative() {
     let r = RAIN_LOCKS.load(Ordering::Relaxed);
     if p != 0 || r != 0 {
         log::debug!(target: "wow::events", "seam locks: particle {p}, rain {r}");
+    }
+    let ground = TRACE_GROUND.load(Ordering::Relaxed);
+    let sweep = TRACE_SWEEP.load(Ordering::Relaxed);
+    let terrain = TRACE_TERRAIN.load(Ordering::Relaxed);
+    let scene = TRACE_SCENE.load(Ordering::Relaxed);
+    let geometry = TRACE_GEOMETRY.load(Ordering::Relaxed);
+    let wmo = TRACE_WMO_QUERY.load(Ordering::Relaxed);
+    let doodad = TRACE_DOODAD_QUERY.load(Ordering::Relaxed);
+    let grid = TRACE_GRID_BUILD.load(Ordering::Relaxed);
+    if ground | sweep | terrain | scene | geometry | wmo | doodad | grid != 0 {
+        log::debug!(
+            target: "wow::events",
+            "seam traces: ground {ground}, sweep {sweep}, terrain {terrain}, scene {scene}, \
+             geom {geometry}, wmo {wmo}, doodad {doodad}, grid {grid}",
+        );
     }
     let draws = PART_DRAWS.load(Ordering::Relaxed);
     if draws != 0 {
