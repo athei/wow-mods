@@ -165,6 +165,12 @@ impl Memo {
 
     /// The `TString*` recorded for `key`, if any.
     fn get(&self, key: u64) -> Option<usize> {
+        if key == 0 {
+            // Zero marks an empty way: a zero key would match one and hand
+            // back a null `TString`. Callers never record it (a zero GUID
+            // renders without being stored), so it is never a hit either.
+            return None;
+        }
         self.ways[Self::set_of(key)].iter().find_map(|way| {
             (way.key.load(Ordering::Relaxed) == key).then(|| {
                 let value = way.value.load(Ordering::Relaxed);
