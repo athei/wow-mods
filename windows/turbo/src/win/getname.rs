@@ -22,8 +22,12 @@
 //! five-byte jump, which does not say whose jump it is, so the module owning
 //! the displaced code is identified before install and only a prologue that is
 //! stock, or a replacement whose body has been read, enables the fast path.
-//! Anything else runs the displaced code unchanged, as do the argument shapes
-//! this does not model (the error paths, where the host owns the message).
+//! The GUID half is served whenever a replacement that answers it is
+//! installed, whichever of the two it is; a machine with neither keeps the
+//! stock reading, so a script probing for the extension cannot detect a
+//! server that is not there. Anything else runs the displaced code unchanged,
+//! as do the argument shapes this does not model (the error paths, where the
+//! host owns the message).
 //!
 //! Pushes reproduce the host's own: the taint propagation of the elided
 //! `lua_rawgeti(L, 1, 0)`, and — on a memo hit, which calls nothing — the
@@ -53,12 +57,12 @@ const VERIFIED_HANDLER_MODULE: &str = "SuperWoWhook.dll";
 /// object `+0x4e8` rendered by the same uppercase `0x%016X`. It writes no
 /// globals and keeps no per-call state, so nothing is lost by not running it.
 ///
-/// It classifies that argument differently, though — a numeric conversion
-/// where the other replacement takes the broader optional-boolean reading, so
-/// the two disagree for a boolean argument. That is why reclaiming the entry
-/// drops to [`MODE_STOCK`]: the name behaviour every implementation shares is
-/// served here, and anything that reads past the frame argument goes to the
-/// displaced code instead of being answered under the wrong dialect.
+/// It classifies that argument with a numeric conversion where the other
+/// replacement takes the broader optional-boolean reading, so the two disagree
+/// for a boolean argument. The broader reading is the documented one, and it
+/// is what this reimplementation serves wherever either replacement is
+/// installed; the numeric shape scripts actually pass classifies identically
+/// under both.
 const LATE_HANDLER_MODULE: &str = "nampower.dll";
 
 /// In-module offset of [`LATE_HANDLER_MODULE`]'s handler.
@@ -105,10 +109,10 @@ const LUA_REGISTRYINDEX: i32 = -10_000;
 
 /// Run the displaced code for every call: the prologue's owner is unknown.
 const MODE_DELEGATE: u8 = 0;
-/// Stock prologue — the name behaviour only, extra arguments ignored.
+/// No GUID server installed: the name behaviour only, extra arguments ignored.
 const MODE_STOCK: u8 = 1;
-/// A replacement whose body has been read — name and GUID behaviours.
-const MODE_VERIFIED: u8 = 2;
+/// A GUID server whose body has been read is installed: name and GUID.
+const MODE_EXTENDED: u8 = 2;
 
 /// Which behaviour [`detect_underlying`] established, decided before install.
 static MODE: AtomicU8 = AtomicU8::new(MODE_DELEGATE);
@@ -246,8 +250,19 @@ fn bump(counter: &AtomicU32) {
 pub fn detect_underlying(image_base: usize) {
     let va = image_base + GET_NAME_RVA;
     let Some(target) = wow_hook::detour_target(va) else {
-        log::info!(target: super::LOG_TARGET, "getname: stock handler, name only");
-        MODE.store(MODE_STOCK, Ordering::Relaxed);
+        // The late module leaves this prologue stock until in-world init, so
+        // at install time its presence, not the entry's bytes, is what says
+        // this machine has the GUID reading.
+        if late_handler_installed() {
+            log::info!(
+                target: super::LOG_TARGET,
+                "getname: stock prologue with {LATE_HANDLER_MODULE} installed, name and GUID",
+            );
+            MODE.store(MODE_EXTENDED, Ordering::Relaxed);
+        } else {
+            log::info!(target: super::LOG_TARGET, "getname: stock handler, name only");
+            MODE.store(MODE_STOCK, Ordering::Relaxed);
+        }
         return;
     };
     let owner = wow_hook::module_of(target);
@@ -272,12 +287,24 @@ pub fn detect_underlying(image_base: usize) {
     }
     MODE.store(
         if verified {
-            MODE_VERIFIED
+            MODE_EXTENDED
         } else {
             MODE_DELEGATE
         },
         Ordering::Relaxed,
     );
+}
+
+/// Whether [`LATE_HANDLER_MODULE`] is loaded with the handler body that was read.
+fn late_handler_installed() -> bool {
+    let Some(base) = wow_hook::module_base(LATE_HANDLER_MODULE) else {
+        return false;
+    };
+    let handler = base + LATE_HANDLER_OFFSET;
+    // SAFETY: `handler` is an offset into a loaded module's image, and the
+    // read stays inside the body whose first instructions these are.
+    let seen: [u8; 6] = unsafe { *(handler as *const [u8; 6]) };
+    seen == LATE_HANDLER_PROLOGUE
 }
 
 /// Whether the handler whose body was read is what the entry now runs.
@@ -296,10 +323,10 @@ pub fn detect_underlying(image_base: usize) {
 /// handler's, so what it does with this function is not in doubt; because it
 /// is the only loaded module besides the one displaced at attach whose image
 /// mentions the entry at all; and because reclaiming loses nothing either
-/// way: what is served afterwards is the name behaviour every implementation
-/// of this function shares, and everything else goes to the displaced code.
+/// way: both behaviours it served are served here, and the shapes this
+/// reimplementation does not model go to the displaced code.
 fn late_handler_owns(thunk: usize) -> bool {
-    let Some(base) = wow_hook::module_base(LATE_HANDLER_MODULE) else {
+    if wow_hook::module_base(LATE_HANDLER_MODULE).is_none() {
         log::info!(
             target: super::LOG_TARGET,
             "getname: the entry went to unnamed memory at {thunk:#010x} \
@@ -307,12 +334,8 @@ fn late_handler_owns(thunk: usize) -> bool {
             wow_hook::thunk_bytes(thunk),
         );
         return false;
-    };
-    let handler = base + LATE_HANDLER_OFFSET;
-    // SAFETY: `handler` is an offset into a loaded module's image, and the
-    // read stays inside the body whose first instructions these are.
-    let seen: [u8; 6] = unsafe { *(handler as *const [u8; 6]) };
-    if seen != LATE_HANDLER_PROLOGUE {
+    }
+    if !late_handler_installed() {
         log::info!(
             target: super::LOG_TARGET,
             "getname: {LATE_HANDLER_MODULE}+{LATE_HANDLER_OFFSET:#x} is not the body \
@@ -332,15 +355,13 @@ fn late_handler_owns(thunk: usize) -> bool {
 /// Decide whether to reclaim the entry from whoever overwrote the prologue.
 ///
 /// Called once, from the periodic prologue check, with the address the
-/// rewritten entry now jumps to. Two conditions have to hold together, and
-/// both are about not destroying behaviour rather than about ownership.
-///
-/// The new owner must be the handler whose body has been read, so that what
-/// stops running is understood rather than merely displaced. And this hook
-/// must have gone in over the replacement it was written against, because the
-/// GUID reading it declines to serve is answered by the displaced code — over
-/// a stock prologue there is no such answer, and reclaiming would take a
-/// working behaviour away from whoever asked for it.
+/// rewritten entry now jumps to. The new owner must be the handler whose body
+/// has been read, so that what stops running is understood rather than merely
+/// displaced; both of its behaviours are then served here, faster. The one
+/// mode that refuses is [`MODE_DELEGATE`]: there the displaced code is a
+/// handler this reimplementation does not model, and re-asserting the hook
+/// would keep that handler reachable only for the shapes that delegate while
+/// swallowing the rest.
 fn reclaim_entry(owner_va: usize) -> bool {
     // The prologue points at a thunk in private memory, not at the handler,
     // and that allocation sits somewhere different every run — so ask where
@@ -348,20 +369,21 @@ fn reclaim_entry(owner_va: usize) -> bool {
     if !late_handler_owns(owner_va) {
         return false;
     }
-    if MODE.load(Ordering::Relaxed) != MODE_VERIFIED {
+    if MODE.load(Ordering::Relaxed) == MODE_DELEGATE {
         log::info!(
             target: super::LOG_TARGET,
-            "getname: {LATE_HANDLER_MODULE} owns the entry and nothing underneath \
-             serves its extra reading — leaving it",
+            "getname: an unmodelled handler is underneath, \
+             leaving the entry to {LATE_HANDLER_MODULE}",
         );
         return false;
     }
-    // The name half is shared by every implementation; the argument dialects
-    // differ, so those calls go to the displaced code from here on.
-    MODE.store(MODE_STOCK, Ordering::Relaxed);
+    // The new owner's GUID reading is served here from now on. Its numeric
+    // argument dialect differs from the optional-boolean one only for a
+    // boolean argument, which is now answered under the documented reading.
+    MODE.store(MODE_EXTENDED, Ordering::Relaxed);
     log::info!(
         target: super::LOG_TARGET,
-        "getname: reclaiming the entry from {LATE_HANDLER_MODULE}, names only",
+        "getname: reclaiming the entry from {LATE_HANDLER_MODULE}, name and GUID",
     );
     true
 }
