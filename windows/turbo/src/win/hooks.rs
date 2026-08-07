@@ -41442,6 +41442,7 @@ pub fn weather__set_type__67baf0(this: *mut u8, weather_type: i32, intensity: f3
 /// follows a present runs the limiter (the scene ends twice per frame under
 /// a software cursor).
 pub fn c_gx_device_d3d__i_scene_end__5a17a0(this: *mut u8) {
+    super::transmog::flush();
     if !super::unitxp::settings::in_world() {
         (super::symbols::originals::c_gx_device_d3d__i_scene_end__5a17a0())(this);
         return;
@@ -41845,3 +41846,47 @@ pub fn floating_frame_anchor_at_screen_pos__509ec0(
     set_point(frame, point as u32, relative_to, 6, center_x, top_y, 1);
     relative_to
 }
+
+/// The raw descriptor-field write — visible-item writes may be deferred.
+///
+/// `thiscall(ecx = this)` plus the field index and the value, `RET 8`,
+/// returns 1. Stock reads the field array at `this + 0x8` and stores the
+/// value at the index; that store is reproduced here, because the entry is
+/// hot enough that a trampoline call on every write would cost more than the
+/// work it does. Writes the coalescer takes over are reported as written:
+/// stock's return value is a constant, and callers only ever see it succeed.
+pub fn cg_object_c__set_descriptor_field_raw__6142e0(this: *mut u8, index: u32, value: u32) -> u32 {
+    if super::transmog::intercept_write(this, index, value) {
+        return 1;
+    }
+    if this.is_null() {
+        return 1;
+    }
+    // SAFETY: `this` is the entry's own receiver, whose `+0x8` stock itself
+    // dereferences on every call.
+    let fields = unsafe { *(this.addr().wrapping_add(0x8) as *const usize) };
+    // SAFETY: `fields` is the field array stock indexes with the caller's
+    // index; reproducing the store means reproducing that indexing exactly.
+    unsafe { *((fields + index as usize * 4) as *mut u32) = value };
+    1
+}
+
+/// World entry for a unit — an appearance flicker answers with a refresh.
+///
+/// `thiscall(ecx = this)` plus three arguments, `RET 0xc`, void. Delegates
+/// unless every visible difference since the last sighting is a flicker that
+/// already came back, in which case re-reading the unit's own record is all
+/// the state change there was.
+pub fn cg_unit_c__on_enter_world__5fb880(this: *mut u8, a: i32, b: i32, c: i32) {
+    if !this.is_null() && super::transmog::downgrade_enter_world(this) {
+        return;
+    }
+    (super::symbols::originals::cg_unit_c__on_enter_world__5fb880())(this, a, b, c);
+}
+
+/// The client's code-integrity scan, replaced with an immediate return.
+///
+/// `thiscall(ecx = this)`, `RET 0`, void. Stock reads two globals and jumps
+/// into code generated past the end of the image; with a patched prologue in
+/// the process that path has nothing useful to report, so it does not run.
+pub fn wow_client__integrity_scan__42a320(_this: *mut u8) {}

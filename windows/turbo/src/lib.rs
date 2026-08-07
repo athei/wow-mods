@@ -33,5 +33,13 @@ mod math;
 #[cfg(any(target_arch = "x86", test))]
 mod storm;
 
+/// Portable visible-item write-coalescing kernel.
+///
+/// Suppresses the appearance flicker behind the descriptor-write hooks. Like
+/// `math` and `storm`, it depends on nothing Windows-specific and is
+/// host-unit-tested under the same toolchain.
+#[cfg(any(target_arch = "x86", test))]
+mod transmog;
+
 #[cfg(target_arch = "x86")]
 mod win;

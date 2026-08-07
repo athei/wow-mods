@@ -4719,3 +4719,43 @@ abi  = "fastcall"
 ret  = "*mut u8"
 args = ["i32", "*mut u8", "*mut u8", "*const f32", "i32"]
 preserve = []
+
+# The raw descriptor-field write. Three instructions in stock — the field
+# array at `+0x8`, an indexed store, a constant 1 — and one of the hottest
+# entries in the client, so the adapter's own index tests come before
+# anything else it does. It stands in for the whole entry rather than
+# wrapping it: the store is reproduced here and the trampoline is called only
+# on the paths that defer one. Stock-only signature, no detour alternative:
+# a second coalescer over this entry would double-defer, so an entry another
+# module already owns is one this refuses and leaves alone.
+[functions.CGObject_C__SetDescriptorFieldRaw__6142e0]
+rva  = 0x2142e0
+sig  = "55 8B EC 8B 41 08 8B 4D 0C"
+abi  = "thiscall"
+ret  = "u32"
+args = ["*mut u8", "u32", "u32"]
+preserve = []
+
+# World entry for a unit. The wrapper answers the calls whose only difference
+# from the last sighting is an appearance flicker that already came back —
+# rebuilding a model for those is what the coalescer exists to avoid — and
+# delegates every other call. Stock-only signature, same reason as above.
+[functions.CGUnit_C__OnEnterWorld__5fb880]
+rva  = 0x1fb880
+sig  = "55 8B EC 83 EC 30 53 56 57 8B F1"
+abi  = "thiscall"
+ret  = "void"
+args = ["*mut u8", "i32", "i32", "i32"]
+preserve = []
+
+# The client's periodic code-integrity scan, which reads two globals and
+# jumps into code generated past the end of the image. Any mod that patches a
+# prologue needs it inert, and the replacement is the shape every such mod
+# installs: return immediately, touch nothing.
+[functions.WowClient__IntegrityScan__42a320]
+rva  = 0x2a320
+sig  = "55 8B EC 83 EC 40 A1 ?? ?? ?? ?? 85 C0 56 8B F1"
+abi  = "thiscall"
+ret  = "void"
+args = ["*mut u8"]
+preserve = ["edx"]

@@ -28,6 +28,12 @@ unsafe extern "system" {
     fn GetModuleHandleA(module_name: *const u8) -> usize;
     fn GetModuleHandleExA(flags: u32, module_name: *const u8, module: *mut usize) -> i32;
     fn GetModuleFileNameA(module: usize, filename: *mut u8, size: u32) -> u32;
+    fn VirtualProtect(
+        address: *mut c_void,
+        size: usize,
+        new_protect: u32,
+        old_protect: *mut u32,
+    ) -> i32;
 }
 
 /// Resolve a module handle from an address inside it, taking no reference.
@@ -571,6 +577,84 @@ pub unsafe fn install(target_va: usize, detour: *mut c_void, label: &str) -> Opt
     } else {
         None
     }
+}
+
+/// Replace `expected` with `replacement` at `va`, verifying before writing.
+///
+/// The in-place counterpart to a prologue detour, for the rare change a hook
+/// cannot express: rewriting an instruction in the middle of a host function.
+/// The write happens only when the site still holds `expected`; finding
+/// `replacement` already there means another module made the same edit first,
+/// which is reported and treated as success because the machine state is the
+/// one this call wanted. Any other bytes refuse, exactly like a signature
+/// mismatch at install — a site that reads differently is a different build,
+/// or somebody else's incompatible patch, and writing over it corrupts the
+/// host.
+///
+/// Returns whether the site now holds `replacement`. Callers that want the
+/// periodic overwrite check on the site register it with [`watch_patch`] and
+/// re-run [`snapshot_patches`] after this call, same as a queued hook.
+///
+/// # Safety
+///
+/// `va` must point at mapped host code readable and patchable for
+/// `expected.len()` bytes, and no thread may be executing inside the patched
+/// range during the call — install-time use only.
+#[must_use]
+pub unsafe fn patch_bytes(va: usize, expected: &[u8], replacement: &[u8], label: &str) -> bool {
+    const PAGE_EXECUTE_READWRITE: u32 = 0x40;
+
+    if expected.is_empty() || expected.len() != replacement.len() {
+        return false;
+    }
+    // SAFETY: per the contract, `va` is readable for `expected.len()` bytes.
+    let live = unsafe { core::slice::from_raw_parts(va as *const u8, expected.len()) };
+    if live == replacement {
+        log::info!(
+            target: LOG_TARGET,
+            "{label}: site at {va:#010x} already patched by another module — leaving it"
+        );
+        return true;
+    }
+    if live != expected {
+        log::warn!(
+            target: LOG_TARGET,
+            "{label}: unexpected bytes at {va:#010x} — refusing to patch"
+        );
+        return false;
+    }
+    let mut old_protect = 0u32;
+    // SAFETY: the published signature; `va` is mapped for the patch length per
+    // the contract, and `old_protect` is written only on success.
+    let ok = unsafe {
+        VirtualProtect(
+            va as *mut c_void,
+            replacement.len(),
+            PAGE_EXECUTE_READWRITE,
+            &raw mut old_protect,
+        )
+    };
+    if ok == 0 {
+        log::warn!(target: LOG_TARGET, "{label}: VirtualProtect({va:#010x}) failed");
+        return false;
+    }
+    // SAFETY: the range was just made writable, `replacement` is a live slice
+    // of the verified length, and per the contract no thread executes here.
+    unsafe {
+        core::ptr::copy_nonoverlapping(replacement.as_ptr(), va as *mut u8, replacement.len())
+    };
+    let mut restored = 0u32;
+    // SAFETY: same range as above; restores the protection the page had.
+    unsafe {
+        VirtualProtect(
+            va as *mut c_void,
+            replacement.len(),
+            old_protect,
+            &raw mut restored,
+        )
+    };
+    log::info!(target: LOG_TARGET, "byte patch applied: {label} @ {va:#010x}");
+    true
 }
 
 /// Whether the bytes at `va` match the wildcard byte pattern `sig`.

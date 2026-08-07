@@ -99,17 +99,17 @@ undocumented_unsafe_blocks = "warn"
 # behaviour it has to match.
 items_after_statements = "allow"        # 864
 cast_ptr_alignment = "allow"            # 921 — reads are already `read_unaligned`
-unreadable_literal = "allow"            # 387 — addresses and bit masks, verbatim
+unreadable_literal = "allow"            # 390 — addresses and bit masks, verbatim
 similar_names = "allow"                 # 219
-semicolon_if_nothing_returned = "allow" # 149
-many_single_char_names = "allow"        # 41
+semicolon_if_nothing_returned = "allow" # 151
+many_single_char_names = "allow"        # 42
 
 # Numeric conversions that must truncate, wrap and round exactly as the
 # original did. The usual fix — `try_from(..).expect(..)` — turns a silent
 # narrowing into a panic, which is a behaviour change, and in a per-frame hook
 # it is a crash. Float comparison is exact on purpose: the differential harness
 # compares bit patterns.
-cast_possible_truncation = "allow"      # 363
+cast_possible_truncation = "allow"      # 375
 cast_sign_loss = "allow"                # 230
 cast_possible_wrap = "allow"            # 102
 cast_precision_loss = "allow"           # 109
@@ -132,7 +132,7 @@ imprecise_flops = "allow"               # 8
 # Style preferences that fight the transcription: restructuring control flow to
 # satisfy them moves code away from the shape being reproduced, for no change
 # in what the function does.
-missing_const_for_fn = "allow"          # 90
+missing_const_for_fn = "allow"          # 99
 useless_let_if_seq = "allow"            # 21
 if_not_else = "allow"                   # 12
 suspicious_operation_groupings = "allow" # 12

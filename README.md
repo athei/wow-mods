@@ -288,11 +288,23 @@ and the log line names it.
   functions natively. `UnitXP("version", "additionalInformation")` names
   `wow_turbo`, not the original, so a script probing for the exact original
   can tell them apart.
-- **SuperWoW, nampower, transmogfix — compatible.** Load them first and
-  `wow_turbo` stays out of their way. Where one of them wraps an entry
-  `wow_turbo` also wraps and both only ever add behaviour around the original
-  — the scene-end entry is the current example — the two stack instead:
-  `wow_turbo` accepts the installed detour and chains underneath it.
+- **transmogfix — replaced; remove it.** Its two jobs are covered. Equipment
+  appearance changes arrive from the server as a blank-then-restore pair on
+  the same field, and applying each one eagerly rebuilds a model that never
+  visibly changed; `wow_turbo` swallows the pair when the restore lands
+  inside the window and applies the blank for real only when it does not, at
+  most sixteen units per frame with one refresh each. And the client's file
+  resolver only checks the file system on some lookup paths, which leaves
+  loose custom art unreachable on the others: the two branches that gate the
+  check are opened at load, verified before they are written and skipped if
+  another mod already opened them. It also had to blank the client's
+  integrity scan to keep its own patches working, which `wow_turbo` now does
+  itself, so removing it changes nothing there either.
+- **SuperWoW, nampower — compatible.** Load them first and `wow_turbo` stays
+  out of their way. Where one of them wraps an entry `wow_turbo` also wraps
+  and both only ever add behaviour around the original — the scene-end entry
+  is the current example — the two stack instead: `wow_turbo` accepts the
+  installed detour and chains underneath it.
 
 If something ever misbehaves, `WOW_TURBO_SKIP=all` disables every hook and
 `WOW_TURBO_SKIP=Name1,Name2` disables specific ones — no rebuild, no

@@ -17,6 +17,7 @@ mod objmgr;
 mod script_method;
 mod seam_probe;
 mod symbols;
+mod transmog;
 mod unitxp;
 
 use core::ffi::c_void;
@@ -253,6 +254,13 @@ fn attach_process(instance: *mut c_void) {
     // a later same-entry detour still reaches this dispatcher through its own
     // trampoline, so the policy is to leave it in place, never re-assert.
     unitxp::arm_chain_policy(image_base);
+    // The scene-end entry is wrapped by other mods too, and a wrapper that
+    // always delegates stacks on whatever is underneath — so a later detour
+    // there gets the same never-reassert policy as the shared script entry.
+    transmog::arm_scene_end_policy(image_base);
+    // Two guarded branches inside the file resolver, opened at attach so the
+    // check they gate runs for every lookup the client makes afterwards.
+    transmog::open_disk_lookup(image_base);
     // fmod is a separate, packed module (not Wow.exe), so it gets its own install
     // path: hook its FSOUND_Init export now so the mixer reimpl patches in once,
     // right after sound init — no per-frame/per-call poll.
