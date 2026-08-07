@@ -293,6 +293,18 @@ A derive can be *structurally* required with no visible `.clone()`: `vec![elem; 
 - Both `Cargo.lock` files are committed for reproducible releases. Bump via `make upgrade` (semver-compatible) or `make upgrade-incompat` (needs `cargo-edit`).
 - `rust-version` is pinned to the current stable and tracks it. It documents what the tree is built with; it is not an MSRV promise.
 
+## Diagnostic counters cost nothing when nobody is reading
+
+A counter that only a log line reads is instrumentation, and instrumentation runs inside a game loop. So every diagnostic counter is declared through `win/tally.rs` and written only while holding that module's arm token, which resolves the event gauge's filter once. Unarmed — which is every shipped session that has not set `RUST_LOG` — a counting site is a cached load and a branch, and no counter is touched.
+
+The arm is a token rather than a rule to remember because a counting site is added in the middle of doing something else, and a rule that has to be recalled at that moment is one a type can state instead. `tally::bump` is the form for a site whose whole bookkeeping is that one call; a site with an argument to compute or a clock to read holds the token across that work instead, so the work is skipped too.
+
+Which atomic operation a counter compiles to is a property of its declared type — the single-writer shape is load-add-store, exact where the game thread is the only writer and free of the `lock` prefix i686 puts on a `fetch_add`; the shared shape pays that prefix. A call site cannot choose, so a counter reached from a worker thread is a decision made once, where the static is declared, and argued there.
+
+**The exception is a tripwire, and it is narrow.** A permanent regression check that has to fire at the default `info` filter cannot ride an arm: nobody who has not already suspected a problem would arm it, so a gated tripwire does not exist. Those count unarmed, on their cold branch only — the branch a healthy session never takes — and say at the site why they are exempt. A tripwire that would count on its hot path is not exempt; it wants a cheaper signature.
+
+Reporting rides one cadence, the gauge's cumulative tick, and one target. Counters are session-cumulative and are never reset, so a log's last line carries the totals. A family emits its line only when it has something in it: a feature the player never used prints nothing, which is what keeps an armed log readable. Each module reports its own counters, so a label and the counter it names sit together in the file that writes it — a positional snapshot handed to another module to format is how a column silently comes to name the wrong number.
+
 ## Imports
 
 No glob imports. Explicit named imports only — never `use foo::*`. One exception: `use super::*` at the top of a `#[cfg(test)] mod tests` block, the standard idiom for pulling the module under test into its own tests.

@@ -38,6 +38,8 @@
 
 use core::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
 
+use super::tally::Counter;
+
 /// RVA of the `GetName` script method inside the host image.
 const GET_NAME_RVA: usize = 0x003a_1390;
 
@@ -188,7 +190,7 @@ impl Memo {
         let way = chosen.unwrap_or_else(|| {
             let cursor = self.cursor.load(Ordering::Relaxed);
             self.cursor.store(cursor.wrapping_add(1), Ordering::Relaxed);
-            bump(&EVICTIONS);
+            super::tally::bump(&EVICTIONS);
             &set[cursor as usize % WAYS]
         });
         let prior = way.key.swap(0, Ordering::Relaxed);
@@ -227,25 +229,12 @@ static GUIDS: Memo = Memo::new();
 /// stale within a run; the array is a bound, not a cache policy.
 static ISA_OK: [AtomicU32; 64] = [const { AtomicU32::new(0) }; 64];
 
-static NAME_HITS: AtomicU32 = AtomicU32::new(0);
-static NAME_MISSES: AtomicU32 = AtomicU32::new(0);
-static GUID_HITS: AtomicU32 = AtomicU32::new(0);
-static GUID_MISSES: AtomicU32 = AtomicU32::new(0);
-static DELEGATED: AtomicU32 = AtomicU32::new(0);
-static EVICTIONS: AtomicU32 = AtomicU32::new(0);
-
-/// Single-writer counter bump (armed runs only), load-add-store on purpose.
-///
-/// The game thread is the only writer, so a read-modify-write is exact, and a
-/// `fetch_add` would be a `lock`-prefixed RMW on i686.
-fn bump(counter: &AtomicU32) {
-    if super::events::armed() {
-        counter.store(
-            counter.load(Ordering::Relaxed).wrapping_add(1),
-            Ordering::Relaxed,
-        );
-    }
-}
+static NAME_HITS: Counter = Counter::zero();
+static NAME_MISSES: Counter = Counter::zero();
+static GUID_HITS: Counter = Counter::zero();
+static GUID_MISSES: Counter = Counter::zero();
+static DELEGATED: Counter = Counter::zero();
+static EVICTIONS: Counter = Counter::zero();
 
 /// Establish which behaviour this entry's prologue has, before install.
 ///
@@ -407,7 +396,7 @@ pub fn get_name(l: i32) -> i32 {
     }
     // Every shape not modelled above, and every unrecognized prologue: run the
     // code this hook displaced, which owns the error messages.
-    bump(&DELEGATED);
+    super::tally::bump(&DELEGATED);
     super::symbols::originals::script_get_name__7a1390()(l)
 }
 
@@ -582,10 +571,10 @@ fn push_name(l: i32, obj: usize, vtbl: usize) {
     let key = name.addr() as u64;
     if let Some(ts) = NAMES.get(key).filter(|&ts| name_matches(name, ts)) {
         push_cached(l, ts);
-        bump(&NAME_HITS);
+        super::tally::bump(&NAME_HITS);
         return;
     }
-    bump(&NAME_MISSES);
+    super::tally::bump(&NAME_MISSES);
     let len = strlen(name);
     push_lstring(l, name, len);
     if let Some((ts, anchored)) = anchor(l) {
@@ -600,10 +589,10 @@ fn push_guid(l: i32, obj: usize) {
     let guid = unsafe { ((obj + 0x4e8) as *const u64).read_unaligned() };
     if let Some(ts) = GUIDS.get(guid) {
         push_cached(l, ts);
-        bump(&GUID_HITS);
+        super::tally::bump(&GUID_HITS);
         return;
     }
-    bump(&GUID_MISSES);
+    super::tally::bump(&GUID_MISSES);
     let text = render_guid(guid);
     push_lstring(l, text.as_ptr(), text.len());
     // A zero GUID — an object with no unit attached — is the one value that
@@ -800,14 +789,17 @@ pub fn forget() {
 
 /// One cumulative counters line on the events gauge's 60-second cadence.
 pub fn emit_cumulative() {
-    let name_hits = NAME_HITS.load(Ordering::Relaxed);
-    let name_misses = NAME_MISSES.load(Ordering::Relaxed);
-    let guid_hits = GUID_HITS.load(Ordering::Relaxed);
-    let guid_misses = GUID_MISSES.load(Ordering::Relaxed);
-    let delegated = DELEGATED.load(Ordering::Relaxed);
-    let evictions = EVICTIONS.load(Ordering::Relaxed);
+    let name_hits = NAME_HITS.get();
+    let name_misses = NAME_MISSES.get();
+    let guid_hits = GUID_HITS.get();
+    let guid_misses = GUID_MISSES.get();
+    let delegated = DELEGATED.get();
+    let evictions = EVICTIONS.get();
+    if name_hits | name_misses | guid_hits | guid_misses | delegated == 0 {
+        return;
+    }
     log::debug!(
-        target: "wow::events",
+        target: super::tally::TARGET,
         "getname: name {name_hits} hits / {name_misses} misses, \
          guid {guid_hits} / {guid_misses}, delegated {delegated}, evict {evictions}",
     );

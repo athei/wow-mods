@@ -20126,11 +20126,6 @@ pub fn storm_archive__find_file_entry__6549a0(
 
     #[cfg(not(wow_turbo_diff))]
     {
-        use core::sync::atomic::{AtomicU32, Ordering};
-        static POS_HITS: AtomicU32 = AtomicU32::new(0);
-        static NEG_HITS: AtomicU32 = AtomicU32::new(0);
-        static MISSES: AtomicU32 = AtomicU32::new(0);
-
         let cached = storm_filecache()
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -20150,7 +20145,7 @@ pub fn storm_archive__find_file_entry__6549a0(
                 let set_last_error: extern "stdcall" fn(u32) =
                     unsafe { core::mem::transmute(STORM_SET_LAST_ERROR_VA) };
                 set_last_error(2);
-                NEG_HITS.fetch_add(1, Ordering::Relaxed);
+                super::filecache::hit_negative();
                 return 0;
             }
             if archive != 0
@@ -20160,7 +20155,7 @@ pub fn storm_archive__find_file_entry__6549a0(
                 && let Some(ret) =
                     storm_replay_positive(archive, hit, out_archive, out_found_in, out_block_entry)
             {
-                POS_HITS.fetch_add(1, Ordering::Relaxed);
+                super::filecache::hit_positive();
                 return ret;
             }
             // Shape mismatch or a handle left the list: fall through and let
@@ -20175,15 +20170,7 @@ pub fn storm_archive__find_file_entry__6549a0(
             out_found_in,
             out_block_entry,
         );
-        let misses = MISSES.fetch_add(1, Ordering::Relaxed) + 1;
-        if misses.is_multiple_of(16384) {
-            log::debug!(
-                target: super::LOG_TARGET,
-                "filecache: {} pos hits, {} neg hits, {misses} misses",
-                POS_HITS.load(Ordering::Relaxed),
-                NEG_HITS.load(Ordering::Relaxed),
-            );
-        }
+        super::filecache::miss();
         ret
     }
 }
@@ -23604,14 +23591,19 @@ pub fn c_particle_emitter__render__7b3d20(this: *mut u8, parent_matrix: *const f
         // bracket prices one emitter's whole quad build; with the grain fields
         // beside it (`count` before the clamp, `cap` after, the cursor advance
         // in `ctx[8]`) it is what sizes a per-emitter fork of this pass.
-        let probe = super::seam_probe::armed();
-        let probe_t0 = if probe { wow_shared::tsc::rdtsc() } else { 0 };
+        let probe = super::tally::arm();
+        let probe_t0 = if probe.is_some() {
+            wow_shared::tsc::rdtsc()
+        } else {
+            0
+        };
         c_particle_emitter__render_particles__7b3a10(
             this.cast::<core::ffi::c_void>(),
             ctx.as_mut_ptr().cast::<f32>(),
         );
-        if probe {
+        if let Some(armed) = &probe {
             super::seam_probe::particle_draw(
+                armed,
                 count,
                 cap,
                 ctx[8],
@@ -29921,7 +29913,8 @@ fn bdl_anim_phase(base: *mut u8) {
     // for every player. This is the cheapest always-on tick available — one
     // counter bump per frame, the real check once every 120.
     wow_hook::verify_periodically(120);
-    let probe = super::seam_probe::armed();
+    let probe = super::tally::arm();
+    let timed = probe.is_some();
     let mut roots: u32 = 0;
     let mut ticks_sum: u64 = 0;
     let mut ticks_max: u64 = 0;
@@ -29952,7 +29945,7 @@ fn bdl_anim_phase(base: *mut u8) {
             // the same pointer handed to `AnimateBones` below; `+0x1cc` is the dword the
             // stock walk gates that call on.
             if unsafe { bdl_rd32(node, 0x1cc) } == 0 {
-                if probe {
+                if timed {
                     bdl_animate_root_timed(base, node, &mut roots, &mut ticks_sum, &mut ticks_max);
                 } else {
                     bdl_animate_bones_identity(base, node);
@@ -29986,7 +29979,7 @@ fn bdl_anim_phase(base: *mut u8) {
             // the same pointer handed to `AnimateBones` below; `+0x1cc` is the dword the
             // stock walk gates that call on.
             if unsafe { bdl_rd32(node, 0x1cc) } == 0 {
-                if probe {
+                if timed {
                     bdl_animate_root_timed(base, node, &mut roots, &mut ticks_sum, &mut ticks_max);
                 } else {
                     bdl_animate_bones_identity(base, node);
@@ -30009,13 +30002,13 @@ fn bdl_anim_phase(base: *mut u8) {
         // visible list is chained through.
         node = unsafe { bdl_rdp(node, 0x48) };
     }
-    if probe {
-        super::seam_probe::anim_phase(worker_arm, roots, ticks_sum, ticks_max, list_len);
+    if let Some(armed) = &probe {
+        super::seam_probe::anim_phase(armed, worker_arm, roots, ticks_sum, ticks_max, list_len);
         // Price the fork substrate only where a fork would run: the
         // multi-root passes. Single-model views would only measure an idle
         // pool over and over.
         if roots > 1 {
-            super::seam_probe::gc_roundtrip(gc_par_probe_roundtrip());
+            super::seam_probe::gc_roundtrip(armed, gc_par_probe_roundtrip());
         }
     }
 }
@@ -30123,8 +30116,8 @@ fn bdl_finalize(base: *mut u8) {
             // that 0x40-stride record array; `+0x24` is the record's canonical-index dword.
             unsafe { ((recbase2 + (rec_idx as usize) * 0x40 + 0x24) as *mut u32).write(canonical) };
         }
-        if super::seam_probe::armed() {
-            super::seam_probe::finalize_stats(count, probe_steps, cmp_calls);
+        if let Some(armed) = super::tally::arm() {
+            super::seam_probe::finalize_stats(&armed, count, probe_steps, cmp_calls);
         }
     }
 

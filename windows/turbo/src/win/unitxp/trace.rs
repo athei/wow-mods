@@ -12,7 +12,7 @@
 //! "blocked" is the safe answer), and endpoints closer than the float
 //! tolerance answer "no hit" without tracing.
 
-use core::sync::atomic::{AtomicU32, Ordering};
+use crate::win::tally::{self, Counter};
 
 /// `CWorld::Intersect` — `fastcall(ecx = p1, edx = p2)` + 4 stack args, `RET 0x10`.
 const CWORLD_INTERSECT_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x0027_2170;
@@ -27,9 +27,9 @@ const GUARD_DIST_SQ: f32 = 150.0 * 150.0;
 const DEGENERATE_SQ: f32 = 1e-5 * 1e-5;
 
 /// Fabricated over-distance hits and degenerate short-circuits (armed runs).
-static FABRICATED: AtomicU32 = AtomicU32::new(0);
+static FABRICATED: Counter = Counter::zero();
 /// See [`FABRICATED`].
-static DEGENERATE: AtomicU32 = AtomicU32::new(0);
+static DEGENERATE: Counter = Counter::zero();
 
 /// [`world_intersect_flagged`] with the sight features' conservative flag.
 pub fn world_intersect(from: &[f32; 3], to: &[f32; 3]) -> Option<f32> {
@@ -48,11 +48,11 @@ pub fn world_intersect_flagged(from: &[f32; 3], to: &[f32; 3], flag: u32) -> Opt
     let dz = to[2] - from[2];
     let dist_sq = dx * dx + dy * dy + dz * dz;
     if dist_sq > GUARD_DIST_SQ {
-        super::bump(&FABRICATED);
+        tally::bump(&FABRICATED);
         return Some(0.5);
     }
     if dist_sq <= DEGENERATE_SQ {
-        super::bump(&DEGENERATE);
+        tally::bump(&DEGENERATE);
         return None;
     }
     let mut intersect_point = [0.0f32; 3];
@@ -80,10 +80,14 @@ pub fn world_intersect_flagged(from: &[f32; 3], to: &[f32; 3], flag: u32) -> Opt
     (hit != 0).then_some(fraction)
 }
 
-/// Fold this module's counters into the dispatcher's cumulative line.
-pub fn counters() -> (u32, u32) {
-    (
-        FABRICATED.load(Ordering::Relaxed),
-        DEGENERATE.load(Ordering::Relaxed),
-    )
+/// One cumulative line for the trace guards, when either has fired.
+pub fn emit_cumulative() {
+    let fabricated = FABRICATED.get();
+    let degenerate = DEGENERATE.get();
+    if fabricated | degenerate != 0 {
+        log::debug!(
+            target: tally::TARGET,
+            "unitxp trace: {fabricated} fabricated, {degenerate} degenerate",
+        );
+    }
 }

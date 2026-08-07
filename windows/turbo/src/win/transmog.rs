@@ -11,9 +11,10 @@
 //! structures, and only the raw array is indexed by the field numbers the
 //! write entry receives.
 
-use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{LazyLock, Mutex};
 
+use super::tally::SharedCounter;
 use crate::transmog::{
     Coalescer, FLUSH_UNITS_CAP, INV_GUID_DWORDS, INV_GUID_FIRST, ITEM_DEFER_FIELD, InvWrite,
     PlayerWrite, VISIBLE_FIRST, VISIBLE_SLOTS, VISIBLE_STRIDE,
@@ -75,11 +76,14 @@ static STATE: LazyLock<Mutex<Coalescer>> = LazyLock::new(|| Mutex::new(Coalescer
 /// The player object the mirrors were bound against, zero when unbound.
 static BOUND_PLAYER: AtomicUsize = AtomicUsize::new(0);
 
-static WRITES_SEEN: AtomicU32 = AtomicU32::new(0);
-static SWALLOWED: AtomicU32 = AtomicU32::new(0);
-static FLUSHED: AtomicU32 = AtomicU32::new(0);
-static REFRESHED: AtomicU32 = AtomicU32::new(0);
-static DEFERRED_ITEMS: AtomicU32 = AtomicU32::new(0);
+// Declared as the locked-add shape: the write intercept is reached from the
+// descriptor-write hook, the scene-end flush and the world-entry downgrade, and
+// nothing here establishes that all three are the game thread.
+static WRITES_SEEN: SharedCounter = SharedCounter::zero();
+static SWALLOWED: SharedCounter = SharedCounter::zero();
+static FLUSHED: SharedCounter = SharedCounter::zero();
+static REFRESHED: SharedCounter = SharedCounter::zero();
+static DEFERRED_ITEMS: SharedCounter = SharedCounter::zero();
 
 /// The engine tick the reference implementation stamps its entries with.
 fn now_ms() -> u32 {
@@ -210,7 +214,7 @@ pub fn intercept_write(this: *mut u8, index: u32, value: u32) -> bool {
 
 /// A write to a visible-item field, on the player or on any other unit.
 fn visible_write(this: *mut u8, slot: usize, value: u32) -> bool {
-    WRITES_SEEN.fetch_add(1, Ordering::Relaxed);
+    super::tally::bump_shared(&WRITES_SEEN);
     let now = now_ms();
     if ensure_bound(this) {
         return player_visible_write(this, slot, value, now);
@@ -238,7 +242,7 @@ fn visible_write(this: *mut u8, slot: usize, value: u32) -> bool {
     );
     drop(state);
     if swallowed {
-        SWALLOWED.fetch_add(1, Ordering::Relaxed);
+        super::tally::bump_shared(&SWALLOWED);
     }
     swallowed
 }
@@ -253,11 +257,11 @@ fn player_visible_write(this: *mut u8, slot: usize, value: u32, now: u32) -> boo
     match verdict {
         PlayerWrite::Passthrough => false,
         PlayerWrite::Swallow => {
-            SWALLOWED.fetch_add(1, Ordering::Relaxed);
+            super::tally::bump_shared(&SWALLOWED);
             true
         }
         PlayerWrite::SwallowAndScan => {
-            SWALLOWED.fetch_add(1, Ordering::Relaxed);
+            super::tally::bump_shared(&SWALLOWED);
             scan_equipment_status();
             true
         }
@@ -265,7 +269,7 @@ fn player_visible_write(this: *mut u8, slot: usize, value: u32, now: u32) -> boo
             guid,
             value: parked,
         } => {
-            SWALLOWED.fetch_add(1, Ordering::Relaxed);
+            super::tally::bump_shared(&SWALLOWED);
             if let Some(item) = super::objmgr::object_by_guid(guid)
                 && descriptor(item.raw() as *mut u8).is_some()
             {
@@ -298,7 +302,7 @@ fn item_write(this: *mut u8, value: u32) -> bool {
     let parked = slot.is_some_and(|slot| state.defer_item_write(slot, value, now));
     drop(state);
     if parked {
-        DEFERRED_ITEMS.fetch_add(1, Ordering::Relaxed);
+        super::tally::bump_shared(&DEFERRED_ITEMS);
     }
     parked
 }
@@ -338,7 +342,7 @@ fn scan_equipment_status() {
 /// there is nothing to refresh against, and re-entering the unit into the
 /// world is the client's own path to rebuilding the same state.
 fn refresh_unit(obj: usize) {
-    REFRESHED.fetch_add(1, Ordering::Relaxed);
+    super::tally::bump_shared(&REFRESHED);
     // SAFETY: `MODEL_CONTEXT` is a fixed host global at the verified image
     // base, null before the world is up.
     let context = unsafe { *(MODEL_CONTEXT as *const usize) };
@@ -405,7 +409,7 @@ pub fn flush() {
             continue;
         };
         write_field(unit.raw(), VISIBLE_FIRST + slot * VISIBLE_STRIDE, 0);
-        FLUSHED.fetch_add(1, Ordering::Relaxed);
+        super::tally::bump_shared(&FLUSHED);
         if !units[..collected].contains(&unit.raw()) && collected < FLUSH_UNITS_CAP {
             units[collected] = unit.raw();
             collected += 1;
@@ -520,13 +524,16 @@ pub fn arm_scene_end_policy(image_base: usize) {
 
 /// One cumulative counters line on the events gauge's 60-second cadence.
 pub fn emit_cumulative() {
-    let seen = WRITES_SEEN.load(Ordering::Relaxed);
-    let swallowed = SWALLOWED.load(Ordering::Relaxed);
-    let flushed = FLUSHED.load(Ordering::Relaxed);
-    let refreshed = REFRESHED.load(Ordering::Relaxed);
-    let deferred = DEFERRED_ITEMS.load(Ordering::Relaxed);
+    let seen = WRITES_SEEN.get();
+    let swallowed = SWALLOWED.get();
+    let flushed = FLUSHED.get();
+    let refreshed = REFRESHED.get();
+    let deferred = DEFERRED_ITEMS.get();
+    if seen == 0 {
+        return;
+    }
     log::debug!(
-        target: "wow::events",
+        target: super::tally::TARGET,
         "transmog: {seen} visible writes, {swallowed} coalesced, \
          {flushed} applied late, {refreshed} refreshes, {deferred} item writes parked",
     );

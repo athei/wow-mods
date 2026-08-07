@@ -33,7 +33,7 @@ pub mod timer;
 mod trace;
 mod worldtext;
 
-use core::sync::atomic::{AtomicU32, Ordering};
+use super::tally::Counter;
 
 /// RVA of the stock `UnitXP` script function inside the host image.
 const UNIT_XP_RVA: usize = 0x0011_7350;
@@ -50,32 +50,19 @@ const GAME_LOCALE: usize = crate::win::EXPECTED_IMAGE_BASE + 0x0080_e080;
 const IDENTITY_PREFIX: &str = "wow_turbo ";
 
 /// Commands handled here, delegated calls, and calls below the argument gate.
-static HANDLED: AtomicU32 = AtomicU32::new(0);
+static HANDLED: Counter = Counter::zero();
 /// See [`HANDLED`].
-static DELEGATED: AtomicU32 = AtomicU32::new(0);
-
-/// Single-writer counter bump (armed runs only), load-add-store on purpose.
-///
-/// The game thread is the only writer, so a read-modify-write is exact, and a
-/// `fetch_add` would be a `lock`-prefixed RMW on i686.
-pub fn bump(counter: &AtomicU32) {
-    if super::events::armed() {
-        counter.store(
-            counter.load(Ordering::Relaxed).wrapping_add(1),
-            Ordering::Relaxed,
-        );
-    }
-}
+static DELEGATED: Counter = Counter::zero();
 
 /// The dispatcher body behind the generated thunk; `fastcall(ecx = L)`.
 pub fn unit_xp(l: i32) -> i32 {
     // SAFETY: `l` is the live `lua_State` the host dispatched this call with.
     let lua = unsafe { super::lua::LuaState::from_raw(l) };
     if let Some(results) = dispatch(&lua) {
-        bump(&HANDLED);
+        super::tally::bump(&HANDLED);
         return results;
     }
-    bump(&DELEGATED);
+    super::tally::bump(&DELEGATED);
     super::symbols::originals::script_unit_xp__517350()(l)
 }
 
@@ -573,29 +560,23 @@ pub fn arm_chain_policy(image_base: usize) {
     wow_hook::on_overwrite(image_base + UNIT_XP_RVA, chain_decide);
 }
 
-/// One cumulative counters line on the events gauge's 60-second cadence.
+/// The command set's cumulative lines, on the gauge's 60-second cadence.
+///
+/// The dispatcher's own line first, then one per feature that has run: each
+/// module owns its counters, so a label and the counter it names sit together
+/// in the file that writes it, and a feature nobody used prints nothing.
 pub fn emit_cumulative() {
-    let handled = HANDLED.load(Ordering::Relaxed);
-    let delegated = DELEGATED.load(Ordering::Relaxed);
-    log::debug!(
-        target: "wow::events",
-        "unitxp: {handled} handled, {delegated} delegated",
-    );
-    let [ut, up, um, ue, ct, cp, cm, ce, culled] = insight::counters();
-    let (fabricated, degenerate) = trace::counters();
-    log::debug!(
-        target: "wow::events",
-        "unitxp sight: unit {ut} ttl + {up} pos / {um} miss, evict {ue} | \
-         cam {ct} ttl + {cp} pos / {cm} miss, evict {ce} | \
-         frustum-cull {culled}, fabricated {fabricated}, degenerate {degenerate}",
-    );
-    let [walked, vetoed, removed] = nameplate::counters();
-    let [sweeps, admitted, overflow] = targeting::counters();
-    let [probe_batches, probe_reuses] = camera::counters();
-    log::debug!(
-        target: "wow::events",
-        "unitxp plates: {walked} walked, {vetoed} vetoed, {removed} removed | \
-         target: {sweeps} sweeps, {admitted} admitted, {overflow} overflow | \
-         camera probes {probe_batches} + {probe_reuses} reused",
-    );
+    let handled = HANDLED.get();
+    let delegated = DELEGATED.get();
+    if handled | delegated != 0 {
+        log::debug!(
+            target: super::tally::TARGET,
+            "unitxp: {handled} handled, {delegated} delegated",
+        );
+    }
+    insight::emit_cumulative();
+    trace::emit_cumulative();
+    nameplate::emit_cumulative();
+    targeting::emit_cumulative();
+    camera::emit_cumulative();
 }

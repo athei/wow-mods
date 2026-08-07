@@ -33,6 +33,8 @@
 
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
+use super::tally::Counter;
+
 /// Current taint owner (`0xceeac0`) and taint-enabled flag (`0xceeac4`).
 ///
 /// The client widens every `TObject` with a taint word at `+0x4`: copying a
@@ -127,7 +129,7 @@ impl Memo {
         let way = chosen.unwrap_or_else(|| {
             let cursor = self.cursor.load(Ordering::Relaxed);
             self.cursor.store(cursor.wrapping_add(1), Ordering::Relaxed);
-            bump(&EVICTIONS);
+            super::tally::bump(&EVICTIONS);
             &set[cursor as usize % WAYS]
         });
         let prior = way.key.swap(0, Ordering::Relaxed);
@@ -180,44 +182,31 @@ static SAW_UNBUILT: AtomicU32 = AtomicU32::new(0);
 /// nil.
 static WALKED: AtomicU32 = AtomicU32::new(0);
 
-static HITS: AtomicU32 = AtomicU32::new(0);
-static NIL_HITS: AtomicU32 = AtomicU32::new(0);
-static MISSES: AtomicU32 = AtomicU32::new(0);
-static DELEGATED: AtomicU32 = AtomicU32::new(0);
-static EVICTIONS: AtomicU32 = AtomicU32::new(0);
-
-/// Single-writer counter bump (armed runs only), load-add-store on purpose.
-///
-/// The game thread is the only writer, so a read-modify-write is exact, and a
-/// `fetch_add` would be a `lock`-prefixed RMW on i686.
-fn bump(counter: &AtomicU32) {
-    if super::events::armed() {
-        counter.store(
-            counter.load(Ordering::Relaxed).wrapping_add(1),
-            Ordering::Relaxed,
-        );
-    }
-}
+static HITS: Counter = Counter::zero();
+static NIL_HITS: Counter = Counter::zero();
+static MISSES: Counter = Counter::zero();
+static DELEGATED: Counter = Counter::zero();
+static EVICTIONS: Counter = Counter::zero();
 
 /// The `__index` reimplementation; `fastcall(ecx = L)`, returns result count.
 pub fn index(l: i32) -> i32 {
     let Some(key) = method_key(l) else {
         // A shape not modelled here: run the displaced code, which owns it.
-        bump(&DELEGATED);
+        super::tally::bump(&DELEGATED);
         return (super::symbols::originals::frame_script_meta_index__7020b0())(l);
     };
     if let Some(value) = MEMO.get(key) {
         let method_ref = u32::try_from(value & 0xffff_ffff).expect("masked to 32 bits");
         if method_ref == 0 {
             push_nil(l);
-            bump(&NIL_HITS);
+            super::tally::bump(&NIL_HITS);
         } else {
             push_registry(l, method_ref);
-            bump(&HITS);
+            super::tally::bump(&HITS);
         }
         return 1;
     }
-    bump(&MISSES);
+    super::tally::bump(&MISSES);
     RECORDED_REF.store(0, Ordering::Relaxed);
     SAW_UNBUILT.store(0, Ordering::Relaxed);
     WALKED.store(0, Ordering::Relaxed);
@@ -539,13 +528,16 @@ pub fn forget() {
 
 /// One cumulative counters line on the events gauge's 60-second cadence.
 pub fn emit_cumulative() {
-    let hits = HITS.load(Ordering::Relaxed);
-    let nil_hits = NIL_HITS.load(Ordering::Relaxed);
-    let misses = MISSES.load(Ordering::Relaxed);
-    let delegated = DELEGATED.load(Ordering::Relaxed);
-    let evictions = EVICTIONS.load(Ordering::Relaxed);
+    let hits = HITS.get();
+    let nil_hits = NIL_HITS.get();
+    let misses = MISSES.get();
+    let delegated = DELEGATED.get();
+    let evictions = EVICTIONS.get();
+    if hits | nil_hits | misses | delegated == 0 {
+        return;
+    }
     log::debug!(
-        target: "wow::events",
+        target: super::tally::TARGET,
         "index: {hits} hits + {nil_hits} nil hits / {misses} misses, \
          delegated {delegated}, evict {evictions}",
     );

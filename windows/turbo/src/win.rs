@@ -9,6 +9,8 @@
 #[cfg(wow_turbo_diff)]
 mod diff;
 mod events;
+#[cfg(not(wow_turbo_diff))]
+mod filecache;
 mod fmod;
 mod getname;
 mod hooks;
@@ -17,6 +19,7 @@ mod objmgr;
 mod script_method;
 mod seam_probe;
 mod symbols;
+mod tally;
 mod transmog;
 mod unitxp;
 

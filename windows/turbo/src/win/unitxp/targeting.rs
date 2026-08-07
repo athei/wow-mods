@@ -15,7 +15,7 @@
 //! does not exist in practice (the far-range cap is 61 yards), and overflow
 //! drops extras under a counter rather than allocating.
 
-use core::sync::atomic::{AtomicU32, Ordering};
+use crate::win::tally::{self, Counter};
 
 /// Candidate cap per sweep; overflow is counted, not grown.
 const CAP: usize = 256;
@@ -32,11 +32,11 @@ const CHARGE_CAP: usize = 3;
 const FAR_CAP: usize = 5;
 
 /// Sweeps run, candidates admitted, and buffer overflows (armed runs only).
-static SWEEPS: AtomicU32 = AtomicU32::new(0);
+static SWEEPS: Counter = Counter::zero();
 /// See [`SWEEPS`].
-static ADMITTED: AtomicU32 = AtomicU32::new(0);
+static ADMITTED: Counter = Counter::zero();
 /// See [`SWEEPS`].
-static OVERFLOW: AtomicU32 = AtomicU32::new(0);
+static OVERFLOW: Counter = Counter::zero();
 
 /// One admitted candidate.
 #[derive(Clone, Copy, Default)]
@@ -68,12 +68,12 @@ impl Candidates {
 
     fn push(&mut self, entry: MobEntry) {
         if self.len == CAP {
-            super::bump(&OVERFLOW);
+            tally::bump(&OVERFLOW);
             return;
         }
         self.entries[self.len] = entry;
         self.len += 1;
-        super::bump(&ADMITTED);
+        tally::bump(&ADMITTED);
     }
 
     fn as_mut_slice(&mut self) -> &mut [MobEntry] {
@@ -131,7 +131,7 @@ fn combat_gate(unit: super::super::objmgr::UnitRef, ctx: &SweepContext) -> bool 
 
 /// Walk every unit or player in the manager, applying `admit`.
 fn sweep(ctx: &SweepContext, mut admit: impl FnMut(super::super::objmgr::UnitRef, &SweepContext)) {
-    super::bump(&SWEEPS);
+    tally::bump(&SWEEPS);
     for unit in super::super::objmgr::objects() {
         if unit.is_unit_or_player() {
             admit(unit, ctx);
@@ -445,11 +445,15 @@ fn select_adjacent_mark(current: u64, list: &mut [MobEntry], order: &[u32], forw
     list.first().map_or(0, |m| m.guid)
 }
 
-/// Counter snapshot for the dispatcher's cumulative line.
-pub fn counters() -> [u32; 3] {
-    [
-        SWEEPS.load(Ordering::Relaxed),
-        ADMITTED.load(Ordering::Relaxed),
-        OVERFLOW.load(Ordering::Relaxed),
-    ]
+/// One cumulative line for the target sweeps, when any has run.
+pub fn emit_cumulative() {
+    let sweeps = SWEEPS.get();
+    if sweeps != 0 {
+        log::debug!(
+            target: tally::TARGET,
+            "unitxp target: {sweeps} sweeps, {} admitted, {} overflow",
+            ADMITTED.get(),
+            OVERFLOW.get(),
+        );
+    }
 }

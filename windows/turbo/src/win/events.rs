@@ -183,7 +183,7 @@ type NameBuf = [u8; NAME_CAP];
 /// filter never changes mid-run, so one resolution is enough. The armed line
 /// lets a tester confirm their config from the login screen alone.
 static ARMED: LazyLock<bool> = LazyLock::new(|| {
-    let armed = log::log_enabled!(target: "wow::events", log::Level::Debug);
+    let armed = log::log_enabled!(target: super::tally::TARGET, log::Level::Debug);
     if armed {
         // Force the counter's read-cost calibration here rather than leaving it
         // to the first C call, which would run it inside a handler body and
@@ -197,13 +197,13 @@ static ARMED: LazyLock<bool> = LazyLock::new(|| {
         let stride = *API_SAMPLE;
         if stride > 1 {
             log::debug!(
-                target: "wow::events",
+                target: super::tally::TARGET,
                 "event gauge armed, counter read cost {read_cost_ns} ns, \
                  api spans sampled 1-in-{stride}",
             );
         } else {
             log::debug!(
-                target: "wow::events",
+                target: super::tally::TARGET,
                 "event gauge armed, counter read cost {read_cost_ns} ns",
             );
         }
@@ -381,6 +381,7 @@ static STATE: LazyLock<Mutex<State>> = LazyLock::new(|| {
 });
 
 /// Whether the gauge is armed (cheap after the first call).
+#[inline]
 pub fn armed() -> bool {
     *ARMED
 }
@@ -564,7 +565,7 @@ fn owner_of(st: &mut State, chunk: (usize, u32)) -> NameBuf {
     // name is already the row they group under.
     if text.contains(&b'\\') {
         log::debug!(
-            target: "wow::events",
+            target: super::tally::TARGET,
             "chunk: {:?} -> {}",
             String::from_utf8_lossy(&text[..text.len().min(120)]),
             name_str(&owner),
@@ -629,7 +630,7 @@ fn build_frame_index() -> FxHashMap<NameBuf, NameBuf> {
         }
     }
     log::debug!(
-        target: "wow::events",
+        target: super::tally::TARGET,
         "addon frame index: {} frames declared in addon markup",
         index.len(),
     );
@@ -1110,17 +1111,17 @@ pub fn signal_event(event_id: i32) {
     // an interface rebuild rather than a world load.
     match name_str(&dump) {
         "PLAYER_ENTERING_WORLD" => {
-            log::debug!(target: "wow::events", "world: entered (loading screen ended)");
+            log::debug!(target: super::tally::TARGET, "world: entered (loading screen ended)");
             dump_registry();
         }
         "PLAYER_LEAVING_WORLD" => {
-            log::debug!(target: "wow::events", "world: leaving (loading screen started)");
+            log::debug!(target: super::tally::TARGET, "world: leaving (loading screen started)");
         }
         "PLAYER_LOGOUT" => {
-            log::debug!(target: "wow::events", "ui: unloading (reload or logout)");
+            log::debug!(target: super::tally::TARGET, "ui: unloading (reload or logout)");
         }
         "VARIABLES_LOADED" => {
-            log::debug!(target: "wow::events", "ui: rebuilt (saved variables read back)");
+            log::debug!(target: super::tally::TARGET, "ui: rebuilt (saved variables read back)");
         }
         _ => {}
     }
@@ -1289,6 +1290,8 @@ fn maybe_emit(st: &mut State) {
         super::seam_probe::emit_cumulative();
         super::unitxp::emit_cumulative();
         super::transmog::emit_cumulative();
+        #[cfg(not(wow_turbo_diff))]
+        super::filecache::emit_cumulative();
         st.cumulative_emit = now;
     }
     let spent = span(now, wow_shared::tsc::rdtsc());
@@ -1436,7 +1439,7 @@ fn emit_owners(t: &Tables, top: usize, label: &str) {
         push_ms(&mut line, ticks);
         line.push_str(" ms;");
     }
-    log::debug!(target: "wow::events", "{line}");
+    log::debug!(target: super::tally::TARGET, "{line}");
 }
 
 /// Emit where the body time sat on the cost scale.
@@ -1463,7 +1466,7 @@ fn emit_body_histogram(t: &Tables, label: &str) {
         push_ms(&mut line, *ticks);
         line.push_str(" ms;");
     }
-    log::debug!(target: "wow::events", "{line}");
+    log::debug!(target: super::tally::TARGET, "{line}");
 }
 
 /// Emit the client's C script API, ranked by cost, with the tail folded in.
@@ -1498,7 +1501,7 @@ fn emit_api(t: &Tables, label: &str) {
         push_ms(&mut line, t.api_dropped_ticks);
         line.push_str(" ms)");
     }
-    log::debug!(target: "wow::events", "{line}");
+    log::debug!(target: super::tally::TARGET, "{line}");
 }
 
 /// Emit the quarantined C-API spans, when any exist (see [`API_SUSPECT_US`]).
@@ -1526,7 +1529,7 @@ fn emit_api_suspect(t: &Tables, label: &str) {
         push_ms(&mut line, t.api_suspect_dropped_ticks);
         line.push_str(" ms)");
     }
-    log::debug!(target: "wow::events", "{line}");
+    log::debug!(target: super::tally::TARGET, "{line}");
 }
 
 /// Build the header: the window total, split both ways, then the api/vm split.
@@ -1617,7 +1620,7 @@ fn emit_tables(t: &Tables, span_ms: u64, top: usize, label: &str) {
         skip = shown + i;
     }
     push_event_tail(&mut line, &rows, shown, skip);
-    log::debug!(target: "wow::events", "{line}");
+    log::debug!(target: super::tally::TARGET, "{line}");
     emit_owners(t, top, label);
     emit_body_histogram(t, label);
     emit_api(t, label);
@@ -1645,7 +1648,7 @@ fn emit_tables(t: &Tables, span_ms: u64, top: usize, label: &str) {
         push_ms(&mut line, t.dropped_ticks);
         line.push_str(" ms)");
     }
-    log::debug!(target: "wow::events", "{line}");
+    log::debug!(target: super::tally::TARGET, "{line}");
 }
 
 /// Dump every event with at least one listener (fires on each world enter).
@@ -1667,10 +1670,10 @@ fn dump_registry() {
         // name.
         let p = unsafe { *(entry as *const *const u8) };
         let name = name_from_cstr(p);
-        log::debug!(target: "wow::events", "reg: {} listeners={n}", name_str(&name));
+        log::debug!(target: super::tally::TARGET, "reg: {} listeners={n}", name_str(&name));
     }
     log::debug!(
-        target: "wow::events",
+        target: super::tally::TARGET,
         "reg: {listened} of {count} events have listeners",
     );
 }

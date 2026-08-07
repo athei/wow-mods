@@ -23,6 +23,8 @@
 
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
+use crate::win::tally::{self, Counter};
+
 /// Cache geometry: 256 sets of 4 ways, addressed as one flat array.
 const SETS: usize = 256;
 /// See [`SETS`].
@@ -92,13 +94,13 @@ struct SightCache {
     /// Round-robin eviction cursor; a full set evicts `cursor % WAYS`.
     cursor: AtomicU32,
     /// TTL hits, position-stable hits, misses, evictions (armed runs only).
-    ttl_hits: AtomicU32,
+    ttl_hits: Counter,
     /// See above.
-    pos_hits: AtomicU32,
+    pos_hits: Counter,
     /// See above.
-    misses: AtomicU32,
+    misses: Counter,
     /// See above.
-    evictions: AtomicU32,
+    evictions: Counter,
 }
 
 impl SightCache {
@@ -110,10 +112,10 @@ impl SightCache {
             pos_b: [const { AtomicU64::new(0) }; ENTRIES],
             meta: [const { AtomicU64::new(0) }; ENTRIES],
             cursor: AtomicU32::new(0),
-            ttl_hits: AtomicU32::new(0),
-            pos_hits: AtomicU32::new(0),
-            misses: AtomicU32::new(0),
-            evictions: AtomicU32::new(0),
+            ttl_hits: Counter::zero(),
+            pos_hits: Counter::zero(),
+            misses: Counter::zero(),
+            evictions: Counter::zero(),
         }
     }
 
@@ -132,20 +134,20 @@ impl SightCache {
             let verdict = i32::from(meta >> 32 != 0);
             let age = super::super::objmgr::game_tick_ms().wrapping_sub(meta as u32);
             if age < TTL_FLOOR_MS + (mixed as u32) % TTL_DITHER_MS {
-                super::bump(&self.ttl_hits);
+                tally::bump(&self.ttl_hits);
                 return Some(verdict);
             }
             if age < MAX_AGE_BASE_MS + ((mixed >> 8) as u32) % MAX_AGE_DITHER_MS
                 && self.pos_a[idx].load(Ordering::Relaxed) == qa
                 && self.pos_b[idx].load(Ordering::Relaxed) == qb
             {
-                super::bump(&self.pos_hits);
+                tally::bump(&self.pos_hits);
                 return Some(verdict);
             }
-            super::bump(&self.misses);
+            tally::bump(&self.misses);
             return None;
         }
-        super::bump(&self.misses);
+        tally::bump(&self.misses);
         None
     }
 
@@ -168,7 +170,7 @@ impl SightCache {
         let idx = chosen.unwrap_or_else(|| {
             let cursor = self.cursor.load(Ordering::Relaxed);
             self.cursor.store(cursor.wrapping_add(1), Ordering::Relaxed);
-            super::bump(&self.evictions);
+            tally::bump(&self.evictions);
             set * WAYS + cursor as usize % WAYS
         });
         self.key_lo[idx].store(0, Ordering::Relaxed);
@@ -188,7 +190,7 @@ static UNIT_CACHE: SightCache = SightCache::new();
 static CAMERA_CACHE: SightCache = SightCache::new();
 
 /// Frustum pre-culls that skipped the trace entirely (armed runs only).
-static FRUSTUM_CULLED: AtomicU32 = AtomicU32::new(0);
+static FRUSTUM_CULLED: Counter = Counter::zero();
 
 /// Mix a pair key into well-spread bits (set index and per-key dither).
 const fn mix(lo: u64, hi: u64) -> u64 {
@@ -334,7 +336,7 @@ pub fn camera_in_sight(unit: super::super::objmgr::UnitRef) -> i32 {
     let pos = unit.position();
     // Fresh every call — a cached frustum verdict would lag camera rotation.
     if !in_viewing_frustum(pos, 2.0) {
-        super::bump(&FRUSTUM_CULLED);
+        tally::bump(&FRUSTUM_CULLED);
         return 0;
     }
     let cam = super::camera::translated_position();
@@ -469,19 +471,22 @@ pub fn command_behind(unit0: &[u8], unit1: &[u8]) -> i32 {
     behind(me, mob)
 }
 
-/// Counter snapshot for the dispatcher's cumulative line.
-///
-/// Order: unit ttl/pos/miss/evict, camera ttl/pos/miss/evict, frustum culls.
-pub fn counters() -> [u32; 9] {
-    [
-        UNIT_CACHE.ttl_hits.load(Ordering::Relaxed),
-        UNIT_CACHE.pos_hits.load(Ordering::Relaxed),
-        UNIT_CACHE.misses.load(Ordering::Relaxed),
-        UNIT_CACHE.evictions.load(Ordering::Relaxed),
-        CAMERA_CACHE.ttl_hits.load(Ordering::Relaxed),
-        CAMERA_CACHE.pos_hits.load(Ordering::Relaxed),
-        CAMERA_CACHE.misses.load(Ordering::Relaxed),
-        CAMERA_CACHE.evictions.load(Ordering::Relaxed),
-        FRUSTUM_CULLED.load(Ordering::Relaxed),
-    ]
+/// One cumulative line per sight cache, when that cache has been asked.
+pub fn emit_cumulative() {
+    for (label, cache) in [("unit", &UNIT_CACHE), ("cam", &CAMERA_CACHE)] {
+        let ttl = cache.ttl_hits.get();
+        let pos = cache.pos_hits.get();
+        let misses = cache.misses.get();
+        if ttl | pos | misses != 0 {
+            log::debug!(
+                target: tally::TARGET,
+                "unitxp sight {label}: {ttl} ttl + {pos} pos / {misses} miss, evict {}",
+                cache.evictions.get(),
+            );
+        }
+    }
+    let culled = FRUSTUM_CULLED.get();
+    if culled != 0 {
+        log::debug!(target: tally::TARGET, "unitxp sight: frustum-cull {culled}");
+    }
 }

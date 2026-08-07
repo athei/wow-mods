@@ -17,7 +17,9 @@
 //! No diff table is possible (the effect is which plates exist on screen);
 //! verification is the armed veto/remove counters and in-game observation.
 
-use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, Ordering};
+
+use crate::win::tally::{self, Counter};
 
 /// Head of the client's intrusive nameplate list.
 const NAMEPLATE_LIST: usize = crate::win::EXPECTED_IMAGE_BASE + 0x0084_d92c;
@@ -38,11 +40,11 @@ const NEAR_PLAYER_DISTANCE: f32 = 8.0;
 static HAS_MARKED_PLATE: AtomicBool = AtomicBool::new(false);
 
 /// Units evaluated in the per-frame walk (armed runs only).
-static WALKED: AtomicU32 = AtomicU32::new(0);
+static WALKED: Counter = Counter::zero();
 /// See [`WALKED`].
-static VETOED: AtomicU32 = AtomicU32::new(0);
+static VETOED: Counter = Counter::zero();
 /// See [`WALKED`].
-static REMOVED: AtomicU32 = AtomicU32::new(0);
+static REMOVED: Counter = Counter::zero();
 
 /// Per-evaluation state hoisted out of the filter chain.
 ///
@@ -166,9 +168,9 @@ pub fn cull_before_render() {
         if let Some(unit) = super::super::objmgr::object_by_guid(guid)
             && unit.is_unit_or_player()
         {
-            super::bump(&WALKED);
+            tally::bump(&WALKED);
             if should_have_nameplate(unit, &ctx) == 0 {
-                super::bump(&REMOVED);
+                tally::bump(&REMOVED);
                 // SAFETY: a fixed `.text` entry in the live host image
                 // (base verified at load); the transmuted signature
                 // matches the declared prototype (`__thiscall(ecx =
@@ -197,17 +199,21 @@ pub fn should_veto_add(unit_raw: usize) -> bool {
         return false;
     };
     if unit.is_unit_or_player() && should_have_nameplate(unit, &frame_context()) == 0 {
-        super::bump(&VETOED);
+        tally::bump(&VETOED);
         return true;
     }
     false
 }
 
-/// Counter snapshot for the dispatcher's cumulative line.
-pub fn counters() -> [u32; 3] {
-    [
-        WALKED.load(Ordering::Relaxed),
-        VETOED.load(Ordering::Relaxed),
-        REMOVED.load(Ordering::Relaxed),
-    ]
+/// One cumulative line for the plate cull, when it has walked anything.
+pub fn emit_cumulative() {
+    let walked = WALKED.get();
+    if walked != 0 {
+        log::debug!(
+            target: tally::TARGET,
+            "unitxp plates: {walked} walked, {} vetoed, {} removed",
+            VETOED.get(),
+            REMOVED.get(),
+        );
+    }
 }

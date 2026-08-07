@@ -19,6 +19,8 @@
 
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
+use crate::win::tally::{self, Counter};
+
 /// The active camera record — no arguments, record pointer in `eax`.
 const GET_ACTIVE_CAMERA_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x0008_18f0;
 
@@ -55,9 +57,9 @@ static LAST_V_BODY: [AtomicU32; 3] = [const { AtomicU32::new(0) }; 3];
 static LAST_H_BODY: [AtomicU32; 3] = [const { AtomicU32::new(0) }; 3];
 
 /// Probe batches run and frames served from cached corrections (armed only).
-static PROBE_BATCHES: AtomicU32 = AtomicU32::new(0);
+static PROBE_BATCHES: Counter = Counter::zero();
 /// See [`PROBE_BATCHES`].
-static PROBE_REUSES: AtomicU32 = AtomicU32::new(0);
+static PROBE_REUSES: Counter = Counter::zero();
 
 fn store3(slots: &[AtomicU32; 3], value: [f32; 3]) {
     for (slot, v) in slots.iter().zip(value) {
@@ -243,7 +245,7 @@ fn validate_against_world(
         || (last_pitch.abs() - pitch.abs()).abs() > TOLERANCE;
     let (v_clip, h_clip, h_body, v_body);
     if due && moved {
-        super::bump(&PROBE_BATCHES);
+        tally::bump(&PROBE_BATCHES);
         LAST_PROBE_MS.store(now, Ordering::Relaxed);
         store3(&LAST_PROBED_POS, *translated);
         LAST_PROBED_PITCH.store(pitch.to_bits(), Ordering::Relaxed);
@@ -263,7 +265,7 @@ fn validate_against_world(
         store3(&LAST_H_BODY, h_body);
         store3(&LAST_V_BODY, v_body);
     } else {
-        super::bump(&PROBE_REUSES);
+        tally::bump(&PROBE_REUSES);
         v_clip = if need_vertical {
             load3(&LAST_V_CLIP)
         } else {
@@ -391,10 +393,14 @@ pub fn after_update(camera_raw: u32) {
     publish(translated, camera_vec3(camera, 0x14));
 }
 
-/// Counter snapshot for the dispatcher's cumulative line.
-pub fn counters() -> [u32; 2] {
-    [
-        PROBE_BATCHES.load(Ordering::Relaxed),
-        PROBE_REUSES.load(Ordering::Relaxed),
-    ]
+/// One cumulative line for the collision probes, when any has run.
+pub fn emit_cumulative() {
+    let batches = PROBE_BATCHES.get();
+    let reuses = PROBE_REUSES.get();
+    if batches | reuses != 0 {
+        log::debug!(
+            target: tally::TARGET,
+            "unitxp camera: {batches} probe batches, {reuses} reused",
+        );
+    }
 }
