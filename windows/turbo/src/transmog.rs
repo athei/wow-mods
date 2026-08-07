@@ -144,8 +144,10 @@ pub enum PlayerWrite {
     Swallow,
     /// Drop the write and re-scan equipment status.
     SwallowAndScan,
-    /// Drop the write, apply `value` to the slot's equipped item at
-    /// [`ITEM_DEFER_FIELD`], then re-scan equipment status.
+    /// Drop the write and park `value` for the slot's equipped item.
+    ///
+    /// The parked value lands on that item's [`ITEM_DEFER_FIELD`] dword, and
+    /// equipment status is re-scanned after.
     SwallowDeferredItem {
         /// GUID of the equipped item to apply the deferred value to.
         guid: u64,
@@ -161,8 +163,10 @@ pub enum PlayerWrite {
 pub enum InvWrite {
     /// Run the stock write.
     Passthrough,
-    /// First apply the pending zero to `visible_slot`'s visible field, then
-    /// run the stock write.
+    /// Apply the pending zero first, then run the stock write.
+    ///
+    /// The zero goes to `visible_slot`'s visible field, which the stock write
+    /// would otherwise overtake.
     ApplyZeroThenPassthrough {
         /// The visible-item slot whose parked zero must be applied first.
         visible_slot: usize,
@@ -557,17 +561,17 @@ impl Default for Coalescer {
 
 /// Table slot a (GUID, visible slot) pair probes from.
 fn unit_bucket(guid: u64, slot: u32) -> usize {
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "deliberate low-half extraction"
-    )]
+    // The truncation is the operation: the mix wants the low half of a wider
+    // value, and a checked conversion would reject exactly the inputs it is
+    // fed.
+    #[expect(clippy::cast_possible_truncation)]
     let guid_lo = guid as u32;
     let guid_hi = (guid >> 32) as u32;
     let p = 0x9e37_79b1u64 * u64::from(slot);
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "deliberate low-half extraction"
-    )]
+    // The truncation is the operation: the mix wants the low half of a wider
+    // value, and a checked conversion would reject exactly the inputs it is
+    // fed.
+    #[expect(clippy::cast_possible_truncation)]
     let a = (p as u32) ^ guid_lo;
     let d = ((p >> 32) as u32) ^ guid_hi;
     let c = d.wrapping_mul(0xed55_8ccd);
@@ -577,10 +581,10 @@ fn unit_bucket(guid: u64, slot: u32) -> usize {
         .wrapping_mul(0xff51_afd7)
         .wrapping_add((q >> 32) as u32)
         .wrapping_add(c);
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "deliberate low-half extraction"
-    )]
+    // The truncation is the operation: the mix wants the low half of a wider
+    // value, and a checked conversion would reject exactly the inputs it is
+    // fed.
+    #[expect(clippy::cast_possible_truncation)]
     let lo = (hi >> 1) ^ (q as u32);
     let mixed = (u64::from(hi) << 32) | u64::from(lo);
     (mixed % UNIT_TABLE_LEN as u64) as usize

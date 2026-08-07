@@ -74,6 +74,8 @@ windows/turbo/src/math/world.rs clippy::neg_cmp_op_on_partial_ord 10
 windows/turbo/src/math/world.rs clippy::too_many_arguments 12
 windows/turbo/src/math/world.rs non_snake_case 1
 windows/turbo/src/math/world.rs non_upper_case_globals 1
+windows/turbo/src/transmog.rs clippy::cast_possible_truncation 3
+windows/turbo/src/transmog.rs dead_code 5
 windows/turbo/src/win/diff.rs dead_code 1
 windows/turbo/src/win/hooks.rs clippy::cognitive_complexity 4
 windows/turbo/src/win/hooks.rs clippy::manual_range_contains 2
