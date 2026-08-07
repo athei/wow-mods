@@ -41519,3 +41519,329 @@ pub fn frame_script_object__lookup_script_method__702000(
 ) -> i32 {
     super::script_method::lookup(l, name, table)
 }
+
+/// `CLayoutFrame` deferred-resize queueing (`__fastcall(ecx = frame)`).
+///
+/// Appends `frame` to the global pending-resize list: link pair at
+/// `frame + [0xcf0bec]` (`0x6c`), list head pair at `0xcf0bf0`/`0xcf0bf4`
+/// (tail link, then first frame, tagged terminator), retry countdown byte at
+/// `frame+0x38` armed to 6. An already-queued frame returns untouched.
+///
+/// Deviation, by design: stock walks the whole pending list probing all nine
+/// anchor slots per entry through a virtual target getter to insert the frame
+/// ahead of its first queued dependent, which is quadratic in queued frames
+/// and dominated this path with many floating frames re-anchored per frame.
+/// This build always appends at the tail. The pending-list pump re-queues a
+/// dependent whenever its parent's rect changes (32-pass cap), so the final
+/// layout is order-independent; insertion order only changes how many resolve
+/// iterations a frame takes within one pump. Stock's defensive unlink of a
+/// half-linked node is dropped: with `next == 0` its successor-slot lookup
+/// would fault in stock too, so that state is unreachable.
+pub fn c_layout_frame_queue_resize__7681b0(frame: *mut u8) {
+    const LINK_OFF: *const u32 = (crate::win::EXPECTED_IMAGE_BASE + 0x8f_0bec) as *const u32;
+    const HEAD: *mut u32 = (crate::win::EXPECTED_IMAGE_BASE + 0x8f_0bf0) as *mut u32;
+    if frame.is_null() {
+        return;
+    }
+    // SAFETY: fixed, initialized `.data` link-offset dword in the live image.
+    let link_off = unsafe { LINK_OFF.read() } as usize;
+    // SAFETY: `frame` is a live layout frame; its two-dword link pair sits at
+    // the published link offset inside the object.
+    let node = unsafe { frame.add(link_off) }.cast::<u32>();
+    // SAFETY: `node` is the frame's link pair; slot 1 is the next pointer.
+    let node_next = unsafe { node.add(1) };
+    // SAFETY: `node_next` is the readable next slot of the link pair.
+    let next = unsafe { node_next.read() };
+    if next != 0 {
+        return;
+    }
+    // SAFETY: `HEAD` holds the list's tail-link pointer (or its own address
+    // when the list is empty), always a valid link pair.
+    let tail = unsafe { HEAD.read() } as *mut u32;
+    // SAFETY: `node` is the frame's writable link pair; the old tail becomes
+    // this node's prev link.
+    unsafe { node.write(tail as u32) };
+    // SAFETY: `tail` is the previous tail link pair; slot 1 is its next slot.
+    let tail_next_slot = unsafe { tail.add(1) };
+    // SAFETY: the old tail's next slot holds the tagged list terminator this
+    // node inherits.
+    let tail_next = unsafe { tail_next_slot.read() };
+    // SAFETY: `node_next` is the writable next slot; adopt the terminator.
+    unsafe { node_next.write(tail_next) };
+    // SAFETY: the old tail's next slot is writable; it now names the appended
+    // frame object (next slots hold object pointers, not link pointers).
+    unsafe { tail_next_slot.write(frame as u32) };
+    // SAFETY: `HEAD` is the writable tail slot of the list head pair.
+    unsafe { HEAD.write(node as u32) };
+    // SAFETY: `frame+0x38` is the frame's retry countdown byte.
+    let countdown = unsafe { frame.add(0x38) };
+    // SAFETY: `countdown` is the writable countdown byte; stock arms it to 6.
+    unsafe { countdown.write(6) };
+}
+
+/// Floating-frame screen anchoring (`__fastcall(ecx = listIndex, edx = frame)`).
+///
+/// Reimplements the placement chain at `0x509ec0`, run once per floating
+/// frame per rendered frame: build the frame's rect at the requested screen
+/// position (`width`/`height` from the frame's own virtuals at `+0x1c`/
+/// `+0x20`), slide it onto the screen, run the first-fit placement search
+/// against obstacle list `listIndex`, clamp the resulting center back into
+/// the screen, record the placed rect as a new obstacle, and re-anchor the
+/// frame at the result (frame point `CENTER` or `TOP`, relative point
+/// `BOTTOMLEFT` of `relativeTo`). Returns `relativeTo`, which stock leaves in
+/// `eax` at return.
+///
+/// Deviations, by design: the placement search order is deterministic FIFO
+/// (see the kernel doc), and when the frame already carries exactly one
+/// anchor of the shape this path always produces (concrete anchor class,
+/// same target, relative point `BOTTOMLEFT`), the anchor is updated in place
+/// following the same epsilon early-out stock's set-point applies, instead
+/// of freeing and reallocating it plus re-walking the target's dependent
+/// list every frame. Any other anchor shape takes the stock
+/// clear-and-set-point path unchanged.
+// The center clamps are written `!(max < upper)` so an unordered compare
+// snaps to the upper bound, which is the sense of the original's `C0`-and-
+// parity branch; the structural rewrite `max >= upper` is false on NaN and
+// would keep an unordered center unclamped.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
+pub fn floating_frame_anchor_at_screen_pos__509ec0(
+    list_index: i32,
+    frame: *mut u8,
+    relative_to: *mut u8,
+    screen_pos: *const f32,
+    anchor_center: i32,
+) -> *mut u8 {
+    const HALF: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x3f_fa24) as *const f32;
+    const FLOOR: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x3f_fd74) as *const f32;
+    const X_SCALE: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x43_2a44) as *const f32;
+    const Y_SCALE: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x43_2a48) as *const f32;
+    const EXT_D8: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x40_87d8) as *const f32;
+    const EXT_CC: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x40_87cc) as *const f32;
+    const MIN_D4: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x40_87d4) as *const f32;
+    const MIN_D0: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x40_87d0) as *const f32;
+    const DIR_TABLE: *const i32 = (crate::win::EXPECTED_IMAGE_BASE + 0x40_87e0) as *const i32;
+    const COUNT_BASE: *const i32 = (crate::win::EXPECTED_IMAGE_BASE + 0x7e_0b90) as *const i32;
+    const PTR_BASE: *const usize = (crate::win::EXPECTED_IMAGE_BASE + 0x7e_0b94) as *const usize;
+    const EPSILON: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x40_29d4) as *const f32;
+    const ANCHOR_VTABLE: u32 = (crate::win::EXPECTED_IMAGE_BASE as u32) + 0x41_c44c;
+
+    if frame.is_null() || screen_pos.is_null() || list_index < 0 {
+        return relative_to;
+    }
+
+    // SAFETY: `frame` is a live layout frame; slot 0 is its vtable pointer.
+    let vtable = unsafe { frame.cast::<usize>().read() } as *const usize;
+    // SAFETY: vtable slot 7 (`+0x1c`) is the frame's width getter.
+    let get_width_slot = unsafe { vtable.add(7) };
+    // SAFETY: `get_width_slot` is a readable vtable slot.
+    let get_width_addr = unsafe { get_width_slot.read() };
+    // SAFETY: vtable slot 8 (`+0x20`) is the frame's height getter.
+    let get_height_slot = unsafe { vtable.add(8) };
+    // SAFETY: `get_height_slot` is a readable vtable slot.
+    let get_height_addr = unsafe { get_height_slot.read() };
+    let get_width: extern "thiscall" fn(*mut u8) -> f32 =
+        // SAFETY: the vtable slot holds the client's width getter, a
+        // `__thiscall(this)` returning the width on the x87 stack.
+        unsafe { core::mem::transmute(get_width_addr) };
+    let get_height: extern "thiscall" fn(*mut u8) -> f32 =
+        // SAFETY: the vtable slot holds the client's height getter, same shape.
+        unsafe { core::mem::transmute(get_height_addr) };
+    let width = get_width(frame);
+    let height = get_height(frame);
+
+    // SAFETY: fixed, initialized `.data` one-half float in the live image.
+    let half = unsafe { HALF.read() };
+    // SAFETY: fixed, initialized `.data` lower-edge float in the live image.
+    let floor = unsafe { FLOOR.read() };
+    // SAFETY: fixed, initialized `.data` x cursor-scale float.
+    let screen_w = unsafe { X_SCALE.read() };
+    // SAFETY: fixed, initialized `.data` y cursor-scale float.
+    let screen_h = unsafe { Y_SCALE.read() };
+    let half_w = width * half;
+    let half_h = height * half;
+
+    // SAFETY: `screen_pos` addresses the caller's two-float screen position.
+    let pos = unsafe { screen_pos.cast::<[f32; 2]>().read_unaligned() };
+    let mut rect = [pos[1], pos[0] - half_w, pos[1] - height, pos[0] + half_w];
+    crate::math::ui::ui_frame_slide_rect_onto_screen__509e20(&mut rect, screen_w, screen_h, floor);
+
+    // Seed clamp through the hooked clamp so the derived-extent memo caches
+    // see the same writes as stock.
+    let mut seed = [0.0f32; 4];
+    let outcode = ui_frame_clamp_rect_to_screen__509bf0(
+        seed.as_mut_ptr(),
+        0,
+        rect[0],
+        rect[1],
+        rect[2],
+        rect[3],
+    );
+    let row = crate::math::ui::ui_frame_outcode_row__509d80(u32::from(outcode));
+    let mut dirs = [0i32; 4];
+    for (slot, dir) in dirs.iter_mut().enumerate() {
+        // SAFETY: the direction-preference table at `0x8087e0` holds nine
+        // four-dword rows; `row` is 0..=8 by construction of the row mapper.
+        let entry = unsafe { DIR_TABLE.add(row as usize * 4 + slot) };
+        // SAFETY: `entry` is a readable dword inside the table.
+        *dir = unsafe { entry.read() };
+    }
+
+    // Iteration budget: stock divides the screen extent by the rect extent in
+    // extended precision before truncating; f64 here can differ in the last
+    // bit, which only moves an iteration cap.
+    let cap_x = crate::math::misc::ftol__40a2b0(f64::from(screen_w) / f64::from(rect[3] - rect[1]));
+    let cap_y = crate::math::misc::ftol__40a2b0(f64::from(screen_h) / f64::from(rect[0] - rect[2]));
+    let cap = ((cap_x as i32).wrapping_add(1))
+        .wrapping_mul((cap_y as i32).wrapping_add(1))
+        .cast_unsigned();
+
+    let stride = list_index as usize * 4;
+    // SAFETY: the obstacle-list table's count slot for this list index.
+    let count_slot = unsafe { COUNT_BASE.add(stride) };
+    // SAFETY: `count_slot` is the readable count dword for this list index.
+    let count = unsafe { count_slot.read() };
+    // SAFETY: the obstacle-list table's array-pointer slot for this list index.
+    let list_slot = unsafe { PTR_BASE.add(stride) };
+    // SAFETY: `list_slot` holds the obstacle-array pointer for this list.
+    let list_addr = unsafe { list_slot.read() };
+    let obstacles: &[[f32; 4]] = if count > 0 && list_addr != 0 {
+        // SAFETY: the table promises `count` contiguous 4-float rects at the
+        // array pointer; read-only and not held past this call.
+        unsafe { core::slice::from_raw_parts(list_addr as *const [f32; 4], count as usize) }
+    } else {
+        &[]
+    };
+
+    // SAFETY: fixed, initialized `.data` x screen-margin float.
+    let ext_d8 = unsafe { EXT_D8.read() };
+    // SAFETY: fixed, initialized `.data` y screen-margin float.
+    let ext_cc = unsafe { EXT_CC.read() };
+    // SAFETY: fixed, initialized `.data` x lower-bound float.
+    let min_x = unsafe { MIN_D4.read() };
+    // SAFETY: fixed, initialized `.data` y lower-bound float.
+    let min_y = unsafe { MIN_D0.read() };
+    let bounds = crate::math::ui::FloatingScreenBounds {
+        extent_x: screen_w - ext_d8,
+        extent_y: screen_h - ext_cc,
+        min_x,
+        min_y,
+    };
+    let placed =
+        crate::math::ui::ui_frame_place_floating_rect(&rect, &seed, obstacles, &dirs, cap, &bounds);
+
+    // Center clamp, stock branch shapes: the max leg first, then the ordered
+    // `< upper` test whose NaN arm snaps to the upper bound.
+    let mut center_x = (placed[3] + placed[1]) * half;
+    let upper_x = screen_w - half_w;
+    let max_x = if half_w > center_x { half_w } else { center_x };
+    if !(max_x < upper_x) {
+        center_x = upper_x;
+    } else if half_w > center_x {
+        center_x = half_w;
+    }
+    let mut top_y = placed[0];
+    let upper_y = screen_h - half_h;
+    let max_y = if half_h > top_y { half_h } else { top_y };
+    if !(max_y < upper_y) {
+        top_y = upper_y;
+    } else if half_h > top_y {
+        top_y = half_h;
+    }
+
+    let mut final_rect = [top_y, center_x - half_w, top_y - height, center_x + half_w];
+    crate::math::ui::ui_frame_slide_rect_onto_screen__509e20(
+        &mut final_rect,
+        screen_w,
+        screen_h,
+        floor,
+    );
+
+    let append_obstacle: extern "fastcall" fn(i32, *const f32) =
+        // SAFETY: 0x509660 is the client's obstacle-list append,
+        // `__fastcall(ecx = listIndex, edx = rect)`, verified non-relocated by
+        // the image-base check.
+        unsafe { core::mem::transmute(crate::win::EXPECTED_IMAGE_BASE + 0x10_9660) };
+    append_obstacle(list_index, final_rect.as_ptr());
+
+    let point: usize = if anchor_center == 0 { 1 } else { 4 };
+    // SAFETY: the frame's nine anchor-pointer slots live at `+0x4..=0x24`.
+    let anchor_slot = unsafe { frame.add(4 + point * 4) };
+    // SAFETY: `anchor_slot` is the readable anchor pointer for this point.
+    let anchor = unsafe { anchor_slot.cast::<u32>().read() } as *mut u8;
+    let mut reusable = !anchor.is_null() && !relative_to.is_null();
+    if reusable {
+        for slot in 0..9usize {
+            if slot == point {
+                continue;
+            }
+            // SAFETY: anchor slot `slot` of the frame's nine-slot point array.
+            let other_slot = unsafe { frame.add(4 + slot * 4) };
+            // SAFETY: `other_slot` is a readable anchor pointer slot.
+            if unsafe { other_slot.cast::<u32>().read() } != 0 {
+                reusable = false;
+                break;
+            }
+        }
+    }
+    if reusable {
+        // SAFETY: `anchor` is a live anchor object; slot 0 is its vtable.
+        reusable = unsafe { anchor.cast::<u32>().read() } == ANCHOR_VTABLE;
+    }
+    if reusable {
+        // SAFETY: concrete-class anchor field `+0xc` is the target frame.
+        let target_ptr = unsafe { anchor.add(0xc) };
+        // SAFETY: `target_ptr` is the readable target-frame field.
+        reusable = unsafe { target_ptr.cast::<u32>().read() } == relative_to as u32;
+    }
+    if reusable {
+        // SAFETY: concrete-class anchor field `+0x10` is the relative point.
+        let rel_point_ptr = unsafe { anchor.add(0x10) };
+        // SAFETY: `rel_point_ptr` is the readable relative-point field.
+        reusable = unsafe { rel_point_ptr.cast::<u32>().read() } == 6;
+    }
+    if reusable {
+        // SAFETY: fixed, initialized `.data` set-point epsilon float.
+        let epsilon = unsafe { EPSILON.read() };
+        // SAFETY: concrete-class anchor field `+0x4` is the x offset.
+        let x_ptr = unsafe { anchor.add(4) }.cast::<f32>();
+        // SAFETY: `x_ptr` is the readable and writable x-offset field.
+        let old_x = unsafe { x_ptr.read() };
+        // SAFETY: concrete-class anchor field `+0x8` is the y offset.
+        let y_ptr = unsafe { anchor.add(8) }.cast::<f32>();
+        // SAFETY: `y_ptr` is the readable and writable y-offset field.
+        let old_y = unsafe { y_ptr.read() };
+        if (old_x - center_x).abs() < epsilon && (old_y - top_y).abs() < epsilon {
+            return relative_to;
+        }
+        // SAFETY: `x_ptr` is the writable x offset; same store a fresh anchor gets.
+        unsafe { x_ptr.write(center_x) };
+        // SAFETY: `y_ptr` is the writable y offset; same store a fresh anchor gets.
+        unsafe { y_ptr.write(top_y) };
+        // SAFETY: `frame+0x3c` is the frame's flags dword.
+        let flags_ptr = unsafe { frame.add(0x3c) }.cast::<u32>();
+        // SAFETY: `flags_ptr` is the readable flags dword.
+        let flags = unsafe { flags_ptr.read() };
+        // SAFETY: `flags_ptr` is writable; stock's set-point clears bit 3 on
+        // every anchor update.
+        unsafe { flags_ptr.write(flags & !8) };
+        let resize: extern "thiscall" fn(*mut u8, i32) =
+            // SAFETY: 0x7680e0 is the client's layout resize,
+            // `__thiscall(this, immediate)`, non-relocated per image-base check.
+            unsafe { core::mem::transmute(crate::win::EXPECTED_IMAGE_BASE + 0x36_80e0) };
+        resize(frame, 0);
+        return relative_to;
+    }
+
+    let clear_all_points: extern "thiscall" fn(*mut u8) =
+        // SAFETY: 0x767ed0 is the client's clear-all-anchor-points routine,
+        // `__thiscall(this)`, non-relocated per image-base check.
+        unsafe { core::mem::transmute(crate::win::EXPECTED_IMAGE_BASE + 0x36_7ed0) };
+    clear_all_points(frame);
+    let set_point: extern "thiscall" fn(*mut u8, u32, *mut u8, u32, f32, f32, i32) =
+        // SAFETY: 0x767c70 is the client's anchor set-point,
+        // `__thiscall(this, point, relativeTo, relativePoint, x, y, resize)`,
+        // non-relocated per image-base check.
+        unsafe { core::mem::transmute(crate::win::EXPECTED_IMAGE_BASE + 0x36_7c70) };
+    set_point(frame, point as u32, relative_to, 6, center_x, top_y, 1);
+    relative_to
+}

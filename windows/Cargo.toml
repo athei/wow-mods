@@ -59,7 +59,7 @@ pedantic = { level = "warn", priority = -1 }
 # Length is a poor proxy for complexity; allow long procedural functions
 # (per-opcode dispatchers, codegen templates) where the structural alternative
 # is fragmented helpers threading the same state.
-too_many_lines = "allow"                # 66
+too_many_lines = "allow"                # 67
 # A separate multiply and add is what the originals compiled to, and the
 # differential harness compares against that — fusing them changes the rounding
 # and the comparison fails. It is also faster on the default baseline: nehalem
@@ -98,10 +98,10 @@ undocumented_unsafe_blocks = "warn"
 # it to suit a lint makes the reimplementation harder to check against the
 # behaviour it has to match.
 items_after_statements = "allow"        # 864
-cast_ptr_alignment = "allow"            # 911 — reads are already `read_unaligned`
-unreadable_literal = "allow"            # 385 — addresses and bit masks, verbatim
+cast_ptr_alignment = "allow"            # 921 — reads are already `read_unaligned`
+unreadable_literal = "allow"            # 387 — addresses and bit masks, verbatim
 similar_names = "allow"                 # 219
-semicolon_if_nothing_returned = "allow" # 148
+semicolon_if_nothing_returned = "allow" # 149
 many_single_char_names = "allow"        # 41
 
 # Numeric conversions that must truncate, wrap and round exactly as the
@@ -109,12 +109,12 @@ many_single_char_names = "allow"        # 41
 # narrowing into a panic, which is a behaviour change, and in a per-frame hook
 # it is a crash. Float comparison is exact on purpose: the differential harness
 # compares bit patterns.
-cast_possible_truncation = "allow"      # 359
-cast_sign_loss = "allow"                # 228
+cast_possible_truncation = "allow"      # 363
+cast_sign_loss = "allow"                # 230
 cast_possible_wrap = "allow"            # 102
 cast_precision_loss = "allow"           # 109
 cast_lossless = "allow"                 # 60
-float_cmp = "allow"                     # 47
+float_cmp = "allow"                     # 48
 
 # Pointer casts in the transcription — these convert no numbers, so the
 # narrowing/rounding argument above does not reach them. The client's records

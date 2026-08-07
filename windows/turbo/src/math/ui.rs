@@ -592,3 +592,309 @@ mod tests_blip_in_range__4eaa90 {
         assert!(in_range(&[1.0, 0.0, 0.0], &c, f32::NAN));
     }
 }
+
+/// Outcode to preferred-push-direction row index (stock bit dispatch at `0x509d80`).
+///
+/// The outcode bits are bit0 = off-left, bit1 = off-right, bit2 = off-top,
+/// bit3 = off-bottom. The result indexes the 9-row direction-preference table
+/// at `0x8087e0` (rows of four direction codes, `-1` padding), a 3x3
+/// classification of where the rect left the screen.
+pub const fn ui_frame_outcode_row__509d80(outcode: u32) -> u32 {
+    if outcode & 1 != 0 {
+        if outcode & 4 != 0 {
+            return 8;
+        }
+        return ((outcode & 8) | 0x10) >> 2;
+    }
+    if outcode & 4 != 0 {
+        return if outcode & 2 != 0 { 7 } else { 2 };
+    }
+    if outcode & 2 != 0 {
+        return if outcode & 8 != 0 { 5 } else { 3 };
+    }
+    ((outcode & 0xff) >> 3) & 1
+}
+
+#[cfg(test)]
+mod tests_ui_frame_outcode_row__509d80 {
+    use super::ui_frame_outcode_row__509d80 as f;
+
+    #[test]
+    fn on_screen_is_row_zero() {
+        assert_eq!(f(0), 0);
+    }
+    #[test]
+    fn single_edges() {
+        assert_eq!(f(1), 4); // off-left
+        assert_eq!(f(2), 3); // off-right
+        assert_eq!(f(4), 2); // off-top
+        assert_eq!(f(8), 1); // off-bottom
+    }
+    #[test]
+    fn corners() {
+        assert_eq!(f(1 | 4), 8); // left + top
+        assert_eq!(f(1 | 8), 6); // left + bottom
+        assert_eq!(f(2 | 4), 7); // right + top
+        assert_eq!(f(2 | 8), 5); // right + bottom
+    }
+}
+
+/// Slides a floating rect `(top, left, bottom, right)` back onto the screen edge by edge.
+///
+/// Transcribes the in-place fixup at `0x509e20`: the width and height are taken
+/// from the incoming corners, then the four edge cases run in order (top past
+/// `screen_h`, bottom below `floor`, left below `floor`, right past
+/// `screen_w`), each later step seeing the earlier stores. All compares are
+/// strict ordered x87 tests; a NaN corner skips its step.
+pub fn ui_frame_slide_rect_onto_screen__509e20(
+    rect: &mut [f32; 4],
+    screen_w: f32,
+    screen_h: f32,
+    floor: f32,
+) {
+    let height = rect[0] - rect[2];
+    let width = rect[3] - rect[1];
+    if rect[0] >= screen_h {
+        rect[0] = screen_h;
+        rect[2] = screen_h - height;
+    }
+    if rect[2] < floor {
+        rect[2] = 0.0;
+        rect[0] = height;
+    }
+    if rect[1] < floor {
+        rect[1] = 0.0;
+        rect[3] = width;
+    }
+    if rect[3] > screen_w {
+        rect[3] = screen_w;
+        rect[1] = screen_w - width;
+    }
+}
+
+#[cfg(test)]
+mod tests_ui_frame_slide_rect_onto_screen__509e20 {
+    use super::ui_frame_slide_rect_onto_screen__509e20 as f;
+
+    #[test]
+    fn on_screen_untouched() {
+        let mut r = [5.0f32, 1.0, 1.0, 3.0];
+        f(&mut r, 10.0, 10.0, 0.0);
+        assert_eq!(r, [5.0, 1.0, 1.0, 3.0]);
+    }
+    #[test]
+    fn top_overflow_slides_down() {
+        let mut r = [12.0f32, 1.0, 8.0, 3.0];
+        f(&mut r, 10.0, 10.0, 0.0);
+        assert_eq!(r, [10.0, 1.0, 6.0, 3.0]);
+    }
+    #[test]
+    fn bottom_underflow_slides_up_to_zero() {
+        let mut r = [1.0f32, 1.0, -3.0, 3.0];
+        f(&mut r, 10.0, 10.0, 0.0);
+        assert_eq!(r, [4.0, 1.0, 0.0, 3.0]);
+    }
+    #[test]
+    fn left_then_right_order() {
+        // Wider than the screen: the right-edge fix runs last and wins.
+        let mut r = [5.0f32, -2.0, 1.0, 14.0];
+        f(&mut r, 10.0, 10.0, 0.0);
+        assert_eq!(r, [5.0, -6.0, 1.0, 10.0]);
+    }
+    #[test]
+    fn top_equal_still_stores() {
+        // The top test is `>=`: an exactly-fitting top is re-stored unchanged.
+        let mut r = [10.0f32, 1.0, 2.0, 3.0];
+        f(&mut r, 10.0, 10.0, 0.0);
+        assert_eq!(r, [10.0, 1.0, 2.0, 3.0]);
+    }
+}
+
+/// Returns the lowest-index obstacle rect overlapping `rect`, if any.
+///
+/// Same strict-inequality overlap test and scan order as
+/// [`ui_frame_rect_overlap_distance__509220`]; factored out so the floating
+/// placement search runs one scan per frontier rect instead of one per push
+/// direction (the overlap verdict and the hit obstacle do not depend on the
+/// direction, only the returned clearance does).
+pub fn ui_frame_first_overlap<'a>(
+    rect: &[f32; 4],
+    obstacles: &'a [[f32; 4]],
+) -> Option<&'a [f32; 4]> {
+    obstacles
+        .iter()
+        .find(|obs| rect[3] > obs[1] && rect[1] < obs[3] && rect[0] > obs[2] && rect[2] < obs[0])
+}
+
+/// Derived screen bounds for the floating placement search.
+///
+/// `extent_x`/`extent_y` are the derived upper bounds (cursor scale minus the
+/// margin globals at `0x8087d8`/`0x8087cc`); `min_x`/`min_y` are the lower
+/// bounds (`0x8087d4`/`0x8087d0`).
+pub struct FloatingScreenBounds {
+    /// Derived upper x bound.
+    pub extent_x: f32,
+    /// Derived upper y bound.
+    pub extent_y: f32,
+    /// Lower x bound.
+    pub min_x: f32,
+    /// Lower y bound.
+    pub min_y: f32,
+}
+
+/// First-fit placement search for a floating rect among screen obstacles.
+///
+/// Reimplements the frontier search at `0x5097a0`: starting from the clamped
+/// `seed`, repeatedly take a candidate rect; discard it if any screen outcode
+/// bit is set; otherwise find its lowest-index overlapping obstacle. With no
+/// overlap the candidate is accepted as soon as the preference row holds any
+/// usable direction code (0..=3). With an overlap, each usable direction
+/// produces a child candidate pushed clear of that obstacle by the clearance
+/// along that axis; a push absorbed entirely by f32 rounding equals its parent
+/// and is accepted as-is. After `cap` candidate expansions, or when the
+/// frontier empties, the search gives up and returns `src` unchanged.
+///
+/// Deviation from stock, by design: the stock frontier order depends on
+/// whether search nodes come from the recycler or from a fresh allocation
+/// (recycled nodes are prepended, fresh ones appended), so which of several
+/// valid positions wins depends on allocator history. This search is a plain
+/// FIFO over children pushed in row order, which is deterministic and equally
+/// valid under the same push rules. Stock's per-node direction tag is dead
+/// (every allocation resets it to `-1` and nothing ever writes it), so it is
+/// dropped here.
+pub fn ui_frame_place_floating_rect(
+    src: &[f32; 4],
+    seed: &[f32; 4],
+    obstacles: &[[f32; 4]],
+    dirs: &[i32; 4],
+    cap: u32,
+    bounds: &FloatingScreenBounds,
+) -> [f32; 4] {
+    // Dense obstacle fields grow the frontier well past a handful of rects;
+    // sized so a crowded scene stays within one allocation.
+    let mut queue: Vec<[f32; 4]> = Vec::with_capacity(64);
+    queue.push(*seed);
+    let mut head = 0usize;
+    let mut expansions = 0u32;
+    while head < queue.len() {
+        if expansions >= cap {
+            return *src;
+        }
+        expansions += 1;
+        let rect = queue[head];
+        head += 1;
+        let (outcode, _) = ui_frame_clamp_rect_to_screen__509bf0(
+            rect[0],
+            rect[1],
+            rect[2],
+            rect[3],
+            bounds.extent_x,
+            bounds.extent_y,
+            bounds.min_x,
+            bounds.min_y,
+        );
+        if outcode != 0 {
+            continue;
+        }
+        let Some(obs) = ui_frame_first_overlap(&rect, obstacles) else {
+            if dirs.iter().any(|d| (0..=3).contains(d)) {
+                return rect;
+            }
+            continue;
+        };
+        for &dir in dirs {
+            let Ok(dir) = u32::try_from(dir) else {
+                continue;
+            };
+            if dir > 3 {
+                continue;
+            }
+            let clearance = match dir {
+                0 => obs[0] - rect[2],
+                1 => rect[3] - obs[1],
+                2 => obs[3] - rect[1],
+                _ => rect[0] - obs[2],
+            };
+            let mut child = rect;
+            match dir {
+                0 => {
+                    child[0] += clearance;
+                    child[2] += clearance;
+                }
+                1 => {
+                    child[1] -= clearance;
+                    child[3] -= clearance;
+                }
+                2 => {
+                    child[1] += clearance;
+                    child[3] += clearance;
+                }
+                _ => {
+                    child[0] -= clearance;
+                    child[2] -= clearance;
+                }
+            }
+            if child == rect {
+                return child;
+            }
+            queue.push(child);
+        }
+    }
+    *src
+}
+
+#[cfg(test)]
+mod tests_ui_frame_place_floating_rect {
+    use super::{FloatingScreenBounds, ui_frame_place_floating_rect as f};
+
+    const BOUNDS: FloatingScreenBounds = FloatingScreenBounds {
+        extent_x: 100.0,
+        extent_y: 100.0,
+        min_x: 0.0,
+        min_y: 0.0,
+    };
+    // Push up, then left, then right, then down.
+    const DIRS: [i32; 4] = [0, 1, 2, 3];
+
+    #[test]
+    fn no_obstacles_accepts_seed() {
+        let seed = [10.0f32, 1.0, 5.0, 4.0];
+        assert_eq!(
+            f(&[9.0, 9.0, 9.0, 9.0], &seed, &[], &DIRS, 16, &BOUNDS),
+            seed
+        );
+    }
+    #[test]
+    fn all_directions_unusable_returns_src() {
+        let src = [9.0f32, 9.0, 9.0, 9.0];
+        let seed = [10.0f32, 1.0, 5.0, 4.0];
+        assert_eq!(f(&src, &seed, &[], &[-1, -1, -1, -1], 16, &BOUNDS), src);
+    }
+    #[test]
+    fn cap_zero_returns_src() {
+        let src = [9.0f32, 9.0, 9.0, 9.0];
+        let seed = [10.0f32, 1.0, 5.0, 4.0];
+        assert_eq!(f(&src, &seed, &[], &DIRS, 0, &BOUNDS), src);
+    }
+    #[test]
+    fn single_obstacle_pushes_clear_in_first_direction() {
+        // Obstacle occupies y 0..20 fully across; seed overlaps it. Direction 0
+        // pushes up by `obs.top - rect.bottom = 20 - 5 = 15`.
+        let obs = [[20.0f32, 0.0, 0.0, 100.0]];
+        let seed = [10.0f32, 1.0, 5.0, 4.0];
+        let placed = f(&[0.0; 4], &seed, &obs, &DIRS, 16, &BOUNDS);
+        assert_eq!(placed, [25.0, 1.0, 20.0, 4.0]);
+    }
+    #[test]
+    fn off_screen_candidate_discarded() {
+        // The up-push lands past the screen top, so the search falls through to
+        // the left-push child instead.
+        let obs = [[120.0f32, 0.0, 0.0, 50.0]];
+        let seed = [90.0f32, 40.0, 85.0, 45.0];
+        let placed = f(&[0.0; 4], &seed, &obs, &DIRS, 16, &BOUNDS);
+        // Left push: rect.right - obs.left = 45 - 0 = 45 => left column lands
+        // at [90, -5, 85, 0], off screen; right push: obs.right - rect.left =
+        // 50 - 40 = 10 => [90, 50, 85, 55], on screen and overlap-free.
+        assert_eq!(placed, [90.0, 50.0, 85.0, 55.0]);
+    }
+}

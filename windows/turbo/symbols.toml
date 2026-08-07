@@ -4703,3 +4703,19 @@ abi  = "thiscall"
 ret  = "i32"
 args = ["*mut u8", "*mut u8"]
 preserve = []
+
+[functions.CLayoutFrame_QueueResize__7681b0]
+rva  = 0x3681b0
+sig  = "55 8B EC 83 EC 08 85 C9 56 8B 35 ?? ?? ?? ??"
+abi  = "fastcall"
+ret  = "void"
+args = ["*mut u8"]
+preserve = []
+
+[functions.FloatingFrame_AnchorAtScreenPos__509ec0]
+rva  = 0x109ec0
+sig  = "55 8B EC 83 EC 3C 56 8B F2"
+abi  = "fastcall"
+ret  = "*mut u8"
+args = ["i32", "*mut u8", "*mut u8", "*const f32", "i32"]
+preserve = []
