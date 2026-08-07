@@ -20,6 +20,7 @@ memchr = "2"
 miniz_oxide = { version = "0.9", features = ["simd"] }
 minhook = "0.9"
 rustc-hash = "2"
+jpeg-encoder = "0.6"
 serde = { version = "1", features = ["derive"] }
 toml = "1.1"
 
@@ -58,14 +59,14 @@ pedantic = { level = "warn", priority = -1 }
 # Length is a poor proxy for complexity; allow long procedural functions
 # (per-opcode dispatchers, codegen templates) where the structural alternative
 # is fragmented helpers threading the same state.
-too_many_lines = "allow"                # 65
+too_many_lines = "allow"                # 66
 # A separate multiply and add is what the originals compiled to, and the
 # differential harness compares against that — fusing them changes the rounding
 # and the comparison fails. It is also faster on the default baseline: nehalem
 # has no hardware FMA, so `mul_add` lowers to an `fmaf` libcall. (The AVX2
 # native-Windows variant does have FMA, which is why the faithfulness argument
 # is the one that carries this and not the ISA.)
-suboptimal_flops = "allow"              # 1158
+suboptimal_flops = "allow"              # 1181
 # Stricter unsafe discipline.
 missing_safety_doc = "warn"
 not_unsafe_ptr_arg_deref = "warn"
@@ -98,9 +99,9 @@ undocumented_unsafe_blocks = "warn"
 # behaviour it has to match.
 items_after_statements = "allow"        # 864
 cast_ptr_alignment = "allow"            # 911 — reads are already `read_unaligned`
-unreadable_literal = "allow"            # 375 — addresses and bit masks, verbatim
-similar_names = "allow"                 # 217
-semicolon_if_nothing_returned = "allow" # 144
+unreadable_literal = "allow"            # 385 — addresses and bit masks, verbatim
+similar_names = "allow"                 # 219
+semicolon_if_nothing_returned = "allow" # 148
 many_single_char_names = "allow"        # 41
 
 # Numeric conversions that must truncate, wrap and round exactly as the
@@ -108,12 +109,12 @@ many_single_char_names = "allow"        # 41
 # narrowing into a panic, which is a behaviour change, and in a per-frame hook
 # it is a crash. Float comparison is exact on purpose: the differential harness
 # compares bit patterns.
-cast_possible_truncation = "allow"      # 344
-cast_sign_loss = "allow"                # 224
-cast_possible_wrap = "allow"            # 101
-cast_precision_loss = "allow"           # 107
-cast_lossless = "allow"                 # 59
-float_cmp = "allow"                     # 46
+cast_possible_truncation = "allow"      # 359
+cast_sign_loss = "allow"                # 228
+cast_possible_wrap = "allow"            # 102
+cast_precision_loss = "allow"           # 109
+cast_lossless = "allow"                 # 60
+float_cmp = "allow"                     # 47
 
 # Pointer casts in the transcription — these convert no numbers, so the
 # narrowing/rounding argument above does not reach them. The client's records
@@ -126,13 +127,13 @@ ptr_cast_constness = "allow"            # 12
 # All five are `(a*a + b*b).sqrt()`, which clippy wants as `hypot`. `hypot` is a
 # different algorithm — it rescales operands and rounds differently — so it does
 # not reproduce the transcribed `mul, mul, add, sqrt` the harness compares.
-imprecise_flops = "allow"               # 5
+imprecise_flops = "allow"               # 8
 
 # Style preferences that fight the transcription: restructuring control flow to
 # satisfy them moves code away from the shape being reproduced, for no change
 # in what the function does.
-missing_const_for_fn = "allow"          # 82
-useless_let_if_seq = "allow"            # 20
+missing_const_for_fn = "allow"          # 90
+useless_let_if_seq = "allow"            # 21
 if_not_else = "allow"                   # 12
 suspicious_operation_groupings = "allow" # 12
 # The tail `match` of a transcribed function: the arms ARE the original's branch
@@ -152,7 +153,7 @@ bool_to_int_with_if = "allow"           # 3
 verbose_bit_mask = "allow"              # 1
 # The parameters mirror the pointers the stock routine holds, so the signature is
 # ABI-shaped: see §"An argument list that mirrors a calling convention".
-trivially_copy_pass_by_ref = "allow"    # 1
+trivially_copy_pass_by_ref = "allow"    # 2
 # The house shape for this surface: a `math::` kernel returns `Option`, the hook
 # forwards the accepted value or takes the stock error arm.
 single_match_else = "allow"             # 1

@@ -52,6 +52,16 @@ pub mod fmod_mixer;
 // not generated — outside the assemble.py sentinels.
 pub mod fmod_mp3;
 
+// Distance meters behind the `UnitXP` script dispatcher's distance command —
+// new arithmetic (server-parity range formulas), not a reimplementation of a
+// client function. Hand-maintained, outside the assemble.py sentinels.
+pub mod reach;
+
+// Camera-offset arithmetic behind the dispatcher's camera-editing feature —
+// new arithmetic, not a reimplementation of a client function.
+// Hand-maintained, outside the assemble.py sentinels.
+pub mod editcamera;
+
 // libm-free polynomial sin/cos shared by the trig kernels (Euler/axis-angle/
 // quaternion/movement-arc). Hand-maintained, not generated — outside the
 // assemble.py sentinels.

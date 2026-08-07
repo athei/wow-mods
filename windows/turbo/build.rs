@@ -373,6 +373,15 @@ fn main() {
         println!("cargo:rustc-cfg=wow_turbo_diff");
     }
 
+    // The `version coffTimeDateStamp` command answers with a build timestamp.
+    // The linker's header field is a reproducibility hash, not a time, so the
+    // real build time is baked here instead (fresh per release: the tag watch
+    // below re-runs this script whenever the version stamp moves).
+    let epoch = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    println!("cargo:rustc-env=WOW_TURBO_BUILD_EPOCH={epoch}");
+
     let manifest_dir =
         PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR set by cargo"));
     let toml_path = manifest_dir.join("symbols.toml");

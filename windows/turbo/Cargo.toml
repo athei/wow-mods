@@ -16,6 +16,7 @@ log = { workspace = true }
 # Histogram map used by the in-DLL `profile` module; unconditional because that
 # module (classification + TSV rendering) is host-tested.
 rustc-hash = { workspace = true }
+jpeg-encoder = { workspace = true }
 # Pure-Rust inflate for the MPQ sector-decompressor reimpl (`storm::inflate`).
 # Not target-gated: the kernel is host-unit-tested under the same toolchain.
 miniz_oxide = { workspace = true }

@@ -41374,6 +41374,121 @@ pub fn script_get_name__7a1390(l: i32) -> i32 {
     super::getname::get_name(l)
 }
 
+/// The `UnitXP` script entry — a chained command dispatcher.
+///
+/// `fastcall(ecx = L)`, `RET 0`, returns the Lua result count. A thin adapter:
+/// the command match, the answers and the delegate all live in
+/// `crate::win::unitxp`.
+pub fn script_unit_xp__517350(l: i32) -> i32 {
+    super::unitxp::unit_xp(l)
+}
+
+/// Nameplate creation — refused for units the nameplate filters exclude.
+///
+/// `thiscall(ecx = unit)` plus two pass-through arguments, `RET 8`, void. The
+/// filter chain lives in `crate::win::unitxp::nameplate`; anything not vetoed
+/// runs the displaced code unchanged.
+pub fn nameplate__add__6086e0(unit: *mut u8, arg1: *mut u8, arg2: *mut u8) {
+    if super::unitxp::nameplate::should_veto_add(unit.addr()) {
+        return;
+    }
+    (super::symbols::originals::nameplate__add__6086e0())(unit, arg1, arg2);
+}
+
+/// Per-frame camera update — stock first, then the configured offsets.
+///
+/// `fastcall(ecx = unknown, edx = camera)`, `RET 0`. The offset arithmetic,
+/// collision probes and published state live in `crate::win::unitxp::camera`.
+pub fn cg_camera__update_callback__511bc0(unknown: u32, camera: u32) -> i32 {
+    let result = (super::symbols::originals::cg_camera__update_callback__511bc0())(unknown, camera);
+    super::unitxp::camera::after_update(camera);
+    result
+}
+
+/// The camera-distance easing curve, bypassed while smoothing is off.
+///
+/// `fastcall` with three stack floats, `RET 0xC`, the eased value in `st0`.
+pub fn camera__organic_smooth__5b7bb0(start: f32, end: f32, step: f32) -> f64 {
+    if super::unitxp::settings::camera_organic_smooth() {
+        return (super::symbols::originals::camera__organic_smooth__5b7bb0())(start, end, step);
+    }
+    f64::from(end)
+}
+
+/// Per-frame world render — the nameplate cull runs first, then stock.
+///
+/// `thiscall(ecx = this)`, `RET 0`. The wrapper walks the live plate list and
+/// drops plates whose units stopped qualifying (see
+/// `crate::win::unitxp::nameplate`), then always runs the displaced code.
+pub fn c_world_scene__render_world__482d70(this: *mut u8) -> i32 {
+    if !this.is_null() {
+        super::unitxp::nameplate::cull_before_render();
+        super::unitxp::timer::pump();
+    }
+    (super::symbols::originals::c_world_scene__render_world__482d70())(this)
+}
+
+/// The weather-type setter — suppressed precipitation becomes clear.
+///
+/// `thiscall(ecx = this)` plus type, intensity and a flag, callee-cleaned.
+pub fn weather__set_type__67baf0(this: *mut u8, weather_type: i32, intensity: f32, flag: u8) {
+    let filtered = super::unitxp::settings::weather_filtered_type(weather_type);
+    (super::symbols::originals::weather__set_type__67baf0())(this, filtered, intensity, flag);
+}
+
+/// Scene end — the frame limiter runs after stock, on the presenting pass.
+///
+/// `thiscall(ecx = this)`, `RET 0`, void. In world, only the scene-end that
+/// follows a present runs the limiter (the scene ends twice per frame under
+/// a software cursor).
+pub fn c_gx_device_d3d__i_scene_end__5a17a0(this: *mut u8) {
+    if !super::unitxp::settings::in_world() {
+        (super::symbols::originals::c_gx_device_d3d__i_scene_end__5a17a0())(this);
+        return;
+    }
+    if !super::unitxp::fpscap::take_presenting() {
+        (super::symbols::originals::c_gx_device_d3d__i_scene_end__5a17a0())(this);
+        return;
+    }
+    (super::symbols::originals::c_gx_device_d3d__i_scene_end__5a17a0())(this);
+    super::unitxp::fpscap::limit();
+}
+
+/// Scene present — marks the presenting scene-end for the limiter's dedup.
+///
+/// `thiscall(ecx = this)` plus one argument, callee-cleaned, void.
+pub fn c_gx_device__scene_present__592430(this: *mut u8, arg: i32) {
+    (super::symbols::originals::c_gx_device__scene_present__592430())(this, arg);
+    super::unitxp::fpscap::mark_presenting();
+}
+
+/// Floating world text — the experience text (type 4) suppressed on request.
+///
+/// `thiscall(ecx = this)` plus type, text, color and a flag, callee-cleaned.
+pub fn create_world_text__6c73f0(
+    this: *mut u8,
+    text_type: i32,
+    text: *const u8,
+    color: u32,
+    flag: u32,
+) {
+    if text_type == 4 && super::unitxp::settings::hide_exp_text() {
+        return;
+    }
+    (super::symbols::originals::create_world_text__6c73f0())(this, text_type, text, color, flag);
+}
+
+/// The screenshot TGA writer — re-encoded off-thread, stock on any mismatch.
+///
+/// `thiscall(ecx = this)` plus the target path, `RET 4`.
+pub fn c_tga_file__write__5a4810(this: *mut u8, filename: *mut u8) -> i32 {
+    if super::unitxp::screenshot::take_over(this.addr(), filename) {
+        // The worker owns the copy; the stock writer is skipped entirely.
+        return 1;
+    }
+    (super::symbols::originals::c_tga_file__write__5a4810())(this, filename)
+}
+
 /// `FrameScript::Shutdown` — drops every Lua-state memo, then runs stock.
 ///
 /// `cdecl`, no arguments, void. Wrapper only: the memos' registry refs index

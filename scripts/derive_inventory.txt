@@ -7,6 +7,7 @@ windows/turbo/src/math/collision.rs SweepHitAction Debug,Clone,Copy,PartialEq,Eq
 windows/turbo/src/math/lua.rs LuaGetRoute Debug,PartialEq,Eq,Clone,Copy
 windows/turbo/src/math/lua.rs LuaSetKey Debug,PartialEq,Eq,Clone,Copy
 windows/turbo/src/math/lua_gc.rs ChunkSpan Clone,Copy
+windows/turbo/src/math/reach.rs Meter Clone,Copy,PartialEq,Eq
 windows/turbo/src/math/ulp.rs LaneDiff Debug,Clone,Copy,PartialEq,Eq
 windows/turbo/src/math/weather.rs RainDropScalars Clone,Copy,PartialEq,Debug
 windows/turbo/src/math/world.rs BspChildSide Debug,Clone,Copy,PartialEq,Eq
@@ -27,3 +28,5 @@ windows/turbo/src/storm/filecache.rs Hit Clone,Copy,PartialEq,Eq,Debug
 windows/turbo/src/win/hooks.rs GcJob Clone,Copy
 windows/turbo/src/win/hooks.rs GcJobKind Clone,Copy
 windows/turbo/src/win/hooks.rs GxLightRec Clone,Copy
+windows/turbo/src/win/objmgr.rs UnitRef Clone,Copy
+windows/turbo/src/win/unitxp/targeting.rs MobEntry Clone,Copy,Default

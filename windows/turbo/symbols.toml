@@ -4568,3 +4568,138 @@ ret  = "i32"
 args = ["i32", "i32"]
 preserve = []
 armed_only = true
+
+# The stock `UnitXP` script function, the entry mods borrow as an RPC channel
+# into native code. This dispatcher answers the command set of a discontinued
+# mod (line of sight, distances, targeting, nameplate filters and utilities)
+# and delegates everything else through the trampoline, so other mods chained
+# on the same entry keep working in any hook order. The sig list accepts the
+# stock prologue or an already-installed detour (either jump form): a detoured
+# entry is the chain working, not a wrong build. No diff table is possible —
+# both sides would push onto the live Lua stack; verification is the armed
+# dispatcher counters and in-game observation.
+[functions.Script_UnitXP__517350]
+rva  = 0x117350
+sig  = [
+  "55 8B EC 83 EC 08 56 8B F1 BA 01 00 00 00 89 75 F8 E8 ?? ?? ?? ??",
+  "E9 ?? ?? ?? ??",
+  "FF 25 ?? ?? ?? ??",
+]
+abi  = "fastcall"
+ret  = "i32"
+args = ["i32"]
+preserve = []
+
+# The nameplate creation entry: `this` is the unit gaining a plate. The wrapper
+# refuses creation for units the nameplate filters exclude and runs the
+# displaced code unchanged otherwise; the filter policy lives with the `UnitXP`
+# dispatcher's nameplate feature. No diff table is possible (the effect is
+# which plates exist on screen); verification is the armed veto/remove counters
+# and in-game observation.
+[functions.Nameplate__Add__6086e0]
+rva  = 0x2086e0
+sig  = "55 8B EC 83 EC 08 56 8B F1 8B 8E 60 0E 00 00"
+abi  = "thiscall"
+ret  = "void"
+args = ["*mut u8", "*mut u8", "*mut u8"]
+preserve = []
+
+# The per-frame world render entry, wrapped so the nameplate filters can walk
+# the live plate list and drop plates whose units stopped qualifying before
+# the frame draws (and, later, to pump script timers). The displaced code
+# always runs; the wrapper only acts first. Verification as above.
+[functions.CWorldScene__RenderWorld__482d70]
+rva  = 0x082d70
+sig  = "55 8B EC 81 EC 80 00 00 00 56 8B F1"
+abi  = "thiscall"
+ret  = "i32"
+args = ["*mut u8"]
+preserve = []
+
+# The per-frame camera update callback: `edx` carries the camera record. The
+# wrapper runs the displaced code first, then applies the configured offsets
+# (shoulder/height/pitch/pin), validates them with collision probes, and
+# publishes the edited state for the sight features. No diff table is
+# possible (the effect is the live camera record); verification is the armed
+# probe counters and in-game observation.
+[functions.CGCamera__UpdateCallback__511bc0]
+rva  = 0x111bc0
+sig  = "56 8B F2 85 F6 57 74 72"
+abi  = "fastcall"
+ret  = "i32"
+args = ["u32", "u32"]
+preserve = []
+
+# The camera-distance easing curve: three floats on the stack, the eased
+# value back in `st0`. Wrapped so the smoothing toggle can answer the target
+# value directly, which makes zooming instant. Verification in-game (an
+# f64-in-`st0` return has no diffable out region through this harness).
+[functions.Camera__OrganicSmooth__5b7bb0]
+rva  = 0x1b7bb0
+sig  = "55 8B EC D9 05 ?? ?? ?? ?? D8 4D 10"
+abi  = "fastcall"
+ret  = "f64"
+args = ["f32", "f32", "f32"]
+preserve = ["eax", "ecx", "edx"]
+
+# The weather-type setter, wrapped so suppressed precipitation types become
+# clear weather while the rest pass through unchanged. Verification in-game
+# (the effect is the live weather system's state).
+[functions.Weather__SetType__67baf0]
+rva  = 0x27baf0
+sig  = "55 8B EC A0 ?? ?? ?? ?? 84 C0 56"
+abi  = "thiscall"
+ret  = "void"
+args = ["*mut u8", "i32", "f32", "u8"]
+preserve = []
+
+# The scene-end entry: the wrapper consumes the presenting flag (the scene
+# ends twice per frame under a software cursor) and runs the frame limiter
+# after the displaced code, in world only. The sig list accepts an installed
+# detour: other mods wrap this entry too, and a wrapper that always delegates
+# stacks on whatever is underneath, the same chain contract as the `UnitXP`
+# entry. Verification in-game.
+[functions.CGxDeviceD3d__ISceneEnd__5a17a0]
+rva  = 0x1a17a0
+sig  = [
+  "56 8B F1 8B 86 38 3A 00 00",
+  "E9 ?? ?? ?? ??",
+  "FF 25 ?? ?? ?? ??",
+]
+abi  = "thiscall"
+ret  = "void"
+args = ["*mut u8"]
+preserve = ["edx"]
+
+# The scene-present entry: the wrapper marks the presenting scene-end for the
+# frame limiter's dedup. Verification in-game.
+[functions.CGxDevice__ScenePresent__592430]
+rva  = 0x192430
+sig  = "56 8B F1 FF 46 74 E8 ?? ?? ?? ??"
+abi  = "thiscall"
+ret  = "void"
+args = ["*mut u8", "i32"]
+preserve = []
+
+# The floating world-text creation entry: type 4 is the experience text,
+# suppressed on request; everything else runs the displaced code unchanged.
+# Verification in-game.
+[functions.CreateWorldText__6c73f0]
+rva  = 0x2c73f0
+sig  = "55 8B EC 83 EC 0C 56 57 8B F9 33 F6"
+abi  = "thiscall"
+ret  = "void"
+args = ["*mut u8", "i32", "*const u8", "u32", "u32"]
+preserve = []
+
+# The screenshot TGA writer: the wrapper re-encodes the frame off-thread as
+# PNG or JPEG and skips the stock write; any shape it does not model runs the
+# displaced code unchanged, so a screenshot is never lost. Verification
+# in-game.
+[functions.CTgaFile__Write__5a4810]
+rva  = 0x1a4810
+sig  = "55 8B EC 83 EC 08 53 56 8B F1 8B 4D 08 85 C9"
+abi  = "thiscall"
+ret  = "i32"
+args = ["*mut u8", "*mut u8"]
+preserve = []

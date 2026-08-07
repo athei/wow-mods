@@ -88,3 +88,13 @@ windows/turbo/src/win/symbols.rs dead_code 1
 windows/turbo/src/win/symbols.rs non_camel_case_types 1
 windows/turbo/src/win/symbols.rs non_snake_case 1
 windows/turbo/src/win/symbols.rs non_upper_case_globals 1
+windows/turbo/src/win/unitxp.rs clippy::cast_possible_truncation 3
+windows/turbo/src/win/unitxp.rs clippy::cast_precision_loss 1
+windows/turbo/src/win/unitxp.rs clippy::cast_sign_loss 2
+windows/turbo/src/win/unitxp/fpscap.rs clippy::cast_possible_truncation 1
+windows/turbo/src/win/unitxp/fpscap.rs clippy::cast_precision_loss 1
+windows/turbo/src/win/unitxp/fpscap.rs clippy::cast_sign_loss 1
+windows/turbo/src/win/unitxp/insight.rs clippy::approx_constant 1
+windows/turbo/src/win/unitxp/insight.rs clippy::float_cmp 1
+windows/turbo/src/win/unitxp/settings.rs clippy::cast_possible_truncation 3
+windows/turbo/src/win/unitxp/worldtext.rs clippy::cast_possible_truncation 1

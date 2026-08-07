@@ -1287,6 +1287,7 @@ fn maybe_emit(st: &mut State) {
         super::getname::emit_cumulative();
         super::script_method::emit_cumulative();
         super::seam_probe::emit_cumulative();
+        super::unitxp::emit_cumulative();
         st.cumulative_emit = now;
     }
     let spent = span(now, wow_shared::tsc::rdtsc());

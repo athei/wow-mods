@@ -236,7 +236,7 @@ interpreter itself was measured and deliberately left alone.
 against a recorded signature before patching. A prologue already detoured by
 another mod fails that check, and `wow_turbo` logs
 `signature mismatch — refusing to patch` and leaves the function to its owner.
-Loading it after SuperWoW, UnitXP_SP3, nampower and friends means it
+Loading it after SuperWoW, nampower and friends means it
 automatically yields on every function they claimed and accelerates the rest.
 These functions are not special-cased. SuperWoW's selection-circle hook and
 the minimap-icons blip callback are two functions `wow_turbo` also knows how to
@@ -270,8 +270,29 @@ and the log line names it.
   creates. The only piece
   deliberately not adopted is its small-block-allocator swap, whose global
   free lists are unsynchronized.
-- **SuperWoW, UnitXP_SP3, nampower — compatible.** Load them first and
-  `wow_turbo` stays out of their way.
+- **UnitXP_SP3 — replaced; remove it.** `wow_turbo` serves its `UnitXP(...)`
+  command set natively: line of sight (`inSight`, including the camera form),
+  the five `distanceBetween` meters, `behind`, the full targeting suite, the
+  nameplate filters (`modernNameplateDistance` and friends), the camera
+  offsets and follow mode, weather suppression, FPS caps, script timers,
+  notifications, screenshot re-encoding and the version/probe commands. Its
+  companion addon (`UnitXP_SP3_Addon`) keeps working unmodified, panel and
+  keybindings included. Line-of-sight answers come from a position-aware
+  cache that traces the world several times less often than the original,
+  which was a measurable slice of frame time in crowded scenes. Two pieces
+  are deliberately different: the floating combat text overlay is not built
+  in yet (the `combatTextSP3` commands answer exactly like the original does
+  when its renderer fails to initialize, so the addon reports the reason and
+  stock combat text stays), and the remote Lua debugger, TCP tweaks and the
+  math detours are dropped — the math because `wow_turbo` already owns those
+  functions natively. `UnitXP("version", "additionalInformation")` names
+  `wow_turbo`, not the original, so a script probing for the exact original
+  can tell them apart.
+- **SuperWoW, nampower, transmogfix — compatible.** Load them first and
+  `wow_turbo` stays out of their way. Where one of them wraps an entry
+  `wow_turbo` also wraps and both only ever add behaviour around the original
+  — the scene-end entry is the current example — the two stack instead:
+  `wow_turbo` accepts the installed detour and chains underneath it.
 
 If something ever misbehaves, `WOW_TURBO_SKIP=all` disables every hook and
 `WOW_TURBO_SKIP=Name1,Name2` disables specific ones — no rebuild, no
