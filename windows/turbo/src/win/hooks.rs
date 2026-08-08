@@ -19848,16 +19848,89 @@ fn read_lookup_name(
     }
 }
 
-/// Replay a cached scoped-positive.
+/// Discard every memoized resolution, for a change in the mounted archive set.
+fn storm_filecache_flush() {
+    storm_filecache()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clear();
+    #[cfg(not(wow_turbo_diff))]
+    super::filecache::flushed();
+}
+
+/// `SFileOpenArchive` — `__stdcall`, `RET 0x18`, mounts an archive.
 ///
-/// Revalidate-and-ref both handles the caller receives (found first, then the
-/// requested archive; on a second-handle failure the first ref is released again),
-/// then write the three outs exactly as the stock success epilogue would. Returns
-/// `None` — fall through to a real miss — if any handle has left the
-/// open-archive list or the block table looks torn down.
+/// Present only to invalidate the resolution memo, which answers for a fixed
+/// set of mounted archives. The original runs first, so the flush happens once
+/// the new archive is on the open list and any lookup racing behind us
+/// re-derives. `arg5`/`arg6` are forwarded untouched; the client's own
+/// four-argument wrapper passes zero for both.
+pub fn s_file_open_archive__655690(
+    name: *const u8,
+    priority: u32,
+    flags: u32,
+    out_archive: *mut u32,
+    arg5: i32,
+    arg6: i32,
+) -> i32 {
+    let ret = (super::symbols::originals::s_file_open_archive__655690())(
+        name,
+        priority,
+        flags,
+        out_archive,
+        arg5,
+        arg6,
+    );
+    storm_filecache_flush();
+    ret
+}
+
+/// `SFileCloseArchive` — `__stdcall`, `RET 0x4`, unmounts an archive.
+///
+/// The unmount half of the memo's invalidation; see
+/// [`s_file_open_archive__655690`]. Revalidating a stored handle already
+/// catches the archive that went away, but not a name whose owner it was
+/// shadowing, so the table goes.
+pub fn s_file_close_archive__653780(archive: u32) -> u32 {
+    let ret = (super::symbols::originals::s_file_close_archive__653780())(archive);
+    storm_filecache_flush();
+    ret
+}
+
+/// The record fields a call needs, from which out-pointers it supplied.
+///
+/// A caller receives only what it asks for, and asking for the block record
+/// also needs the found archive, whose block table the stored index is relative
+/// to.
+const fn storm_wanted_fields(
+    out_archive: *mut u32,
+    out_found_in: *mut u32,
+    out_block_entry: *mut u32,
+) -> u8 {
+    let mut want = 0;
+    if !out_archive.is_null() {
+        want |= crate::storm::filecache::KNOWN_FOUND;
+    }
+    if !out_found_in.is_null() {
+        want |= crate::storm::filecache::KNOWN_FOUND_IN;
+    }
+    if !out_block_entry.is_null() {
+        want |= crate::storm::filecache::KNOWN_FOUND | crate::storm::filecache::KNOWN_BLOCK;
+    }
+    want
+}
+
+/// Replay a cached positive into whichever outs this caller supplied.
+///
+/// Refcounts follow the stock epilogue exactly: it bumps the archive it writes
+/// to `*outArchive` and the one it writes to `*outFoundIn`, each only when that
+/// pointer is non-null, and never bumps for the block record. So a caller that
+/// wants the block entry but not the archive takes a ref only long enough to
+/// read the block-table base and releases it again. Returns `None` — fall
+/// through to a real miss — if a handle has left the open-archive list or the
+/// block table looks torn down, releasing anything already ref'd on the way out.
 #[cfg(not(wow_turbo_diff))]
 fn storm_replay_positive(
-    requested: u32,
     hit: crate::storm::filecache::Hit,
     out_archive: *mut u32,
     out_found_in: *mut u32,
@@ -19871,45 +19944,89 @@ fn storm_replay_positive(
     let release: extern "fastcall" fn(u32) -> u32 =
         unsafe { core::mem::transmute(STORM_ARCHIVE_RELEASE_VA) };
 
-    let found = ref_by_handle(hit.found);
-    if found == 0 {
+    if !hit.serves(storm_wanted_fields(
+        out_archive,
+        out_found_in,
+        out_block_entry,
+    )) {
         return None;
     }
-    let found_in = ref_by_handle(requested);
-    if found_in == 0 {
-        release(found);
-        return None;
-    }
-    // SAFETY: `found` is a live open-archive object (just revalidated and
-    // ref'd); +0x290 is its block-table base pointer.
-    let block_base = unsafe { ((found + STORM_BLOCK_TABLE_OFFSET) as *const u32).read_unaligned() };
-    let Some(block_entry) = (block_base != 0)
-        .then(|| hit.block_index.checked_mul(STORM_BLOCK_ENTRY_STRIDE))
-        .flatten()
-        .and_then(|off| block_base.checked_add(off))
-    else {
-        release(found_in);
-        release(found);
-        return None;
+
+    // The found archive is needed as a written-back handle, as the owner of the
+    // block table, or not at all.
+    let needs_found = !out_archive.is_null() || !out_block_entry.is_null();
+    let found = if needs_found {
+        let handle = ref_by_handle(hit.found);
+        if handle == 0 {
+            return None;
+        }
+        handle
+    } else {
+        0
     };
-    // The caller verified all three out-pointers are non-null (the shape this
-    // entry was recorded under); write order matches stock.
-    // SAFETY: caller-supplied out-pointer, checked non-null.
-    unsafe { out_archive.write_unaligned(found) };
-    // SAFETY: caller-supplied out-pointer, checked non-null.
-    unsafe { out_found_in.write_unaligned(found_in) };
-    // SAFETY: caller-supplied out-pointer, checked non-null.
-    unsafe { out_block_entry.write_unaligned(block_entry) };
+
+    let block_entry = if out_block_entry.is_null() {
+        0
+    } else {
+        // SAFETY: `found` is a live open-archive object (just revalidated and
+        // ref'd); +0x290 is its block-table base pointer.
+        let base = unsafe { ((found + STORM_BLOCK_TABLE_OFFSET) as *const u32).read_unaligned() };
+        let Some(entry) = (base != 0)
+            .then(|| hit.block_index.checked_mul(STORM_BLOCK_ENTRY_STRIDE))
+            .flatten()
+            .and_then(|off| base.checked_add(off))
+        else {
+            release(found);
+            return None;
+        };
+        entry
+    };
+
+    let found_in = if out_found_in.is_null() {
+        0
+    } else {
+        let handle = ref_by_handle(hit.found_in);
+        if handle == 0 {
+            if needs_found {
+                release(found);
+            }
+            return None;
+        }
+        handle
+    };
+
+    // Write order matches stock.
+    if !out_archive.is_null() {
+        // SAFETY: caller-supplied out-pointer, checked non-null.
+        unsafe { out_archive.write_unaligned(found) };
+    }
+    if !out_found_in.is_null() {
+        // SAFETY: caller-supplied out-pointer, checked non-null.
+        unsafe { out_found_in.write_unaligned(found_in) };
+    }
+    if !out_block_entry.is_null() {
+        // SAFETY: caller-supplied out-pointer, checked non-null.
+        unsafe { out_block_entry.write_unaligned(block_entry) };
+        if out_archive.is_null() {
+            // Stock bumps nothing for the block record; the ref above only
+            // existed to read the base.
+            release(found);
+        }
+    }
     Some(1)
 }
 
 /// Record the original's answer under the exact-key policy.
 ///
-/// Scoped positives (return 1, all three outs delivered, found-in equal to the
-/// requested archive — the invariant the replay reconstructs) and global
-/// negatives (return 0 on an `archive == 0` query). Anything else — pseudo-name
-/// resolutions (2), deleted entries (3), odd shapes — is left for stock every
-/// time.
+/// Positives (return 1) and global negatives (return 0 on an `archive == 0`
+/// query). Anything else — pseudo-name resolutions (2), deleted entries (3) —
+/// is left for stock every time.
+///
+/// A positive is recorded with whichever of the three fields the original was
+/// asked to deliver, because that is all it wrote; the record then answers only
+/// calls of that shape or narrower. Recording the shape rather than demanding
+/// one is what makes the memo reachable at all: no call site in the client
+/// passes all three out-pointers, and the file-open path passes no `outFoundIn`.
 fn storm_record_result(
     key: &crate::storm::filecache::Key,
     archive: u32,
@@ -19922,39 +20039,58 @@ fn storm_record_result(
         crate::storm::filecache::Hit {
             negative: true,
             found: 0,
+            found_in: 0,
             block_index: 0,
+            known: 0,
         }
-    } else if ret == 1
-        && archive != 0
-        && !out_archive.is_null()
-        && !out_found_in.is_null()
-        && !out_block_entry.is_null()
-    {
-        // The original just wrote all three outs (non-null, return 1).
-        // SAFETY: non-null out-pointer the original wrote through.
-        let found = unsafe { out_archive.read_unaligned() };
-        // SAFETY: non-null out-pointer the original wrote through.
-        let found_in = unsafe { out_found_in.read_unaligned() };
-        // SAFETY: non-null out-pointer the original wrote through.
-        let entry = unsafe { out_block_entry.read_unaligned() };
-        if found == 0 || found_in != archive {
-            return;
+    } else if ret == 1 {
+        let mut known = 0;
+        let mut found = 0;
+        let mut found_in = 0;
+        let mut block_index = 0;
+        if !out_archive.is_null() {
+            // SAFETY: non-null out-pointer the original wrote through.
+            found = unsafe { out_archive.read_unaligned() };
+            if found == 0 {
+                return;
+            }
+            known |= crate::storm::filecache::KNOWN_FOUND;
         }
-        // SAFETY: `found` was returned live by the original (ref held by the
-        // caller); +0x290 is its block-table base pointer.
-        let block_base =
-            unsafe { ((found + STORM_BLOCK_TABLE_OFFSET) as *const u32).read_unaligned() };
-        if block_base == 0 || entry < block_base {
-            return;
+        if !out_found_in.is_null() {
+            // SAFETY: non-null out-pointer the original wrote through.
+            found_in = unsafe { out_found_in.read_unaligned() };
+            if found_in == 0 {
+                return;
+            }
+            known |= crate::storm::filecache::KNOWN_FOUND_IN;
         }
-        let offset = entry - block_base;
-        if !offset.is_multiple_of(STORM_BLOCK_ENTRY_STRIDE) {
+        // The block record is stored as an index into the found archive's table,
+        // so it is only recordable when that archive was delivered too.
+        if !out_block_entry.is_null() && known & crate::storm::filecache::KNOWN_FOUND != 0 {
+            // SAFETY: non-null out-pointer the original wrote through.
+            let entry = unsafe { out_block_entry.read_unaligned() };
+            // SAFETY: `found` was returned live by the original (ref held by the
+            // caller); +0x290 is its block-table base pointer.
+            let block_base =
+                unsafe { ((found + STORM_BLOCK_TABLE_OFFSET) as *const u32).read_unaligned() };
+            if block_base == 0 || entry < block_base {
+                return;
+            }
+            let offset = entry - block_base;
+            if !offset.is_multiple_of(STORM_BLOCK_ENTRY_STRIDE) {
+                return;
+            }
+            block_index = offset / STORM_BLOCK_ENTRY_STRIDE;
+            known |= crate::storm::filecache::KNOWN_BLOCK;
+        } else if !out_block_entry.is_null() {
             return;
         }
         crate::storm::filecache::Hit {
             negative: false,
             found,
-            block_index: offset / STORM_BLOCK_ENTRY_STRIDE,
+            found_in,
+            block_index,
+            known,
         }
     } else {
         return;
@@ -19974,14 +20110,19 @@ fn storm_record_result(
 /// sub-queries re-enter this hook and memoize individually).
 ///
 /// The reimpl is a memo in front of the stock body, under a lock: a cached
-/// scoped-positive replays the
-/// success epilogue (revalidate-and-ref both handles, rebuild the block-entry
-/// pointer); a cached global-negative replays "not found" (zero the outs,
-/// Storm error 2, return 0). EVERY other case — cold names, uncacheable
-/// shapes, revalidation failures — delegates to stock, which stays
-/// authoritative. Archive contents are immutable while mounted and a replayed
-/// handle is revalidated against the live open-archive list, so a hit cannot
-/// outlive its archive. Kill switch: the standing per-hook
+/// positive replays the success epilogue into whichever outs this caller
+/// supplied (revalidate-and-ref exactly the handles it writes, rebuild the
+/// block-entry pointer); a cached global-negative replays "not found" (zero the
+/// outs, Storm error 2, return 0). EVERY other case — cold names, uncacheable
+/// shapes, a record that does not cover this call's out-pointers, revalidation
+/// failures — delegates to stock, which stays authoritative.
+///
+/// Three things bound what a record may outlive. Archive contents are immutable
+/// while mounted; a replayed handle is revalidated against the live
+/// open-archive list, so a hit cannot outlive its archive; and a mount or
+/// unmount discards the table, because a newly mounted archive can own a name
+/// that was previously absent or owned elsewhere and no per-handle check can
+/// see that. Kill switch: the standing per-hook
 /// `WOW_TURBO_SKIP=StormArchive__FindFileEntry__6549a0` un-patches the VA.
 ///
 /// `wow_turbo_diff` builds never replay: armed via `WOW_TURBO_DIFF_ARM`, the
@@ -20056,13 +20197,14 @@ pub fn storm_archive__find_file_entry__6549a0(
                     0,
                     ret.cast_unsigned().into(),
                 );
-            } else if !out_archive.is_null()
-                && !out_found_in.is_null()
-                && !out_block_entry.is_null()
-            {
-                // Predicted a scoped positive: stock must have returned 1 with
-                // the same found handle, the requested archive as found-in, and
-                // the same block-table record.
+            } else if hit.serves(storm_wanted_fields(
+                out_archive,
+                out_found_in,
+                out_block_entry,
+            )) {
+                // Predicted a positive this call's shape can be answered from:
+                // stock must have returned 1, and every out the caller asked
+                // for must hold what the replay would have written into it.
                 super::diff::scalar_int(
                     &STATS,
                     LABEL,
@@ -20072,44 +20214,54 @@ pub fn storm_archive__find_file_entry__6549a0(
                     ret.cast_unsigned().into(),
                 );
                 if ret == 1 {
-                    // Return 1 with non-null outs — stock wrote all three.
-                    // SAFETY: non-null out-pointer stock wrote through.
-                    let found = unsafe { out_archive.read_unaligned() };
-                    // SAFETY: non-null out-pointer stock wrote through.
-                    let found_in = unsafe { out_found_in.read_unaligned() };
-                    // SAFETY: non-null out-pointer stock wrote through.
-                    let entry = unsafe { out_block_entry.read_unaligned() };
-                    super::diff::scalar_int(
-                        &STATS,
-                        LABEL,
-                        false,
-                        u64::MAX,
-                        hit.found.into(),
-                        found.into(),
-                    );
-                    super::diff::scalar_int(
-                        &STATS,
-                        LABEL,
-                        false,
-                        u64::MAX,
-                        archive.into(),
-                        found_in.into(),
-                    );
-                    // SAFETY: `found` is live (stock just returned it ref'd);
-                    // +0x290 is the block-table base.
-                    let block_base = unsafe {
-                        ((hit.found + STORM_BLOCK_TABLE_OFFSET) as *const u32).read_unaligned()
-                    };
-                    let ours = block_base
-                        .wrapping_add(hit.block_index.wrapping_mul(STORM_BLOCK_ENTRY_STRIDE));
-                    super::diff::scalar_int(
-                        &STATS,
-                        LABEL,
-                        false,
-                        u64::MAX,
-                        ours.into(),
-                        entry.into(),
-                    );
+                    if !out_archive.is_null() {
+                        // SAFETY: non-null out-pointer stock wrote through.
+                        let found = unsafe { out_archive.read_unaligned() };
+                        super::diff::scalar_int(
+                            &STATS,
+                            LABEL,
+                            false,
+                            u64::MAX,
+                            hit.found.into(),
+                            found.into(),
+                        );
+                    }
+                    if !out_found_in.is_null() {
+                        // SAFETY: non-null out-pointer stock wrote through.
+                        let found_in = unsafe { out_found_in.read_unaligned() };
+                        super::diff::scalar_int(
+                            &STATS,
+                            LABEL,
+                            false,
+                            u64::MAX,
+                            hit.found_in.into(),
+                            found_in.into(),
+                        );
+                    }
+                    // The block record is rebuilt off the found archive's table,
+                    // which is only safe to read here when stock ref'd that
+                    // handle for this call — i.e. when the caller also asked for
+                    // it. No call site asks for one without the other.
+                    if !out_block_entry.is_null() && !out_archive.is_null() {
+                        // SAFETY: non-null out-pointer stock wrote through.
+                        let entry = unsafe { out_block_entry.read_unaligned() };
+                        // SAFETY: `hit.found` is live (stock just returned it
+                        // ref'd through `out_archive`); +0x290 is the
+                        // block-table base.
+                        let block_base = unsafe {
+                            ((hit.found + STORM_BLOCK_TABLE_OFFSET) as *const u32).read_unaligned()
+                        };
+                        let ours = block_base
+                            .wrapping_add(hit.block_index.wrapping_mul(STORM_BLOCK_ENTRY_STRIDE));
+                        super::diff::scalar_int(
+                            &STATS,
+                            LABEL,
+                            false,
+                            u64::MAX,
+                            ours.into(),
+                            entry.into(),
+                        );
+                    }
                 }
             }
         }
@@ -20148,16 +20300,13 @@ pub fn storm_archive__find_file_entry__6549a0(
                 super::filecache::hit_negative();
                 return 0;
             }
-            if archive != 0
-                && !out_archive.is_null()
-                && !out_found_in.is_null()
-                && !out_block_entry.is_null()
-                && let Some(ret) =
-                    storm_replay_positive(archive, hit, out_archive, out_found_in, out_block_entry)
+            if let Some(ret) =
+                storm_replay_positive(hit, out_archive, out_found_in, out_block_entry)
             {
                 super::filecache::hit_positive();
                 return ret;
             }
+            super::filecache::unserved();
             // Shape mismatch or a handle left the list: fall through and let
             // stock re-derive (and re-record) the answer.
         }

@@ -4430,6 +4430,28 @@ ret  = "i32"
 args = ["u32", "*const u8", "u32", "*mut u32", "*mut u32", "*mut u32", "*mut u8"]
 preserve = []
 
+# Archive mount. Hooked only to discard the resolution memo above: a mount can
+# give a name an owner it did not have, or one earlier in the walk, which no
+# stored record can detect. The adapter runs the original first and adds
+# nothing else. The internal six-argument form rather than its four-argument
+# wrapper at 0x655670, so a caller outside the image is covered too.
+[functions.SFileOpenArchive__655690]
+rva  = 0x255690
+sig  = "55 8B EC 81 EC 5C 02 00 00"
+abi  = "stdcall"
+ret  = "i32"
+args = ["*const u8", "u32", "u32", "*mut u32", "i32", "i32"]
+preserve = []
+
+# Archive unmount; the other half of the memo's invalidation. See above.
+[functions.SFileCloseArchive__653780]
+rva  = 0x253780
+sig  = "55 8B EC 56 57 8B 7D 08 8B CF E8 ?? ?? ?? ?? 8B F0"
+abi  = "stdcall"
+ret  = "u32"
+args = ["u32"]
+preserve = []
+
 # Lua's private small-object pool (size-classed, 6 buckets; state at *(G+0)).
 # The stock free/realloc resolves a block's owning chunk by LINEARLY scanning
 # every chunk of every class; the reimpl resolves it through a sorted span

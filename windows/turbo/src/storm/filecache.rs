@@ -110,22 +110,96 @@ fn fnv1a(seed: u32, bytes: &[u8]) -> u32 {
     h
 }
 
+/// `Hit::found` carries the handle stock wrote to `*outArchive`.
+pub const KNOWN_FOUND: u8 = 1 << 0;
+
+/// `Hit::found_in` carries the handle stock wrote to `*outFoundIn`.
+pub const KNOWN_FOUND_IN: u8 = 1 << 1;
+
+/// `Hit::block_index` locates the record stock wrote to `*outBlockEntry`.
+pub const KNOWN_BLOCK: u8 = 1 << 2;
+
 /// A replayable prior answer.
 ///
 /// `negative` means stock returned 0 ("not found") for a global query;
-/// otherwise `found`/`block_index` reproduce a scoped positive (return 1).
+/// otherwise this is a positive (return 1) and `known` says which of the three
+/// fields were observed. A caller only receives what it asked for, so a
+/// positive is recorded under the out-pointer shape of the call that produced
+/// it, and replays only for a call whose shape it covers. A positive with no
+/// fields at all is still worth keeping: three of the four call sites want
+/// nothing but the return code.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Hit {
     pub negative: bool,
     /// The handle stock wrote to `*outArchive`.
     ///
-    /// (the found archive, possibly a redirect of the requested one). Only
-    /// meaningful for positives.
+    /// (the found archive, possibly a redirect of the requested one). Valid
+    /// under [`KNOWN_FOUND`].
     pub found: u32,
+    /// The handle stock wrote to `*outFoundIn`.
+    ///
+    /// (the archive the walk matched in, which is the requested one for a
+    /// scoped query). Valid under [`KNOWN_FOUND_IN`].
+    pub found_in: u32,
     /// Index into the found archive's block table (`[found+0x290]`), stride 0x2c.
     ///
-    /// Only meaningful for positives.
+    /// Valid under [`KNOWN_BLOCK`], which implies [`KNOWN_FOUND`] — the base the
+    /// index is relative to belongs to the found archive.
     pub block_index: u32,
+    /// Which of the three fields above this record carries.
+    pub known: u8,
+}
+
+impl Hit {
+    /// Whether this record carries every field in `want`.
+    #[must_use]
+    pub const fn serves(&self, want: u8) -> bool {
+        !self.negative && self.known & want == want
+    }
+
+    /// Fold a later observation of the same key into this record.
+    ///
+    /// Fields accumulate rather than replace. The same name is looked up
+    /// through call sites that pass different out-pointers — the file-open path
+    /// asks for the archive and block record, an existence check asks for the
+    /// found-in archive — and a record that kept only the newest shape would
+    /// lose the other's fields on every alternation, so neither shape would ever
+    /// be served. Accumulating is sound for the same reason the memo is: the
+    /// answer is fixed while the archive set is.
+    ///
+    /// A negative on either side wins outright, since the two cannot both
+    /// describe one key. The block index is relative to the found archive's
+    /// table, so it is dropped if the found archive itself changed.
+    #[must_use]
+    pub const fn merged(self, newer: Self) -> Self {
+        if self.negative || newer.negative {
+            return newer;
+        }
+        let found = if newer.known & KNOWN_FOUND == 0 {
+            self.found
+        } else {
+            newer.found
+        };
+        let found_in = if newer.known & KNOWN_FOUND_IN == 0 {
+            self.found_in
+        } else {
+            newer.found_in
+        };
+        let (block_index, block_known) = if newer.known & KNOWN_BLOCK != 0 {
+            (newer.block_index, KNOWN_BLOCK)
+        } else if self.known & KNOWN_BLOCK != 0 && found == self.found {
+            (self.block_index, KNOWN_BLOCK)
+        } else {
+            (0, 0)
+        };
+        Self {
+            negative: false,
+            found,
+            found_in,
+            block_index,
+            known: ((self.known | newer.known) & !KNOWN_BLOCK) | block_known,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -147,7 +221,9 @@ const EMPTY_ENTRY: Entry = Entry {
     hit: Hit {
         negative: false,
         found: 0,
+        found_in: 0,
         block_index: 0,
+        known: 0,
     },
 };
 
@@ -203,14 +279,13 @@ impl FileCache {
 
     /// Record an answer.
     ///
-    /// Overwriting a same-key entry in place, filling an empty way, or evicting
-    /// per the bucket's pseudo-LRU marker.
+    /// Merging into a same-key entry (see [`Hit::merged`]), filling an empty
+    /// way, or evicting per the bucket's pseudo-LRU marker.
     pub fn insert(&mut self, key: &Key, hit: Hit) {
         let bucket = &mut self.buckets[Self::bucket_index(key)];
-        let way = bucket
-            .ways
-            .iter()
-            .position(|e| key.matches(e))
+        let existing = bucket.ways.iter().position(|e| key.matches(e));
+        let hit = existing.map_or(hit, |w| bucket.ways[w].hit.merged(hit));
+        let way = existing
             .or_else(|| bucket.ways.iter().position(|e| !e.used))
             .unwrap_or(bucket.evict_next as usize % WAYS);
         bucket.ways[way] = Entry {
@@ -222,6 +297,17 @@ impl FileCache {
             hit,
         };
         bucket.evict_next = u8::from(way == 0);
+    }
+
+    /// Drop every record, for a change in the set of mounted archives.
+    ///
+    /// An answer is a function of the name and of which archives were mounted
+    /// when it was derived. Revalidating a handle catches an archive that went
+    /// away, but nothing about a stored record can notice one that arrived and
+    /// now owns the name (or owns it earlier in the walk), so a mount or an
+    /// unmount discards the table rather than trying to repair it.
+    pub fn clear(&mut self) {
+        self.buckets.fill(EMPTY_BUCKET);
     }
 }
 
@@ -238,12 +324,16 @@ mod tests_filecache {
     const POS: Hit = Hit {
         negative: false,
         found: 0x00d4_0000,
+        found_in: 0x00d4_0000,
         block_index: 7,
+        known: KNOWN_FOUND | KNOWN_FOUND_IN | KNOWN_BLOCK,
     };
     const NEG: Hit = Hit {
         negative: true,
         found: 0,
+        found_in: 0,
         block_index: 0,
+        known: 0,
     };
 
     #[test]
@@ -291,6 +381,122 @@ mod tests_filecache {
         };
         cache.insert(&key, newer);
         assert_eq!(cache.probe(&key), Some(newer));
+    }
+
+    /// A record serves a call only when it carries every field that call wants.
+    ///
+    /// The shapes are the ones the client actually issues: the file-open path
+    /// asks for the found archive and the block record, the existence checks
+    /// ask for the found-in archive or for nothing at all.
+    #[test]
+    fn a_record_serves_only_the_shapes_it_covers() {
+        let open_path = KNOWN_FOUND | KNOWN_BLOCK;
+        let exists_path = KNOWN_FOUND_IN;
+
+        assert!(POS.serves(open_path));
+        assert!(POS.serves(exists_path));
+        assert!(POS.serves(0), "a return-code-only call wants no field");
+
+        let from_open = Hit {
+            known: KNOWN_FOUND | KNOWN_BLOCK,
+            ..POS
+        };
+        assert!(from_open.serves(open_path));
+        assert!(
+            !from_open.serves(exists_path),
+            "the open path never delivers found-in, so it cannot answer for it"
+        );
+        assert!(from_open.serves(0));
+
+        let bare = Hit { known: 0, ..POS };
+        assert!(bare.serves(0));
+        assert!(!bare.serves(open_path));
+
+        assert!(!NEG.serves(0), "a negative is never a positive answer");
+    }
+
+    /// The two real call shapes alternating on one name.
+    ///
+    /// Each delivers a different subset, and the record has to end up serving
+    /// both — otherwise every alternation evicts the other's fields and neither
+    /// call is ever answered.
+    #[test]
+    fn alternating_shapes_accumulate_instead_of_evicting() {
+        let mut cache = FileCache::new();
+        let key = Key::new(0, 0, b"World\\Shared.blp").unwrap();
+        let open_path = KNOWN_FOUND | KNOWN_BLOCK;
+        let exists_path = KNOWN_FOUND_IN;
+
+        cache.insert(
+            &key,
+            Hit {
+                known: open_path,
+                found_in: 0,
+                ..POS
+            },
+        );
+        cache.insert(
+            &key,
+            Hit {
+                known: exists_path,
+                found: 0,
+                block_index: 0,
+                ..POS
+            },
+        );
+
+        let merged = cache.probe(&key).unwrap();
+        assert!(merged.serves(open_path), "kept the earlier shape's fields");
+        assert!(merged.serves(exists_path), "took the later shape's field");
+        assert_eq!(merged.found, POS.found);
+        assert_eq!(merged.found_in, POS.found_in);
+        assert_eq!(merged.block_index, POS.block_index);
+    }
+
+    /// A block index only survives while it still indexes the same archive.
+    #[test]
+    fn a_new_found_archive_drops_the_stale_block_index() {
+        let older = Hit {
+            known: KNOWN_FOUND | KNOWN_BLOCK,
+            ..POS
+        };
+        let newer = Hit {
+            negative: false,
+            found: 0x00e5_0000,
+            found_in: 0,
+            block_index: 0,
+            known: KNOWN_FOUND,
+        };
+        let merged = older.merged(newer);
+        assert_eq!(merged.found, newer.found);
+        assert!(
+            !merged.serves(KNOWN_BLOCK),
+            "the index belonged to the previous archive's table"
+        );
+    }
+
+    #[test]
+    fn a_negative_replaces_a_positive_outright() {
+        let merged = POS.merged(NEG);
+        assert_eq!(merged, NEG);
+        assert_eq!(NEG.merged(POS), POS);
+    }
+
+    #[test]
+    fn clear_drops_every_record() {
+        let mut cache = FileCache::new();
+        let positive = Key::new(0, 0, b"World\\Real.blp").unwrap();
+        let negative = Key::new(0, 0, b"World\\NoSuchFile.blp").unwrap();
+        cache.insert(&positive, POS);
+        cache.insert(&negative, NEG);
+
+        cache.clear();
+
+        assert_eq!(cache.probe(&positive), None);
+        assert_eq!(cache.probe(&negative), None);
+        // Still usable afterwards.
+        cache.insert(&positive, POS);
+        assert_eq!(cache.probe(&positive), Some(POS));
     }
 
     #[test]

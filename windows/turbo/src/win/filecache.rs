@@ -14,6 +14,8 @@ use super::tally::SharedCounter;
 static POS_HITS: SharedCounter = SharedCounter::zero();
 static NEG_HITS: SharedCounter = SharedCounter::zero();
 static MISSES: SharedCounter = SharedCounter::zero();
+static UNSERVED: SharedCounter = SharedCounter::zero();
+static FLUSHES: SharedCounter = SharedCounter::zero();
 
 /// A positive answer replayed from the memo.
 #[inline]
@@ -33,16 +35,34 @@ pub fn miss() {
     super::tally::bump_shared(&MISSES);
 }
 
+/// A record found for the key that did not cover this call's out-pointers.
+///
+/// Distinguishes "never seen this name" from "seen it, under a shape that
+/// cannot answer here", which are different problems with the same symptom.
+#[inline]
+pub fn unserved() {
+    super::tally::bump_shared(&UNSERVED);
+}
+
+/// The mounted-archive set changed, so every record was discarded.
+#[inline]
+pub fn flushed() {
+    super::tally::bump_shared(&FLUSHES);
+}
+
 /// One cumulative line on the gauge's 60-second cadence, once anything ran.
 pub fn emit_cumulative() {
     let pos = POS_HITS.get();
     let neg = NEG_HITS.get();
     let misses = MISSES.get();
-    if pos | neg | misses == 0 {
+    let unserved = UNSERVED.get();
+    if pos | neg | misses | unserved == 0 {
         return;
     }
     log::debug!(
         target: super::tally::TARGET,
-        "filecache: {pos} pos hits, {neg} neg hits, {misses} misses",
+        "filecache: {pos} pos hits, {neg} neg hits, {misses} misses, \
+         {unserved} unserved, {} flushes",
+        FLUSHES.get(),
     );
 }
