@@ -114,7 +114,7 @@ cast_sign_loss = "allow"                # 230
 cast_possible_wrap = "allow"            # 102
 cast_precision_loss = "allow"           # 109
 cast_lossless = "allow"                 # 60
-float_cmp = "allow"                     # 48
+float_cmp = "allow"                     # 49
 
 # Pointer casts in the transcription — these convert no numbers, so the
 # narrowing/rounding argument above does not reach them. The client's records
@@ -132,7 +132,7 @@ imprecise_flops = "allow"               # 8
 # Style preferences that fight the transcription: restructuring control flow to
 # satisfy them moves code away from the shape being reproduced, for no change
 # in what the function does.
-missing_const_for_fn = "allow"          # 99
+missing_const_for_fn = "allow"          # 100
 useless_let_if_seq = "allow"            # 21
 if_not_else = "allow"                   # 12
 suspicious_operation_groupings = "allow" # 12

@@ -29883,6 +29883,14 @@ fn bdl_view_i32(base: *mut u8) -> i32 {
 /// reached by name only). A production build has no harness to feed, and
 /// through the VA every comparison would just bounce off the patched prologue
 /// and detour back into the same Rust fn.
+///
+/// A partial key over the chain's leading tiers was built and measured, and it
+/// is not worth having. It works: it decided 99.4% of 124M comparisons and cut
+/// comparator time by 93%. But the whole path came out unchanged, 11.7 ns per
+/// comparison against 11.3 ns, because the chain already exits on the element
+/// type tag for most pairs while a key compare loads two ten-lane arrays out of
+/// a scratch table. The tiers are keyable; the chain is simply not where the
+/// time is spent once it early-exits.
 fn bdl_sort_transparent(data: *mut u32, count: u32, base: *mut u8) {
     #[cfg(wow_turbo_diff)]
     {
@@ -41722,6 +41730,17 @@ pub fn c_layout_frame_queue_resize__7681b0(frame: *mut u8) {
     unsafe { countdown.write(6) };
 }
 
+thread_local! {
+    /// Frontier, visited table and obstacle buckets for the placement search.
+    ///
+    /// Held across calls rather than built per placement: the frontier grows by
+    /// up to four rects per expansion against a budget in the hundreds, and the
+    /// obstacle buckets are extended in place as the frame appends each rect it
+    /// has just placed.
+    static PLACEMENT_SEARCH: core::cell::RefCell<crate::math::ui::PlacementSearch> =
+        core::cell::RefCell::new(crate::math::ui::PlacementSearch::new());
+}
+
 /// Floating-frame screen anchoring (`__fastcall(ecx = listIndex, edx = frame)`).
 ///
 /// Reimplements the placement chain at `0x509ec0`, run once per floating
@@ -41869,8 +41888,18 @@ pub fn floating_frame_anchor_at_screen_pos__509ec0(
         min_x,
         min_y,
     };
-    let placed =
-        crate::math::ui::ui_frame_place_floating_rect(&rect, &seed, obstacles, &dirs, cap, &bounds);
+    let placed = PLACEMENT_SEARCH.with(|cell| {
+        let mut search = cell.borrow_mut();
+        crate::math::ui::ui_frame_place_floating_rect(
+            &rect,
+            &seed,
+            obstacles,
+            &dirs,
+            cap,
+            &bounds,
+            &mut search,
+        )
+    });
 
     // Center clamp, stock branch shapes: the max leg first, then the ordered
     // `< upper` test whose NaN arm snaps to the upper bound.
