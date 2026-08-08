@@ -1286,6 +1286,7 @@ fn maybe_emit(st: &mut State) {
         // is reached from a script, not through the dispatch this gauge
         // measures, so no table above can show it.
         super::getname::emit_cumulative();
+        super::hooks::emit_cumulative();
         super::script_method::emit_cumulative();
         super::seam_probe::emit_cumulative();
         super::unitxp::emit_cumulative();

@@ -745,18 +745,50 @@ pub fn ui_frame_first_overlap<'a>(
 pub struct PlacementSearch {
     /// Frontier of candidate rects, consumed head-first.
     queue: Vec<[f32; 4]>,
+    /// Candidate expansions the last call performed.
+    expansions: u32,
+    /// Largest frontier length the last call reached.
+    high_water: u32,
+    /// Whether the last call gave up against the expansion budget.
+    hit_cap: bool,
 }
 
 impl PlacementSearch {
     /// A search with no frontier and no history.
     #[must_use]
     pub fn new() -> Self {
-        Self { queue: Vec::new() }
+        Self {
+            queue: Vec::new(),
+            expansions: 0,
+            high_water: 0,
+            hit_cap: false,
+        }
     }
 
-    /// Empties the frontier, keeping its capacity.
+    /// Candidate expansions the last call performed.
+    #[must_use]
+    pub const fn expansions(&self) -> u32 {
+        self.expansions
+    }
+
+    /// Largest frontier length the last call reached.
+    #[must_use]
+    pub const fn high_water(&self) -> u32 {
+        self.high_water
+    }
+
+    /// Whether the last call gave up against the expansion budget.
+    #[must_use]
+    pub const fn hit_cap(&self) -> bool {
+        self.hit_cap
+    }
+
+    /// Resets the readings and empties the frontier, keeping its capacity.
     fn begin(&mut self) {
         self.queue.clear();
+        self.expansions = 0;
+        self.high_water = 0;
+        self.hit_cap = false;
     }
 }
 
@@ -814,12 +846,12 @@ pub fn ui_frame_place_floating_rect(
     search.begin();
     search.queue.push(*seed);
     let mut head = 0usize;
-    let mut expansions = 0u32;
     while head < search.queue.len() {
-        if expansions >= cap {
+        if search.expansions >= cap {
+            search.hit_cap = true;
             return *src;
         }
-        expansions += 1;
+        search.expansions += 1;
         let rect = search.queue[head];
         head += 1;
         let (outcode, _) = ui_frame_clamp_rect_to_screen__509bf0(
@@ -877,6 +909,10 @@ pub fn ui_frame_place_floating_rect(
                 return child;
             }
             search.queue.push(child);
+            let len = search.queue.len() as u32;
+            if len > search.high_water {
+                search.high_water = len;
+            }
         }
     }
     *src
@@ -947,6 +983,34 @@ mod tests_ui_frame_place_floating_rect {
         // at [90, -5, 85, 0], off screen; right push: obs.right - rect.left =
         // 50 - 40 = 10 => [90, 50, 85, 55], on screen and overlap-free.
         assert_eq!(placed, [90.0, 50.0, 85.0, 55.0]);
+    }
+    #[test]
+    fn cap_hit_is_reported() {
+        let obs = [[20.0f32, 0.0, 0.0, 100.0]];
+        let seed = [10.0f32, 1.0, 5.0, 4.0];
+        let mut search = PlacementSearch::new();
+        let src = [9.0f32, 9.0, 9.0, 9.0];
+        let placed =
+            ui_frame_place_floating_rect(&src, &seed, &obs, &DIRS, 0, &BOUNDS, &mut search);
+        assert_eq!(placed, src);
+        assert!(search.hit_cap());
+        assert_eq!(search.expansions(), 0);
+    }
+    #[test]
+    fn readings_count_the_expansions() {
+        let seed = [10.0f32, 1.0, 5.0, 4.0];
+        let mut search = PlacementSearch::new();
+        // No obstacles: the seed is accepted on the first expansion, and the
+        // frontier never grows past the seed itself.
+        ui_frame_place_floating_rect(&[0.0; 4], &seed, &[], &DIRS, 16, &BOUNDS, &mut search);
+        assert_eq!(search.expansions(), 1);
+        assert!(!search.hit_cap());
+        assert_eq!(search.high_water(), 0);
+        // One obstacle in the way: the seed expands into children, so the
+        // frontier high-water mark records them.
+        let obs = [[20.0f32, 0.0, 0.0, 100.0]];
+        ui_frame_place_floating_rect(&[0.0; 4], &seed, &obs, &DIRS, 16, &BOUNDS, &mut search);
+        assert!(search.high_water() > 1);
     }
     /// The search as it stood before the buckets and the visited table.
     ///

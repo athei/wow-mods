@@ -41741,6 +41741,47 @@ thread_local! {
         core::cell::RefCell::new(crate::math::ui::PlacementSearch::new());
 }
 
+/// Placements the floating-frame anchor performed.
+static LAYOUT_PLACEMENTS: crate::win::tally::Counter = crate::win::tally::Counter::zero();
+
+/// Candidate expansions summed over every placement.
+static LAYOUT_EXPANSIONS: crate::win::tally::Accum = crate::win::tally::Accum::zero();
+
+/// Obstacle-list lengths summed over every placement, for the mean crowd.
+static LAYOUT_OBSTACLES: crate::win::tally::Accum = crate::win::tally::Accum::zero();
+
+/// Largest frontier any one placement reached.
+static LAYOUT_QUEUE_MAX: crate::win::tally::Counter = crate::win::tally::Counter::zero();
+
+/// Largest expansion budget any one placement was given.
+static LAYOUT_CAP_MAX: crate::win::tally::Counter = crate::win::tally::Counter::zero();
+
+/// Placements that gave up against the expansion budget.
+static LAYOUT_CAP_HITS: crate::win::tally::Counter = crate::win::tally::Counter::zero();
+
+/// One cumulative line for the floating-frame placement search.
+///
+/// The means are what the search's shape is read from: expansions per placement
+/// against the crowd size says whether the cost is the scan or the frontier, and
+/// neither was measured before this counted them.
+pub fn emit_cumulative() {
+    let placements = LAYOUT_PLACEMENTS.get();
+    if placements != 0 {
+        let per = f64::from(placements);
+        log::debug!(
+            target: crate::win::tally::TARGET,
+            "plate placement: {placements} placed, {:.1} expansions/placement, \
+             {:.1} obstacles/placement, \
+             frontier max {}, cap max {}, {} gave up",
+            LAYOUT_EXPANSIONS.get() as f64 / per,
+            LAYOUT_OBSTACLES.get() as f64 / per,
+            LAYOUT_QUEUE_MAX.get(),
+            LAYOUT_CAP_MAX.get(),
+            LAYOUT_CAP_HITS.get(),
+        );
+    }
+}
+
 /// Floating-frame screen anchoring (`__fastcall(ecx = listIndex, edx = frame)`).
 ///
 /// Reimplements the placement chain at `0x509ec0`, run once per floating
@@ -41890,7 +41931,7 @@ pub fn floating_frame_anchor_at_screen_pos__509ec0(
     };
     let placed = PLACEMENT_SEARCH.with(|cell| {
         let mut search = cell.borrow_mut();
-        crate::math::ui::ui_frame_place_floating_rect(
+        let placed = crate::math::ui::ui_frame_place_floating_rect(
             &rect,
             &seed,
             obstacles,
@@ -41898,7 +41939,18 @@ pub fn floating_frame_anchor_at_screen_pos__509ec0(
             cap,
             &bounds,
             &mut search,
-        )
+        );
+        if let Some(armed) = crate::win::tally::arm() {
+            LAYOUT_PLACEMENTS.bump(&armed);
+            LAYOUT_EXPANSIONS.add(&armed, u64::from(search.expansions()));
+            LAYOUT_OBSTACLES.add(&armed, obstacles.len() as u64);
+            LAYOUT_QUEUE_MAX.max(&armed, search.high_water());
+            LAYOUT_CAP_MAX.max(&armed, cap);
+            if search.hit_cap() {
+                LAYOUT_CAP_HITS.bump(&armed);
+            }
+        }
+        placed
     });
 
     // Center clamp, stock branch shapes: the max leg first, then the ordered
