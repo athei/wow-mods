@@ -2459,9 +2459,16 @@ args = ["*const u8", "*const u8", "*const f32", "*const f32", "*mut f32"]
 preserve = []
 
 
-# Integer return, compared exactly. No region: the return is the observable.
+# The return only says whether all four side planes were built; the planes
+# themselves are the rest of the answer, so the buffer is the compared region
+# (four plane equations of four f32). Declaring it is also what keeps the
+# compare path honest: the reimpl's second run writes to scratch instead of back
+# over the caller's live buffer, which is the harness's whole safety property.
+# A degenerate edge writes only a prefix, and the untouched tail compares equal
+# because scratch is seeded from the pre-call region.
 [functions.Collision_BuildFaceEdgePlanes__632460.diff]
 mode = "out"
+out  = { arg = 4, len = 64 }
 
 [functions.Collision_ClipPolygonByPlane__6318c0]
 rva  = 0x2318c0
