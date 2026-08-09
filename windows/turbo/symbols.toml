@@ -4710,6 +4710,24 @@ ret  = "void"
 args = ["*mut u8", "i32"]
 preserve = []
 
+# The device-resource release entry: flag 0 is a backend reset, which the
+# overlay's managed-pool textures survive untouched; flag 1 is a device
+# teardown, and every overlay texture is dropped before the backend interface
+# goes away. The sig list accepts an installed detour: wrappers here always
+# delegate, the same chain contract as the scene-end entry. Verification
+# in-game.
+[functions.CGxDeviceD3d__IReleaseD3dResources__599900]
+rva  = 0x199900
+sig  = [
+  "55 8B EC 56 57 8B 7D 08 57 8B F1 E8 ?? ?? ?? ?? 57 8B CE E8 ?? ?? ?? ??",
+  "E9 ?? ?? ?? ??",
+  "FF 25 ?? ?? ?? ??",
+]
+abi  = "thiscall"
+ret  = "void"
+args = ["*mut u8", "i32"]
+preserve = []
+
 # The floating world-text creation entry: type 4 is the experience text,
 # suppressed on request; everything else runs the displaced code unchanged.
 # Verification in-game.

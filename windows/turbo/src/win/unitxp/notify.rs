@@ -35,7 +35,8 @@ unsafe extern "system" {
     fn FlashWindowEx(info: *const FlashInfo) -> i32;
 }
 
-fn game_window() -> usize {
+/// The client top-level window handle, via the fixed window-lookup entry.
+pub fn game_window() -> usize {
     // SAFETY: a fixed `.text` entry in the live host image (base verified
     // at load); the transmuted signature matches the declared prototype
     // (`__fastcall(ecx = index)`, handle in `eax`).

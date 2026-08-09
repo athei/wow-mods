@@ -41,5 +41,20 @@ mod storm;
 #[cfg(any(target_arch = "x86", test))]
 mod transmog;
 
+/// Portable single-line text rasterization for the combat-text overlay.
+///
+/// Measures and rasterizes lines from the client's own fonts; the pure
+/// layout is host-unit-tested.
+#[cfg(any(target_arch = "x86", test))]
+mod typeset;
+
+/// Portable floating combat-text animation kernel.
+///
+/// The screen-space curves behind the overlay renderer. Like the other
+/// kernels, it depends on nothing Windows-specific and is host-unit-tested
+/// under the same toolchain.
+#[cfg(any(target_arch = "x86", test))]
+mod worldtext;
+
 #[cfg(target_arch = "x86")]
 mod win;

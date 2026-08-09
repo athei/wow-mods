@@ -41601,6 +41601,9 @@ pub fn c_gx_device_d3d__i_scene_end__5a17a0(this: *mut u8) {
         (super::symbols::originals::c_gx_device_d3d__i_scene_end__5a17a0())(this);
         return;
     }
+    // The overlay draws before the displaced code so its quads land inside
+    // the scene the client is about to end and present.
+    super::unitxp::worldtext::draw_pass(this);
     (super::symbols::originals::c_gx_device_d3d__i_scene_end__5a17a0())(this);
     super::unitxp::fpscap::limit();
 }
@@ -41613,9 +41616,13 @@ pub fn c_gx_device__scene_present__592430(this: *mut u8, arg: i32) {
     super::unitxp::fpscap::mark_presenting();
 }
 
-/// Floating world text — the experience text (type 4) suppressed on request.
+/// Floating world text — suppressed, taken over by the overlay, or stock.
 ///
 /// `thiscall(ecx = this)` plus type, text, color and a flag, callee-cleaned.
+/// The experience text (type 4) is suppressed on request; with the overlay
+/// enabled and able to render the line, the call is swallowed and the text
+/// drawn screen-space at scene-end; every other case runs the displaced
+/// code, so stock rendering is the fallback rather than the failure mode.
 pub fn create_world_text__6c73f0(
     this: *mut u8,
     text_type: i32,
@@ -41626,7 +41633,21 @@ pub fn create_world_text__6c73f0(
     if text_type == 4 && super::unitxp::settings::hide_exp_text() {
         return;
     }
+    if super::unitxp::worldtext::intercept(this, text_type, text, color) {
+        return;
+    }
     (super::symbols::originals::create_world_text__6c73f0())(this, text_type, text, color, flag);
+}
+
+/// Backend device release — the overlay drops its textures on teardown.
+///
+/// `thiscall(ecx = this)` plus the release flag, `RET 4`, void. Flag 0 is a
+/// device reset, which the overlay's managed-pool textures survive; flag 1
+/// destroys the backend interface, so the overlay releases everything first,
+/// then the displaced code runs.
+pub fn c_gx_device_d3d__i_release_d3d_resources__599900(this: *mut u8, flag: i32) {
+    super::unitxp::worldtext::release_resources(flag);
+    (super::symbols::originals::c_gx_device_d3d__i_release_d3d_resources__599900())(this, flag);
 }
 
 /// The screenshot TGA writer — re-encoded off-thread, stock on any mismatch.

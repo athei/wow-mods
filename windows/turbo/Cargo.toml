@@ -13,6 +13,11 @@ crate-type = ["cdylib"]
 
 [dependencies]
 log = { workspace = true }
+# Pure-Rust TTF parsing and glyph coverage rasterization for the combat-text
+# overlay (`win/unitxp/worldtext`): client-directory fonts are rasterized once
+# per line into textures. Not target-gated: the string-layout half is
+# host-unit-tested.
+ab_glyph = { workspace = true }
 # Histogram map used by the in-DLL `profile` module; unconditional because that
 # module (classification + TSV rendering) is host-tested.
 rustc-hash = { workspace = true }

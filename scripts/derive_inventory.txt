@@ -32,3 +32,9 @@ windows/turbo/src/win/hooks.rs GcJobKind Clone,Copy
 windows/turbo/src/win/hooks.rs GxLightRec Clone,Copy
 windows/turbo/src/win/objmgr.rs UnitRef Clone,Copy
 windows/turbo/src/win/unitxp/targeting.rs MobEntry Clone,Copy,Default
+windows/turbo/src/worldtext.rs CritFont Clone,Copy,PartialEq,Eq,Debug
+windows/turbo/src/worldtext.rs CritTick Clone,Copy,PartialEq,Debug
+windows/turbo/src/worldtext.rs Direction Clone,Copy,PartialEq,Eq,Debug
+windows/turbo/src/worldtext.rs Rect Clone,Copy,PartialEq,Eq,Debug
+windows/turbo/src/worldtext.rs Slot Clone,Copy,PartialEq,Eq,Debug
+windows/turbo/src/worldtext.rs Tick Clone,Copy,PartialEq,Debug

@@ -31,7 +31,7 @@ pub mod settings;
 mod targeting;
 pub mod timer;
 mod trace;
-mod worldtext;
+pub mod worldtext;
 
 use super::tally::Counter;
 
@@ -196,10 +196,34 @@ fn dispatch(lua: &super::lua::LuaState) -> Option<i32> {
             Some(1)
         }
         b"addCombatText" if lua.argc() >= 6 => {
-            // The renderer is absent this version: the message is consumed
-            // exactly as the original consumes one with a dead scene, and
-            // the answer says so.
-            lua.push_boolean(worldtext::SCENE_ENABLED);
+            let color = [
+                color_byte(lua.number_arg(2)),
+                color_byte(lua.number_arg(3)),
+                color_byte(lua.number_arg(4)),
+            ];
+            let text = lua.coerced_str(5).unwrap_or_default();
+            let shown = match lua.str_arg(6) {
+                Some(b"crit") => worldtext::add_crit_text(&text, color, 255),
+                Some(b"downward") => worldtext::add_small_floating(
+                    &text,
+                    color,
+                    255,
+                    crate::worldtext::Direction::Down,
+                ),
+                Some(b"arc") => worldtext::add_small_floating(
+                    &text,
+                    color,
+                    255,
+                    crate::worldtext::Direction::Arc,
+                ),
+                _ => worldtext::add_small_floating(
+                    &text,
+                    color,
+                    255,
+                    crate::worldtext::Direction::Up,
+                ),
+            };
+            lua.push_boolean(shown);
             Some(1)
         }
         b"combatTextSP3" => Some(combat_text_command(lua)),
@@ -352,7 +376,6 @@ fn timer_command(lua: &super::lua::LuaState) -> i32 {
             };
             // the command truncates its millisecond doubles to integers, as
             // the reference does
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let id = timer::arm(delay as u64, period as u64, &script);
             lua.push_number(f64::from(id));
             1
@@ -364,14 +387,12 @@ fn timer_command(lua: &super::lua::LuaState) -> i32 {
             };
             // the command truncates its id double to the integer id it handed
             // out, as the reference does
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let disarmed = timer::disarm(id as u32);
             lua.push_boolean(disarmed);
             1
         }
         Some(b"size") => {
             // the live-timer count is far below the 52-bit exact range
-            #[allow(clippy::cast_precision_loss)]
             lua.push_number(timer::live_count() as f64);
             1
         }
@@ -402,11 +423,12 @@ fn notify_command(lua: &super::lua::LuaState) -> i32 {
     1
 }
 
-/// The `combatTextSP3` subcommands, answered with the scene reported dead.
+/// The `combatTextSP3` subcommands: settings, and the scene state second.
 ///
-/// Settings store and echo exactly as the original's do with a failed
-/// renderer, and the debug query serves the reason; scripts checking the
-/// second value fall back to the stock combat text.
+/// Settings store and echo as the original's do; the second return value
+/// reports whether the overlay can render, and the debug query serves the
+/// reason when it cannot, so scripts checking it fall back to the stock
+/// combat text on the same ladder they always handled.
 fn combat_text_command(lua: &super::lua::LuaState) -> i32 {
     match lua.str_arg(2) {
         Some(b"enable") => {
@@ -415,6 +437,7 @@ fn combat_text_command(lua: &super::lua::LuaState) -> i32 {
         }
         Some(b"disable") => {
             worldtext::set_use_combat_text(false);
+            worldtext::clear();
             lua.push_boolean(worldtext::use_combat_text());
         }
         Some(b"setFontSize") if lua.argc() >= 3 => {
@@ -439,14 +462,14 @@ fn combat_text_command(lua: &super::lua::LuaState) -> i32 {
             lua.push_str(&worldtext::set_font_name(name));
         }
         Some(b"debugText") => {
-            lua.push_str(worldtext::DISABLE_REASON);
+            lua.push_str(&worldtext::debug_text());
         }
         _ => {
             lua.push_nil();
             return 1;
         }
     }
-    lua.push_boolean(worldtext::SCENE_ENABLED);
+    lua.push_boolean(worldtext::scene_enabled());
     2
 }
 
@@ -457,7 +480,6 @@ fn camera_offset(lua: &super::lua::LuaState, get: fn() -> f32, set: fn(f32)) -> 
     {
         // the command narrows its double argument to f32 by value before the
         // clamp, as the reference does
-        #[allow(clippy::cast_possible_truncation)]
         set(value as f32);
     }
     lua.push_number(f64::from(get()));
@@ -526,6 +548,9 @@ fn on_event(lua: &super::lua::LuaState) -> i32 {
         }
         Some(b"PLAYER_LEAVING_WORLD") => {
             settings::set_in_world(false);
+            // The overlay's unload point: lines must not survive into the
+            // next world with stale anchors and a possibly-rebuilt device.
+            worldtext::clear();
             true
         }
         Some(b"PLAYER_REGEN_ENABLED" | b"PLAYER_REGEN_DISABLED") => true,
@@ -579,4 +604,14 @@ pub fn emit_cumulative() {
     nameplate::emit_cumulative();
     targeting::emit_cumulative();
     camera::emit_cumulative();
+    worldtext::emit_cumulative();
+}
+
+/// A script color channel to a byte, the reference's saturating read.
+fn color_byte(value: Option<f64>) -> u8 {
+    let clamped = value.unwrap_or(255.0).clamp(0.0, 255.0);
+    // Clamped to a byte's range right above.
+    // clamped to [0, 255] above
+    // clamped non-negative above
+    clamped as u8
 }
