@@ -156,9 +156,9 @@ pub fn set_font_name(name: String) -> String {
 
 /// The face lookup order when no user selection matches.
 ///
-/// The client's own floating-damage face first, then the wider-coverage UI
-/// faces.
-const FACE_ORDER: [&str; 4] = ["SKURRI", "FRIZQT__", "ARIALN", "MORPHEUS"];
+/// The client's stock face first — the one its own initialization registers
+/// and the world text draws with — then the other shipped faces.
+const FACE_ORDER: [&str; 4] = ["FRIZQT__", "SKURRI", "ARIALN", "MORPHEUS"];
 
 /// Every named face the overlay can draw with.
 ///
@@ -262,6 +262,12 @@ fn system_font_dirs() -> Vec<std::path::PathBuf> {
     let mut dirs = Vec::new();
     if let Ok(windir) = std::env::var("WINDIR") {
         dirs.push(std::path::PathBuf::from(windir).join("Fonts"));
+    }
+    // Wine imports the unix environment, so the host home directory reaches
+    // the per-user font collection through the drive mapping too.
+    if let Ok(home) = std::env::var("HOME") {
+        let host_home = format!("Z:{}", home.replace('/', "\\"));
+        dirs.push(std::path::PathBuf::from(host_home).join(r"Library\Fonts"));
     }
     dirs.push(std::path::PathBuf::from(
         r"Z:\System\Library\Fonts\Supplemental",
