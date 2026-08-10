@@ -20615,6 +20615,8 @@ enum GcJobKind {
     Probe,
     /// Parallel particle build over a pass's pre-scanned emitter draws.
     Particles,
+    /// Parallel bone animation over a draw-list pass's collected roots.
+    AnimateRoots,
 }
 
 /// A pool job: what to run and the parameters to run it on.
@@ -20704,6 +20706,31 @@ impl GcJob {
             strt_size: 0,
             spans_ptr: view_ptr,
             spans_len: len,
+        }
+    }
+
+    /// A bone-animation job over a pre-collected root-node slice.
+    ///
+    /// Reuses the sweep's pointer/len spec fields for the roots slice; `g`
+    /// smuggles the `CWorldView` base (participants read `base+0x9c` as the
+    /// parent matrix) and `strt_hash` an optional per-root tick-slot array of
+    /// the same length (0 when the probe is unarmed). The driver collects
+    /// both buffers fully before publishing and keeps them alive and unmoved
+    /// until its hard join drains every participant.
+    const fn animate_roots(
+        roots_ptr: usize,
+        roots_len: usize,
+        base: usize,
+        ticks_ptr: usize,
+    ) -> Self {
+        Self {
+            epoch: 0,
+            kind: GcJobKind::AnimateRoots,
+            g: base,
+            strt_hash: ticks_ptr,
+            strt_size: 0,
+            spans_ptr: roots_ptr,
+            spans_len: roots_len,
         }
     }
 }
@@ -21009,6 +21036,7 @@ fn gc_par_worker(shared: &GcParShared) {
                     .fetch_add(1, core::sync::atomic::Ordering::SeqCst);
             }
             GcJobKind::Particles => pq_par_build(shared, &job),
+            GcJobKind::AnimateRoots => gc_par_animate_roots(shared, &job),
         }
     }
 }
@@ -31298,11 +31326,181 @@ fn bdl_animate_root_timed(
     }
 }
 
+/// Fork gate: minimum animate-eligible roots before a pass forks.
+///
+/// Break-even against the pool's measured 17-22 us empty round trip with
+/// per-root cost near a microsecond: 32 roots offer roughly 24 us of
+/// offloadable work, the smallest count that is not a guaranteed wash.
+/// Multi-root passes average ~55 roots at raid scale, so the gate admits
+/// the passes that matter while the single-model views (portraits, camera
+/// loads; 11 of the 12 draw-list call sites) stay serial.
+const BDL_ANIM_MIN_ROOTS: usize = 32;
+
+/// Whether the animate fork is disabled (`WOW_TURBO_NO_ANIM_FORK=1`).
+///
+/// Bisect lever for the fork alone: `WOW_TURBO_SKIP` on the draw-list hook
+/// would revert the whole reimplementation, sorts and all. With the fork
+/// off, the phase runs the stock scheduling (engine worker kick plus
+/// even-half walk) exactly.
+static BDL_ANIM_FORK_OFF: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| {
+    std::env::var_os("WOW_TURBO_NO_ANIM_FORK").is_some_and(|v| v == "1")
+});
+
+thread_local! {
+    /// Reused root-pointer buffer for the animate fork's collect walk.
+    ///
+    /// Game-thread owned; taken for the duration of the pass and put back
+    /// after the hard join, so capacity converges to the session's list
+    /// maximum instead of reallocating per frame.
+    static BDL_ANIM_ROOTS: core::cell::RefCell<Vec<usize>> =
+        const { core::cell::RefCell::new(Vec::new()) };
+    /// Per-root tick slots paralleling `BDL_ANIM_ROOTS`, armed passes only.
+    static BDL_ANIM_TICKS: core::cell::RefCell<Vec<u64>> =
+        const { core::cell::RefCell::new(Vec::new()) };
+}
+
+/// Collect the animate-eligible roots of the visible list into `out`.
+///
+/// Single-hop walk of the `this+0x20` list with the stock per-node gate
+/// `[node+0x1cc] == 0` (no parent instance). A read-only pointer chase: the
+/// count decides the fork gate and the collected slice is the published
+/// work list.
+fn bdl_collect_anim_roots(base: *mut u8, out: &mut Vec<usize>) {
+    out.clear();
+    // SAFETY: `base` is the non-null `CWorldView` `this` the draw-list build
+    // was entered with; `+0x20` is its visible-list head pointer field.
+    let mut node = unsafe { bdl_rdp(base, 0x20) };
+    while !node.is_null() {
+        // SAFETY: `node` is non-null by the loop condition and is a
+        // visible-list model; `+0x1cc` is the dword the stock walk gates the
+        // `AnimateBones` call on.
+        if unsafe { bdl_rd32(node, 0x1cc) } == 0 {
+            out.push(node as usize);
+        }
+        // SAFETY: `node` is still that non-null list node; `+0x48` is the
+        // forward link the visible list is chained through.
+        node = unsafe { bdl_rdp(node, 0x48) };
+    }
+}
+
+/// Bone-animation pool participant: claim root chunks, animate each.
+///
+/// The claim discipline copies the sweep participant exactly: raise `active`
+/// first, revalidate the epoch under the `job` lock, then claim off the
+/// shared cursor. The chunk is small because per-root cost is heavy-tailed
+/// (attachment subtrees): the claim is one `fetch_add` against
+/// multi-microsecond roots, and a larger chunk risks a long tail stranded on
+/// one lane.
+///
+/// The `[inst+0x40]` frame-stamp dedup inside `AnimateBones` stays
+/// non-atomic by decision: stock runs the identical race on its own
+/// two-thread split (and also stamps at the end of the body), the measured
+/// collision rate is 0 in 304M entries at raid scale, and an atomic entry
+/// claim would instead hand a parent half-updated bones on collision. The
+/// `repeat` seam counter stays as the tripwire.
+fn gc_par_animate_roots(shared: &GcParShared, job: &GcJob) {
+    use core::sync::atomic::Ordering;
+    const CHUNK: usize = 2;
+    loop {
+        shared.active.fetch_add(1, Ordering::SeqCst);
+        if shared.job.lock().unwrap().epoch != job.epoch {
+            shared.active.fetch_sub(1, Ordering::SeqCst);
+            break;
+        }
+        let start = shared.bucket_cursor.fetch_add(CHUNK, Ordering::SeqCst);
+        if start >= job.spans_len {
+            shared.active.fetch_sub(1, Ordering::SeqCst);
+            break;
+        }
+        let end = (start + CHUNK).min(job.spans_len);
+        for i in start..end {
+            let root_slot = (job.spans_ptr as *const usize).wrapping_add(i);
+            // SAFETY: `i < spans_len`, the epoch was validated with `active`
+            // held, and the driver keeps the roots slice alive and unmoved
+            // until its hard join; each slot holds a visible-list node
+            // collected this pass.
+            let node = unsafe { *root_slot };
+            if job.strt_hash == 0 {
+                bdl_animate_bones_identity(job.g as *mut u8, node as *const u8);
+            } else {
+                let t0 = wow_shared::tsc::rdtsc();
+                bdl_animate_bones_identity(job.g as *mut u8, node as *const u8);
+                let dt = wow_shared::tsc::rdtsc().wrapping_sub(t0);
+                let tick_slot = (job.strt_hash as *mut u64).wrapping_add(i);
+                // SAFETY: the tick array parallels the roots slice (same
+                // length, driver-owned, live across the hard join), and
+                // cursor claims are exclusive per index, so slot `i` has a
+                // single writer.
+                unsafe { *tick_slot = dt };
+            }
+        }
+        shared.active.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// Fork the whole root list across the pool and hard-join it.
+///
+/// Takes over BOTH halves of the engine's even/odd split: on a forked pass
+/// the engine worker is never kicked, because kicking it alongside the fork
+/// would double-animate the odd half. The coordinator participates as the
+/// fourth lane, then spins until the cursor is exhausted and no participant
+/// is active. The join is unconditional: a fallback is impossible once
+/// instances are mid-mutation, and the refresh phase would destroy the list
+/// under live workers. Past the deadline it warns once and keeps waiting.
+///
+/// `ticks` is resized to parallel `roots` and filled with per-root costs
+/// when `timed`; unarmed passes publish a null tick array and pay no
+/// bracket.
+fn bdl_anim_fork(base: *mut u8, roots: &[usize], ticks: &mut Vec<u64>, timed: bool) {
+    use core::sync::atomic::Ordering;
+    let ticks_ptr = if timed {
+        ticks.clear();
+        ticks.resize(roots.len(), 0);
+        ticks.as_mut_ptr() as usize
+    } else {
+        0
+    };
+    let shared = gc_pool();
+    let job = gc_par_begin(
+        shared,
+        GcJob::animate_roots(
+            roots.as_ptr() as usize,
+            roots.len(),
+            base as usize,
+            ticks_ptr,
+        ),
+    );
+    gc_par_animate_roots(shared, &job);
+    let deadline = wow_shared::tsc::rdtsc().wrapping_add(wow_shared::tsc::secs_to_cycles(1) / 20);
+    let mut warned = false;
+    loop {
+        let drained = shared.bucket_cursor.load(Ordering::SeqCst) >= roots.len()
+            && shared.active.load(Ordering::SeqCst) == 0;
+        if drained {
+            break;
+        }
+        if !warned && wow_shared::tsc::rdtsc() >= deadline {
+            warned = true;
+            log::warn!(
+                target: "wow::events",
+                "animate fork join stalled past the deadline over {} roots; waiting it out",
+                roots.len(),
+            );
+        }
+        std::thread::yield_now();
+    }
+    shared.done.store(true, Ordering::SeqCst);
+}
+
 /// The per-list animation phase (0x707757..0x707843).
 ///
-/// Bone animation over the visible-list head `this+0x20` (camera-relative
-/// double-hop walk gated by `[view+4]&4`, else the plain single-hop walk), then
-/// a particle update pass.
+/// Bone animation over the visible-list head `this+0x20`. With enough
+/// animate-eligible roots the whole list forks across the worker pool,
+/// taking over both halves of the stock even/odd split (the engine worker
+/// is never kicked on a forked pass); below the gate, or with
+/// `WOW_TURBO_NO_ANIM_FORK=1`, the stock scheduling runs unchanged
+/// (camera-relative double-hop walk gated by `[view+4]&4`, else the plain
+/// single-hop walk). A particle update pass follows either way.
 fn bdl_anim_phase(base: *mut u8) {
     // Whether a hook of ours is still installed is not a question only an
     // instrumented session gets to ask: an entry another module takes is dead
@@ -31322,7 +31520,20 @@ fn bdl_anim_phase(base: *mut u8) {
     // load; `+0x4` is the flags dword the stock gate `[view+4]&4` at the head of this phase
     // tests bit 2 of.
     let worker_arm = (unsafe { bdl_rd32(view, 4) } & 4) != 0;
-    if worker_arm {
+    let mut root_buf = BDL_ANIM_ROOTS.with(core::cell::RefCell::take);
+    bdl_collect_anim_roots(base, &mut root_buf);
+    if root_buf.len() >= BDL_ANIM_MIN_ROOTS && !*BDL_ANIM_FORK_OFF {
+        let mut tick_buf = BDL_ANIM_TICKS.with(core::cell::RefCell::take);
+        bdl_anim_fork(base, &root_buf, &mut tick_buf, timed);
+        if timed {
+            roots = root_buf.len() as u32;
+            for &dt in &tick_buf {
+                ticks_sum = ticks_sum.wrapping_add(dt);
+                ticks_max = ticks_max.max(dt);
+            }
+        }
+        BDL_ANIM_TICKS.with(|slot| slot.replace(tick_buf));
+    } else if worker_arm {
         // 0x707760: sub_706cd0(ecx = view, 0x707600 callback, this).
         const CB: u32 = (crate::win::EXPECTED_IMAGE_BASE + 0x30_7600) as u32;
         const SUB_706CD0: usize = crate::win::EXPECTED_IMAGE_BASE + 0x30_6cd0;
@@ -31386,6 +31597,7 @@ fn bdl_anim_phase(base: *mut u8) {
             node = unsafe { bdl_rdp(node, 0x48) };
         }
     }
+    BDL_ANIM_ROOTS.with(|slot| slot.replace(root_buf));
     // 0x707830: UpdateParticlesAndChildren over the visible list.
     // SAFETY: `base` is that same `CWorldView`; `+0x20` is its visible-list head pointer
     // field, re-read here because the stock code at 0x707830 reloads the head for this pass.
