@@ -21785,6 +21785,19 @@ pub fn c_particle_emitter__build_particle_quad__7b2a50(
     particle: *mut f32,
     vertex_stream: *mut f32,
 ) -> i32 {
+    pq_build_particle_quad(&PqLiveEnv, this, particle, vertex_stream)
+}
+
+/// The quad build body, generic over the per-draw input source.
+///
+/// See [`PqEnv`]; [`c_particle_emitter__build_particle_quad__7b2a50`]
+/// instantiates it with the engine globals.
+fn pq_build_particle_quad<E: PqEnv>(
+    env: &E,
+    this: *mut core::ffi::c_void,
+    particle: *mut f32,
+    vertex_stream: *mut f32,
+) -> i32 {
     if this.is_null() || particle.is_null() || vertex_stream.is_null() {
         return 0;
     }
@@ -21813,7 +21826,7 @@ pub fn c_particle_emitter__build_particle_quad__7b2a50(
         );
     }
     // SAFETY: `idx` is masked to 0..0x7f, in-bounds of the 128-entry LOD array.
-    let lod = unsafe { anim_f32(PQ_FADE_LOD.cast(), idx as usize * 4) };
+    let lod = unsafe { anim_f32(env.fade_lod().cast(), idx as usize * 4) };
     if fade_dist < 1.0 && fade_dist < lod {
         return 0;
     }
@@ -21839,16 +21852,10 @@ pub fn c_particle_emitter__build_particle_quad__7b2a50(
         &mut size,
     );
 
-    // ARGB byte-order swap when the active format descriptor selects it.
-    // SAFETY: `PQ_DEVICE` is the device singleton pointer; `device+0x258` is the
-    // color byte-order field. The original calls GetFormatDesc unconditionally;
-    // the singleton is always live during rendering — guard defensively.
-    let swap = {
-        // SAFETY: `PQ_DEVICE` is the live device-singleton pointer field.
-        let device = unsafe { PQ_DEVICE.read() };
-        // SAFETY: `device+0x258` is the color byte-order field (guarded non-null).
-        !device.is_null() && unsafe { anim_i32(device, 0x258) } == 1
-    };
+    // ARGB byte-order swap when the active format descriptor selects it (the
+    // original calls GetFormatDesc unconditionally; the env impl carries the
+    // read and its guards).
+    let swap = env.swap();
     if swap {
         let c = color.to_le_bytes();
         color = u32::from_le_bytes([c[2], c[1], c[0], c[3]]);
@@ -21868,18 +21875,18 @@ pub fn c_particle_emitter__build_particle_quad__7b2a50(
 
     // Center = view·particle.
     let mut center = [0.0f32; 3];
-    c44_matrix__transform_point__7bca80(center.as_mut_ptr(), particle, PQ_VIEW);
+    c44_matrix__transform_point__7bca80(center.as_mut_ptr(), particle, env.view());
     let (cx, cy, cz) = (center[0], center[1], center[2]);
 
     // Constant normal + the static corner/uv tables (read once; values are fixed
     // across the four verts).
     let normal = [
-        // SAFETY: `PQ_NORMAL+0/4/8` are 3 in-bounds dwords.
-        unsafe { anim_u32(PQ_NORMAL.cast(), 0) },
+        // SAFETY: the env normal pointer addresses 3 in-bounds dwords.
+        unsafe { anim_u32(env.normal().cast(), 0) },
         // SAFETY: as above.
-        unsafe { anim_u32(PQ_NORMAL.cast(), 4) },
+        unsafe { anim_u32(env.normal().cast(), 4) },
         // SAFETY: as above.
-        unsafe { anim_u32(PQ_NORMAL.cast(), 8) },
+        unsafe { anim_u32(env.normal().cast(), 8) },
     ];
     let mut corner = [(0.0f32, 0.0f32); 4];
     let mut uvt = [(0.0f32, 0.0f32); 4];
@@ -21926,11 +21933,11 @@ pub fn c_particle_emitter__build_particle_quad__7b2a50(
                 for (i, &(uu, vv)) in uvt.iter().enumerate() {
                     let b = i as isize * 3;
                     // SAFETY: the static basis spans the four corners' 3-float rows.
-                    let bx = unsafe { pq_rdf(PQ_BASIS_STATIC, b - 2) };
+                    let bx = unsafe { pq_rdf(env.basis_static(), b - 2) };
                     // SAFETY: as above.
-                    let by = unsafe { pq_rdf(PQ_BASIS_STATIC, b - 1) };
+                    let by = unsafe { pq_rdf(env.basis_static(), b - 1) };
                     // SAFETY: as above.
-                    let bz = unsafe { pq_rdf(PQ_BASIS_STATIC, b) };
+                    let bz = unsafe { pq_rdf(env.basis_static(), b) };
                     let pos = [size * bx + cx, size * by + cy, size * bz + cz];
                     let uv = [uu * u_scale + col, vv * v_scale + row];
                     // SAFETY: the cursor has room for one more vertex.
@@ -21956,18 +21963,17 @@ pub fn c_particle_emitter__build_particle_quad__7b2a50(
             } else {
                 // axis-angle rotated, precomputed basis (cf5b30; reads B[-1],B[0],B[1])
                 let mut m = [0.0f32; 9];
-                // SAFETY: `this+0x284` is the in-bounds rotation axis (3 floats).
-                let axis = unsafe { inst.add(0x284) }.cast::<f32>();
+                let axis = env.axis(inst);
                 // `m` is a writable 3×3; `skip_normalize = 1`. The callee is a safe fn.
                 c33_matrix__from_axis_angle__7be490(m.as_mut_ptr(), axis, ang, 1);
                 for (i, &(uu, vv)) in uvt.iter().enumerate() {
                     let b = i as isize * 3;
                     // SAFETY: the axis-angle basis spans the four corners' rows.
-                    let bm1 = unsafe { pq_rdf(PQ_BASIS_AA, b - 1) };
+                    let bm1 = unsafe { pq_rdf(env.basis_aa(), b - 1) };
                     // SAFETY: as above.
-                    let b0 = unsafe { pq_rdf(PQ_BASIS_AA, b) };
+                    let b0 = unsafe { pq_rdf(env.basis_aa(), b) };
                     // SAFETY: as above.
-                    let b1 = unsafe { pq_rdf(PQ_BASIS_AA, b + 1) };
+                    let b1 = unsafe { pq_rdf(env.basis_aa(), b + 1) };
                     let pz = m[6] * bm1 + m[8] * b1 + m[7] * b0;
                     let px = (m[2] * b1 + m[1] * b0 + m[0] * bm1) * size + cx;
                     let py = (m[3] * bm1 + m[5] * b1 + m[4] * b0) * size + cy;
@@ -22000,7 +22006,7 @@ pub fn c_particle_emitter__build_particle_quad__7b2a50(
         let v6 = unsafe { anim_f32(particle.cast(), 0x18) };
         let neg_vel = [-v4, -v5, -v6, 0.0];
         let mut vview = [0.0f32; 4];
-        c44_matrix__transform_vector4__7bcb40(vview.as_mut_ptr(), neg_vel.as_ptr(), PQ_VIEW);
+        c44_matrix__transform_vector4__7bcb40(vview.as_mut_ptr(), neg_vel.as_ptr(), env.view());
 
         let f1 = stretch_len * vview[0];
         let f2 = stretch_len * vview[1];
@@ -22058,6 +22064,166 @@ const PQ_HEAP_CTRL: *mut u8 = (crate::win::EXPECTED_IMAGE_BASE + 0x8f_58c8) as *
 const PQ_HEAP_DATA: *const *mut u8 =
     (crate::win::EXPECTED_IMAGE_BASE + 0x8f_58d4) as *const *mut u8;
 const PQ_HEAP_COUNT: *mut u32 = (crate::win::EXPECTED_IMAGE_BASE + 0x8f_58e4) as *mut u32;
+
+/// Where the quad build's per-draw mutable inputs come from.
+///
+/// The build reads two kinds of state: emitter fields (stable for the whole
+/// draw pass) and per-draw globals that `Render` rewrites for every emitter
+/// (composed matrix, vertex normal, corner bases, fade table, device byte
+/// order, capped live count). [`PqLiveEnv`] serves the latter from the engine
+/// globals exactly like the direct transcription; a snapshot-backed impl can
+/// serve them from captured copies so a build may run while another emitter's
+/// `Render` is rewriting the globals.
+trait PqEnv {
+    /// The composed view matrix, 16 floats (stock `0xcf5b68`).
+    fn view(&self) -> *const f32;
+    /// The constant vertex normal, 3 dwords (stock `0xcf5878`).
+    fn normal(&self) -> *const u32;
+    /// The `&0x2000` axis-angle corner basis (stock `0xcf5b30`).
+    fn basis_aa(&self) -> *const f32;
+    /// The `&0x2000` static corner basis (stock `0xcf5b34`).
+    fn basis_static(&self) -> *const f32;
+    /// The 128-entry fade/LOD table (stock `0xcf58f0`).
+    fn fade_lod(&self) -> *const f32;
+    /// The rotation axis `Render` writes to `this+0x284` before the build.
+    fn axis(&self, inst: *const u8) -> *const f32;
+    /// ARGB byte-order swap (stock `device+0x258 == 1`).
+    fn swap(&self) -> bool;
+    /// The capped live-particle count (stock `0xcf5b60`).
+    fn live_count(&self) -> u32;
+    /// The depth-sort view rows (stock `0xcf5b70/80/90/a0`).
+    ///
+    /// They alias [`Self::view`] elements 2/6/10/14.
+    fn sort_rows(&self) -> [f32; 4];
+}
+
+/// The engine-global environment.
+///
+/// Every accessor performs exactly the load the direct transcription
+/// performed, at the same use site.
+struct PqLiveEnv;
+
+impl PqEnv for PqLiveEnv {
+    fn view(&self) -> *const f32 {
+        PQ_VIEW
+    }
+
+    fn normal(&self) -> *const u32 {
+        PQ_NORMAL
+    }
+
+    fn basis_aa(&self) -> *const f32 {
+        PQ_BASIS_AA
+    }
+
+    fn basis_static(&self) -> *const f32 {
+        PQ_BASIS_STATIC
+    }
+
+    fn fade_lod(&self) -> *const f32 {
+        PQ_FADE_LOD
+    }
+
+    fn axis(&self, inst: *const u8) -> *const f32 {
+        inst.wrapping_add(0x284).cast::<f32>()
+    }
+
+    fn swap(&self) -> bool {
+        // SAFETY: `PQ_DEVICE` is the live device-singleton pointer field.
+        let device = unsafe { PQ_DEVICE.read() };
+        // SAFETY: `device+0x258` is the color byte-order field (guarded non-null).
+        !device.is_null() && unsafe { anim_i32(device, 0x258) } == 1
+    }
+
+    fn live_count(&self) -> u32 {
+        // SAFETY: the live-particle count global is initialized by Render.
+        unsafe { PQ_LIVE_COUNT.read() }
+    }
+
+    fn sort_rows(&self) -> [f32; 4] {
+        // SAFETY: depth-sort view row 0 is a live per-frame global.
+        let r0 = unsafe { PQ_VIEW_R0.read() };
+        // SAFETY: depth-sort view row 1 is a live per-frame global.
+        let r1 = unsafe { PQ_VIEW_R1.read() };
+        // SAFETY: depth-sort view row 2 is a live per-frame global.
+        let r2 = unsafe { PQ_VIEW_R2.read() };
+        // SAFETY: depth-sort view row 3 constant is a live per-frame global.
+        let r3 = unsafe { PQ_VIEW_R3.read() };
+        [r0, r1, r2, r3]
+    }
+}
+
+/// The depth-sort scratch heap the sorted arm builds and pops.
+///
+/// [`PqGlobalHeap`] is the stock shared vector at `0xcf58c8` (game thread
+/// only; also used by `CRenderNode::DrawChildrenDepthSorted`); a private
+/// impl can back the same algorithm with caller-owned storage.
+///
+/// The index contracts mirror the stock code: element 0 is a dummy the heap
+/// never touches, the root is element 1, and `set`/`z`/`ptr` trust the
+/// caller's bounds exactly like the raw transcription did.
+trait PqDepthHeap {
+    /// Reserve one slot at the end of the vector.
+    ///
+    /// May leave the count unchanged when the stock grow fails.
+    ///
+    /// SAFETY: the backing vector control state is live.
+    unsafe fn reserve_one(&mut self);
+    /// The element count.
+    fn count(&self) -> usize;
+    /// Store the element count (the pop loop's erase-last).
+    ///
+    /// SAFETY: `n` does not exceed the reserved extent.
+    unsafe fn set_count(&mut self, n: usize);
+    /// Element `idx`'s view-Z.
+    ///
+    /// SAFETY: `idx` is within the live heap extent.
+    unsafe fn z(&self, idx: usize) -> f32;
+    /// Element `idx`'s particle pointer.
+    ///
+    /// SAFETY: `idx` is within the live heap extent.
+    unsafe fn ptr(&self, idx: usize) -> u32;
+    /// Write `{ z, ptr }` into element `idx`.
+    ///
+    /// SAFETY: `idx` is within the reserved heap extent.
+    unsafe fn set(&mut self, idx: usize, z: f32, ptr: u32);
+}
+
+/// The stock shared depth-sort vector (`0xcf58c8` control block).
+struct PqGlobalHeap;
+
+impl PqDepthHeap for PqGlobalHeap {
+    unsafe fn reserve_one(&mut self) {
+        // SAFETY: forwarded; the control block is the live stock vector.
+        unsafe { pq_heap_reserve_one() }
+    }
+
+    fn count(&self) -> usize {
+        // SAFETY: the count field is live.
+        let n = unsafe { PQ_HEAP_COUNT.read() };
+        n as usize
+    }
+
+    unsafe fn set_count(&mut self, n: usize) {
+        // SAFETY: the count field is writable.
+        unsafe { PQ_HEAP_COUNT.write(n as u32) }
+    }
+
+    unsafe fn z(&self, idx: usize) -> f32 {
+        // SAFETY: forwarded; `idx` is within the live heap extent.
+        unsafe { pq_heap_z(idx) }
+    }
+
+    unsafe fn ptr(&self, idx: usize) -> u32 {
+        // SAFETY: forwarded; `idx` is within the live heap extent.
+        unsafe { pq_heap_ptr(idx) }
+    }
+
+    unsafe fn set(&mut self, idx: usize, z: f32, ptr: u32) {
+        // SAFETY: forwarded; `idx` is within the reserved heap extent.
+        unsafe { pq_heap_set(idx, z, ptr) }
+    }
+}
 
 /// Resolve a live particle record pointer.
 ///
@@ -22160,9 +22326,6 @@ unsafe fn pq_heap_reserve_one() {
 /// per-particle path). With sort flag `0x10` clear, emits in array order; with it set, builds a
 /// binary max-heap on each particle's view-space Z and emits far-to-near. Finally stores the
 /// emitted-quad count (`vertexStream[8] / *(this+0x9c)`) at `this+0x1c`.
-// The heap sift negates `>=` to keep the stock polarity, so an unordered
-// view-space Z sifts the way it did; the plain `<` rewrite would swap it.
-#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn c_particle_emitter__render_particles__7b3a10(
     this: *mut core::ffi::c_void,
     vertex_stream: *mut f32,
@@ -22170,30 +22333,49 @@ pub fn c_particle_emitter__render_particles__7b3a10(
     if this.is_null() || vertex_stream.is_null() {
         return;
     }
+    pq_render_particles(&PqLiveEnv, &mut PqGlobalHeap, this, vertex_stream);
     let inst: *mut u8 = this.cast();
     let cur: *mut u8 = vertex_stream.cast();
+    // Emitted-quad count = emitted verts / verts-per-quad (unsigned).
+    // SAFETY: cursor slot 8 is the emitted-vertex count.
+    let emitted = unsafe { anim_u32(cur, 0x20) };
+    // SAFETY: `this+0x9c` is the verts-per-quad divisor.
+    let divisor = unsafe { anim_u32(inst, 0x9c) };
+    if let Some(quads) = emitted.checked_div(divisor) {
+        // SAFETY: `this+0x1c` is the writable emitted-quad count.
+        unsafe { anim_put_u32(inst, 0x1c, quads) };
+    }
+}
+
+/// The per-emitter draw-driver body, generic over env and depth heap.
+///
+/// See [`PqEnv`] and [`PqDepthHeap`]. The `this+0x1c` emitted-quad store
+/// stays in [`c_particle_emitter__render_particles__7b3a10`] so an
+/// instantiation running off the game thread never writes emitter state.
+// The heap sift negates `>=` to keep the stock polarity, so an unordered
+// view-space Z sifts the way it did; the plain `<` rewrite would swap it.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
+fn pq_render_particles<E: PqEnv, H: PqDepthHeap>(
+    env: &E,
+    heap: &mut H,
+    this: *mut core::ffi::c_void,
+    vertex_stream: *mut f32,
+) {
+    let inst: *mut u8 = this.cast();
     // SAFETY: `this+0x1ac` is the in-bounds emitter FLAGS dword.
     let flags = unsafe { anim_u32(inst, 0x1ac) };
 
     if (flags & 0x10) == 0 {
         // Array order.
-        // SAFETY: the live-particle count global is initialized by Render.
-        let n = unsafe { PQ_LIVE_COUNT.read() };
+        let n = env.live_count();
         for i in 0..n as usize {
             // SAFETY: `i` is within the live-particle range.
             let p = unsafe { pq_particle_ptr(inst, i) };
-            c_particle_emitter__build_particle_quad__7b2a50(this, p, vertex_stream);
+            pq_build_particle_quad(env, this, p, vertex_stream);
         }
     } else {
         // Depth-sorted: build a max-heap keyed on view-space Z, then pop far→near.
-        // SAFETY: depth-sort view row 0 is a live per-frame global.
-        let r0 = unsafe { PQ_VIEW_R0.read() };
-        // SAFETY: depth-sort view row 1 is a live per-frame global.
-        let r1 = unsafe { PQ_VIEW_R1.read() };
-        // SAFETY: depth-sort view row 2 is a live per-frame global.
-        let r2 = unsafe { PQ_VIEW_R2.read() };
-        // SAFETY: depth-sort view row 3 constant is a live per-frame global.
-        let r3 = unsafe { PQ_VIEW_R3.read() };
+        let [r0, r1, r2, r3] = env.sort_rows();
         // SAFETY: `this+0x64` is the in-bounds heap-build particle count.
         let build_n = unsafe { anim_u32(inst, 0x64) };
         for i in 0..build_n as usize {
@@ -22207,9 +22389,8 @@ pub fn c_particle_emitter__render_particles__7b3a10(
             let p2 = unsafe { anim_f32(p.cast(), 8) };
             let view_z = r0 * p0 + (r1 * p1 + r2 * p2) + r3;
             // SAFETY: reserve one heap slot (grows live if needed).
-            unsafe { pq_heap_reserve_one() };
-            // SAFETY: the count was just incremented to at least 1.
-            let count = unsafe { PQ_HEAP_COUNT.read() } as usize;
+            unsafe { heap.reserve_one() };
+            let count = heap.count();
             // Up-sift the new last element into the max-heap.
             let mut k = count - 1;
             while k > 1 {
@@ -22217,35 +22398,33 @@ pub fn c_particle_emitter__render_particles__7b3a10(
                 // Break when `view_z < parent.z` OR either is NaN (the original's
                 // `FCOMP; TEST AH,1; JNZ` — C0 set on less-or-unordered).
                 // SAFETY: `parent` is an in-bounds heap index.
-                if !(view_z >= unsafe { pq_heap_z(parent) }) {
+                if !(view_z >= unsafe { heap.z(parent) }) {
                     break;
                 }
                 // SAFETY: `parent` is an in-bounds heap index.
-                let pz = unsafe { pq_heap_z(parent) };
+                let pz = unsafe { heap.z(parent) };
                 // SAFETY: as above.
-                let pp = unsafe { pq_heap_ptr(parent) };
+                let pp = unsafe { heap.ptr(parent) };
                 // SAFETY: `k` is in-bounds.
-                unsafe { pq_heap_set(k, pz, pp) };
+                unsafe { heap.set(k, pz, pp) };
                 k = parent;
             }
             // SAFETY: `k` is the resolved in-bounds slot.
-            unsafe { pq_heap_set(k, view_z, p as usize as u32) };
+            unsafe { heap.set(k, view_z, p as usize as u32) };
         }
 
         // Pop far→near.
-        // SAFETY: the live-particle (pop) count global is initialized by Render.
-        let pop_n = unsafe { PQ_LIVE_COUNT.read() };
+        let pop_n = env.live_count();
         for _ in 0..pop_n {
             // SAFETY: index 1 is the heap root for a populated heap.
-            let root_ptr = unsafe { pq_heap_ptr(1) };
-            // SAFETY: the count field is live.
-            let pre = unsafe { PQ_HEAP_COUNT.read() } as usize;
+            let root_ptr = unsafe { heap.ptr(1) };
+            let pre = heap.count();
             // The last element re-sifted from the root (read before the erase).
             let (sift_z, sift_ptr) = if pre != 0 {
                 // SAFETY: `pre-1` is the in-bounds last element's z.
-                let z = unsafe { pq_heap_z(pre - 1) };
+                let z = unsafe { heap.z(pre - 1) };
                 // SAFETY: `pre-1` is the in-bounds last element's ptr.
-                let ptr = unsafe { pq_heap_ptr(pre - 1) };
+                let ptr = unsafe { heap.ptr(pre - 1) };
                 (z, ptr)
             } else {
                 (0.0, 0)
@@ -22253,11 +22432,10 @@ pub fn c_particle_emitter__render_particles__7b3a10(
             // Erase the last element: tail-shift is zero (erase-last), so this is
             // just `count -= 1` (stock: `0x7b64a0(ctrl, count-1, 1)`).
             if pre != 0 {
-                // SAFETY: the count field is writable.
-                unsafe { PQ_HEAP_COUNT.write((pre - 1) as u32) };
+                // SAFETY: `pre-1` does not exceed the reserved extent.
+                unsafe { heap.set_count(pre - 1) };
             }
-            // SAFETY: the (decremented) count field is live.
-            let count = unsafe { PQ_HEAP_COUNT.read() } as usize;
+            let count = heap.count();
             if count >= 2 {
                 let limit = (count - 1) >> 1;
                 let mut k = 1usize;
@@ -22268,24 +22446,24 @@ pub fn c_particle_emitter__render_particles__7b3a10(
                             // Pick the right child when `left.z <= right.z`
                             // (NaN keeps left), matching the original's compare.
                             // SAFETY: the left child is in-bounds.
-                            let left = unsafe { pq_heap_z(child) };
+                            let left = unsafe { heap.z(child) };
                             // SAFETY: the right child is in-bounds.
-                            let right = unsafe { pq_heap_z(child + 1) };
+                            let right = unsafe { heap.z(child + 1) };
                             if left <= right {
                                 child += 1;
                             }
                         }
                         // Stop when `child.z <= sift_z` (NaN continues).
                         // SAFETY: `child` is in-bounds.
-                        if unsafe { pq_heap_z(child) } <= sift_z {
+                        if unsafe { heap.z(child) } <= sift_z {
                             break;
                         }
                         // SAFETY: `child` is an in-bounds heap index.
-                        let cz = unsafe { pq_heap_z(child) };
+                        let cz = unsafe { heap.z(child) };
                         // SAFETY: as above.
-                        let cp = unsafe { pq_heap_ptr(child) };
+                        let cp = unsafe { heap.ptr(child) };
                         // SAFETY: `k` is in-bounds.
-                        unsafe { pq_heap_set(k, cz, cp) };
+                        unsafe { heap.set(k, cz, cp) };
                         k = child;
                         if child > limit {
                             break;
@@ -22293,24 +22471,10 @@ pub fn c_particle_emitter__render_particles__7b3a10(
                     }
                 }
                 // SAFETY: `k` is the resolved in-bounds slot.
-                unsafe { pq_heap_set(k, sift_z, sift_ptr) };
+                unsafe { heap.set(k, sift_z, sift_ptr) };
             }
-            c_particle_emitter__build_particle_quad__7b2a50(
-                this,
-                root_ptr as *mut f32,
-                vertex_stream,
-            );
+            pq_build_particle_quad(env, this, root_ptr as *mut f32, vertex_stream);
         }
-    }
-
-    // Emitted-quad count = emitted verts / verts-per-quad (unsigned).
-    // SAFETY: cursor slot 8 is the emitted-vertex count.
-    let emitted = unsafe { anim_u32(cur, 0x20) };
-    // SAFETY: `this+0x9c` is the verts-per-quad divisor.
-    let divisor = unsafe { anim_u32(inst, 0x9c) };
-    if let Some(quads) = emitted.checked_div(divisor) {
-        // SAFETY: `this+0x1c` is the writable emitted-quad count.
-        unsafe { anim_put_u32(inst, 0x1c, quads) };
     }
 }
 
