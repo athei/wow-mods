@@ -279,13 +279,18 @@ and the log line names it.
   companion addon (`UnitXP_SP3_Addon`) keeps working unmodified, panel and
   keybindings included. Line-of-sight answers come from a position-aware
   cache that traces the world several times less often than the original,
-  which was a measurable slice of frame time in crowded scenes. Two pieces
-  are deliberately different: the floating combat text overlay is not built
-  in yet (the `combatTextSP3` commands answer exactly like the original does
-  when its renderer fails to initialize, so the addon reports the reason and
-  stock combat text stays), and the remote Lua debugger, TCP tweaks and the
-  math detours are dropped — the math because `wow_turbo` already owns those
-  functions natively. `UnitXP("version", "additionalInformation")` names
+  which was a measurable slice of frame time in crowded scenes. The floating
+  combat text overlay is served too: `combatTextSP3 enable` draws the floating
+  numbers, the crit carousel and script-added lines. Its renderer is not a
+  port of the original's, which rasterizes through GDI system fonts and
+  `d3dx9` objects that Wine substitutes per machine; here each line is
+  rasterized once from a font file into a managed-pool texture, so a device
+  reset costs nothing and the face is whatever the addon's font box names,
+  from the client's own `Fonts/` directory or the system's (stock `FRIZQT__`
+  by default, and those edit boxes only apply on Enter). What is deliberately
+  dropped: the remote Lua debugger, the TCP tweaks and the math detours, the
+  math because `wow_turbo` already owns those functions natively.
+  `UnitXP("version", "additionalInformation")` names
   `wow_turbo`, not the original, so a script probing for the exact original
   can tell them apart.
 - **transmogfix — replaced; remove it.** Its two jobs are covered. Equipment
