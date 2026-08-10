@@ -369,7 +369,7 @@ fn load_faces() -> Result<Faces, String> {
     };
     log::info!(
         target: "wow_turbo",
-        "worldtext: client faces available: {}",
+        "worldtext: client faces loaded: {}; any system font resolves by file name on demand",
         registry.roster()
     );
     Ok(registry)
@@ -1730,7 +1730,11 @@ pub fn debug_text() -> String {
         "Overlay state: device {device:#x}, {floats} floats, {smalls} smalls, {groups} crit groups"
     );
     if let Ok(faces) = &*FACES {
-        let _ = writeln!(out, "Client faces: {}", faces.roster());
+        let _ = writeln!(
+            out,
+            "Client faces: {} (system fonts resolve by file name on demand)",
+            faces.roster()
+        );
         let stem = selected_stem();
         let resolution = if faces.resolve(&stem).is_some() {
             "resolves"
