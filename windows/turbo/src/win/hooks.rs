@@ -20611,8 +20611,6 @@ enum GcJobKind {
     Mark,
     /// String-table sweep over bucket ranges.
     Sweep,
-    /// No-op wake/ack round trip; workers bump the cursor and go back to sleep.
-    Probe,
     /// Parallel particle build over a pass's pre-scanned emitter draws.
     Particles,
     /// Parallel bone animation over a draw-list pass's collected roots.
@@ -20677,19 +20675,6 @@ impl GcJob {
             strt_size,
             spans_ptr,
             spans_len,
-        }
-    }
-
-    /// An empty wake/ack job for the round-trip probe.
-    const fn probe() -> Self {
-        Self {
-            epoch: 0,
-            kind: GcJobKind::Probe,
-            g: 0,
-            strt_hash: 0,
-            strt_size: 0,
-            spans_ptr: 0,
-            spans_len: 0,
         }
     }
 
@@ -20776,8 +20761,6 @@ struct GcParShared {
     job: std::sync::Mutex<GcJob>,
     /// Wakes the workers for a new job.
     cv: std::sync::Condvar,
-    /// Worker-thread count, fixed at pool creation; the probe's ack target.
-    workers: usize,
 }
 
 /// A mark participant's view of the collect: local stack + shared routing.
@@ -21030,11 +21013,6 @@ fn gc_par_worker(shared: &GcParShared) {
         match job.kind {
             GcJobKind::Mark => gc_par_propagate(shared, job.g, false),
             GcJobKind::Sweep => gc_par_sweep_strt(shared, &job),
-            GcJobKind::Probe => {
-                shared
-                    .bucket_cursor
-                    .fetch_add(1, core::sync::atomic::Ordering::SeqCst);
-            }
             GcJobKind::Particles => pq_par_build(shared, &job),
             GcJobKind::AnimateRoots => gc_par_animate_roots(shared, &job),
         }
@@ -21061,35 +21039,6 @@ fn gc_par_begin(shared: &GcParShared, mut spec: GcJob) -> GcJob {
     spec
 }
 
-/// Publish an empty job and measure the wake-to-ack round trip, in ticks.
-///
-/// The pool's cost as a fork substrate at frame rate is exactly this round
-/// trip. The probe publishes a no-op job, spins (yielding) until every worker
-/// has bumped the ack cursor, and returns the elapsed ticks. It bails out at
-/// roughly 50 ms so a stalled worker degrades to one visibly huge sample
-/// instead of a hang.
-fn gc_par_probe_roundtrip() -> u64 {
-    let shared = gc_pool();
-    let t0 = wow_shared::tsc::rdtsc();
-    let deadline = t0.wrapping_add(wow_shared::tsc::secs_to_cycles(1) / 20);
-    gc_par_begin(shared, GcJob::probe());
-    while shared
-        .bucket_cursor
-        .load(core::sync::atomic::Ordering::SeqCst)
-        < shared.workers
-    {
-        if wow_shared::tsc::rdtsc() >= deadline {
-            break;
-        }
-        std::thread::yield_now();
-    }
-    let dt = wow_shared::tsc::rdtsc().wrapping_sub(t0);
-    shared
-        .done
-        .store(true, core::sync::atomic::Ordering::SeqCst);
-    dt
-}
-
 /// The worker pool, created on the game thread at the first collect.
 ///
 /// Never from `DllMain`. Workers park on the condvar between passes and
@@ -21114,7 +21063,6 @@ fn gc_pool() -> &'static GcParShared {
             freed_strings: core::sync::atomic::AtomicU32::new(0),
             job: std::sync::Mutex::new(GcJob::mark(0)),
             cv: std::sync::Condvar::new(),
-            workers,
         });
         for i in 0..workers {
             let s = std::sync::Arc::clone(&shared);
@@ -22296,9 +22244,9 @@ impl PqDepthHeap for PqGlobalHeap {
 /// base count (element 0 unused, root at 1; the capture path declines an
 /// emitter when the stock count is not 1). Out-of-bounds access degrades to
 /// a default instead of a panic: the workspace is `panic = abort` and a
-/// worker must never take the process down on odd guest data; the parity
-/// oracle catches a silently wrong result. `Vec` growth replaces the stock
-/// grow-failure silent-drop corner, which never fires at real heap sizes.
+/// worker must never take the process down on odd guest data. `Vec` growth
+/// replaces the stock grow-failure silent-drop corner, which never fires at
+/// real heap sizes.
 struct PqLocalHeap {
     /// `(view_z, particle_ptr)` elements, index 0 unused.
     elems: Vec<(f32, u32)>,
@@ -22349,6 +22297,11 @@ struct PqJobHeader {
     fade_lod: [f32; 128],
     /// ARGB byte-order swap (`device+0x258 == 1`) at pre-scan.
     swap: bool,
+    /// Whether the workers bracket each build for the seam line.
+    ///
+    /// Read from the arm once per pass on the game thread, so an unarmed
+    /// session pays no clock read per entry on the worker side either.
+    timed: bool,
 }
 
 /// Per-emitter snapshot of every mutable input `Render` writes for a draw.
@@ -22777,7 +22730,10 @@ struct PqJobTable {
 static PQ_PASS_VIEW: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
 /// Consume-order cursor into the live pass table (game thread only).
 static PQ_PASS_CURSOR: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
-/// Entries consumed from the live pass table (game thread only).
+/// Entries a draw reached in the live pass table (game thread, armed only).
+///
+/// Nothing but the retire line reads it — how far the pre-scan over-predicted
+/// the pass — so it counts under the arm like any other diagnostic.
 static PQ_PASS_CONSUMED: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
 
 /// The `C44Matrix::Multiply` chain (`0x7bc6a0`), called by name.
@@ -22974,7 +22930,11 @@ fn pq_build_entry(view: &PqJobView, i: usize) {
         unsafe { &(*e).state }.store(PQ_STATE_DECLINED, Ordering::Release);
         return;
     }
-    let t0 = wow_shared::tsc::rdtsc();
+    let t0 = if header.timed {
+        wow_shared::tsc::rdtsc()
+    } else {
+        0
+    };
 
     // The scratch stands in for the locked stream cursor: same interleave
     // offsets, same stride, so the consume side moves one contiguous block.
@@ -23027,7 +22987,11 @@ fn pq_build_entry(view: &PqJobView, i: usize) {
         ctx.as_mut_ptr().cast::<f32>(),
     );
 
-    let ticks = wow_shared::tsc::rdtsc().wrapping_sub(t0);
+    let ticks = if header.timed {
+        wow_shared::tsc::rdtsc().wrapping_sub(t0)
+    } else {
+        0
+    };
     // SAFETY: raw store into this claimed entry, published by the Release
     // store below.
     unsafe { (*e).emitted = ctx[8] };
@@ -23145,12 +23109,14 @@ fn pq_walk_current_matrix(ctx: *const u8) -> Option<[f32; 16]> {
 /// sorted index array; opcode 4 is the batch+emitter case; opcode 2
 /// advances by its sub-batch count) without calling anything. Returns
 /// `None` when fewer than [`PQ_MIN_EMITTERS`] draws surface, so portraits
-/// and single-model passes cost one integer scan and nothing else.
+/// and single-model passes cost one integer scan and nothing else. `timed`
+/// is the pass's arm, carried into the header for the workers.
 fn pq_prescan(
     ctx: *const u8,
     batches: *const u8,
     indices: *const u32,
     count: u32,
+    timed: bool,
 ) -> Option<PqJobTable> {
     let cur = pq_walk_current_matrix(ctx)?;
     let mut entries: Vec<PqEntry> = Vec::new();
@@ -23217,22 +23183,13 @@ fn pq_prescan(
     let header = PqJobHeader {
         fade_lod,
         swap: PqLiveEnv.swap(),
+        timed,
     };
     Some(PqJobTable {
         header,
         entries,
         arena: Vec::with_capacity(arena_len),
     })
-}
-
-/// Whether the parity oracle is on (`WOW_TURBO_PARTICLE_ORACLE=1`).
-///
-/// Debug-only soak mode: every prebuilt hit is rebuilt serially and
-/// compared before anything reaches the locked buffer; a divergent worker
-/// result is discarded (the serial bytes ship) and warned about.
-fn pq_oracle_enabled() -> bool {
-    static ORACLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ORACLE.get_or_init(|| std::env::var_os("WOW_TURBO_PARTICLE_ORACLE").is_some_and(|v| v == "1"))
 }
 
 /// Consume a pre-built entry for this emitter draw, if one exists and holds.
@@ -23268,31 +23225,17 @@ fn pq_try_consume(this: *mut u8, cursor: usize, ctx: &mut [u32; 9]) -> bool {
         return false;
     }
     PQ_PASS_CURSOR.store(found + 1, Ordering::Relaxed);
-    PQ_PASS_CONSUMED.fetch_add(1, Ordering::Relaxed);
+    // One arm read for the draw: it gates the reached-entry tally here and
+    // the wait bracket below, both of which only a seam line reads.
+    let probe = super::tally::arm();
+    if probe.is_some() {
+        PQ_PASS_CONSUMED.fetch_add(1, Ordering::Relaxed);
+    }
     // SAFETY: `found < len`.
     let e = unsafe { view.entries.add(found) };
     // SAFETY: the snapshot is immutable once published.
     let snap = unsafe { &(*e).snapshot };
     if let Err(field) = pq_validate(snap, this) {
-        // One-shot forensic dump of the first few composed-matrix drifts:
-        // the row pattern says whether the walk-current prediction or the
-        // parent matrix is what moved.
-        static DUMPS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
-        if field == 0 && DUMPS.load(Ordering::Relaxed) < 4 {
-            DUMPS.fetch_add(1, Ordering::Relaxed);
-            // SAFETY: the composed-matrix global, just written by Render.
-            let live = unsafe { PQ_VIEW.cast::<[f32; 16]>().read_unaligned() };
-            log::warn!(
-                target: "wow::events",
-                "particle validate drift: emitter {:#x} idx {found} \
-                 snap r0 {:?} r3 {:?} live r0 {:?} r3 {:?}",
-                this as usize,
-                &snap.composed[0..4],
-                &snap.composed[12..16],
-                &live[0..4],
-                &live[12..16],
-            );
-        }
         super::seam_probe::pq_miss_validate(field);
         return false;
     }
@@ -23311,7 +23254,13 @@ fn pq_try_consume(this: *mut u8, cursor: usize, ctx: &mut [u32; 9]) -> bool {
         core::hint::spin_loop();
         s = state.load(Ordering::Acquire);
     }
-    let waited = wow_shared::tsc::rdtsc().wrapping_sub(t0);
+    // `t0` is the deadline's anchor either way; only the second clock read
+    // is instrumentation, so it rides the arm read above.
+    let waited = if probe.is_some() {
+        wow_shared::tsc::rdtsc().wrapping_sub(t0)
+    } else {
+        0
+    };
     if s != PQ_STATE_DONE {
         super::seam_probe::pq_miss_declined();
         return false;
@@ -23327,8 +23276,6 @@ fn pq_try_consume(this: *mut u8, cursor: usize, ctx: &mut [u32; 9]) -> bool {
     // SAFETY: as above.
     let verts_max = unsafe { (*e).verts_max };
     // SAFETY: as above.
-    let ticks = unsafe { (*e).ticks };
-    // SAFETY: as above.
     let sink = unsafe { (*e).sink };
     // Both bounds must hold before a byte moves: the worker's own scratch
     // bound, and the locked reservation (`cap * vpp` verts) the copy lands in.
@@ -23338,12 +23285,6 @@ fn pq_try_consume(this: *mut u8, cursor: usize, ctx: &mut [u32; 9]) -> bool {
     }
     let src = view.arena.wrapping_add(scratch_off);
     let bytes = emitted as usize * decl as usize;
-
-    if pq_oracle_enabled() && !pq_oracle_check(this, snap, decl, verts_max, src, emitted) {
-        super::seam_probe::pq_oracle_miss();
-        return false;
-    }
-
     // SAFETY: `bytes` fits the locked reservation (checked above) and the
     // worker's scratch region; the regions cannot overlap.
     unsafe { core::ptr::copy_nonoverlapping(src, cursor as *mut u8, bytes) };
@@ -23363,91 +23304,8 @@ fn pq_try_consume(this: *mut u8, cursor: usize, ctx: &mut [u32; 9]) -> bool {
         unsafe { this.wrapping_add(0x1c).cast::<u32>().write_unaligned(quads) };
     }
     state.store(PQ_STATE_CONSUMED, Ordering::Relaxed);
-    super::seam_probe::pq_hit(waited, ticks);
-    true
-}
-
-/// Rebuild one prebuilt draw serially and compare it against the worker.
-///
-/// Runs under the live env (the globals were just validated against the
-/// snapshot, so both builds read identical inputs) into a private scratch;
-/// returns `false` (discarding the worker result) on any divergence.
-fn pq_oracle_check(
-    this: *mut u8,
-    snap: &PqSnapshot,
-    decl: u32,
-    verts_max: u32,
-    worker_src: *const u8,
-    worker_emitted: u32,
-) -> bool {
-    let bytes_max = verts_max as usize * decl as usize;
-    let mut buf: Vec<u8> = vec![0; bytes_max.max(1)];
-    let scratch = buf.as_mut_ptr();
-    let index: u32 = if snap.sel & 1 != 0 { 4 } else { 8 };
-    // SAFETY: the 0x8097a8 state table rows for decl indices 4 and 8.
-    let ofs0 = unsafe { STATE_TABLE_PQ.wrapping_add((index * 0xd) as usize).read() };
-    let mut ctx = [0u32; 9];
-    ctx[0] = (scratch.wrapping_add(ofs0 as usize)) as u32;
-    ctx[4] = decl;
-    let mut sink = [0u32; 3];
-    if snap.sel & 1 != 0 {
-        // SAFETY: as above.
-        let ofs3 = unsafe {
-            STATE_TABLE_PQ
-                .wrapping_add((index * 0xd + 3) as usize)
-                .read()
-        };
-        ctx[1] = (scratch.wrapping_add(ofs3 as usize)) as u32;
-        ctx[5] = decl;
-    } else {
-        ctx[1] = sink.as_mut_ptr() as u32;
-        ctx[5] = 0;
-    }
-    // SAFETY: as above.
-    let ofs4 = unsafe {
-        STATE_TABLE_PQ
-            .wrapping_add((index * 0xd + 4) as usize)
-            .read()
-    };
-    ctx[2] = (scratch.wrapping_add(ofs4 as usize)) as u32;
-    ctx[6] = decl;
-    // SAFETY: as above.
-    let ofs5 = unsafe {
-        STATE_TABLE_PQ
-            .wrapping_add((index * 0xd + 5) as usize)
-            .read()
-    };
-    ctx[3] = (scratch.wrapping_add(ofs5 as usize)) as u32;
-    ctx[7] = decl;
-    ctx[8] = 0;
-    pq_render_particles(
-        &PqLiveEnv,
-        &mut PqGlobalHeap,
-        this.cast::<core::ffi::c_void>(),
-        ctx.as_mut_ptr().cast::<f32>(),
-    );
-    let serial_emitted = ctx[8];
-    if serial_emitted != worker_emitted {
-        log::warn!(
-            target: "wow::events",
-            "particle oracle: emitter {:#x} emitted {} (worker) vs {} (serial)",
-            this as usize, worker_emitted, serial_emitted,
-        );
-        return false;
-    }
-    let bytes = (serial_emitted as usize * decl as usize).min(bytes_max);
-    // SAFETY: the oracle scratch holds `bytes` initialized vertex bytes.
-    let serial = unsafe { core::slice::from_raw_parts(scratch.cast_const(), bytes) };
-    // SAFETY: the worker scratch holds `bytes` initialized vertex bytes.
-    let worker = unsafe { core::slice::from_raw_parts(worker_src, bytes) };
-    let diff = serial.iter().zip(worker.iter()).position(|(a, b)| a != b);
-    if let Some(off) = diff {
-        log::warn!(
-            target: "wow::events",
-            "particle oracle: emitter {:#x} flags {:#x} count {} first diff at byte {off}",
-            this as usize, snap.flags, snap.count,
-        );
-        return false;
+    if let Some(armed) = &probe {
+        super::seam_probe::pq_hit(armed, waited);
     }
     true
 }
@@ -23517,14 +23375,29 @@ pub fn cm2_scene__draw_batch_pass_entry__70b360(
         original(ctx, pass_idx, batches, indices, count);
         return;
     }
-    let t0 = wow_shared::tsc::rdtsc();
-    let Some(mut table) = pq_prescan(ctx.cast::<u8>().cast_const(), batches, indices, count) else {
+    // One arm read for the whole pass: it gates the pre-scan bracket here,
+    // the per-entry bracket the workers keep, and the retire sum below.
+    let probe = super::tally::arm();
+    let t0 = if probe.is_some() {
+        wow_shared::tsc::rdtsc()
+    } else {
+        0
+    };
+    let Some(mut table) = pq_prescan(
+        ctx.cast::<u8>().cast_const(),
+        batches,
+        indices,
+        count,
+        probe.is_some(),
+    ) else {
         super::seam_probe::pq_pass_gated();
         original(ctx, pass_idx, batches, indices, count);
         return;
     };
     let len = table.entries.len();
-    super::seam_probe::pq_pass(len as u32, wow_shared::tsc::rdtsc().wrapping_sub(t0));
+    if let Some(armed) = &probe {
+        super::seam_probe::pq_pass(armed, len as u32, wow_shared::tsc::rdtsc().wrapping_sub(t0));
+    }
     let view = Box::new(PqJobView {
         header: &table.header,
         entries: table.entries.as_mut_ptr(),
@@ -23565,15 +23438,17 @@ pub fn cm2_scene__draw_batch_pass_entry__70b360(
         std::thread::yield_now();
     }
     shared.done.store(true, Ordering::SeqCst);
-    let consumed = PQ_PASS_CONSUMED.load(Ordering::Relaxed).min(len);
-    let mut worker_ticks = 0u64;
-    for e in &table.entries {
-        let s = e.state.load(Ordering::Relaxed);
-        if s == PQ_STATE_DONE || s == PQ_STATE_CONSUMED {
-            worker_ticks = worker_ticks.wrapping_add(e.ticks);
+    if let Some(armed) = &probe {
+        let consumed = PQ_PASS_CONSUMED.load(Ordering::Relaxed).min(len);
+        let mut worker_ticks = 0u64;
+        for e in &table.entries {
+            let s = e.state.load(Ordering::Relaxed);
+            if s == PQ_STATE_DONE || s == PQ_STATE_CONSUMED {
+                worker_ticks = worker_ticks.wrapping_add(e.ticks);
+            }
         }
+        super::seam_probe::pq_retire(armed, (len - consumed) as u32, worker_ticks);
     }
-    super::seam_probe::pq_retire((len - consumed) as u32, worker_ticks);
 }
 
 // Dense liquid-query driver: the per-face gather + kind-arm branches are a
@@ -31635,12 +31510,6 @@ fn bdl_anim_phase(base: *mut u8) {
     }
     if let Some(armed) = &probe {
         super::seam_probe::anim_phase(armed, worker_arm, roots, ticks_sum, ticks_max, list_len);
-        // Price the fork substrate only where a fork would run: the
-        // multi-root passes. Single-model views would only measure an idle
-        // pool over and over.
-        if roots > 1 {
-            super::seam_probe::gc_roundtrip(armed, gc_par_probe_roundtrip());
-        }
     }
 }
 
@@ -31683,8 +31552,6 @@ fn bdl_finalize(base: *mut u8) {
     // `+0x40` is the element-count dword of its bucket-0 index header at `+0x3c`.
     let count = unsafe { bdl_rd32(base, 0x40) };
     if count > 1 {
-        let mut probe_steps: u32 = 0;
-        let mut cmp_calls: u32 = 0;
         // 0x7086a7: clear the 251-dword scratch to -1.
         for i in 0..0xfbusize {
             // SAFETY: `TABLE` is the client's static 251-dword dedup scratch at 0xcefff8 and
@@ -31714,7 +31581,6 @@ fn bdl_finalize(base: *mut u8) {
             let mut edi = start;
             loop {
                 edi += 1;
-                probe_steps = probe_steps.wrapping_add(1);
                 if edi >= 0xfb {
                     edi = 0;
                 }
@@ -31730,7 +31596,6 @@ fn bdl_finalize(base: *mut u8) {
                     unsafe { probe.write(rec_idx) };
                     break;
                 }
-                cmp_calls = cmp_calls.wrapping_add(1);
                 if bdl_draw_list_equal(rec_idx, entry, base) == 0 {
                     break;
                 }
@@ -31746,9 +31611,6 @@ fn bdl_finalize(base: *mut u8) {
             // SAFETY: `rec_idx` came off bucket-0, which the builder fills with indices into
             // that 0x40-stride record array; `+0x24` is the record's canonical-index dword.
             unsafe { ((recbase2 + (rec_idx as usize) * 0x40 + 0x24) as *mut u32).write(canonical) };
-        }
-        if let Some(armed) = super::tally::arm() {
-            super::seam_probe::finalize_stats(&armed, count, probe_steps, cmp_calls);
         }
     }
 

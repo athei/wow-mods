@@ -5,16 +5,14 @@
 //! how many animate-eligible roots does a draw-list pass walk and how is
 //! their cost distributed (the measured bound on what a worker split could
 //! recover); does any model instance get visited twice in one frame through
-//! the `+0x40` stamp (the aliasing hazard a fork must exclude); what does an
-//! empty publish/join round trip on the worker pool cost at frame rate; what
-//! a forked animate pass pays at the join against the per-root cost its
-//! lanes absorb; how
-//! full does the draw-list dedup scratch run and how much probing it costs;
-//! how many dynamic-buffer lock cycles the particle and precipitation paths
-//! pay per session; and what grain the per-emitter particle draws offer a
-//! fork (draws per second, live particles per draw with a histogram whose
-//! buckets end at 4/16/64/256, the quad build's cost spread, and how much of
-//! an up-front output reservation the emitted counts would waste); and which
+//! the `+0x40` stamp (the aliasing hazard a fork must exclude); what a
+//! forked animate pass pays at the join against the per-root cost its lanes
+//! absorb; how many dynamic-buffer lock cycles the particle and
+//! precipitation paths pay per session; what grain the per-emitter particle
+//! draws offer a fork (draws per second, live particles per draw with a
+//! histogram whose buckets end at 4/16/64/256, the quad build's cost spread,
+//! and how much of an up-front output reservation the emitted counts would
+//! waste) and what the forked build then hits, misses and waits for; and which
 //! entry family feeds the collision/trace cluster and at what call rate
 //! (per-unit ground movement, swept-volume queries, the terrain and M2-scene
 //! arms of trace lines, spatial-node geometry collection, the chunk WMO and
@@ -43,10 +41,6 @@ static ROOT_TICKS_MAX: Accum = Accum::zero();
 static ANIM_CALLS: SharedCounter = SharedCounter::zero();
 static REPEAT_VISITS: SharedCounter = SharedCounter::zero();
 
-static GC_RT_N: Counter = Counter::zero();
-static GC_RT_SUM: Accum = Accum::zero();
-static GC_RT_MAX: Accum = Accum::zero();
-
 static ANIM_PAR_PASSES: Counter = Counter::zero();
 static ANIM_PAR_GATED: Counter = Counter::zero();
 static ANIM_PAR_ROOTS: Accum = Accum::zero();
@@ -54,12 +48,6 @@ static ANIM_PAR_WAIT_TICKS_SUM: Accum = Accum::zero();
 static ANIM_PAR_WAIT_TICKS_MAX: Accum = Accum::zero();
 static ANIM_PAR_WORKER_TICKS: Accum = Accum::zero();
 static ANIM_PAR_FORK_TICKS_SUM: Accum = Accum::zero();
-
-static FIN_PASSES: Counter = Counter::zero();
-static FIN_B0_SUM: Accum = Accum::zero();
-static FIN_B0_MAX: Counter = Counter::zero();
-static FIN_PROBE_STEPS: Accum = Accum::zero();
-static FIN_CMP_CALLS: Accum = Accum::zero();
 
 static PARTICLE_LOCKS: Counter = Counter::zero();
 static RAIN_LOCKS: Counter = Counter::zero();
@@ -106,7 +94,6 @@ static PART_PRE_MISS_VALIDATE: [Counter; 7] = [
 ];
 static PART_PRE_MISS_TIMEOUT: Counter = Counter::zero();
 static PART_PRE_MISS_DECLINED: Counter = Counter::zero();
-static PART_PRE_ORACLE_MISS: Counter = Counter::zero();
 static PART_PRE_UNCONSUMED: Accum = Accum::zero();
 static PART_PRE_WAIT_TICKS_SUM: Accum = Accum::zero();
 static PART_PRE_WAIT_TICKS_MAX: Accum = Accum::zero();
@@ -160,13 +147,6 @@ pub fn anim_entry(repeat: bool) {
     }
 }
 
-/// One empty publish/join round trip on the worker pool, in ticks.
-pub fn gc_roundtrip(armed: &Armed, ticks: u64) {
-    GC_RT_N.bump(armed);
-    GC_RT_SUM.add(armed, ticks);
-    GC_RT_MAX.max(armed, ticks);
-}
-
 /// One forked animate pass: its size and where the time went.
 ///
 /// `worker_ticks` is the post-join sum of the per-root brackets across every
@@ -197,15 +177,6 @@ pub fn anim_par_pass(
 #[inline]
 pub fn anim_par_gated() {
     super::tally::bump(&ANIM_PAR_GATED);
-}
-
-/// One dedup pass over bucket 0: its record count and what probing cost.
-pub fn finalize_stats(armed: &Armed, bucket0: u32, probe_steps: u32, cmp_calls: u32) {
-    FIN_PASSES.bump(armed);
-    FIN_B0_SUM.add(armed, u64::from(bucket0));
-    FIN_B0_MAX.max(armed, bucket0);
-    FIN_PROBE_STEPS.add(armed, u64::from(probe_steps));
-    FIN_CMP_CALLS.add(armed, u64::from(cmp_calls));
 }
 
 /// One dynamic-buffer resize/lock cycle in the particle emitter render.
@@ -298,12 +269,10 @@ pub fn particle_draw(armed: &Armed, count: u32, cap: u32, emitted: u32, t0: u64,
 }
 
 /// One published particle pass job: its size and what the pre-scan cost.
-pub fn pq_pass(emitters: u32, prescan_ticks: u64) {
-    if let Some(armed) = super::tally::arm() {
-        PART_PRE_PASSES.bump(&armed);
-        PART_PRE_EMITTERS.add(&armed, u64::from(emitters));
-        PART_PRE_PRESCAN_TICKS.add(&armed, prescan_ticks);
-    }
+pub fn pq_pass(armed: &Armed, emitters: u32, prescan_ticks: u64) {
+    PART_PRE_PASSES.bump(armed);
+    PART_PRE_EMITTERS.add(armed, u64::from(emitters));
+    PART_PRE_PRESCAN_TICKS.add(armed, prescan_ticks);
 }
 
 /// One pass below the publish gate (portraits, single-model views).
@@ -313,12 +282,10 @@ pub fn pq_pass_gated() {
 }
 
 /// One prebuilt draw consumed, with how long the consume waited.
-pub fn pq_hit(wait_ticks: u64, _worker_ticks: u64) {
-    if let Some(armed) = super::tally::arm() {
-        PART_PRE_HITS.bump(&armed);
-        PART_PRE_WAIT_TICKS_SUM.add(&armed, wait_ticks);
-        PART_PRE_WAIT_TICKS_MAX.max(&armed, wait_ticks);
-    }
+pub fn pq_hit(armed: &Armed, wait_ticks: u64) {
+    PART_PRE_HITS.bump(armed);
+    PART_PRE_WAIT_TICKS_SUM.add(armed, wait_ticks);
+    PART_PRE_WAIT_TICKS_MAX.max(armed, wait_ticks);
 }
 
 /// A draw with no live pass entry (unknown caller or duplicate emitter).
@@ -349,18 +316,10 @@ pub fn pq_miss_declined() {
     super::tally::bump(&PART_PRE_MISS_DECLINED);
 }
 
-/// An oracle divergence (the serial result shipped instead).
-#[inline]
-pub fn pq_oracle_miss() {
-    super::tally::bump(&PART_PRE_ORACLE_MISS);
-}
-
 /// One pass retired: entries never consumed, and the workers' build time.
-pub fn pq_retire(unconsumed: u32, worker_ticks: u64) {
-    if let Some(armed) = super::tally::arm() {
-        PART_PRE_UNCONSUMED.add(&armed, u64::from(unconsumed));
-        PART_PRE_WORKER_TICKS.add(&armed, worker_ticks);
-    }
+pub fn pq_retire(armed: &Armed, unconsumed: u32, worker_ticks: u64) {
+    PART_PRE_UNCONSUMED.add(armed, u64::from(unconsumed));
+    PART_PRE_WORKER_TICKS.add(armed, worker_ticks);
 }
 
 /// Ticks to microseconds through the calibrated engine clock.
@@ -403,27 +362,6 @@ pub fn emit_cumulative() {
             ticks_to_us(ANIM_PAR_WAIT_TICKS_SUM.get()),
             ticks_to_us(ANIM_PAR_WAIT_TICKS_MAX.get()),
             ticks_to_us(ANIM_PAR_FORK_TICKS_SUM.get()),
-        );
-    }
-    let rounds = GC_RT_N.get();
-    if rounds != 0 {
-        let sum = GC_RT_SUM.get();
-        log::debug!(
-            target: super::tally::TARGET,
-            "seam pool: {rounds} rounds, round-trip mean {}us max {}us",
-            ticks_to_us(sum / u64::from(rounds)),
-            ticks_to_us(GC_RT_MAX.get()),
-        );
-    }
-    let fin = FIN_PASSES.get();
-    if fin != 0 {
-        log::debug!(
-            target: super::tally::TARGET,
-            "seam finalize: {fin} passes, bucket0 sum {} max {}, probe steps {}, cmp calls {}",
-            FIN_B0_SUM.get(),
-            FIN_B0_MAX.get(),
-            FIN_PROBE_STEPS.get(),
-            FIN_CMP_CALLS.get(),
         );
     }
     let p = PARTICLE_LOCKS.get();
@@ -472,7 +410,7 @@ pub fn emit_cumulative() {
         log::debug!(
             target: super::tally::TARGET,
             "seam particles par: {pre_passes} passes ({pre_gated} gated), emitters {}, hits {}, \
-             miss absent {} validate {}/{}/{}/{}/{}/{}/{} timeout {} declined {}, oracle miss {}, \
+             miss absent {} validate {}/{}/{}/{}/{}/{}/{} timeout {} declined {}, \
              unconsumed {}, wait us sum {} max {}, prescan us sum {}, worker us sum {}",
             PART_PRE_EMITTERS.get(),
             PART_PRE_HITS.get(),
@@ -486,7 +424,6 @@ pub fn emit_cumulative() {
             PART_PRE_MISS_VALIDATE[6].get(),
             PART_PRE_MISS_TIMEOUT.get(),
             PART_PRE_MISS_DECLINED.get(),
-            PART_PRE_ORACLE_MISS.get(),
             PART_PRE_UNCONSUMED.get(),
             ticks_to_us(PART_PRE_WAIT_TICKS_SUM.get()),
             ticks_to_us(PART_PRE_WAIT_TICKS_MAX.get()),
