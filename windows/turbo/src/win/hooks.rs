@@ -31336,16 +31336,6 @@ fn bdl_animate_root_timed(
 /// loads; 11 of the 12 draw-list call sites) stay serial.
 const BDL_ANIM_MIN_ROOTS: usize = 32;
 
-/// Whether the animate fork is disabled (`WOW_TURBO_NO_ANIM_FORK=1`).
-///
-/// Bisect lever for the fork alone: `WOW_TURBO_SKIP` on the draw-list hook
-/// would revert the whole reimplementation, sorts and all. With the fork
-/// off, the phase runs the stock scheduling (engine worker kick plus
-/// even-half walk) exactly.
-static BDL_ANIM_FORK_OFF: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| {
-    std::env::var_os("WOW_TURBO_NO_ANIM_FORK").is_some_and(|v| v == "1")
-});
-
 thread_local! {
     /// Reused root-pointer buffer for the animate fork's collect walk.
     ///
@@ -31517,10 +31507,10 @@ fn bdl_anim_fork(
 /// Bone animation over the visible-list head `this+0x20`. With enough
 /// animate-eligible roots the whole list forks across the worker pool,
 /// taking over both halves of the stock even/odd split (the engine worker
-/// is never kicked on a forked pass); below the gate, or with
-/// `WOW_TURBO_NO_ANIM_FORK=1`, the stock scheduling runs unchanged
-/// (camera-relative double-hop walk gated by `[view+4]&4`, else the plain
-/// single-hop walk). A particle update pass follows either way.
+/// is never kicked on a forked pass); below the gate the stock scheduling
+/// runs unchanged (camera-relative double-hop walk gated by `[view+4]&4`,
+/// else the plain single-hop walk). A particle update pass follows either
+/// way.
 fn bdl_anim_phase(base: *mut u8) {
     // Whether a hook of ours is still installed is not a question only an
     // instrumented session gets to ask: an entry another module takes is dead
@@ -31542,7 +31532,7 @@ fn bdl_anim_phase(base: *mut u8) {
     let worker_arm = (unsafe { bdl_rd32(view, 4) } & 4) != 0;
     let mut root_buf = BDL_ANIM_ROOTS.with(core::cell::RefCell::take);
     bdl_collect_anim_roots(base, &mut root_buf);
-    let fork = root_buf.len() >= BDL_ANIM_MIN_ROOTS && !*BDL_ANIM_FORK_OFF;
+    let fork = root_buf.len() >= BDL_ANIM_MIN_ROOTS;
     if !fork && root_buf.len() > 1 {
         super::seam_probe::anim_par_gated();
     }

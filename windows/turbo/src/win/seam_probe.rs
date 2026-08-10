@@ -190,7 +190,7 @@ pub fn anim_par_pass(
     ANIM_PAR_WORKER_TICKS.add(armed, worker_ticks);
 }
 
-/// One multi-root pass below the fork gate (or with the fork disabled).
+/// One multi-root pass below the fork gate.
 ///
 /// The gate-tuning signal: a large count next to a small forked-pass count
 /// means the threshold is starving the fork.
