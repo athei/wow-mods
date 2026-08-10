@@ -79,6 +79,21 @@ static PART_HIST: [Counter; PART_HIST_EDGES.len() + 1] = [
 static PART_BUILD_TICKS_SUM: Accum = Accum::zero();
 static PART_BUILD_TICKS_MAX: Accum = Accum::zero();
 
+static PART_PRE_PASSES: Counter = Counter::zero();
+static PART_PRE_GATED: Counter = Counter::zero();
+static PART_PRE_EMITTERS: Accum = Accum::zero();
+static PART_PRE_PRESCAN_TICKS: Accum = Accum::zero();
+static PART_PRE_HITS: Counter = Counter::zero();
+static PART_PRE_MISS_ABSENT: Counter = Counter::zero();
+static PART_PRE_MISS_VALIDATE: Counter = Counter::zero();
+static PART_PRE_MISS_TIMEOUT: Counter = Counter::zero();
+static PART_PRE_MISS_DECLINED: Counter = Counter::zero();
+static PART_PRE_ORACLE_MISS: Counter = Counter::zero();
+static PART_PRE_UNCONSUMED: Accum = Accum::zero();
+static PART_PRE_WAIT_TICKS_SUM: Accum = Accum::zero();
+static PART_PRE_WAIT_TICKS_MAX: Accum = Accum::zero();
+static PART_PRE_WORKER_TICKS: Accum = Accum::zero();
+
 /// Upper edges for the live-particles-per-draw histogram; one bucket past.
 const PART_HIST_EDGES: [u32; 4] = [4, 16, 64, 256];
 
@@ -231,6 +246,68 @@ pub fn particle_draw(armed: &Armed, count: u32, cap: u32, emitted: u32, t0: u64,
     PART_BUILD_TICKS_MAX.max(armed, dt);
 }
 
+/// One published particle pass job: its size and what the pre-scan cost.
+pub fn pq_pass(emitters: u32, prescan_ticks: u64) {
+    if let Some(armed) = super::tally::arm() {
+        PART_PRE_PASSES.bump(&armed);
+        PART_PRE_EMITTERS.add(&armed, u64::from(emitters));
+        PART_PRE_PRESCAN_TICKS.add(&armed, prescan_ticks);
+    }
+}
+
+/// One pass below the publish gate (portraits, single-model views).
+#[inline]
+pub fn pq_pass_gated() {
+    super::tally::bump(&PART_PRE_GATED);
+}
+
+/// One prebuilt draw consumed, with how long the consume waited.
+pub fn pq_hit(wait_ticks: u64, _worker_ticks: u64) {
+    if let Some(armed) = super::tally::arm() {
+        PART_PRE_HITS.bump(&armed);
+        PART_PRE_WAIT_TICKS_SUM.add(&armed, wait_ticks);
+        PART_PRE_WAIT_TICKS_MAX.max(&armed, wait_ticks);
+    }
+}
+
+/// A draw with no live pass entry (unknown caller or duplicate emitter).
+#[inline]
+pub fn pq_miss_absent() {
+    super::tally::bump(&PART_PRE_MISS_ABSENT);
+}
+
+/// A draw whose snapshot no longer matched the just-written state.
+#[inline]
+pub fn pq_miss_validate() {
+    super::tally::bump(&PART_PRE_MISS_VALIDATE);
+}
+
+/// A draw that gave up waiting on its worker.
+#[inline]
+pub fn pq_miss_timeout() {
+    super::tally::bump(&PART_PRE_MISS_TIMEOUT);
+}
+
+/// A draw whose worker declined it (guard tripped or bound exceeded).
+#[inline]
+pub fn pq_miss_declined() {
+    super::tally::bump(&PART_PRE_MISS_DECLINED);
+}
+
+/// An oracle divergence (the serial result shipped instead).
+#[inline]
+pub fn pq_oracle_miss() {
+    super::tally::bump(&PART_PRE_ORACLE_MISS);
+}
+
+/// One pass retired: entries never consumed, and the workers' build time.
+pub fn pq_retire(unconsumed: u32, worker_ticks: u64) {
+    if let Some(armed) = super::tally::arm() {
+        PART_PRE_UNCONSUMED.add(&armed, u64::from(unconsumed));
+        PART_PRE_WORKER_TICKS.add(&armed, worker_ticks);
+    }
+}
+
 /// Ticks to microseconds through the calibrated engine clock.
 fn ticks_to_us(ticks: u64) -> u64 {
     super::hooks::clock_ticks_to_ms(ticks.saturating_mul(1000))
@@ -318,6 +395,28 @@ pub fn emit_cumulative() {
             PART_EMITTED_SUM.get(),
             ticks_to_us(PART_BUILD_TICKS_SUM.get()),
             ticks_to_us(PART_BUILD_TICKS_MAX.get()),
+        );
+    }
+    let pre_passes = PART_PRE_PASSES.get();
+    let pre_gated = PART_PRE_GATED.get();
+    if pre_passes != 0 || pre_gated != 0 {
+        log::debug!(
+            target: super::tally::TARGET,
+            "seam particles par: {pre_passes} passes ({pre_gated} gated), emitters {}, hits {}, \
+             miss absent {} validate {} timeout {} declined {}, oracle miss {}, unconsumed {}, \
+             wait us sum {} max {}, prescan us sum {}, worker us sum {}",
+            PART_PRE_EMITTERS.get(),
+            PART_PRE_HITS.get(),
+            PART_PRE_MISS_ABSENT.get(),
+            PART_PRE_MISS_VALIDATE.get(),
+            PART_PRE_MISS_TIMEOUT.get(),
+            PART_PRE_MISS_DECLINED.get(),
+            PART_PRE_ORACLE_MISS.get(),
+            PART_PRE_UNCONSUMED.get(),
+            ticks_to_us(PART_PRE_WAIT_TICKS_SUM.get()),
+            ticks_to_us(PART_PRE_WAIT_TICKS_MAX.get()),
+            ticks_to_us(PART_PRE_PRESCAN_TICKS.get()),
+            ticks_to_us(PART_PRE_WORKER_TICKS.get()),
         );
     }
 }

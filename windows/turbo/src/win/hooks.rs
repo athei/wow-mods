@@ -20613,6 +20613,8 @@ enum GcJobKind {
     Sweep,
     /// No-op wake/ack round trip; workers bump the cursor and go back to sleep.
     Probe,
+    /// Parallel particle build over a pass's pre-scanned emitter draws.
+    Particles,
 }
 
 /// A pool job: what to run and the parameters to run it on.
@@ -20686,6 +20688,22 @@ impl GcJob {
             strt_size: 0,
             spans_ptr: 0,
             spans_len: 0,
+        }
+    }
+
+    /// A particle-build job over a published [`PqJobView`].
+    ///
+    /// Reuses the sweep's pointer/len spec fields; the driver hook keeps the
+    /// view (and the table behind it) alive until the join.
+    const fn particles(view_ptr: usize, len: usize) -> Self {
+        Self {
+            epoch: 0,
+            kind: GcJobKind::Particles,
+            g: 0,
+            strt_hash: 0,
+            strt_size: 0,
+            spans_ptr: view_ptr,
+            spans_len: len,
         }
     }
 }
@@ -20990,6 +21008,7 @@ fn gc_par_worker(shared: &GcParShared) {
                     .bucket_cursor
                     .fetch_add(1, core::sync::atomic::Ordering::SeqCst);
             }
+            GcJobKind::Particles => pq_par_build(shared, &job),
         }
     }
 }
@@ -21074,7 +21093,25 @@ fn gc_pool() -> &'static GcParShared {
             std::thread::Builder::new()
                 .name(format!("wow-turbo-gc-{i}"))
                 .stack_size(256 * 1024)
-                .spawn(move || gc_par_worker(&s))
+                .spawn(move || {
+                    // Match the game thread's float environment before any
+                    // job runs: the client sets 53-bit x87 precision on its
+                    // threads, and the particle build's f64 arms may reach
+                    // CRT libcalls; a worker at the OS default would round
+                    // differently. MXCSR is pinned to the default the SSE2
+                    // kernels are validated under.
+                    let cw: u16 = 0x27f;
+                    // SAFETY: fldcw with a valid control word image.
+                    unsafe {
+                        core::arch::asm!("fldcw [{0}]", in(reg) &cw, options(nostack, readonly))
+                    };
+                    let mxcsr: u32 = 0x1f80;
+                    // SAFETY: ldmxcsr with a valid control/status image.
+                    unsafe {
+                        core::arch::asm!("ldmxcsr [{0}]", in(reg) &mxcsr, options(nostack, readonly))
+                    };
+                    gc_par_worker(&s)
+                })
                 .expect("wow_turbo: gc worker spawn failed");
         }
         log::info!(target: "wow::gc", "gc pool: {workers} workers + coordinator");
@@ -22225,6 +22262,150 @@ impl PqDepthHeap for PqGlobalHeap {
     }
 }
 
+/// A private depth-sort heap: the same algorithm over caller-owned storage.
+///
+/// Seeded with one dummy element to mirror the stock vector's steady-state
+/// base count (element 0 unused, root at 1; the capture path declines an
+/// emitter when the stock count is not 1). Out-of-bounds access degrades to
+/// a default instead of a panic: the workspace is `panic = abort` and a
+/// worker must never take the process down on odd guest data; the parity
+/// oracle catches a silently wrong result. `Vec` growth replaces the stock
+/// grow-failure silent-drop corner, which never fires at real heap sizes.
+struct PqLocalHeap {
+    /// `(view_z, particle_ptr)` elements, index 0 unused.
+    elems: Vec<(f32, u32)>,
+}
+
+impl PqLocalHeap {
+    /// A heap seeded with the stock base count of one dummy element.
+    fn new() -> Self {
+        Self {
+            elems: vec![(0.0, 0)],
+        }
+    }
+}
+
+impl PqDepthHeap for PqLocalHeap {
+    unsafe fn reserve_one(&mut self) {
+        // The new slot is written through `set` before it is ever read, so
+        // the placeholder value never surfaces.
+        self.elems.push((0.0, 0));
+    }
+
+    fn count(&self) -> usize {
+        self.elems.len()
+    }
+
+    unsafe fn set_count(&mut self, n: usize) {
+        self.elems.truncate(n);
+    }
+
+    unsafe fn z(&self, idx: usize) -> f32 {
+        self.elems.get(idx).map_or(0.0, |e| e.0)
+    }
+
+    unsafe fn ptr(&self, idx: usize) -> u32 {
+        self.elems.get(idx).map_or(0, |e| e.1)
+    }
+
+    unsafe fn set(&mut self, idx: usize, z: f32, ptr: u32) {
+        if let Some(e) = self.elems.get_mut(idx) {
+            *e = (z, ptr);
+        }
+    }
+}
+
+/// Per-job constants for a parallel particle build (one copy per pass).
+struct PqJobHeader {
+    /// Copy of the 128-entry fade/LOD table (`0xcf58f0`).
+    fade_lod: [f32; 128],
+    /// ARGB byte-order swap (`device+0x258 == 1`) at pre-scan.
+    swap: bool,
+}
+
+/// Per-emitter snapshot of every mutable input `Render` writes for a draw.
+///
+/// Captured by [`pq_capture`] during the pre-scan (writing nothing);
+/// [`PqSnapEnv`] serves the worker build from it, and [`pq_validate`]
+/// compares it at consume time against what the emitter's `Render` actually
+/// wrote; a mismatch falls back to the serial build.
+struct PqSnapshot {
+    /// The composed matrix `Render` writes to `0xcf5b68`.
+    composed: [f32; 16],
+    /// The vertex normal `Render` writes to `0xcf5878` (bit patterns).
+    normal: [u32; 3],
+    /// The fixup block `Render` writes to `0xcf5b2c` (both basis views).
+    ///
+    /// Meaningful iff `flags & 0x2000`.
+    fixup_out: [f32; 12],
+    /// The facing axis `Render` writes to `this+0x284` (bit patterns).
+    ///
+    /// Meaningful iff `flags & 0x2000`.
+    axis: [u32; 3],
+    /// Emitter FLAGS (`this+0x1ac`) at pre-scan.
+    flags: u32,
+    /// Live particle count (`this+0x64`) at pre-scan.
+    count: u32,
+    /// The capped live count `Render` will write to `0xcf5b60`.
+    cap: u32,
+    /// Verts-per-particle divisor (`this+0x9c`).
+    vpp: u32,
+    /// Stream-selector dword (`this+0x194`).
+    sel: u32,
+}
+
+/// The snapshot-backed environment a worker build runs under.
+///
+/// The only guest memory the build then touches is emitter/particle state
+/// that is stable for the draw pass, plus `.rodata` tables.
+struct PqSnapEnv<'a> {
+    /// The per-emitter snapshot.
+    snap: &'a PqSnapshot,
+    /// The per-job constants.
+    header: &'a PqJobHeader,
+}
+
+impl PqEnv for PqSnapEnv<'_> {
+    fn view(&self) -> *const f32 {
+        self.snap.composed.as_ptr()
+    }
+
+    fn normal(&self) -> *const u32 {
+        self.snap.normal.as_ptr()
+    }
+
+    fn basis_aa(&self) -> *const f32 {
+        // `0xcf5b30` is element 1 of the `0xcf5b2c` fixup block.
+        self.snap.fixup_out.as_ptr().wrapping_add(1)
+    }
+
+    fn basis_static(&self) -> *const f32 {
+        // `0xcf5b34` is element 2 of the `0xcf5b2c` fixup block.
+        self.snap.fixup_out.as_ptr().wrapping_add(2)
+    }
+
+    fn fade_lod(&self) -> *const f32 {
+        self.header.fade_lod.as_ptr()
+    }
+
+    fn axis(&self, _inst: *const u8) -> *const f32 {
+        self.snap.axis.as_ptr().cast::<f32>()
+    }
+
+    fn swap(&self) -> bool {
+        self.header.swap
+    }
+
+    fn live_count(&self) -> u32 {
+        self.snap.cap
+    }
+
+    fn sort_rows(&self) -> [f32; 4] {
+        let m = &self.snap.composed;
+        [m[2], m[6], m[10], m[14]]
+    }
+}
+
 /// Resolve a live particle record pointer.
 ///
 /// `(*(this+0x5c))[idx] << shift + base`, where `(shift, base)` is `(5, this+0x3c)` or
@@ -22476,6 +22657,851 @@ fn pq_render_particles<E: PqEnv, H: PqDepthHeap>(
             pq_build_particle_quad(env, this, root_ptr as *mut f32, vertex_stream);
         }
     }
+}
+
+// --- Parallel particle build (the chunked two-phase fork over a draw pass) ---
+//
+// The batch-pass walk (`CM2Scene__DrawBatchPassEntry`, 0x70b360) is the only
+// route to `CParticleEmitter::Render`. Its hook pre-scans the descriptor
+// array, captures a `PqSnapshot` per emitter draw, and publishes one pool
+// job; workers build each emitter's quads into private scratch through
+// `PqSnapEnv`/`PqLocalHeap` (guest reads only, no guest calls, no guest
+// writes). The walk then runs unmodified; `Render`'s hook consumes the
+// pre-built result at each emitter's turn (validate, wait, one memcpy into
+// the freshly locked cursor) and falls back to the serial build on any
+// mismatch, decline, timeout or absent entry.
+
+/// The `0xcf5b2c` fixup-output block `Render` writes for the `&0x2000` arm.
+const PQ_FIXUP_BLOCK: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x8f_5b2c) as *const f32;
+/// The Gx decl table (`0x85a7a8`): per-vertex byte strides by decl index.
+const PQ_DECL_TABLE: *const u32 = (crate::win::EXPECTED_IMAGE_BASE + 0x45_a7a8) as *const u32;
+/// Normalize epsilon (`0x8029d4`) and 1.0 (`0x7ff9d8`), as `Render` reads them.
+const PQ_EPS: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x40_29d4) as *const f32;
+const PQ_ONE: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x3f_f9d8) as *const f32;
+
+/// One emitter draw the pre-scan captured for the workers.
+struct PqEntry {
+    /// The emitter (`CParticleEmitter*`) this entry pre-builds.
+    emitter: usize,
+    /// The captured per-draw inputs.
+    snapshot: PqSnapshot,
+    /// Byte offset of this draw's scratch region in the pass arena.
+    scratch_off: usize,
+    /// Per-vertex byte stride (decl table entry 4 or 8).
+    decl: u32,
+    /// Hard bound on emitted verts: `cap * (4 per set FLAGS-4/8 arm)`.
+    verts_max: u32,
+    /// Stream-1 sink when `sel` bit0 is clear.
+    ///
+    /// The stride-0 normal writes stock lands on the shared `0xcf5860` triple.
+    sink: [u32; 3],
+    /// Emitted vertex count (valid once `state` is `DONE`).
+    emitted: u32,
+    /// Worker build bracket in rdtsc ticks (valid once `state` is `DONE`).
+    ticks: u64,
+    /// The publication flag.
+    ///
+    /// [`PQ_STATE_PENDING`] / [`PQ_STATE_DONE`] / [`PQ_STATE_DECLINED`] /
+    /// [`PQ_STATE_CONSUMED`]; the worker stores `DONE` with `Release`, the
+    /// consume path loads with `Acquire`.
+    state: core::sync::atomic::AtomicU32,
+}
+
+/// Entry not built yet.
+const PQ_STATE_PENDING: u32 = 0;
+/// Worker finished; `emitted`/`ticks`/scratch/`sink` are valid.
+const PQ_STATE_DONE: u32 = 1;
+/// Worker declined (guard tripped); consume must build serially.
+const PQ_STATE_DECLINED: u32 = 2;
+/// Consumed by the game thread (retire accounting only).
+const PQ_STATE_CONSUMED: u32 = 3;
+
+/// The published, pointer-only view of a pass job.
+///
+/// The driver hook owns the backing [`PqJobTable`] on its stack for the
+/// whole pass and keeps this view alive until the join, so a worker that
+/// passed the epoch check with `active` held may dereference it freely.
+struct PqJobView {
+    /// The per-job constants.
+    header: *const PqJobHeader,
+    /// The entry array base.
+    entries: *mut PqEntry,
+    /// The entry count.
+    len: usize,
+    /// The scratch arena base (capacity-backed raw memory).
+    arena: *mut u8,
+}
+
+/// The pass-owned storage behind a [`PqJobView`].
+struct PqJobTable {
+    /// The per-job constants.
+    header: PqJobHeader,
+    /// One entry per emitter draw, in walk order.
+    entries: Vec<PqEntry>,
+    /// Scratch backing.
+    ///
+    /// Regions are carved by byte offset and written raw through
+    /// `as_mut_ptr` (the `Vec` is capacity only, `len` stays 0).
+    arena: Vec<u8>,
+}
+
+/// The live pass view for the consume path (game thread only; 0 = none).
+static PQ_PASS_VIEW: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+/// Consume-order cursor into the live pass table (game thread only).
+static PQ_PASS_CURSOR: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+/// Entries consumed from the live pass table (game thread only).
+static PQ_PASS_CONSUMED: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+
+/// The `C44Matrix::Multiply` chain (`0x7bc6a0`), called by name.
+///
+/// The capture composes matrices bit-identically to `Render`'s own calls.
+fn pq_mat_multiply(out: *mut f32, a: *const f32, b: *const f32) -> *mut f32 {
+    c44_matrix__multiply__7bc6a0(out, a, b)
+}
+
+/// Mirror `Render`'s front half for one emitter, writing nothing.
+///
+/// Reproduces the composed matrix, vertex normal, fixup block and facing
+/// axis the emitter's `Render` will compute at its turn in the walk (same
+/// delegates, same kernels), plus the reservation numbers. Returns `None`
+/// when the draw is not worth or not safe to pre-build (zero counts, a
+/// zero divisor, no emitting arm, or a depth-sort base count other than
+/// the steady-state 1).
+fn pq_capture(this: *const u8, parent_matrix: *const f32, cur: &[f32; 16]) -> Option<PqSnapshot> {
+    const IDENT: [f32; 16] = [
+        1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+    ];
+    // SAFETY: the emitter pivot triple at +0x23c.
+    let pos = unsafe { this.wrapping_add(0x23c).cast::<[f32; 3]>().read_unaligned() };
+    let neg = crate::math::particle::render_neg_translation__7b3d20(&pos);
+    let mut m_neg = IDENT;
+    m_neg[12] = neg[0];
+    m_neg[13] = neg[1];
+    m_neg[14] = neg[2];
+
+    // SAFETY: the emitter flag dword at +0x1ac.
+    let flags = unsafe { this.wrapping_add(0x1ac).cast::<u32>().read_unaligned() };
+    let emitter_mtx = this.wrapping_add(0x1fc).cast::<f32>();
+    let mut tmp_a = [0f32; 16];
+    let mut tmp_b = [0f32; 16];
+    let composed_src = if flags & 0x100 != 0 {
+        let t = pq_mat_multiply(tmp_a.as_mut_ptr(), emitter_mtx, m_neg.as_ptr());
+        pq_mat_multiply(tmp_b.as_mut_ptr(), t.cast_const(), cur.as_ptr())
+    } else if parent_matrix.is_null() {
+        pq_mat_multiply(tmp_b.as_mut_ptr(), m_neg.as_ptr(), cur.as_ptr())
+    } else {
+        let t = pq_mat_multiply(tmp_b.as_mut_ptr(), parent_matrix, m_neg.as_ptr());
+        pq_mat_multiply(tmp_a.as_mut_ptr(), t.cast_const(), cur.as_ptr())
+    };
+    // SAFETY: `composed_src` addresses the multiply result (our local).
+    let composed = unsafe {
+        composed_src
+            .cast_const()
+            .cast::<[f32; 16]>()
+            .read_unaligned()
+    };
+    let normal = [cur[8].to_bits(), cur[9].to_bits(), cur[10].to_bits()];
+
+    let mut fixup_out = [0f32; 12];
+    let mut axis = [0u32; 3];
+    if flags & 0x2000 != 0 {
+        // The rows the stock one-time init writes (constant thereafter).
+        let rows: [f32; 12] = [
+            -1.0, 1.0, 0.0, -1.0, -1.0, 0.0, 1.0, 1.0, 0.0, 1.0, -1.0, 0.0,
+        ];
+        let bm = if flags & 0x100 != 0 {
+            composed
+        } else {
+            let t = pq_mat_multiply(tmp_a.as_mut_ptr(), emitter_mtx, composed.as_ptr());
+            // SAFETY: `t` addresses the multiply result (our local).
+            unsafe { t.cast_const().cast::<[f32; 16]>().read_unaligned() }
+        };
+        fixup_out = crate::math::particle::render_billboard_fixup__7b3d20(&bm, &rows);
+        let v = [bm[8], bm[9], bm[10]];
+        // SAFETY: fixed engine f32 globals; read by value.
+        let eps = unsafe { PQ_EPS.read() };
+        // SAFETY: as above.
+        let one = unsafe { PQ_ONE.read() };
+        let a = crate::math::particle::render_facing_normalize__7b3d20(&v, eps, one).unwrap_or(v);
+        axis = [a[0].to_bits(), a[1].to_bits(), a[2].to_bits()];
+    }
+
+    // SAFETY: the live particle count at +0x64.
+    let count = unsafe { this.wrapping_add(0x64).cast::<u32>().read_unaligned() };
+    // SAFETY: the verts-per-particle dword at +0x9c.
+    let vpp = unsafe { this.wrapping_add(0x9c).cast::<u32>().read_unaligned() };
+    if vpp == 0 {
+        return None;
+    }
+    let cap0 = 0x4000u32 / vpp;
+    let cap = if cap0 < count { cap0 } else { count };
+    if cap == 0 {
+        return None;
+    }
+    // SAFETY: the decl-select flag dword at +0x194.
+    let sel = unsafe { this.wrapping_add(0x194).cast::<u32>().read_unaligned() };
+    if flags & 0x10 != 0 {
+        // SAFETY: the depth-sort heap count global.
+        let base = unsafe { PQ_HEAP_COUNT.cast_const().read() };
+        if base != 1 {
+            return None;
+        }
+    }
+    Some(PqSnapshot {
+        composed,
+        normal,
+        fixup_out,
+        axis,
+        flags,
+        count,
+        cap,
+        vpp,
+        sel,
+    })
+}
+
+/// Compare a snapshot against the state `Render` just wrote at consume time.
+///
+/// Everything the worker's build read must match what the serial build
+/// would read now; any drift (camera state changed mid-walk, emitter
+/// mutated) rejects the pre-built result.
+fn pq_validate(snap: &PqSnapshot, this: *const u8) -> bool {
+    // SAFETY: the composed-matrix global, just written by Render.
+    let composed = unsafe { PQ_VIEW.cast::<[u32; 16]>().read_unaligned() };
+    if composed != snap.composed.map(f32::to_bits) {
+        return false;
+    }
+    // SAFETY: the vertex-normal global triple, just written by Render.
+    let normal = unsafe { PQ_NORMAL.cast::<[u32; 3]>().read_unaligned() };
+    if normal != snap.normal {
+        return false;
+    }
+    // SAFETY: the emitter flag dword at +0x1ac.
+    let flags = unsafe { this.wrapping_add(0x1ac).cast::<u32>().read_unaligned() };
+    // SAFETY: the live particle count at +0x64.
+    let count = unsafe { this.wrapping_add(0x64).cast::<u32>().read_unaligned() };
+    // SAFETY: the verts-per-particle dword at +0x9c.
+    let vpp = unsafe { this.wrapping_add(0x9c).cast::<u32>().read_unaligned() };
+    // SAFETY: the decl-select flag dword at +0x194.
+    let sel = unsafe { this.wrapping_add(0x194).cast::<u32>().read_unaligned() };
+    // SAFETY: the capped live-count global, just written by Render.
+    let cap = unsafe { PQ_LIVE_COUNT.read() };
+    if flags != snap.flags || count != snap.count || vpp != snap.vpp || sel != snap.sel {
+        return false;
+    }
+    if cap != snap.cap {
+        return false;
+    }
+    if flags & 0x2000 != 0 {
+        // SAFETY: the fixup-output block, just written by Render.
+        let fixup = unsafe { PQ_FIXUP_BLOCK.cast::<[u32; 12]>().read_unaligned() };
+        if fixup != snap.fixup_out.map(f32::to_bits) {
+            return false;
+        }
+        // SAFETY: the facing-axis triple at +0x284, just written by Render.
+        let axis = unsafe { this.wrapping_add(0x284).cast::<[u32; 3]>().read_unaligned() };
+        if axis != snap.axis {
+            return false;
+        }
+    }
+    if flags & 0x10 != 0 {
+        // SAFETY: the depth-sort heap count global.
+        let base = unsafe { PQ_HEAP_COUNT.cast_const().read() };
+        if base != 1 {
+            return false;
+        }
+    }
+    true
+}
+
+/// Build one pre-scanned emitter draw into its scratch region (worker side).
+///
+/// Reads guest memory (emitter fields, particle records, `.rodata` tables)
+/// but never writes it and never calls a guest function; everything mutable
+/// comes from the snapshot and lands in the entry's scratch/sink. Declines
+/// instead of panicking on anything odd: the workspace is `panic = abort`.
+fn pq_build_entry(view: &PqJobView, i: usize) {
+    use core::sync::atomic::Ordering;
+    // SAFETY: entries are claimed exclusively through the pool cursor; `i`
+    // is within the published length.
+    let e = unsafe { view.entries.add(i) };
+    // The entry's immutable parts: the game thread does not touch them
+    // while the entry is PENDING.
+    // SAFETY: `e` is a live published entry.
+    let snap = unsafe { &(*e).snapshot };
+    // SAFETY: as above.
+    let scratch_off = unsafe { (*e).scratch_off };
+    // SAFETY: as above.
+    let decl = unsafe { (*e).decl };
+    // SAFETY: as above.
+    let verts_max = unsafe { (*e).verts_max };
+    // SAFETY: as above.
+    let emitter = unsafe { (*e).emitter };
+    // SAFETY: the header lives on the driver's stack for the pass.
+    let header = unsafe { &*view.header };
+    if emitter == 0 || snap.vpp == 0 || snap.cap == 0 || verts_max == 0 {
+        // SAFETY: the state field is this entry's publication flag.
+        unsafe { &(*e).state }.store(PQ_STATE_DECLINED, Ordering::Release);
+        return;
+    }
+    let t0 = wow_shared::tsc::rdtsc();
+
+    // The scratch stands in for the locked stream cursor: same interleave
+    // offsets, same stride, so the consume side moves one contiguous block.
+    let scratch = view.arena.wrapping_add(scratch_off);
+    let index: u32 = if snap.sel & 1 != 0 { 4 } else { 8 };
+    let decl_u = decl;
+    // SAFETY: the 0x8097a8 state table, entry (index*0xd + 0).
+    let ofs0 = unsafe { STATE_TABLE_PQ.wrapping_add((index * 0xd) as usize).read() };
+    let mut ctx = [0u32; 9];
+    ctx[0] = (scratch.wrapping_add(ofs0 as usize)) as u32;
+    ctx[4] = decl_u;
+    if snap.sel & 1 != 0 {
+        // SAFETY: as above, entry (index*0xd + 3).
+        let ofs3 = unsafe {
+            STATE_TABLE_PQ
+                .wrapping_add((index * 0xd + 3) as usize)
+                .read()
+        };
+        ctx[1] = (scratch.wrapping_add(ofs3 as usize)) as u32;
+        ctx[5] = decl_u;
+    } else {
+        // SAFETY: the sink triple is entry-owned worker-writable memory.
+        ctx[1] = unsafe { &raw mut (*e).sink } as u32;
+        ctx[5] = 0;
+    }
+    // SAFETY: as above, entries (index*0xd + 4) and (index*0xd + 5).
+    let ofs4 = unsafe {
+        STATE_TABLE_PQ
+            .wrapping_add((index * 0xd + 4) as usize)
+            .read()
+    };
+    ctx[2] = (scratch.wrapping_add(ofs4 as usize)) as u32;
+    ctx[6] = decl_u;
+    // SAFETY: as above.
+    let ofs5 = unsafe {
+        STATE_TABLE_PQ
+            .wrapping_add((index * 0xd + 5) as usize)
+            .read()
+    };
+    ctx[3] = (scratch.wrapping_add(ofs5 as usize)) as u32;
+    ctx[7] = decl_u;
+    ctx[8] = 0;
+
+    let env = PqSnapEnv { snap, header };
+    let mut heap = PqLocalHeap::new();
+    pq_render_particles(
+        &env,
+        &mut heap,
+        emitter as *mut core::ffi::c_void,
+        ctx.as_mut_ptr().cast::<f32>(),
+    );
+
+    let ticks = wow_shared::tsc::rdtsc().wrapping_sub(t0);
+    // SAFETY: raw store into this claimed entry, published by the Release
+    // store below.
+    unsafe { (*e).emitted = ctx[8] };
+    // SAFETY: as above.
+    unsafe { (*e).ticks = ticks };
+    // SAFETY: the state field is this entry's publication flag.
+    unsafe { &(*e).state }.store(PQ_STATE_DONE, Ordering::Release);
+}
+
+/// The 0x8097a8 state table as the parallel path reads it.
+const STATE_TABLE_PQ: *const u32 = (crate::win::EXPECTED_IMAGE_BASE + 0x40_97a8) as *const u32;
+
+/// The matrix the pass prologue installs as current (`0xcf03e8`).
+///
+/// The walk entry saves the device matrix, then sets this global as the
+/// current matrix before dispatching batches, so it is what each
+/// `Render`'s `GetCurrentMatrix` returns during the walk.
+const PQ_WALK_MATRIX: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x8f_03e8) as *const f32;
+/// Minimum emitter draws before a pass publishes a job.
+const PQ_MIN_EMITTERS: usize = 4;
+/// Hard cap on a pass arena, in bytes; draws beyond it stay serial.
+const PQ_ARENA_MAX: usize = 4 << 20;
+
+/// Mirror the `CParticleEmitter2::Render` emitter+child walk for the pre-scan.
+///
+/// Same gates as 0x7b4b40: a zero `+0x64` skips the subtree, a nonzero
+/// `+0x28` skips the self-draw, children recurse from the inline pointer
+/// array at `+0x80`. Guest reads only; anything odd just means no entry
+/// (the serial path serves that draw as stock).
+fn pq_prescan_emitter(
+    em: *const u8,
+    pm: *const f32,
+    cur: &[f32; 16],
+    entries: &mut Vec<PqEntry>,
+    arena_len: &mut usize,
+    depth: u32,
+) {
+    if em.is_null() || depth > 8 || entries.len() >= 4096 {
+        return;
+    }
+    // SAFETY: the subtree gate / live count at +0x64.
+    let live = unsafe { em.wrapping_add(0x64).cast::<u32>().read_unaligned() };
+    if live == 0 {
+        return;
+    }
+    // SAFETY: the self-draw gate at +0x28.
+    let gate = unsafe { em.wrapping_add(0x28).cast::<u32>().read_unaligned() };
+    // SAFETY: the texture owner handle at +0x1a0.
+    let tex_owner = unsafe { em.wrapping_add(0x1a0).cast::<u32>().read_unaligned() };
+    // A zero texture handle means Render will draw nothing; skipping it
+    // only avoids a wasted build (the entry would go unconsumed).
+    if gate == 0
+        && tex_owner != 0
+        && let Some(snapshot) = pq_capture(em, pm, cur)
+    {
+        let vpp_eff = if snapshot.flags & 4 != 0 { 4u32 } else { 0 }
+            + if snapshot.flags & 8 != 0 { 4 } else { 0 };
+        let index = if snapshot.sel & 1 != 0 { 4usize } else { 8 };
+        // SAFETY: decl table entry 4 or 8 (`0x85a7a8` `.data` table).
+        let decl = unsafe { PQ_DECL_TABLE.wrapping_add(index).read() };
+        if vpp_eff != 0 && decl != 0 && decl <= 0x40 {
+            let verts_max = snapshot.cap.saturating_mul(vpp_eff);
+            let bytes = (verts_max as usize * decl as usize).next_multiple_of(16);
+            if *arena_len + bytes <= PQ_ARENA_MAX {
+                entries.push(PqEntry {
+                    emitter: em as usize,
+                    snapshot,
+                    scratch_off: *arena_len,
+                    decl,
+                    verts_max,
+                    sink: [0; 3],
+                    emitted: 0,
+                    ticks: 0,
+                    state: core::sync::atomic::AtomicU32::new(PQ_STATE_PENDING),
+                });
+                *arena_len += bytes;
+            }
+        }
+    }
+    // SAFETY: the child count at +0x7c.
+    let nkids = unsafe { em.wrapping_add(0x7c).cast::<u32>().read_unaligned() };
+    for j in 0..nkids.min(64) {
+        // SAFETY: the inline child pointer array at +0x80.
+        let kid = unsafe {
+            em.wrapping_add(0x80 + j as usize * 4)
+                .cast::<u32>()
+                .read_unaligned()
+        };
+        pq_prescan_emitter(kid as *const u8, pm, cur, entries, arena_len, depth + 1);
+    }
+}
+
+/// Pre-scan one pass's descriptor walk for emitter draws worth pre-building.
+///
+/// Mirrors the walk's dispatch geometry (0x40-byte entries through the
+/// sorted index array; opcode 4 is the batch+emitter case; opcode 2
+/// advances by its sub-batch count) without calling anything. Returns
+/// `None` when fewer than [`PQ_MIN_EMITTERS`] draws surface, so portraits
+/// and single-model passes cost one integer scan and nothing else.
+fn pq_prescan(batches: *const u8, indices: *const u32, count: u32) -> Option<PqJobTable> {
+    // SAFETY: the walk-current matrix global the pass prologue installs.
+    let cur = unsafe { PQ_WALK_MATRIX.cast::<[f32; 16]>().read_unaligned() };
+    let mut entries: Vec<PqEntry> = Vec::new();
+    let mut arena_len = 0usize;
+    let mut i = 0u32;
+    while i < count {
+        // SAFETY: `indices[i]` is within the pass index array (`i < count`).
+        let idx = unsafe { indices.wrapping_add(i as usize).read_unaligned() };
+        let entry = batches.wrapping_add(idx as usize * 0x40);
+        // SAFETY: the descriptor opcode dword at +0x0.
+        let opcode = unsafe { entry.cast::<u32>().read_unaligned() };
+        match opcode {
+            2 => {
+                // SAFETY: the sub-batch count dword at +0x20.
+                let sub = unsafe { entry.wrapping_add(0x20).cast::<u32>().read_unaligned() };
+                // Stock advances the cursor by the sub-batch count; a zero
+                // count would not advance (and would hang stock too);
+                // clamp so the pre-scan always terminates.
+                i = i.wrapping_add(sub.max(1));
+            }
+            4 => {
+                // SAFETY: the model pointer at +0x4.
+                let model = unsafe { entry.wrapping_add(4).cast::<*const u8>().read_unaligned() };
+                if !model.is_null() {
+                    // SAFETY: the emitter array pointer at model+0x3d4.
+                    let arr = unsafe {
+                        model
+                            .wrapping_add(0x3d4)
+                            .cast::<*const u32>()
+                            .read_unaligned()
+                    };
+                    // SAFETY: the emitter index at entry+0x1c.
+                    let eidx = unsafe { entry.wrapping_add(0x1c).cast::<u32>().read_unaligned() };
+                    // SAFETY: the parent matrix pointer at model+0x17c.
+                    let pm = unsafe {
+                        model
+                            .wrapping_add(0x17c)
+                            .cast::<*const f32>()
+                            .read_unaligned()
+                    };
+                    if !arr.is_null() && eidx < 0x1000 {
+                        // SAFETY: element `eidx` of the emitter array.
+                        let em = unsafe { arr.wrapping_add(eidx as usize).read_unaligned() };
+                        pq_prescan_emitter(
+                            em as *const u8,
+                            pm,
+                            &cur,
+                            &mut entries,
+                            &mut arena_len,
+                            0,
+                        );
+                    }
+                }
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+    if entries.len() < PQ_MIN_EMITTERS {
+        return None;
+    }
+    // SAFETY: the 128-entry fade/LOD table global.
+    let fade_lod = unsafe { PQ_FADE_LOD.cast::<[f32; 128]>().read_unaligned() };
+    let header = PqJobHeader {
+        fade_lod,
+        swap: PqLiveEnv.swap(),
+    };
+    Some(PqJobTable {
+        header,
+        entries,
+        arena: Vec::with_capacity(arena_len),
+    })
+}
+
+/// Whether the parity oracle is on (`WOW_TURBO_PARTICLE_ORACLE=1`).
+///
+/// Debug-only soak mode: every prebuilt hit is rebuilt serially and
+/// compared before anything reaches the locked buffer; a divergent worker
+/// result is discarded (the serial bytes ship) and warned about.
+fn pq_oracle_enabled() -> bool {
+    static ORACLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ORACLE.get_or_init(|| std::env::var_os("WOW_TURBO_PARTICLE_ORACLE").is_some_and(|v| v == "1"))
+}
+
+/// Consume a pre-built entry for this emitter draw, if one exists and holds.
+///
+/// Runs inside `Render` after the stock front half (globals written) and
+/// reservation (buffer locked, `ctx` built): finds the entry in walk order,
+/// validates the snapshot against the just-written state, waits briefly for
+/// the worker, then moves the scratch into the locked cursor and reproduces
+/// the serial build's remaining stores. Returns `false` on any miss; the
+/// caller then runs the serial build unchanged.
+fn pq_try_consume(this: *mut u8, cursor: usize, ctx: &mut [u32; 9]) -> bool {
+    use core::sync::atomic::Ordering;
+    let view_addr = PQ_PASS_VIEW.load(Ordering::Relaxed);
+    if view_addr == 0 {
+        return false;
+    }
+    // SAFETY: the driver hook keeps the view alive while `PQ_PASS_VIEW`
+    // holds its address.
+    let view = unsafe { &*(view_addr as *const PqJobView) };
+    let start = PQ_PASS_CURSOR.load(Ordering::Relaxed);
+    let mut found = usize::MAX;
+    for i in start..view.len {
+        let ep = view.entries.wrapping_add(i);
+        // SAFETY: `i < len`; the emitter field is immutable once published.
+        let em = unsafe { (*ep).emitter };
+        if em == this as usize {
+            found = i;
+            break;
+        }
+    }
+    if found == usize::MAX {
+        super::seam_probe::pq_miss_absent();
+        return false;
+    }
+    PQ_PASS_CURSOR.store(found + 1, Ordering::Relaxed);
+    PQ_PASS_CONSUMED.fetch_add(1, Ordering::Relaxed);
+    // SAFETY: `found < len`.
+    let e = unsafe { view.entries.add(found) };
+    // SAFETY: the snapshot is immutable once published.
+    let snap = unsafe { &(*e).snapshot };
+    if !pq_validate(snap, this) {
+        super::seam_probe::pq_miss_validate();
+        return false;
+    }
+    // Wait for the worker. Workers start at the pass head, which is also
+    // the consume order, so the common case is already DONE.
+    let t0 = wow_shared::tsc::rdtsc();
+    let deadline = t0.wrapping_add(wow_shared::tsc::secs_to_cycles(1) / 500);
+    // SAFETY: the state field is the entry's publication flag.
+    let state = unsafe { &(*e).state };
+    let mut s = state.load(Ordering::Acquire);
+    while s == PQ_STATE_PENDING {
+        if wow_shared::tsc::rdtsc() >= deadline {
+            super::seam_probe::pq_miss_timeout();
+            return false;
+        }
+        core::hint::spin_loop();
+        s = state.load(Ordering::Acquire);
+    }
+    let waited = wow_shared::tsc::rdtsc().wrapping_sub(t0);
+    if s != PQ_STATE_DONE {
+        super::seam_probe::pq_miss_declined();
+        return false;
+    }
+    // All published by the worker's Release store, paired by the Acquire
+    // loads above.
+    // SAFETY: `e` is a live entry the worker is done with.
+    let emitted = unsafe { (*e).emitted };
+    // SAFETY: as above.
+    let scratch_off = unsafe { (*e).scratch_off };
+    // SAFETY: as above.
+    let decl = unsafe { (*e).decl };
+    // SAFETY: as above.
+    let verts_max = unsafe { (*e).verts_max };
+    // SAFETY: as above.
+    let ticks = unsafe { (*e).ticks };
+    // SAFETY: as above.
+    let sink = unsafe { (*e).sink };
+    // Both bounds must hold before a byte moves: the worker's own scratch
+    // bound, and the locked reservation (`cap * vpp` verts) the copy lands in.
+    if emitted > verts_max || emitted > snap.cap.saturating_mul(snap.vpp) {
+        super::seam_probe::pq_miss_declined();
+        return false;
+    }
+    let src = view.arena.wrapping_add(scratch_off);
+    let bytes = emitted as usize * decl as usize;
+
+    if pq_oracle_enabled() && !pq_oracle_check(this, snap, decl, verts_max, src, emitted) {
+        super::seam_probe::pq_oracle_miss();
+        return false;
+    }
+
+    // SAFETY: `bytes` fits the locked reservation (checked above) and the
+    // worker's scratch region; the regions cannot overlap.
+    unsafe { core::ptr::copy_nonoverlapping(src, cursor as *mut u8, bytes) };
+    ctx[8] = emitted;
+    // The serial build's remaining stores. Stream 1 with a cleared sel bit
+    // lands its stride-0 normal writes on the shared zeroed triple; the
+    // stock ctx construction just ran, so its one-time init is done.
+    if snap.sel & 1 == 0 && emitted > 0 {
+        const STREAM3_ZERO: *mut u32 = (crate::win::EXPECTED_IMAGE_BASE + 0x8f_5860) as *mut u32;
+        // SAFETY: the shared stride-0 stream target the serial build would
+        // have last written with the same values.
+        unsafe { STREAM3_ZERO.cast::<[u32; 3]>().write_unaligned(sink) };
+    }
+    // The emitted-quad store the RenderParticles wrapper performs.
+    if let Some(quads) = emitted.checked_div(snap.vpp) {
+        // SAFETY: `this+0x1c` is the writable emitted-quad count.
+        unsafe { this.wrapping_add(0x1c).cast::<u32>().write_unaligned(quads) };
+    }
+    state.store(PQ_STATE_CONSUMED, Ordering::Relaxed);
+    super::seam_probe::pq_hit(waited, ticks);
+    true
+}
+
+/// Rebuild one prebuilt draw serially and compare it against the worker.
+///
+/// Runs under the live env (the globals were just validated against the
+/// snapshot, so both builds read identical inputs) into a private scratch;
+/// returns `false` (discarding the worker result) on any divergence.
+fn pq_oracle_check(
+    this: *mut u8,
+    snap: &PqSnapshot,
+    decl: u32,
+    verts_max: u32,
+    worker_src: *const u8,
+    worker_emitted: u32,
+) -> bool {
+    let bytes_max = verts_max as usize * decl as usize;
+    let mut buf: Vec<u8> = vec![0; bytes_max.max(1)];
+    let scratch = buf.as_mut_ptr();
+    let index: u32 = if snap.sel & 1 != 0 { 4 } else { 8 };
+    // SAFETY: the 0x8097a8 state table rows for decl indices 4 and 8.
+    let ofs0 = unsafe { STATE_TABLE_PQ.wrapping_add((index * 0xd) as usize).read() };
+    let mut ctx = [0u32; 9];
+    ctx[0] = (scratch.wrapping_add(ofs0 as usize)) as u32;
+    ctx[4] = decl;
+    let mut sink = [0u32; 3];
+    if snap.sel & 1 != 0 {
+        // SAFETY: as above.
+        let ofs3 = unsafe {
+            STATE_TABLE_PQ
+                .wrapping_add((index * 0xd + 3) as usize)
+                .read()
+        };
+        ctx[1] = (scratch.wrapping_add(ofs3 as usize)) as u32;
+        ctx[5] = decl;
+    } else {
+        ctx[1] = sink.as_mut_ptr() as u32;
+        ctx[5] = 0;
+    }
+    // SAFETY: as above.
+    let ofs4 = unsafe {
+        STATE_TABLE_PQ
+            .wrapping_add((index * 0xd + 4) as usize)
+            .read()
+    };
+    ctx[2] = (scratch.wrapping_add(ofs4 as usize)) as u32;
+    ctx[6] = decl;
+    // SAFETY: as above.
+    let ofs5 = unsafe {
+        STATE_TABLE_PQ
+            .wrapping_add((index * 0xd + 5) as usize)
+            .read()
+    };
+    ctx[3] = (scratch.wrapping_add(ofs5 as usize)) as u32;
+    ctx[7] = decl;
+    ctx[8] = 0;
+    pq_render_particles(
+        &PqLiveEnv,
+        &mut PqGlobalHeap,
+        this.cast::<core::ffi::c_void>(),
+        ctx.as_mut_ptr().cast::<f32>(),
+    );
+    let serial_emitted = ctx[8];
+    if serial_emitted != worker_emitted {
+        log::warn!(
+            target: "wow::events",
+            "particle oracle: emitter {:#x} emitted {} (worker) vs {} (serial)",
+            this as usize, worker_emitted, serial_emitted,
+        );
+        return false;
+    }
+    let bytes = (serial_emitted as usize * decl as usize).min(bytes_max);
+    // SAFETY: the oracle scratch holds `bytes` initialized vertex bytes.
+    let serial = unsafe { core::slice::from_raw_parts(scratch.cast_const(), bytes) };
+    // SAFETY: the worker scratch holds `bytes` initialized vertex bytes.
+    let worker = unsafe { core::slice::from_raw_parts(worker_src, bytes) };
+    let diff = serial.iter().zip(worker.iter()).position(|(a, b)| a != b);
+    if let Some(off) = diff {
+        log::warn!(
+            target: "wow::events",
+            "particle oracle: emitter {:#x} flags {:#x} count {} first diff at byte {off}",
+            this as usize, snap.flags, snap.count,
+        );
+        return false;
+    }
+    true
+}
+
+/// Particle-build pool participant: claim entry chunks, build each.
+///
+/// The claim discipline copies the sweep participant exactly: raise
+/// `active` first, revalidate the epoch under the `job` lock, then claim
+/// off the shared cursor: a participant that slept through a publication
+/// can never mix a stale view with a newer job's cursor, and the view
+/// pointers stay live while any participant is active.
+fn pq_par_build(shared: &GcParShared, job: &GcJob) {
+    use core::sync::atomic::Ordering;
+    // ~11 us of build work per claim against a sub-microsecond claim cost,
+    // while all workers start near index 0, which is also the consume
+    // order, so wait latency concentrates at the pass head.
+    const CHUNK: usize = 8;
+    loop {
+        shared.active.fetch_add(1, Ordering::SeqCst);
+        if shared.job.lock().unwrap().epoch != job.epoch {
+            shared.active.fetch_sub(1, Ordering::SeqCst);
+            break;
+        }
+        let start = shared.bucket_cursor.fetch_add(CHUNK, Ordering::SeqCst);
+        if start >= job.spans_len {
+            shared.active.fetch_sub(1, Ordering::SeqCst);
+            break;
+        }
+        // SAFETY: the epoch was validated with `active` held; the driver
+        // keeps the view alive until the join drains every participant.
+        let view = unsafe { &*(job.spans_ptr as *const PqJobView) };
+        let end = (start + CHUNK).min(job.spans_len);
+        for i in start..end {
+            pq_build_entry(view, i);
+        }
+        shared.active.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// `CM2Scene::DrawBatchPassEntry`, the batch-pass walk entry.
+///
+/// `__thiscall(ecx = pass ctx, stack = (passIdx, batchArrayBase,
+/// sortedIndexArray, count))`. Prologue delegate around the batch-pass
+/// walk, the only route to `CParticleEmitter::Render` (0x70b371 is an
+/// interior label of this body; this is the real prologue). Pre-scans the descriptor array for
+/// emitter draws, publishes one pool job that builds them into private
+/// scratch, runs the stock walk (whose `Render` hook consumes each result
+/// at its turn), then joins and retires the job. With no job published the
+/// walk runs exactly as stock, which is also the `WOW_TURBO_SKIP` story:
+/// unpatching this one hook reverts every draw to the serial path.
+pub fn cm2_scene__draw_batch_pass_entry__70b360(
+    ctx: *mut core::ffi::c_void,
+    pass_idx: u32,
+    batches: *const u8,
+    indices: *const u32,
+    count: u32,
+) {
+    use core::sync::atomic::Ordering;
+    let original = super::symbols::originals::cm2_scene__draw_batch_pass_entry__70b360();
+    // A nested pass (defensive; the walk's callees are not known to
+    // re-enter) or an empty list: straight to stock.
+    if PQ_PASS_VIEW.load(Ordering::Relaxed) != 0
+        || batches.is_null()
+        || indices.is_null()
+        || count == 0
+    {
+        original(ctx, pass_idx, batches, indices, count);
+        return;
+    }
+    let t0 = wow_shared::tsc::rdtsc();
+    let Some(mut table) = pq_prescan(batches, indices, count) else {
+        super::seam_probe::pq_pass_gated();
+        original(ctx, pass_idx, batches, indices, count);
+        return;
+    };
+    let len = table.entries.len();
+    super::seam_probe::pq_pass(len as u32, wow_shared::tsc::rdtsc().wrapping_sub(t0));
+    let view = Box::new(PqJobView {
+        header: &table.header,
+        entries: table.entries.as_mut_ptr(),
+        len,
+        arena: table.arena.as_mut_ptr(),
+    });
+    let view_addr = core::ptr::from_ref::<PqJobView>(&view) as usize;
+    let shared = gc_pool();
+    PQ_PASS_CURSOR.store(0, Ordering::Relaxed);
+    PQ_PASS_CONSUMED.store(0, Ordering::Relaxed);
+    gc_par_begin(shared, GcJob::particles(view_addr, len));
+    PQ_PASS_VIEW.store(view_addr, Ordering::Relaxed);
+
+    original(ctx, pass_idx, batches, indices, count);
+
+    PQ_PASS_VIEW.store(0, Ordering::Relaxed);
+    // Join: a cursor past the end means no new claim can begin, and
+    // `active == 0` means none is in flight. Probe-style deadline so a
+    // stalled worker degrades to one leaked table and a warning, never a
+    // free under a live writer.
+    let deadline = wow_shared::tsc::rdtsc().wrapping_add(wow_shared::tsc::secs_to_cycles(1) / 20);
+    loop {
+        let drained = shared.bucket_cursor.load(Ordering::SeqCst) >= len
+            && shared.active.load(Ordering::SeqCst) == 0;
+        if drained {
+            break;
+        }
+        if wow_shared::tsc::rdtsc() >= deadline {
+            log::warn!(
+                target: "wow::events",
+                "particle pass join timed out; leaking one {len}-entry pass table",
+            );
+            shared.done.store(true, Ordering::SeqCst);
+            core::mem::forget(table);
+            Box::leak(view);
+            return;
+        }
+        std::thread::yield_now();
+    }
+    shared.done.store(true, Ordering::SeqCst);
+    let consumed = PQ_PASS_CONSUMED.load(Ordering::Relaxed).min(len);
+    let mut worker_ticks = 0u64;
+    for e in &table.entries {
+        let s = e.state.load(Ordering::Relaxed);
+        if s == PQ_STATE_DONE || s == PQ_STATE_CONSUMED {
+            worker_ticks = worker_ticks.wrapping_add(e.ticks);
+        }
+    }
+    super::seam_probe::pq_retire((len - consumed) as u32, worker_ticks);
 }
 
 // Dense liquid-query driver: the per-face gather + kind-arm branches are a
@@ -23910,10 +24936,15 @@ pub fn c_particle_emitter__render__7b3d20(this: *mut u8, parent_matrix: *const f
         } else {
             0
         };
-        c_particle_emitter__render_particles__7b3a10(
-            this.cast::<core::ffi::c_void>(),
-            ctx.as_mut_ptr().cast::<f32>(),
-        );
+        // Prebuilt consume: on a hit the pass job's scratch moves into the
+        // locked cursor and the serial build is skipped; every miss shape
+        // runs the serial build unchanged.
+        if !pq_try_consume(this, cursor, &mut ctx) {
+            c_particle_emitter__render_particles__7b3a10(
+                this.cast::<core::ffi::c_void>(),
+                ctx.as_mut_ptr().cast::<f32>(),
+            );
+        }
         if let Some(armed) = &probe {
             super::seam_probe::particle_draw(
                 armed,

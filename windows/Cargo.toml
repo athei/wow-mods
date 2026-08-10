@@ -60,7 +60,7 @@ pedantic = { level = "warn", priority = -1 }
 # Length is a poor proxy for complexity; allow long procedural functions
 # (per-opcode dispatchers, codegen templates) where the structural alternative
 # is fragmented helpers threading the same state.
-too_many_lines = "allow"                # 68
+too_many_lines = "allow"                # 69
 # A separate multiply and add is what the originals compiled to, and the
 # differential harness compares against that — fusing them changes the rounding
 # and the comparison fails. It is also faster on the default baseline: nehalem
@@ -99,10 +99,10 @@ undocumented_unsafe_blocks = "warn"
 # it to suit a lint makes the reimplementation harder to check against the
 # behaviour it has to match.
 items_after_statements = "allow"        # 865
-cast_ptr_alignment = "allow"            # 921 — reads are already `read_unaligned`
-unreadable_literal = "allow"            # 393 — addresses and bit masks, verbatim
+cast_ptr_alignment = "allow"            # 922 — reads are already `read_unaligned`
+unreadable_literal = "allow"            # 394 — addresses and bit masks, verbatim
 similar_names = "allow"                 # 224
-semicolon_if_nothing_returned = "allow" # 152
+semicolon_if_nothing_returned = "allow" # 156
 many_single_char_names = "allow"        # 42
 
 # Numeric conversions that must truncate, wrap and round exactly as the
@@ -110,7 +110,7 @@ many_single_char_names = "allow"        # 42
 # narrowing into a panic, which is a behaviour change, and in a per-frame hook
 # it is a crash. Float comparison is exact on purpose: the differential harness
 # compares bit patterns.
-cast_possible_truncation = "allow"      # 385
+cast_possible_truncation = "allow"      # 387
 cast_sign_loss = "allow"                # 232
 cast_possible_wrap = "allow"            # 102
 cast_precision_loss = "allow"           # 115
@@ -122,7 +122,7 @@ float_cmp = "allow"                     # 49
 # are read through raw pointers held as the stock routine held them; `&raw const`
 # and `.cast()` are bit-identical rewrites, but they re-spell every access site
 # and move the code away from the original it has to be checked against.
-borrow_as_ptr = "allow"                 # 40
+borrow_as_ptr = "allow"                 # 43
 ptr_as_ptr = "allow"                    # 24
 ptr_cast_constness = "allow"            # 12
 # All five are `(a*a + b*b).sqrt()`, which clippy wants as `hypot`. `hypot` is a
@@ -134,7 +134,7 @@ imprecise_flops = "allow"               # 8
 # satisfy them moves code away from the shape being reproduced, for no change
 # in what the function does.
 missing_const_for_fn = "allow"          # 109
-useless_let_if_seq = "allow"            # 21
+useless_let_if_seq = "allow"            # 22
 if_not_else = "allow"                   # 12
 suspicious_operation_groupings = "allow" # 12
 # The tail `match` of a transcribed function: the arms ARE the original's branch
