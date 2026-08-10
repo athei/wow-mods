@@ -31438,6 +31438,14 @@ fn gc_par_animate_roots(shared: &GcParShared, job: &GcJob) {
     }
 }
 
+/// What one forked animate pass measured at its seam.
+struct BdlAnimForkStats {
+    /// Pure join wait: coordinator-participation end to quiescence, in ticks.
+    wait_ticks: u64,
+    /// Publish-to-quiescence wall ticks for the whole fork.
+    fork_ticks: u64,
+}
+
 /// Fork the whole root list across the pool and hard-join it.
 ///
 /// Takes over BOTH halves of the engine's even/odd split: on a forked pass
@@ -31451,7 +31459,12 @@ fn gc_par_animate_roots(shared: &GcParShared, job: &GcJob) {
 /// `ticks` is resized to parallel `roots` and filled with per-root costs
 /// when `timed`; unarmed passes publish a null tick array and pay no
 /// bracket.
-fn bdl_anim_fork(base: *mut u8, roots: &[usize], ticks: &mut Vec<u64>, timed: bool) {
+fn bdl_anim_fork(
+    base: *mut u8,
+    roots: &[usize],
+    ticks: &mut Vec<u64>,
+    timed: bool,
+) -> BdlAnimForkStats {
     use core::sync::atomic::Ordering;
     let ticks_ptr = if timed {
         ticks.clear();
@@ -31461,6 +31474,7 @@ fn bdl_anim_fork(base: *mut u8, roots: &[usize], ticks: &mut Vec<u64>, timed: bo
         0
     };
     let shared = gc_pool();
+    let t0 = wow_shared::tsc::rdtsc();
     let job = gc_par_begin(
         shared,
         GcJob::animate_roots(
@@ -31471,7 +31485,8 @@ fn bdl_anim_fork(base: *mut u8, roots: &[usize], ticks: &mut Vec<u64>, timed: bo
         ),
     );
     gc_par_animate_roots(shared, &job);
-    let deadline = wow_shared::tsc::rdtsc().wrapping_add(wow_shared::tsc::secs_to_cycles(1) / 20);
+    let t1 = wow_shared::tsc::rdtsc();
+    let deadline = t1.wrapping_add(wow_shared::tsc::secs_to_cycles(1) / 20);
     let mut warned = false;
     loop {
         let drained = shared.bucket_cursor.load(Ordering::SeqCst) >= roots.len()
@@ -31490,6 +31505,11 @@ fn bdl_anim_fork(base: *mut u8, roots: &[usize], ticks: &mut Vec<u64>, timed: bo
         std::thread::yield_now();
     }
     shared.done.store(true, Ordering::SeqCst);
+    let t2 = wow_shared::tsc::rdtsc();
+    BdlAnimForkStats {
+        wait_ticks: t2.wrapping_sub(t1),
+        fork_ticks: t2.wrapping_sub(t0),
+    }
 }
 
 /// The per-list animation phase (0x707757..0x707843).
@@ -31522,15 +31542,28 @@ fn bdl_anim_phase(base: *mut u8) {
     let worker_arm = (unsafe { bdl_rd32(view, 4) } & 4) != 0;
     let mut root_buf = BDL_ANIM_ROOTS.with(core::cell::RefCell::take);
     bdl_collect_anim_roots(base, &mut root_buf);
-    if root_buf.len() >= BDL_ANIM_MIN_ROOTS && !*BDL_ANIM_FORK_OFF {
+    let fork = root_buf.len() >= BDL_ANIM_MIN_ROOTS && !*BDL_ANIM_FORK_OFF;
+    if !fork && root_buf.len() > 1 {
+        super::seam_probe::anim_par_gated();
+    }
+    if fork {
         let mut tick_buf = BDL_ANIM_TICKS.with(core::cell::RefCell::take);
-        bdl_anim_fork(base, &root_buf, &mut tick_buf, timed);
+        let stats = bdl_anim_fork(base, &root_buf, &mut tick_buf, timed);
         if timed {
             roots = root_buf.len() as u32;
             for &dt in &tick_buf {
                 ticks_sum = ticks_sum.wrapping_add(dt);
                 ticks_max = ticks_max.max(dt);
             }
+        }
+        if let Some(armed) = &probe {
+            super::seam_probe::anim_par_pass(
+                armed,
+                roots,
+                stats.wait_ticks,
+                stats.fork_ticks,
+                ticks_sum,
+            );
         }
         BDL_ANIM_TICKS.with(|slot| slot.replace(tick_buf));
     } else if worker_arm {

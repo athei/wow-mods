@@ -6,7 +6,9 @@
 //! their cost distributed (the measured bound on what a worker split could
 //! recover); does any model instance get visited twice in one frame through
 //! the `+0x40` stamp (the aliasing hazard a fork must exclude); what does an
-//! empty publish/join round trip on the worker pool cost at frame rate; how
+//! empty publish/join round trip on the worker pool cost at frame rate; what
+//! a forked animate pass pays at the join against the per-root cost its
+//! lanes absorb; how
 //! full does the draw-list dedup scratch run and how much probing it costs;
 //! how many dynamic-buffer lock cycles the particle and precipitation paths
 //! pay per session; and what grain the per-emitter particle draws offer a
@@ -44,6 +46,14 @@ static REPEAT_VISITS: SharedCounter = SharedCounter::zero();
 static GC_RT_N: Counter = Counter::zero();
 static GC_RT_SUM: Accum = Accum::zero();
 static GC_RT_MAX: Accum = Accum::zero();
+
+static ANIM_PAR_PASSES: Counter = Counter::zero();
+static ANIM_PAR_GATED: Counter = Counter::zero();
+static ANIM_PAR_ROOTS: Accum = Accum::zero();
+static ANIM_PAR_WAIT_TICKS_SUM: Accum = Accum::zero();
+static ANIM_PAR_WAIT_TICKS_MAX: Accum = Accum::zero();
+static ANIM_PAR_WORKER_TICKS: Accum = Accum::zero();
+static ANIM_PAR_FORK_TICKS_SUM: Accum = Accum::zero();
 
 static FIN_PASSES: Counter = Counter::zero();
 static FIN_B0_SUM: Accum = Accum::zero();
@@ -108,8 +118,9 @@ const PART_HIST_EDGES: [u32; 4] = [4, 16, 64, 256];
 /// One draw-list animation pass: which arm ran and what it walked.
 ///
 /// `roots` counts the animate-eligible nodes our walk dispatched (the even
-/// half when the client's worker arm is on), `root_ticks_*` their measured
-/// cost, `list_len` the full visible-list length from the particle pass.
+/// half when the client's worker arm is on, the whole list on a forked
+/// pass), `root_ticks_*` their measured cost, `list_len` the full
+/// visible-list length from the particle pass.
 pub fn anim_phase(
     armed: &Armed,
     worker_arm: bool,
@@ -154,6 +165,38 @@ pub fn gc_roundtrip(armed: &Armed, ticks: u64) {
     GC_RT_N.bump(armed);
     GC_RT_SUM.add(armed, ticks);
     GC_RT_MAX.max(armed, ticks);
+}
+
+/// One forked animate pass: its size and where the time went.
+///
+/// `worker_ticks` is the post-join sum of the per-root brackets across every
+/// lane (the work that left or overlapped the game thread), `wait_ticks` the
+/// coordinator's pure join wait after its own participation, and
+/// `fork_ticks` the publish-to-quiescence wall time. The fork pays off while
+/// `fork_ticks` stays well under the same roots' serial cost (the `seam
+/// anim` line's `root us sum` baseline).
+pub fn anim_par_pass(
+    armed: &Armed,
+    roots: u32,
+    wait_ticks: u64,
+    fork_ticks: u64,
+    worker_ticks: u64,
+) {
+    ANIM_PAR_PASSES.bump(armed);
+    ANIM_PAR_ROOTS.add(armed, u64::from(roots));
+    ANIM_PAR_WAIT_TICKS_SUM.add(armed, wait_ticks);
+    ANIM_PAR_WAIT_TICKS_MAX.max(armed, wait_ticks);
+    ANIM_PAR_FORK_TICKS_SUM.add(armed, fork_ticks);
+    ANIM_PAR_WORKER_TICKS.add(armed, worker_ticks);
+}
+
+/// One multi-root pass below the fork gate (or with the fork disabled).
+///
+/// The gate-tuning signal: a large count next to a small forked-pass count
+/// means the threshold is starving the fork.
+#[inline]
+pub fn anim_par_gated() {
+    super::tally::bump(&ANIM_PAR_GATED);
 }
 
 /// One dedup pass over bucket 0: its record count and what probing cost.
@@ -346,6 +389,20 @@ pub fn emit_cumulative() {
             ticks_to_us(ROOT_TICKS_SUM.get()),
             ticks_to_us(ROOT_TICKS_MAX.get()),
             REPEAT_VISITS.get(),
+        );
+    }
+    let par_passes = ANIM_PAR_PASSES.get();
+    let par_gated = ANIM_PAR_GATED.get();
+    if par_passes != 0 || par_gated != 0 {
+        log::debug!(
+            target: super::tally::TARGET,
+            "seam anim par: {par_passes} passes ({par_gated} gated multi-root), roots {}, \
+             worker us sum {}, wait us sum {} max {}, fork us sum {}",
+            ANIM_PAR_ROOTS.get(),
+            ticks_to_us(ANIM_PAR_WORKER_TICKS.get()),
+            ticks_to_us(ANIM_PAR_WAIT_TICKS_SUM.get()),
+            ticks_to_us(ANIM_PAR_WAIT_TICKS_MAX.get()),
+            ticks_to_us(ANIM_PAR_FORK_TICKS_SUM.get()),
         );
     }
     let rounds = GC_RT_N.get();
