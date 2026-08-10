@@ -22864,17 +22864,19 @@ fn pq_capture(this: *const u8, parent_matrix: *const f32, cur: &[f32; 16]) -> Op
 ///
 /// Everything the worker's build read must match what the serial build
 /// would read now; any drift (camera state changed mid-walk, emitter
-/// mutated) rejects the pre-built result.
-fn pq_validate(snap: &PqSnapshot, this: *const u8) -> bool {
+/// mutated) rejects the pre-built result. On mismatch, returns which field
+/// family drifted (a [`super::seam_probe::pq_miss_validate`] index) so the
+/// seam line can name the failing prediction.
+fn pq_validate(snap: &PqSnapshot, this: *const u8) -> Result<(), u32> {
     // SAFETY: the composed-matrix global, just written by Render.
     let composed = unsafe { PQ_VIEW.cast::<[u32; 16]>().read_unaligned() };
     if composed != snap.composed.map(f32::to_bits) {
-        return false;
+        return Err(0);
     }
     // SAFETY: the vertex-normal global triple, just written by Render.
     let normal = unsafe { PQ_NORMAL.cast::<[u32; 3]>().read_unaligned() };
     if normal != snap.normal {
-        return false;
+        return Err(1);
     }
     // SAFETY: the emitter flag dword at +0x1ac.
     let flags = unsafe { this.wrapping_add(0x1ac).cast::<u32>().read_unaligned() };
@@ -22887,31 +22889,31 @@ fn pq_validate(snap: &PqSnapshot, this: *const u8) -> bool {
     // SAFETY: the capped live-count global, just written by Render.
     let cap = unsafe { PQ_LIVE_COUNT.read() };
     if flags != snap.flags || count != snap.count || vpp != snap.vpp || sel != snap.sel {
-        return false;
+        return Err(2);
     }
     if cap != snap.cap {
-        return false;
+        return Err(3);
     }
     if flags & 0x2000 != 0 {
         // SAFETY: the fixup-output block, just written by Render.
         let fixup = unsafe { PQ_FIXUP_BLOCK.cast::<[u32; 12]>().read_unaligned() };
         if fixup != snap.fixup_out.map(f32::to_bits) {
-            return false;
+            return Err(4);
         }
         // SAFETY: the facing-axis triple at +0x284, just written by Render.
         let axis = unsafe { this.wrapping_add(0x284).cast::<[u32; 3]>().read_unaligned() };
         if axis != snap.axis {
-            return false;
+            return Err(5);
         }
     }
     if flags & 0x10 != 0 {
         // SAFETY: the depth-sort heap count global.
         let base = unsafe { PQ_HEAP_COUNT.cast_const().read() };
         if base != 1 {
-            return false;
+            return Err(6);
         }
     }
-    true
+    Ok(())
 }
 
 /// Build one pre-scanned emitter draw into its scratch region (worker side).
@@ -23010,12 +23012,6 @@ fn pq_build_entry(view: &PqJobView, i: usize) {
 /// The 0x8097a8 state table as the parallel path reads it.
 const STATE_TABLE_PQ: *const u32 = (crate::win::EXPECTED_IMAGE_BASE + 0x40_97a8) as *const u32;
 
-/// The matrix the pass prologue installs as current (`0xcf03e8`).
-///
-/// The walk entry saves the device matrix, then sets this global as the
-/// current matrix before dispatching batches, so it is what each
-/// `Render`'s `GetCurrentMatrix` returns during the walk.
-const PQ_WALK_MATRIX: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x8f_03e8) as *const f32;
 /// Minimum emitter draws before a pass publishes a job.
 const PQ_MIN_EMITTERS: usize = 4;
 /// Hard cap on a pass arena, in bytes; draws beyond it stay serial.
@@ -23090,6 +23086,31 @@ fn pq_prescan_emitter(
     }
 }
 
+/// The matrix `Render` sees as current at every emitter's turn in the walk.
+///
+/// Each batch+emitter entry runs `CParticleEmitter::DrawBatch` (0x70ca50,
+/// our hook at hooks.rs) before the emitter render: it copies the pass
+/// world matrix at `*(ctx+0x40)+0x9c`, offsets its translation row by the
+/// billboard vector at `*(ctx+0x40)+0x10c` through the
+/// [`crate::math::particle::c_particle_emitter__draw_batch__70ca50`]
+/// kernel, and installs the result as the device current matrix. Both
+/// inputs hang off the pass ctx, so the result is the same for every entry
+/// of the pass, and calling the SAME kernel makes this prediction exact by
+/// construction (an independent emulation of the chain drifted by 1 ulp in
+/// the translation row and failed every snapshot validation).
+fn pq_walk_current_matrix(ctx: *const u8) -> Option<[f32; 16]> {
+    // SAFETY: the pass block pointer at ctx+0x40.
+    let base = unsafe { ctx.wrapping_add(0x40).cast::<*const u8>().read_unaligned() };
+    if base.is_null() {
+        return None;
+    }
+    // SAFETY: the 4x4 pass world matrix at base+0x9c.
+    let m = unsafe { base.wrapping_add(0x9c).cast::<[f32; 16]>().read_unaligned() };
+    // SAFETY: the billboard offset triple at base+0x10c.
+    let bv = unsafe { base.wrapping_add(0x10c).cast::<[f32; 3]>().read_unaligned() };
+    Some(crate::math::particle::c_particle_emitter__draw_batch__70ca50(&m, &bv))
+}
+
 /// Pre-scan one pass's descriptor walk for emitter draws worth pre-building.
 ///
 /// Mirrors the walk's dispatch geometry (0x40-byte entries through the
@@ -23097,9 +23118,13 @@ fn pq_prescan_emitter(
 /// advances by its sub-batch count) without calling anything. Returns
 /// `None` when fewer than [`PQ_MIN_EMITTERS`] draws surface, so portraits
 /// and single-model passes cost one integer scan and nothing else.
-fn pq_prescan(batches: *const u8, indices: *const u32, count: u32) -> Option<PqJobTable> {
-    // SAFETY: the walk-current matrix global the pass prologue installs.
-    let cur = unsafe { PQ_WALK_MATRIX.cast::<[f32; 16]>().read_unaligned() };
+fn pq_prescan(
+    ctx: *const u8,
+    batches: *const u8,
+    indices: *const u32,
+    count: u32,
+) -> Option<PqJobTable> {
+    let cur = pq_walk_current_matrix(ctx)?;
     let mut entries: Vec<PqEntry> = Vec::new();
     let mut arena_len = 0usize;
     let mut i = 0u32;
@@ -23220,8 +23245,27 @@ fn pq_try_consume(this: *mut u8, cursor: usize, ctx: &mut [u32; 9]) -> bool {
     let e = unsafe { view.entries.add(found) };
     // SAFETY: the snapshot is immutable once published.
     let snap = unsafe { &(*e).snapshot };
-    if !pq_validate(snap, this) {
-        super::seam_probe::pq_miss_validate();
+    if let Err(field) = pq_validate(snap, this) {
+        // One-shot forensic dump of the first few composed-matrix drifts:
+        // the row pattern says whether the walk-current prediction or the
+        // parent matrix is what moved.
+        static DUMPS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+        if field == 0 && DUMPS.load(Ordering::Relaxed) < 4 {
+            DUMPS.fetch_add(1, Ordering::Relaxed);
+            // SAFETY: the composed-matrix global, just written by Render.
+            let live = unsafe { PQ_VIEW.cast::<[f32; 16]>().read_unaligned() };
+            log::warn!(
+                target: "wow::events",
+                "particle validate drift: emitter {:#x} idx {found} \
+                 snap r0 {:?} r3 {:?} live r0 {:?} r3 {:?}",
+                this as usize,
+                &snap.composed[0..4],
+                &snap.composed[12..16],
+                &live[0..4],
+                &live[12..16],
+            );
+        }
+        super::seam_probe::pq_miss_validate(field);
         return false;
     }
     // Wait for the worker. Workers start at the pass head, which is also
@@ -23446,7 +23490,7 @@ pub fn cm2_scene__draw_batch_pass_entry__70b360(
         return;
     }
     let t0 = wow_shared::tsc::rdtsc();
-    let Some(mut table) = pq_prescan(batches, indices, count) else {
+    let Some(mut table) = pq_prescan(ctx.cast::<u8>().cast_const(), batches, indices, count) else {
         super::seam_probe::pq_pass_gated();
         original(ctx, pass_idx, batches, indices, count);
         return;

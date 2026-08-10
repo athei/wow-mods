@@ -85,7 +85,15 @@ static PART_PRE_EMITTERS: Accum = Accum::zero();
 static PART_PRE_PRESCAN_TICKS: Accum = Accum::zero();
 static PART_PRE_HITS: Counter = Counter::zero();
 static PART_PRE_MISS_ABSENT: Counter = Counter::zero();
-static PART_PRE_MISS_VALIDATE: Counter = Counter::zero();
+static PART_PRE_MISS_VALIDATE: [Counter; 7] = [
+    Counter::zero(),
+    Counter::zero(),
+    Counter::zero(),
+    Counter::zero(),
+    Counter::zero(),
+    Counter::zero(),
+    Counter::zero(),
+];
 static PART_PRE_MISS_TIMEOUT: Counter = Counter::zero();
 static PART_PRE_MISS_DECLINED: Counter = Counter::zero();
 static PART_PRE_ORACLE_MISS: Counter = Counter::zero();
@@ -277,9 +285,13 @@ pub fn pq_miss_absent() {
 }
 
 /// A draw whose snapshot no longer matched the just-written state.
+///
+/// `field` names the drifting prediction: 0 composed, 1 normal, 2 emitter
+/// scalars, 3 cap, 4 fixup, 5 axis, 6 heap base.
 #[inline]
-pub fn pq_miss_validate() {
-    super::tally::bump(&PART_PRE_MISS_VALIDATE);
+pub fn pq_miss_validate(field: u32) {
+    let idx = (field as usize).min(PART_PRE_MISS_VALIDATE.len() - 1);
+    super::tally::bump(&PART_PRE_MISS_VALIDATE[idx]);
 }
 
 /// A draw that gave up waiting on its worker.
@@ -403,12 +415,18 @@ pub fn emit_cumulative() {
         log::debug!(
             target: super::tally::TARGET,
             "seam particles par: {pre_passes} passes ({pre_gated} gated), emitters {}, hits {}, \
-             miss absent {} validate {} timeout {} declined {}, oracle miss {}, unconsumed {}, \
-             wait us sum {} max {}, prescan us sum {}, worker us sum {}",
+             miss absent {} validate {}/{}/{}/{}/{}/{}/{} timeout {} declined {}, oracle miss {}, \
+             unconsumed {}, wait us sum {} max {}, prescan us sum {}, worker us sum {}",
             PART_PRE_EMITTERS.get(),
             PART_PRE_HITS.get(),
             PART_PRE_MISS_ABSENT.get(),
-            PART_PRE_MISS_VALIDATE.get(),
+            PART_PRE_MISS_VALIDATE[0].get(),
+            PART_PRE_MISS_VALIDATE[1].get(),
+            PART_PRE_MISS_VALIDATE[2].get(),
+            PART_PRE_MISS_VALIDATE[3].get(),
+            PART_PRE_MISS_VALIDATE[4].get(),
+            PART_PRE_MISS_VALIDATE[5].get(),
+            PART_PRE_MISS_VALIDATE[6].get(),
             PART_PRE_MISS_TIMEOUT.get(),
             PART_PRE_MISS_DECLINED.get(),
             PART_PRE_ORACLE_MISS.get(),
