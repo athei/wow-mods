@@ -23426,10 +23426,17 @@ pub fn cm2_scene__draw_batch_pass_entry__70b360(
             break;
         }
         if wow_shared::tsc::rdtsc() >= deadline {
-            log::warn!(
-                target: "wow::events",
-                "particle pass join timed out; leaking one {len}-entry pass table",
-            );
+            // Rate-limited rather than one-shot: each timeout leaks a table,
+            // so how often it happens is the number that matters, but a line
+            // per pass at `warn` would bury the first one.
+            static TIMEOUTS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+            let n = TIMEOUTS.fetch_add(1, Ordering::Relaxed);
+            if n < 8 || n.is_multiple_of(64) {
+                log::warn!(
+                    target: "wow::events",
+                    "particle pass join timed out (#{n}); leaking one {len}-entry pass table",
+                );
+            }
             shared.done.store(true, Ordering::SeqCst);
             core::mem::forget(table);
             Box::leak(view);
@@ -31361,7 +31368,10 @@ fn bdl_anim_fork(
         }
         if !warned && wow_shared::tsc::rdtsc() >= deadline {
             warned = true;
-            log::warn!(
+            // Once per session, not once per pass: a pool that stalls at all
+            // stalls every frame, and the first line already says everything
+            // the next thousand would.
+            wow_shared::log_once_warn!(
                 target: "wow::events",
                 "animate fork join stalled past the deadline over {} roots; waiting it out",
                 roots.len(),
