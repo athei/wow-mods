@@ -106,6 +106,7 @@ pub fn set_font_size(value: f64) -> i32 {
     // clamped to [10, 100] above
     let size = clamped as i32;
     FONT_SIZE.store(size, Ordering::Relaxed);
+    log::info!(target: "wow_turbo", "worldtext: font size set to {size}");
     size
 }
 
@@ -127,10 +128,28 @@ fn nameplate_height() -> f64 {
 }
 
 /// Store the font name; answers a copy for the echo.
+///
+/// The resolution is probed and logged immediately so a name that matches
+/// nothing is visible at the moment it was typed, not at the next crit.
 pub fn set_font_name(name: String) -> String {
-    let mut slot = FONT_NAME.lock().expect("font name is game-thread only");
-    *slot = name;
-    slot.clone()
+    let echo = {
+        let mut slot = FONT_NAME.lock().expect("font name is game-thread only");
+        *slot = name;
+        slot.clone()
+    };
+    if let Ok(faces) = &*FACES {
+        let stem = normalize_stem(&echo);
+        if faces.resolve(&stem).is_some() {
+            log::info!(target: "wow_turbo", "worldtext: font name {echo:?} resolved to {stem}");
+        } else {
+            log::info!(
+                target: "wow_turbo",
+                "worldtext: font name {echo:?} matches no face; lines fall back to {}",
+                FACE_ORDER[0]
+            );
+        }
+    }
+    echo
 }
 
 // ── Faces ──
@@ -141,13 +160,24 @@ pub fn set_font_name(name: String) -> String {
 /// faces.
 const FACE_ORDER: [&str; 4] = ["SKURRI", "FRIZQT__", "ARIALN", "MORPHEUS"];
 
-/// Every parseable face from the client's `Fonts/` directory, by upper stem.
+/// Every named face the overlay can draw with.
+///
+/// The client's own `Fonts/` faces load eagerly. A selected name matching
+/// none of them probes the system font directories on demand — the same
+/// universe the reference's GDI selection drew from, minus its registry
+/// family mapping: matching is by file stem, so the name to type is the
+/// font's file name (extension optional), not its family name.
 struct Faces {
     faces: Vec<(String, &'static crate::typeset::Face)>,
+    /// System faces probed by stem, hits and misses both.
+    ///
+    /// Misses are cached so a name that resolves nowhere costs one
+    /// directory scan, not one per line.
+    system: Mutex<Vec<(String, Option<&'static crate::typeset::Face>)>>,
 }
 
 impl Faces {
-    /// The face registered under `stem` (already upper-cased), if any.
+    /// The client face registered under `stem` (already upper-cased), if any.
     fn by_stem(&self, stem: &str) -> Option<&'static crate::typeset::Face> {
         self.faces
             .iter()
@@ -155,22 +185,128 @@ impl Faces {
             .map(|(_, face)| *face)
     }
 
-    /// The first face covering `text`.
+    /// The comma-joined client face roster, for the log and debug query.
+    fn roster(&self) -> String {
+        self.faces
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    /// A system face by upper stem, probing the font directories once.
+    fn system_by_stem(&self, stem: &str) -> Option<&'static crate::typeset::Face> {
+        if stem.is_empty() {
+            return None;
+        }
+        let mut cache = self.system.lock().expect("faces are game-thread only");
+        if let Some((_, cached)) = cache.iter().find(|(name, _)| name == stem) {
+            return *cached;
+        }
+        let loaded = load_system_face(stem);
+        match loaded {
+            Some(_) => log::info!(
+                target: "wow_turbo",
+                "worldtext: system face {stem} loaded"
+            ),
+            None => log::info!(
+                target: "wow_turbo",
+                "worldtext: no system face matches {stem}; falling back to the client faces"
+            ),
+        }
+        cache.push((String::from(stem), loaded));
+        loaded
+    }
+
+    /// The face `stem` names, client faces first, then the system probe.
+    fn resolve(&self, stem: &str) -> Option<&'static crate::typeset::Face> {
+        self.by_stem(stem).or_else(|| self.system_by_stem(stem))
+    }
+
+    /// The first face covering `text`, and the name it answers to.
     ///
-    /// The user selection, then [`FACE_ORDER`], then anything else the
-    /// directory held.
-    fn pick(&self, text: &str) -> Option<&'static crate::typeset::Face> {
-        let selected = FONT_NAME
-            .lock()
-            .expect("font name is game-thread only")
-            .trim()
-            .to_uppercase();
+    /// The user selection (client or system), then [`FACE_ORDER`], then
+    /// anything else the client directory held.
+    fn pick(&self, text: &str) -> Option<(&'static crate::typeset::Face, String)> {
+        let selected = selected_stem();
         let named = core::iter::once(selected.as_str())
             .chain(FACE_ORDER)
-            .filter_map(|stem| self.by_stem(stem));
-        let rest = self.faces.iter().map(|(_, face)| *face);
-        named.chain(rest).find(|face| face.covers(text))
+            .filter_map(|stem| self.resolve(stem).map(|face| (face, String::from(stem))));
+        let rest = self.faces.iter().map(|(name, face)| (*face, name.clone()));
+        named.chain(rest).find(|(face, _)| face.covers(text))
     }
+}
+
+/// The selected font name normalized to an upper-cased file stem.
+fn selected_stem() -> String {
+    let name = FONT_NAME.lock().expect("font name is game-thread only");
+    normalize_stem(&name)
+}
+
+/// Trim a typed font name to the upper-cased stem the registries key on.
+fn normalize_stem(name: &str) -> String {
+    let trimmed = name.trim();
+    let stem = std::path::Path::new(trimmed)
+        .file_stem()
+        .map_or(trimmed, |s| s.to_str().unwrap_or(trimmed));
+    stem.to_uppercase()
+}
+
+/// The directories a system face may live in.
+///
+/// The prefix's own fonts first; under Wine the host filesystem is mapped
+/// as the `Z:` drive, which reaches the host's face collection. On a real
+/// Windows install the `Z:` paths simply do not exist and the probe falls
+/// through.
+fn system_font_dirs() -> Vec<std::path::PathBuf> {
+    let mut dirs = Vec::new();
+    if let Ok(windir) = std::env::var("WINDIR") {
+        dirs.push(std::path::PathBuf::from(windir).join("Fonts"));
+    }
+    dirs.push(std::path::PathBuf::from(
+        r"Z:\System\Library\Fonts\Supplemental",
+    ));
+    dirs.push(std::path::PathBuf::from(r"Z:\System\Library\Fonts"));
+    dirs.push(std::path::PathBuf::from(r"Z:\Library\Fonts"));
+    dirs
+}
+
+/// Load the first system font file whose stem matches, leaked like the rest.
+fn load_system_face(stem: &str) -> Option<&'static crate::typeset::Face> {
+    for dir in system_font_dirs() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let is_font = path.extension().is_some_and(|e| {
+                e.eq_ignore_ascii_case("ttf")
+                    || e.eq_ignore_ascii_case("ttc")
+                    || e.eq_ignore_ascii_case("otf")
+            });
+            if !is_font {
+                continue;
+            }
+            let matches = path
+                .file_stem()
+                .is_some_and(|s| s.to_string_lossy().to_uppercase() == stem);
+            if !matches {
+                continue;
+            }
+            let Ok(bytes) = std::fs::read(&path) else {
+                continue;
+            };
+            if let Some(face) = crate::typeset::Face::from_bytes(bytes) {
+                return Some(&*Box::leak(Box::new(face)));
+            }
+            log::warn!(
+                target: "wow_turbo",
+                "worldtext: {} matched but did not parse as a font",
+                path.display()
+            );
+        }
+    }
+    None
 }
 
 /// The face registry, or the reason the overlay is disabled.
@@ -208,6 +344,12 @@ fn load_faces() -> Result<Faces, String> {
         };
         if let Some(face) = crate::typeset::Face::from_bytes(bytes) {
             faces.push((stem, &*Box::leak(Box::new(face))));
+        } else {
+            log::warn!(
+                target: "wow_turbo",
+                "worldtext: {} did not parse as a font",
+                path.display()
+            );
         }
     }
     if faces.is_empty() {
@@ -215,7 +357,16 @@ fn load_faces() -> Result<Faces, String> {
             "no usable font was found in the client Fonts directory",
         ));
     }
-    Ok(Faces { faces })
+    let registry = Faces {
+        faces,
+        system: Mutex::new(Vec::new()),
+    };
+    log::info!(
+        target: "wow_turbo",
+        "worldtext: client faces available: {}",
+        registry.roster()
+    );
+    Ok(registry)
 }
 
 /// Whether the overlay can render: the face registry loaded.
@@ -973,6 +1124,19 @@ fn trunc_i32(v: f64) -> i32 {
 /// Unknown world-text types seen, served by the debug query.
 static UNKNOWN_TYPES: Mutex<Vec<(i32, String)>> = Mutex::new(Vec::new());
 
+/// The face name lines are currently drawn with, for change logging.
+static LAST_PICK: Mutex<String> = Mutex::new(String::new());
+
+/// Log the face serving new lines whenever it changes.
+fn note_pick(label: &str) {
+    let mut last = LAST_PICK.lock().expect("game-thread only");
+    if *last != label {
+        log::info!(target: "wow_turbo", "worldtext: drawing new lines with {label}");
+        last.clear();
+        last.push_str(label);
+    }
+}
+
 /// The reference's world-text type palette overrides and defaults.
 fn line_color(text_type: i32, color: u32) -> [u8; 3] {
     match text_type {
@@ -1004,10 +1168,11 @@ fn build_line(
     small: bool,
 ) -> Option<Line> {
     let faces = FACES.as_ref().ok()?;
-    let Some(face) = faces.pick(text) else {
+    let Some((face, label)) = faces.pick(text) else {
         tally::bump(&DELEGATED_UNCOVERED);
         return None;
     };
+    note_pick(&label);
     let Some(env) = Env::current() else {
         tally::bump(&DELEGATED_UNREADY);
         return None;
@@ -1099,10 +1264,11 @@ fn insert_crit(text: &str, guid: u64, color: [u8; 3], base_alpha: u8) -> bool {
     let Some(faces) = FACES.as_ref().ok() else {
         return false;
     };
-    let Some(face) = faces.pick(text) else {
+    let Some((face, label)) = faces.pick(text) else {
         tally::bump(&DELEGATED_UNCOVERED);
         return false;
     };
+    note_pick(&label);
     let Some(backend) = Backend::current() else {
         tally::bump(&DELEGATED_UNREADY);
         return false;
@@ -1557,6 +1723,16 @@ pub fn debug_text() -> String {
         out,
         "Overlay state: device {device:#x}, {floats} floats, {smalls} smalls, {groups} crit groups"
     );
+    if let Ok(faces) = &*FACES {
+        let _ = writeln!(out, "Client faces: {}", faces.roster());
+        let stem = selected_stem();
+        let resolution = if faces.resolve(&stem).is_some() {
+            "resolves"
+        } else {
+            "matches no face, lines fall back"
+        };
+        let _ = writeln!(out, "Selected face: {stem} ({resolution})");
+    }
     let reason = disable_reason();
     if !reason.is_empty() {
         out.push_str(&reason);
