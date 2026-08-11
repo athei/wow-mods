@@ -4485,9 +4485,9 @@ ret  = "*mut u8"
 args = ["i32", "u32", "u32"]
 preserve = []
 
-# --- FrameScript event-dispatch gauge (`wow::gauge`) ---
+# --- FrameScript event-dispatch gauge (`wow::script`) ---
 # Observation-only hooks: every adapter runs the original and replaces nothing;
-# the whole gauge is inert unless `wow::gauge` debug logging is enabled.
+# the whole gauge is inert unless `wow::script` debug logging is enabled.
 # Event registry: base *(0xceef68), count *(0xceef64), stride 0x10 — entry+0x0
 # is the event name, entry+0xc the intrusive listener list (node+0x4 next
 # tagged low-bit-terminated, node+0x8 the listening frame). A frame's name

@@ -4,7 +4,7 @@ use core::ffi::c_void;
 
 use wow_shared::identity;
 
-const LOG_TARGET: &str = "version";
+const LOG_TARGET: &str = "wow";
 const DLL_PROCESS_ATTACH: u32 = 1;
 
 /// `VIF_CANNOTREADSRC` — generic install-time failure.

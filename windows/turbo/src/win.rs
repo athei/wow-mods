@@ -27,7 +27,7 @@ use core::ffi::c_void;
 
 use wow_shared::identity;
 
-const LOG_TARGET: &str = "wow_turbo";
+const LOG_TARGET: &str = "wow";
 const DLL_PROCESS_ATTACH: u32 = 1;
 
 /// ISA baseline this DLL was compiled for.

@@ -250,12 +250,12 @@ pub fn detect_underlying(image_base: usize) {
         // this machine has the GUID reading.
         if late_handler_installed() {
             log::info!(
-                target: super::LOG_TARGET,
+                target: wow_hook::LOG_TARGET,
                 "getname: stock prologue with {LATE_HANDLER_MODULE} installed, name and GUID",
             );
             MODE.store(MODE_EXTENDED, Ordering::Relaxed);
         } else {
-            log::info!(target: super::LOG_TARGET, "getname: stock handler, name only");
+            log::info!(target: wow_hook::LOG_TARGET, "getname: stock handler, name only");
             MODE.store(MODE_STOCK, Ordering::Relaxed);
         }
         return;
@@ -271,12 +271,12 @@ pub fn detect_underlying(image_base: usize) {
     );
     if verified {
         log::info!(
-            target: super::LOG_TARGET,
+            target: wow_hook::LOG_TARGET,
             "getname: standing in for {owner}, name and GUID",
         );
     } else {
         log::info!(
-            target: super::LOG_TARGET,
+            target: wow_hook::LOG_TARGET,
             "getname: unrecognized handler {owner}, running it unchanged",
         );
     }
@@ -323,7 +323,7 @@ fn late_handler_installed() -> bool {
 fn late_handler_owns(thunk: usize) -> bool {
     if wow_hook::module_base(LATE_HANDLER_MODULE).is_none() {
         log::info!(
-            target: super::LOG_TARGET,
+            target: wow_hook::LOG_TARGET,
             "getname: the entry went to unnamed memory at {thunk:#010x} \
              [{}] and {LATE_HANDLER_MODULE} is not loaded — leaving it",
             wow_hook::thunk_bytes(thunk),
@@ -332,14 +332,14 @@ fn late_handler_owns(thunk: usize) -> bool {
     }
     if !late_handler_installed() {
         log::info!(
-            target: super::LOG_TARGET,
+            target: wow_hook::LOG_TARGET,
             "getname: {LATE_HANDLER_MODULE}+{LATE_HANDLER_OFFSET:#x} is not the body \
              that was read — leaving the entry alone",
         );
         return false;
     }
     log::info!(
-        target: super::LOG_TARGET,
+        target: wow_hook::LOG_TARGET,
         "getname: the entry went to a thunk at {thunk:#010x} [{}] and \
          {LATE_HANDLER_MODULE}+{LATE_HANDLER_OFFSET:#x} is loaded and unchanged",
         wow_hook::thunk_bytes(thunk),
@@ -366,7 +366,7 @@ fn reclaim_entry(owner_va: usize) -> bool {
     }
     if MODE.load(Ordering::Relaxed) == MODE_DELEGATE {
         log::info!(
-            target: super::LOG_TARGET,
+            target: wow_hook::LOG_TARGET,
             "getname: an unmodelled handler is underneath, \
              leaving the entry to {LATE_HANDLER_MODULE}",
         );
@@ -377,7 +377,7 @@ fn reclaim_entry(owner_va: usize) -> bool {
     // boolean argument, which is now answered under the documented reading.
     MODE.store(MODE_EXTENDED, Ordering::Relaxed);
     log::info!(
-        target: super::LOG_TARGET,
+        target: wow_hook::LOG_TARGET,
         "getname: reclaiming the entry from {LATE_HANDLER_MODULE}, name and GUID",
     );
     true

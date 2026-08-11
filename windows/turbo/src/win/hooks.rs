@@ -31422,6 +31422,10 @@ fn bdl_anim_phase(base: *mut u8) {
     // for every player. This is the cheapest always-on tick available — one
     // counter bump per frame, the real check once every 120.
     wow_hook::verify_periodically(120);
+    // The counters' report rides a per-frame path rather than the event
+    // gauge's emission, so it survives that gauge being switched off. Unarmed
+    // this is a cached load and a branch, like any other counting site.
+    super::tally::heartbeat();
     let probe = super::tally::arm();
     let timed = probe.is_some();
     let mut roots: u32 = 0;

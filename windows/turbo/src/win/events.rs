@@ -1,9 +1,9 @@
-//! Event-dispatch gauge behind the `wow::gauge` debug filter.
+//! Event-dispatch gauge behind the `wow::script` debug filter.
 //!
 //! Observation-only instrumentation over the client's script event dispatch:
 //! the adapters in `hooks.rs` forward every call to the original and, when the
 //! gauge is armed, time it and attribute the cost. Armed means the
-//! `wow::gauge` target has debug logging enabled; otherwise every entry point
+//! `wow::script` target has debug logging enabled; otherwise every entry point
 //! here is a plain delegate and the tables are never touched, so a shipped
 //! build adds nothing at the default filter.
 //!
@@ -67,16 +67,14 @@
 //! parent's. Summing the rows can therefore land slightly above `signals`, and
 //! does whenever nesting occurs.
 //!
-//! Log targets. The gauge emits at three very different rates, so they sit on
-//! three targets and a reader can keep the rare lines without the rest:
-//! [`super::tally::TARGET`] (`wow::gauge`) carries the once-in-a-while
-//! output: the armed line, world and UI lifecycle, and the 60 s cumulative
-//! pass with every sibling module's counters folded in. [`TARGET_LIVE`] is
-//! the per-second tables, [`TARGET_SCRIPT`] the one-line-per-script-file and
-//! one-line-per-registered-event attribution dumps. `wow::gauge` alone is
-//! the ARM: silencing a child costs its lines and the work of formatting
-//! them, never a counter, so `wow=debug,wow::gauge::live=info` still
-//! measures everything and just stops printing it every second.
+//! Log target. Everything here rides [`TARGET`] (`wow::script`), which is
+//! also its arm: the per-second tables, the periodic totals, the per-file and
+//! per-registered-event attribution dumps, and the world/UI lifecycle marks.
+//! They answer one question between them, so they are one switch. The mod's
+//! own counters are a separate topic on a separate arm
+//! ([`super::tally::TARGET`]) precisely so that asking for those cheap
+//! numbers does not silently buy this gauge, which charges over a second of
+//! wall per minute to instrument dispatch.
 //!
 //! Event registry (fixed client globals): base `*(0xceef68)`, count
 //! `*(0xceef64)`, stride 0x10 — entry+0x0 event name, entry+0xc intrusive
@@ -95,19 +93,15 @@ use std::{
 
 use rustc_hash::FxHashMap;
 
-/// Target for the live per-second tables, the gauge's loudest output.
+/// Log target for everything this gauge emits, and its arm.
 ///
-/// A child of the arm's target rather than the arm itself: `env_logger`
-/// resolves a target against its longest matching directive, so
-/// `wow::gauge::live=info` quiets these six lines a second while
-/// `wow=debug` keeps arming the gauge and printing everything else.
-const TARGET_LIVE: &str = "wow::gauge::live";
-/// Target for the per-script-file and per-registered-event attribution dumps.
-///
-/// Both enumerate once over something the session loaded rather than
-/// reporting on a cadence, which is a different kind of noise from the live
-/// tables: hundreds of lines at load, then nothing.
-const TARGET_SCRIPT: &str = "wow::gauge::script";
+/// One topic, one switch: the per-second tables, the periodic totals, the
+/// per-file and per-event attribution dumps and the world/UI lifecycle marks
+/// are all answers to "what is the interface costing", and a session asking
+/// one of those questions wants the rest. It is a different topic from the
+/// mod's own counters ([`super::tally::TARGET`]) and costs enough that it
+/// must not ride along with them.
+const TARGET: &str = "wow::script";
 
 /// Address holding the event-registry entry count.
 const REGISTRY_COUNT: usize = 0x00ce_ef64;
@@ -208,7 +202,7 @@ type NameBuf = [u8; NAME_CAP];
 /// filter never changes mid-run, so one resolution is enough. The armed line
 /// lets a tester confirm their config from the login screen alone.
 static ARMED: LazyLock<bool> = LazyLock::new(|| {
-    let armed = log::log_enabled!(target: super::tally::TARGET, log::Level::Debug);
+    let armed = log::log_enabled!(target: TARGET, log::Level::Debug);
     if armed {
         // Force the counter's read-cost calibration here rather than leaving it
         // to the first C call, which would run it inside a handler body and
@@ -222,13 +216,13 @@ static ARMED: LazyLock<bool> = LazyLock::new(|| {
         let stride = *API_SAMPLE;
         if stride > 1 {
             log::debug!(
-                target: super::tally::TARGET,
+                target: TARGET,
                 "event gauge armed, counter read cost {read_cost_ns} ns, \
                  api spans sampled 1-in-{stride}",
             );
         } else {
             log::debug!(
-                target: super::tally::TARGET,
+                target: TARGET,
                 "event gauge armed, counter read cost {read_cost_ns} ns",
             );
         }
@@ -590,7 +584,7 @@ fn owner_of(st: &mut State, chunk: (usize, u32)) -> NameBuf {
     // name is already the row they group under.
     if text.contains(&b'\\') {
         log::debug!(
-            target: TARGET_SCRIPT,
+            target: TARGET,
             "chunk: {:?} -> {}",
             String::from_utf8_lossy(&text[..text.len().min(120)]),
             name_str(&owner),
@@ -655,7 +649,7 @@ fn build_frame_index() -> FxHashMap<NameBuf, NameBuf> {
         }
     }
     log::debug!(
-        target: super::tally::TARGET,
+        target: TARGET,
         "addon frame index: {} frames declared in addon markup",
         index.len(),
     );
@@ -1136,17 +1130,17 @@ pub fn signal_event(event_id: i32) {
     // an interface rebuild rather than a world load.
     match name_str(&dump) {
         "PLAYER_ENTERING_WORLD" => {
-            log::debug!(target: super::tally::TARGET, "world: entered (loading screen ended)");
+            log::debug!(target: TARGET, "world: entered (loading screen ended)");
             dump_registry();
         }
         "PLAYER_LEAVING_WORLD" => {
-            log::debug!(target: super::tally::TARGET, "world: leaving (loading screen started)");
+            log::debug!(target: TARGET, "world: leaving (loading screen started)");
         }
         "PLAYER_LOGOUT" => {
-            log::debug!(target: super::tally::TARGET, "ui: unloading (reload or logout)");
+            log::debug!(target: TARGET, "ui: unloading (reload or logout)");
         }
         "VARIABLES_LOADED" => {
-            log::debug!(target: super::tally::TARGET, "ui: rebuilt (saved variables read back)");
+            log::debug!(target: TARGET, "ui: rebuilt (saved variables read back)");
         }
         _ => {}
     }
@@ -1300,38 +1294,19 @@ fn maybe_emit(st: &mut State) {
     // belongs to, and from there into the cumulative tables by the ordinary
     // merge.
     st.window.span_rejects += u64::from(SPAN_REJECTS.swap(0, Ordering::Relaxed));
-    // Ranking and formatting several tables is the expensive half of an
-    // emission, so a reader who silenced the per-second target skips the work
-    // and not just the output. The window still closes and still merges: the
-    // cumulative pass is built out of these windows.
-    if log::log_enabled!(target: TARGET_LIVE, log::Level::Debug) {
-        emit_tables(&st.window, window_ms, TOP_PER_SECOND, "", TARGET_LIVE);
-    }
+    emit_tables(&st.window, window_ms, TOP_PER_SECOND, "", TARGET);
     let window = std::mem::take(&mut st.window);
     merge(&mut st.cumulative, window);
     st.window_start = now;
     let cum_ms = super::hooks::clock_ticks_to_ms(span(st.cumulative_emit, now));
     if cum_ms >= CUMULATIVE_MS {
-        emit_tables(
-            &st.cumulative,
-            cum_ms,
-            TOP_CUMULATIVE,
-            "total ",
-            super::tally::TARGET,
-        );
-        // A memo that never hits looks exactly like one that works: its target
-        // is reached from a script, not through the dispatch this gauge
-        // measures, so no table above can show it.
-        super::getname::emit_cumulative();
-        super::hooks::emit_cumulative();
-        super::script_method::emit_cumulative();
-        super::seam_probe::emit_cumulative();
-        super::unitxp::emit_cumulative();
-        super::transmog::emit_cumulative();
-        #[cfg(not(wow_turbo_diff))]
-        super::filecache::emit_cumulative();
+        emit_tables(&st.cumulative, cum_ms, TOP_CUMULATIVE, "total ", TARGET);
         st.cumulative_emit = now;
     }
+    // The mod's own counters report on their own arm and their own clock; this
+    // call is one of the two paths that turn that clock, and it costs a load
+    // and a branch when they are not armed.
+    super::tally::heartbeat();
     let spent = span(now, wow_shared::tsc::rdtsc());
     if BODY_DEPTH.load(Ordering::Relaxed) == 0 {
         if DEPTH.load(Ordering::Relaxed) != 0 {
@@ -1708,10 +1683,10 @@ fn dump_registry() {
         // name.
         let p = unsafe { *(entry as *const *const u8) };
         let name = name_from_cstr(p);
-        log::debug!(target: TARGET_SCRIPT, "reg: {} listeners={n}", name_str(&name));
+        log::debug!(target: TARGET, "reg: {} listeners={n}", name_str(&name));
     }
     log::debug!(
-        target: super::tally::TARGET,
+        target: TARGET,
         "reg: {listened} of {count} events have listeners",
     );
 }

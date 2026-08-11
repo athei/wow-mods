@@ -28,7 +28,7 @@ use core::ffi::c_void;
 
 use wow_shared::identity;
 
-const LOG_TARGET: &str = "wow_translate";
+const LOG_TARGET: &str = "wow";
 const DLL_PROCESS_ATTACH: u32 = 1;
 
 #[unsafe(export_name = "DllMain")]

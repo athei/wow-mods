@@ -492,7 +492,7 @@ pub fn open_disk_lookup(image_base: usize) {
         // before the client's own threads reach that code.
         if !unsafe { wow_hook::patch_bytes(va, &expected, &NOPS, label) } {
             log::warn!(
-                target: super::LOG_TARGET,
+                target: wow_hook::LOG_TARGET,
                 "{label}: left unpatched; loose files resolve only on the scoped paths",
             );
         }
@@ -511,7 +511,7 @@ fn scene_end_chain(owner_va: usize) -> bool {
         |(name, base)| format!("{name}+{:#x}", owner_va.wrapping_sub(base)),
     );
     log::info!(
-        target: super::LOG_TARGET,
+        target: wow_hook::LOG_TARGET,
         "scene end: the entry was re-hooked by {owner}; chaining underneath it",
     );
     false

@@ -20,7 +20,12 @@ use core::{
 
 use minhook::MinHook;
 
-const LOG_TARGET: &str = "wow::hook";
+/// Log target for everything about patching.
+///
+/// Installs, byte patches, refusals and the prologue watchdog. Public so the
+/// mods can put their own hook-ownership narration on the same switch as the
+/// watchdog lines it answers.
+pub const LOG_TARGET: &str = "wow::hook";
 
 #[link(name = "kernel32")]
 unsafe extern "system" {

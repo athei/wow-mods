@@ -106,7 +106,7 @@ pub fn set_font_size(value: f64) -> i32 {
     // clamped to [10, 100] above
     let size = clamped as i32;
     FONT_SIZE.store(size, Ordering::Relaxed);
-    log::info!(target: "wow_turbo", "worldtext: font size set to {size}");
+    log::info!(target: crate::win::LOG_TARGET, "worldtext: font size set to {size}");
     size
 }
 
@@ -140,10 +140,10 @@ pub fn set_font_name(name: String) -> String {
     if let Ok(faces) = &*FACES {
         let stem = normalize_stem(&echo);
         if faces.resolve(&stem).is_some() {
-            log::info!(target: "wow_turbo", "worldtext: font name {echo:?} resolved to {stem}");
+            log::info!(target: crate::win::LOG_TARGET, "worldtext: font name {echo:?} resolved to {stem}");
         } else {
             log::info!(
-                target: "wow_turbo",
+                target: crate::win::LOG_TARGET,
                 "worldtext: font name {echo:?} matches no face; lines fall back to {}",
                 FACE_ORDER[0]
             );
@@ -206,11 +206,11 @@ impl Faces {
         let loaded = load_system_face(stem);
         match loaded {
             Some(_) => log::info!(
-                target: "wow_turbo",
+                target: crate::win::LOG_TARGET,
                 "worldtext: system face {stem} loaded"
             ),
             None => log::info!(
-                target: "wow_turbo",
+                target: crate::win::LOG_TARGET,
                 "worldtext: no system face matches {stem}; falling back to the client faces"
             ),
         }
@@ -306,7 +306,7 @@ fn load_system_face(stem: &str) -> Option<&'static crate::typeset::Face> {
                 return Some(&*Box::leak(Box::new(face)));
             }
             log::warn!(
-                target: "wow_turbo",
+                target: crate::win::LOG_TARGET,
                 "worldtext: {} matched but did not parse as a font",
                 path.display()
             );
@@ -352,7 +352,7 @@ fn load_faces() -> Result<Faces, String> {
             faces.push((stem, &*Box::leak(Box::new(face))));
         } else {
             log::warn!(
-                target: "wow_turbo",
+                target: crate::win::LOG_TARGET,
                 "worldtext: {} did not parse as a font",
                 path.display()
             );
@@ -368,7 +368,7 @@ fn load_faces() -> Result<Faces, String> {
         system: Mutex::new(Vec::new()),
     };
     log::info!(
-        target: "wow_turbo",
+        target: crate::win::LOG_TARGET,
         "worldtext: client faces loaded: {}; any system font resolves by file name on demand",
         registry.roster()
     );
@@ -864,7 +864,7 @@ impl Overlay {
                 LEAKED_ON_DEVICE_SWAP.add(&armed, leaked);
             }
             log::warn!(
-                target: "wow_turbo",
+                target: crate::win::LOG_TARGET,
                 "worldtext: {leaked} overlay entries leaked on a device swap"
             );
         }
@@ -1137,7 +1137,7 @@ static LAST_PICK: Mutex<String> = Mutex::new(String::new());
 fn note_pick(label: &str) {
     let mut last = LAST_PICK.lock().expect("game-thread only");
     if *last != label {
-        log::info!(target: "wow_turbo", "worldtext: drawing new lines with {label}");
+        log::info!(target: crate::win::LOG_TARGET, "worldtext: drawing new lines with {label}");
         last.clear();
         last.push_str(label);
     }

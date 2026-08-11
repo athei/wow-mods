@@ -20,8 +20,10 @@
 //! sampler's collision share when the callers above these entries carry no
 //! frame pointers.
 //!
-//! Counters ride the same arm as the event gauge (`wow::gauge` at debug):
-//! unarmed, every entry point is a load and a branch. All writers are the
+//! Counters ride the counter arm (`wow::perf` at debug), which is NOT the
+//! event gauge's: these cost nothing to keep, that one does not, so asking
+//! for these numbers must not buy it. Unarmed, every entry point here is a
+//! load and a branch. All writers are the
 //! game thread except the two bone-animation entry counters, which the
 //! client's own worker thread can also reach and which are therefore declared
 //! as the locked-add shape.

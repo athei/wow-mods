@@ -10,7 +10,7 @@ mod handlers;
 /// The PE side fires a one-shot `InitLogger` thunk from `DllMain` (see
 /// `handlers::init_logger_handler`) before any other call, which registers
 /// `env_logger`; a handler that ran before it would silently no-op.
-const LOG_TARGET: &str = "wow_mods::unix";
+const LOG_TARGET: &str = "wow";
 
 #[unsafe(no_mangle)]
 pub static __wine_unix_call_funcs: [UnixCallFn; Thunks::COUNT] = DISPATCH_TABLE;

@@ -1,11 +1,19 @@
 //! Counter primitives for the armed instrumentation: one arm, two disciplines.
 //!
 //! Every diagnostic counter in the crate is written through this module and
-//! rides one arm, the event gauge's `wow::gauge` at debug, resolved once. An
-//! unarmed session therefore pays a cached load and a branch per counting site
-//! and touches no counter at all. The exception is a permanent tripwire that
-//! has to fire at the default filter, which counts on its cold branch only and
-//! says so where it does it.
+//! rides one arm, [`TARGET`] at debug, resolved once. An unarmed session
+//! therefore pays a cached load and a branch per counting site and touches no
+//! counter at all. The exception is a permanent tripwire that has to fire at
+//! the default filter, which counts on its cold branch only and says so where
+//! it does it.
+//!
+//! This arm is deliberately NOT the event gauge's. The gauge instruments the
+//! client's script dispatch and charges over a second of wall per minute for
+//! it; these counters cost nothing to keep. Sharing one switch meant asking
+//! for the cheap half bought the expensive half silently, so the two sit on
+//! separate targets and resolve separate arms, and this module owns the
+//! cadence that reports its own ([`heartbeat`]) rather than borrowing the
+//! gauge's.
 //!
 //! Two properties are carried separately, because they are independent of each
 //! other. Being armed is a value the caller holds: [`arm`] hands out the
@@ -24,8 +32,25 @@
 
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
-/// Log target every cumulative counter line is written to.
-pub const TARGET: &str = "wow::gauge";
+/// Log target every cumulative counter line is written to, and its arm.
+///
+/// Grouped with the counter calibration the numbers are read through (the
+/// engine clock's rate and read cost), because that is the one figure needed
+/// to judge every span below it.
+pub const TARGET: &str = "wow::perf";
+
+/// Milliseconds between cumulative reports.
+const CADENCE_MS: u64 = 60_000;
+
+/// Engine ticks at the last report, 0 until the first heartbeat.
+static LAST_REPORT: AtomicU64 = AtomicU64::new(0);
+
+/// Whether the counters are armed, resolved once on first use.
+///
+/// The logger is installed in `DllMain` before any hook can fire and the
+/// filter never changes mid-run, so one resolution stands for the session.
+static ARMED: std::sync::LazyLock<bool> =
+    std::sync::LazyLock::new(|| log::log_enabled!(target: TARGET, log::Level::Debug));
 
 /// Proof that the arm was read, without which no counter can be written.
 ///
@@ -37,7 +62,36 @@ pub struct Armed;
 /// The token while the instrumentation is armed, `None` while it is not.
 #[must_use]
 pub fn arm() -> Option<Armed> {
-    super::events::armed().then_some(Armed)
+    (*ARMED).then_some(Armed)
+}
+
+/// Report every family's counters once a cadence has elapsed.
+///
+/// Called from a per-frame path and from the event gauge's own emission, so
+/// the report survives either being switched off; the elapsed check makes the
+/// extra call free. The first heartbeat only starts the clock, so the first
+/// report covers a full cadence rather than however long start-up took.
+pub fn heartbeat() {
+    if arm().is_none() {
+        return;
+    }
+    let now = wow_shared::tsc::rdtsc();
+    let last = LAST_REPORT.load(Ordering::Relaxed);
+    if last != 0 && super::hooks::clock_ticks_to_ms(now.wrapping_sub(last)) < CADENCE_MS {
+        return;
+    }
+    LAST_REPORT.store(now, Ordering::Relaxed);
+    if last == 0 {
+        return;
+    }
+    super::getname::emit_cumulative();
+    super::hooks::emit_cumulative();
+    super::script_method::emit_cumulative();
+    super::seam_probe::emit_cumulative();
+    super::unitxp::emit_cumulative();
+    super::transmog::emit_cumulative();
+    #[cfg(not(wow_turbo_diff))]
+    super::filecache::emit_cumulative();
 }
 
 /// A counter only the game thread writes, load-add-store on purpose.

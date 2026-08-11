@@ -3,7 +3,7 @@ use std::{ffi::OsStr, path::Path};
 
 use log::{error, info, warn};
 
-const LOG_TARGET: &str = "version";
+const LOG_TARGET: &str = "wow";
 
 const FORMAT_MESSAGE_FROM_SYSTEM: u32 = 0x1000;
 const FORMAT_MESSAGE_IGNORE_INSERTS: u32 = 0x200;

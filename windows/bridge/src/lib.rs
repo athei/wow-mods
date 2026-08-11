@@ -14,7 +14,7 @@ use core::ffi::c_void;
 use log::{error, info};
 use wow_shared::identity;
 
-const LOG_TARGET: &str = "wow_mods";
+const LOG_TARGET: &str = "wow";
 
 // Wine unixlib symbols from winecrt0's unix_lib.o.
 // __wine_unixlib_handle: set by the loader after __wine_init_unix_call succeeds.

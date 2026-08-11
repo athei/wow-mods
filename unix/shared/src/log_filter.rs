@@ -37,11 +37,12 @@ mod tests {
 
     /// Whether `target` logs at `level` under the filter `user` asked for.
     ///
-    /// Builds the logger without installing it, which is what lets the
-    /// sub-target rules below be asserted rather than described: the mods
-    /// split one gauge's output across a parent target and its children
-    /// precisely so a reader can silence a cadence, and that only works if
-    /// the longest matching directive is the one that decides.
+    /// Builds the logger without installing it, which is what lets the rules
+    /// below be asserted rather than described. The mods split their output
+    /// into flat `wow::<topic>` targets so a reader enables the topics they
+    /// are working on, and two of those topics arm instrumentation that costs
+    /// very different amounts, so which directive wins for which target is
+    /// load-bearing rather than cosmetic.
     fn enabled(user: &str, target: &str, level: log::Level) -> bool {
         use log::Log as _;
 
@@ -51,32 +52,42 @@ mod tests {
             .enabled(&log::Metadata::builder().level(level).target(target).build())
     }
 
+    /// Every topic the mods log under, flat beneath the root.
+    const TOPICS: [&str; 4] = ["wow::hook", "wow::gc", "wow::script", "wow::perf"];
+
     #[test]
-    fn a_child_target_can_be_silenced_without_silencing_its_parent() {
-        let f = "wow=debug,wow::gauge::live=info";
-        assert!(enabled(f, "wow::gauge", log::Level::Debug));
-        assert!(enabled(f, "wow::gauge::script", log::Level::Debug));
-        assert!(!enabled(f, "wow::gauge::live", log::Level::Debug));
-        // Still a warning channel: silencing is a volume control, not a mute.
-        assert!(enabled(f, "wow::gauge::live", log::Level::Warn));
+    fn the_counter_topic_arms_without_arming_the_expensive_one() {
+        // The reason the two are separate targets: the counters cost nothing
+        // to keep, the script gauge charges over a second of wall per minute,
+        // and asking for the first must not buy the second.
+        let f = "wow::perf=debug";
+        assert!(enabled(f, "wow::perf", log::Level::Debug));
+        assert!(!enabled(f, "wow::script", log::Level::Debug));
     }
 
     #[test]
-    fn arming_a_parent_arms_every_child() {
+    fn one_topic_can_be_silenced_out_of_the_root() {
+        let f = "wow=debug,wow::script=info";
+        assert!(!enabled(f, "wow::script", log::Level::Debug));
+        for t in TOPICS.iter().filter(|t| **t != "wow::script") {
+            assert!(enabled(f, t, log::Level::Debug), "{t}");
+        }
+        // Silencing is a volume control, not a mute.
+        assert!(enabled(f, "wow::script", log::Level::Warn));
+    }
+
+    #[test]
+    fn the_root_covers_every_topic_and_the_bare_identity_lines() {
         let f = "wow=debug";
-        for t in [
-            "wow::gauge",
-            "wow::gauge::live",
-            "wow::gauge::script",
-            "wow::gc",
-        ] {
+        assert!(enabled(f, "wow", log::Level::Debug));
+        for t in TOPICS {
             assert!(enabled(f, t, log::Level::Debug), "{t}");
         }
     }
 
     #[test]
-    fn an_unasked_for_namespace_stays_at_the_info_baseline() {
-        let f = "wow::gauge=debug";
+    fn an_unasked_for_topic_stays_at_the_info_baseline() {
+        let f = "wow::script=debug";
         assert!(!enabled(f, "wow::gc", log::Level::Debug));
         assert!(enabled(f, "wow::gc", log::Level::Info));
     }
