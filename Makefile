@@ -57,7 +57,7 @@ GAME_MODS = $(dir $(WOW_EXE))mods
 
 MAKEFLAGS += --silent
 
-.PHONY: all windows windows-avx unix install bundle test fmt clippy audit doc check unsafe-debt \
+.PHONY: all windows windows-avx unix install bundle test test-isolated fmt clippy audit doc check unsafe-debt \
         lint-counts lint-counts-update update-inventories \
         upgrade upgrade-incompat clean require-wow-exe require-wine-sdk
 
@@ -192,6 +192,22 @@ test:
 	# wow_turbo's portable numeric kernels are built+run as x86_64-apple-darwin so
 	# the real SSE path executes under the same Rosetta translation the shipped
 	# 32-bit DLL uses — not a native-aarch64 stand-in.
+	#
+	# `cargo test`, not nextest, and the reason is that same Rosetta translation.
+	# nextest runs a process per test, and spawning this crate's x86_64 test
+	# binary costs ~1.4s of Rosetta setup every time — a fixed toll no amount of
+	# parallelism pays down. Measured over the 1846 tests: 135s under nextest,
+	# 7s in one threaded process. Same tests, same target, same assertions; what
+	# is given up is per-test process isolation, which `make test-isolated`
+	# still buys when a test is suspected of leaking into its neighbours.
+	cd windows && cargo test -p wow-turbo-dll --target $(UNIX_RELEASE_TARGET)
+	# Native aarch64, no Rosetta toll, so this leg keeps nextest.
+	cd unix && cargo nextest run
+
+# The same tests with a process per test. Slow (see `test`), and worth it only
+# to pin down a test that passes alone and fails in company, or one that aborts
+# the whole run rather than failing.
+test-isolated:
 	cd windows && cargo nextest run -p wow-turbo-dll --target $(UNIX_RELEASE_TARGET)
 	cd unix && cargo nextest run
 
