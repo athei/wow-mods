@@ -108,6 +108,16 @@ static CLIP_HIST: [Counter; CLIP_HIST_EDGES.len() + 1] = [
 /// loop would have lanes to fill.
 const CLIP_HIST_EDGES: [u32; 3] = [3, 4, 8];
 
+static CLIP_KEPT: Accum = Accum::zero();
+static CLIP_DROPPED: Accum = Accum::zero();
+static CLIP_CUT: Accum = Accum::zero();
+
+static FACE_PASSES: Accum = Accum::zero();
+static FACE_VISITED: Accum = Accum::zero();
+static FACE_BACK: Accum = Accum::zero();
+static FACE_WIPED: Accum = Accum::zero();
+static FACE_SWEPT: Accum = Accum::zero();
+
 static PARTICLE_LOCKS: Counter = Counter::zero();
 static RAIN_LOCKS: Counter = Counter::zero();
 
@@ -394,6 +404,77 @@ pub fn clip_polygon(count: usize) {
     CLIP_HIST[bucket].bump(&armed);
 }
 
+/// One event on a 64-bit counter: the `Accum` twin of [`super::tally::bump`].
+#[inline]
+fn count_one(counter: &Accum) {
+    let Some(armed) = super::tally::arm() else {
+        return;
+    };
+    counter.add(&armed, 1);
+}
+
+/// A clip that found the polygon wholly inside the plane and returned it untouched.
+///
+/// The two early exits leave the polygon alone; only [`clip_cut`] pays the
+/// snapshot. The clip's cost per call is a blend of three very different
+/// bodies, and this split is what says how much of it a cheaper snapshot
+/// reaches.
+#[inline]
+pub fn clip_kept() {
+    count_one(&CLIP_KEPT);
+}
+
+/// A clip that found the polygon wholly outside the plane and dropped it.
+#[inline]
+pub fn clip_dropped() {
+    count_one(&CLIP_DROPPED);
+}
+
+/// A clip whose plane cuts the polygon, so it snapshots and rebuilds.
+#[inline]
+pub fn clip_cut() {
+    count_one(&CLIP_CUT);
+}
+
+/// One visited candidate face, on the counter for how it ended.
+#[inline]
+fn sweep_face(outcome: &Accum) {
+    let Some(armed) = super::tally::arm() else {
+        return;
+    };
+    FACE_VISITED.add(&armed, 1);
+    outcome.add(&armed, 1);
+}
+
+/// A candidate face rejected by the front-face dot, before any clip.
+///
+/// `seam clip` prices one clip; this family prices the loop that asks for them.
+/// The gathered face list is walked linearly with that dot as its only filter,
+/// so `visited` against `sweep` is the multiplier behind the clip rate, and
+/// [`sweep_face_wiped`] is the ceiling on what a broad-phase cull could remove.
+#[inline]
+pub fn sweep_face_back_facing() {
+    sweep_face(&FACE_BACK);
+}
+
+/// A candidate face the clip chain emptied: every plane's work bought nothing.
+#[inline]
+pub fn sweep_face_wiped() {
+    sweep_face(&FACE_WIPED);
+}
+
+/// A candidate face that survived the clip chain and reached the swept-distance pass.
+#[inline]
+pub fn sweep_face_swept() {
+    sweep_face(&FACE_SWEPT);
+}
+
+/// One pass of the face loop, i.e. one prism face tested against the gathered list.
+#[inline]
+pub fn sweep_face_pass() {
+    count_one(&FACE_PASSES);
+}
+
 /// One dynamic-buffer resize/lock cycle in the particle emitter render.
 #[inline]
 pub fn particle_lock() {
@@ -640,12 +721,27 @@ pub fn emit_cumulative() {
     if clip_calls != 0 {
         log::debug!(
             target: super::tally::TARGET,
-            "seam clip: {clip_calls} calls, verts {}, hist {}/{}/{}/{}",
+            "seam clip: {clip_calls} calls, verts {}, hist {}/{}/{}/{}, \
+             kept {}, dropped {}, cut {}",
             CLIP_VERTS.get(),
             CLIP_HIST[0].get(),
             CLIP_HIST[1].get(),
             CLIP_HIST[2].get(),
             CLIP_HIST[3].get(),
+            CLIP_KEPT.get(),
+            CLIP_DROPPED.get(),
+            CLIP_CUT.get(),
+        );
+    }
+    let face_passes = FACE_PASSES.get();
+    if face_passes != 0 {
+        log::debug!(
+            target: super::tally::TARGET,
+            "seam faces: {face_passes} passes, visited {}, back {}, wiped {}, swept {}",
+            FACE_VISITED.get(),
+            FACE_BACK.get(),
+            FACE_WIPED.get(),
+            FACE_SWEPT.get(),
         );
     }
     let ground = TRACE_GROUND.get();

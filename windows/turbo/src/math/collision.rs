@@ -2352,14 +2352,15 @@ pub fn collision_clip_polygon_by_plane__6318c0(
     if count == 0 {
         return 0;
     }
-    // The one place a math kernel reaches into the counter module, and the
-    // reason is that there is no other honest place to put it: this is the
-    // hottest function in the process by a factor of two, and it is entered
-    // from three directions — the guest adapter and two sibling kernels — so
-    // counting at the call sites would be three approximations of one number,
-    // each with its own early-out to reason about. `win` is compiled only for
-    // the 32-bit target, so the host tests build the kernel without it and it
-    // stays pure for them.
+    // A math kernel reaching into the counter module, and the reason is that
+    // there is no other honest place to put it: this is the hottest function in
+    // the process by a factor of two, and it is entered from three directions —
+    // the guest adapter and two sibling kernels — so counting at the call sites
+    // would be three approximations of one number, each with its own early-out
+    // to reason about. The same argument holds one level up, in the face loop
+    // that drives most of these calls. `win` is compiled only for the 32-bit
+    // target, so the host tests build both kernels without it and they stay
+    // pure for them.
     #[cfg(target_arch = "x86")]
     crate::win::seam_probe::clip_polygon(count);
     let mut dist = [0.0f32; 15];
@@ -2377,11 +2378,17 @@ pub fn collision_clip_polygon_by_plane__6318c0(
         dist[i] = d;
     }
     if !(min_dist <= eps_neg) {
+        #[cfg(target_arch = "x86")]
+        crate::win::seam_probe::clip_kept();
         return count;
     }
     if !(eps_pos <= max_dist) {
+        #[cfg(target_arch = "x86")]
+        crate::win::seam_probe::clip_dropped();
         return 0;
     }
+    #[cfg(target_arch = "x86")]
+    crate::win::seam_probe::clip_cut();
 
     let saved_verts = *verts;
     let saved_tags = *tags;
@@ -2923,9 +2930,17 @@ pub fn collision_sweep_polygon_against_faces__632700(
     clip_eps_pos: f32,
 ) -> u32 {
     let mut hit = 0u32;
+    // The face loop is the clip's multiplier: the gathered list is walked
+    // linearly, once per front-facing prism face, with the dot below as its
+    // only filter. `seam clip` prices one clip; this prices how many the loop
+    // asks for and how many of them buy nothing.
+    #[cfg(target_arch = "x86")]
+    crate::win::seam_probe::sweep_face_pass();
     for (idx, face) in faces.iter().enumerate() {
         let dot = face[0] * sweep_dir[0] + face[1] * sweep_dir[1] + face[2] * sweep_dir[2];
         if !(dot <= front_eps) {
+            #[cfg(target_arch = "x86")]
+            crate::win::seam_probe::sweep_face_back_facing();
             continue;
         }
         // Fresh scratch polygon: 3 verts copied from the face, tags = -1
@@ -2950,8 +2965,12 @@ pub fn collision_sweep_polygon_against_faces__632700(
             }
         }
         if count == 0 {
+            #[cfg(target_arch = "x86")]
+            crate::win::seam_probe::sweep_face_wiped();
             continue;
         }
+        #[cfg(target_arch = "x86")]
+        crate::win::seam_probe::sweep_face_swept();
 
         let mut local = f32::MAX;
         let got = collision_ray_polygon_sweep_distance__632830(

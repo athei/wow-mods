@@ -11,9 +11,11 @@
 //! honestly from inside itself. `crate::math::collision`'s polygon clip is the
 //! case — the hottest function in the process, reached from its own guest
 //! adapter and from two sibling kernels — so counting it at the call sites
-//! would be three approximations of one number. The call is `cfg`-gated to the
-//! 32-bit target, which is the only one this module is compiled for, so the
-//! host tests still build those kernels with nothing of `win` in them.
+//! would be three approximations of one number. Its face loop is counted from
+//! inside for the same reason, and because the two numbers only mean anything
+//! beside each other. The calls are `cfg`-gated to the 32-bit target, which is
+//! the only one this module is compiled for, so the host tests still build
+//! those kernels with nothing of `win` in them.
 
 #[cfg(wow_turbo_diff)]
 mod diff;
