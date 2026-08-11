@@ -20622,8 +20622,9 @@ enum GcJobKind {
 /// Published only by [`gc_par_begin`], whole, under the `job` lock; `epoch`
 /// advances with every publication. Participants act on a copy, and any
 /// claim of shared cursor state revalidates `epoch` first (with `active`
-/// held), so a participant that slept through a publication can never mix
-/// a stale spec with a newer job's cursor.
+/// held, against the lock-free [`GcParShared::cur_epoch`] mirror), so a
+/// participant that slept through a publication can never mix a stale spec
+/// with a newer job's cursor.
 #[derive(Clone, Copy)]
 struct GcJob {
     /// Publication generation; workers sleep until it advances.
@@ -20761,6 +20762,20 @@ struct GcParShared {
     job: std::sync::Mutex<GcJob>,
     /// Wakes the workers for a new job.
     cv: std::sync::Condvar,
+    /// The published generation, mirrored out of `job` for the claim loops.
+    ///
+    /// A participant revalidates the generation before every chunk claim, and
+    /// taking the `job` mutex to read one `u64` puts a lock (and, contended, a
+    /// futex wait) inside a loop whose body is a couple of microseconds. The
+    /// mutex never made the check atomic with the claim that follows it —
+    /// it is released first either way — so what keeps a stale participant
+    /// off a newer job's cursor is `active`, raised before the check and
+    /// lowered after the work: a coordinator publishes only after its join
+    /// has observed `active == 0`. This mirror carries the same read with the
+    /// same total order and none of the blocking. Written under the `job`
+    /// lock, after the cursor reset, so a participant that observes a
+    /// generation also observes that generation's cursor.
+    cur_epoch: core::sync::atomic::AtomicU64,
 }
 
 /// A mark participant's view of the collect: local stack + shared routing.
@@ -20938,13 +20953,13 @@ fn gc_par_propagate(shared: &GcParShared, g: usize, coordinator: bool) {
 /// and unlinking touch only this participant's buckets.
 ///
 /// Termination invariant: a claim raises `active` first, revalidates the
-/// job's epoch under the `job` lock, and flushes its `freed_strings` and
-/// `nblocks` accounting before lowering `active`. The coordinator therefore
-/// observes cursor-exhausted ∧ `active == 0` only once no participant holds
-/// unswept buckets or unflushed accounting. The epoch check also keeps a
-/// participant that slept through a publication off a newer job's cursor:
-/// the epoch cannot advance while it holds `active`, and the cursor is only
-/// reset under the `job` lock the check takes.
+/// job's generation against [`GcParShared::cur_epoch`], and flushes its
+/// `freed_strings` and `nblocks` accounting before lowering `active`. The
+/// coordinator therefore observes cursor-exhausted ∧ `active == 0` only once
+/// no participant holds unswept buckets or unflushed accounting. The epoch
+/// check also keeps a participant that slept through a publication off a
+/// newer job's cursor: the epoch cannot advance while it holds `active`,
+/// because a coordinator publishes only after its join saw `active == 0`.
 fn gc_par_sweep_strt(shared: &GcParShared, job: &GcJob) {
     use core::sync::atomic::{AtomicU32, Ordering};
 
@@ -20952,7 +20967,7 @@ fn gc_par_sweep_strt(shared: &GcParShared, job: &GcJob) {
     const BATCH: usize = 256;
     loop {
         shared.active.fetch_add(1, Ordering::SeqCst);
-        if shared.job.lock().unwrap().epoch != job.epoch {
+        if shared.cur_epoch.load(Ordering::SeqCst) != job.epoch {
             shared.active.fetch_sub(1, Ordering::SeqCst);
             break;
         }
@@ -21021,11 +21036,12 @@ fn gc_par_worker(shared: &GcParShared) {
 
 /// Publish a job: reset `done` and the cursor, bump the epoch, wake the workers.
 ///
-/// The spec, the epoch and the cursor reset all land under the `job` lock,
-/// so a worker (which copies the spec under the same lock) and a stale
-/// claimant (which revalidates the epoch under it) each see either the
-/// previous job whole or this one whole. Returns the published job for the
-/// coordinator's own participation.
+/// The spec, the epoch and the cursor reset all land under the `job` lock, so
+/// a worker (which copies the spec under the same lock) sees either the
+/// previous job whole or this one whole. The [`GcParShared::cur_epoch`] mirror
+/// is stored last, so a participant that observes the new generation through
+/// it also observes the cursor reset that belongs to it. Returns the published
+/// job for the coordinator's own participation.
 fn gc_par_begin(shared: &GcParShared, mut spec: GcJob) -> GcJob {
     use core::sync::atomic::Ordering;
     shared.done.store(false, Ordering::SeqCst);
@@ -21034,6 +21050,7 @@ fn gc_par_begin(shared: &GcParShared, mut spec: GcJob) -> GcJob {
     *job = spec;
     shared.bucket_cursor.store(0, Ordering::SeqCst);
     shared.freed_strings.store(0, Ordering::SeqCst);
+    shared.cur_epoch.store(spec.epoch, Ordering::SeqCst);
     drop(job);
     shared.cv.notify_all();
     spec
@@ -21063,6 +21080,7 @@ fn gc_pool() -> &'static GcParShared {
             freed_strings: core::sync::atomic::AtomicU32::new(0),
             job: std::sync::Mutex::new(GcJob::mark(0)),
             cv: std::sync::Condvar::new(),
+            cur_epoch: core::sync::atomic::AtomicU64::new(0),
         });
         for i in 0..workers {
             let s = std::sync::Arc::clone(&shared);
@@ -23313,10 +23331,11 @@ fn pq_try_consume(this: *mut u8, cursor: usize, ctx: &mut [u32; 9]) -> bool {
 /// Particle-build pool participant: claim entry chunks, build each.
 ///
 /// The claim discipline copies the sweep participant exactly: raise
-/// `active` first, revalidate the epoch under the `job` lock, then claim
-/// off the shared cursor: a participant that slept through a publication
-/// can never mix a stale view with a newer job's cursor, and the view
-/// pointers stay live while any participant is active.
+/// `active` first, revalidate the generation against
+/// [`GcParShared::cur_epoch`], then claim off the shared cursor: a
+/// participant that slept through a publication can never mix a stale view
+/// with a newer job's cursor, and the view pointers stay live while any
+/// participant is active.
 fn pq_par_build(shared: &GcParShared, job: &GcJob) {
     use core::sync::atomic::Ordering;
     // ~11 us of build work per claim against a sub-microsecond claim cost,
@@ -23325,7 +23344,7 @@ fn pq_par_build(shared: &GcParShared, job: &GcJob) {
     const CHUNK: usize = 8;
     loop {
         shared.active.fetch_add(1, Ordering::SeqCst);
-        if shared.job.lock().unwrap().epoch != job.epoch {
+        if shared.cur_epoch.load(Ordering::SeqCst) != job.epoch {
             shared.active.fetch_sub(1, Ordering::SeqCst);
             break;
         }
@@ -31258,8 +31277,9 @@ fn bdl_collect_anim_roots(base: *mut u8, out: &mut Vec<usize>) {
 /// Bone-animation pool participant: claim root chunks, animate each.
 ///
 /// The claim discipline copies the sweep participant exactly: raise `active`
-/// first, revalidate the epoch under the `job` lock, then claim off the
-/// shared cursor. The chunk is small because per-root cost is heavy-tailed
+/// first, revalidate the generation against [`GcParShared::cur_epoch`], then
+/// claim off the shared cursor. The chunk is small because per-root cost is
+/// heavy-tailed
 /// (attachment subtrees): the claim is one `fetch_add` against
 /// multi-microsecond roots, and a larger chunk risks a long tail stranded on
 /// one lane.
@@ -31275,7 +31295,7 @@ fn gc_par_animate_roots(shared: &GcParShared, job: &GcJob) {
     const CHUNK: usize = 2;
     loop {
         shared.active.fetch_add(1, Ordering::SeqCst);
-        if shared.job.lock().unwrap().epoch != job.epoch {
+        if shared.cur_epoch.load(Ordering::SeqCst) != job.epoch {
             shared.active.fetch_sub(1, Ordering::SeqCst);
             break;
         }
