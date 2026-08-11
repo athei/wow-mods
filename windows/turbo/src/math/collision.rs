@@ -2362,7 +2362,7 @@ pub fn collision_clip_polygon_by_plane__6318c0(
     // target, so the host tests build both kernels without it and they stay
     // pure for them.
     #[cfg(target_arch = "x86")]
-    crate::win::seam_probe::clip_polygon(count);
+    let counters = crate::win::seam_probe::clip_call(count);
     // The three scratch buffers here are written for the live prefix and read
     // for the live prefix, and never touched above it — so declaring them
     // initialised is not free bookkeeping, it is the cost the profiler came
@@ -2389,16 +2389,22 @@ pub fn collision_clip_polygon_by_plane__6318c0(
     }
     if !(min_dist <= eps_neg) {
         #[cfg(target_arch = "x86")]
-        crate::win::seam_probe::clip_kept();
+        if let Some(c) = &counters {
+            c.kept();
+        }
         return count;
     }
     if !(eps_pos <= max_dist) {
         #[cfg(target_arch = "x86")]
-        crate::win::seam_probe::clip_dropped();
+        if let Some(c) = &counters {
+            c.dropped();
+        }
         return 0;
     }
     #[cfg(target_arch = "x86")]
-    crate::win::seam_probe::clip_cut();
+    if let Some(c) = &counters {
+        c.cut();
+    }
 
     // SAFETY: the distance loop above wrote every slot below `count`, and only
     // those slots are read from here on.

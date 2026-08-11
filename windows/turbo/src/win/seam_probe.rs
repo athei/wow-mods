@@ -382,7 +382,16 @@ pub fn anim_par_gated() {
     super::tally::bump(&ANIM_PAR_GATED);
 }
 
-/// One polygon clip, and how many vertices it walked.
+/// One clip call's counters, with the arm resolved once for the whole call.
+///
+/// The clip counts twice per call — the call itself, then whichever of its
+/// three exits it takes — and it is the hottest function in the process, so
+/// reading the arm again at the exit would double the unarmed cost of the site
+/// for nothing. [`clip_call`] reads it once and this carries it. Zero-sized,
+/// so the `Option` a caller holds across the body is a byte on the stack.
+pub struct ClipCall(Armed);
+
+/// Count one polygon clip and hold the arm for its exit.
 ///
 /// The profiler put `collision_clip_polygon_by_plane` at 6.14% of the thread,
 /// the hottest function in the process, and a sampler cannot say whether that
@@ -390,10 +399,8 @@ pub fn anim_par_gated() {
 /// movement counters above it, and the vertex distribution against the choice
 /// between making the loop cheaper and running it less.
 #[inline]
-pub fn clip_polygon(count: usize) {
-    let Some(armed) = super::tally::arm() else {
-        return;
-    };
+pub fn clip_call(count: usize) -> Option<ClipCall> {
+    let armed = super::tally::arm()?;
     let n = u32::try_from(count).unwrap_or(u32::MAX);
     CLIP_CALLS.add(&armed, 1);
     CLIP_VERTS.add(&armed, u64::from(n));
@@ -402,6 +409,32 @@ pub fn clip_polygon(count: usize) {
         .position(|&edge| n <= edge)
         .unwrap_or(CLIP_HIST_EDGES.len());
     CLIP_HIST[bucket].bump(&armed);
+    Some(ClipCall(armed))
+}
+
+impl ClipCall {
+    /// The polygon was wholly inside the plane and came back untouched.
+    ///
+    /// The two early exits leave the polygon alone; only [`ClipCall::cut`] pays
+    /// the snapshot. The clip's cost per call is a blend of three very
+    /// different bodies, and this split is what says how much of it a cheaper
+    /// snapshot reaches.
+    #[inline]
+    pub fn kept(&self) {
+        CLIP_KEPT.add(&self.0, 1);
+    }
+
+    /// The polygon was wholly outside the plane and was dropped.
+    #[inline]
+    pub fn dropped(&self) {
+        CLIP_DROPPED.add(&self.0, 1);
+    }
+
+    /// The plane cut the polygon, so the snapshot and the rebuild were paid.
+    #[inline]
+    pub fn cut(&self) {
+        CLIP_CUT.add(&self.0, 1);
+    }
 }
 
 /// One event on a 64-bit counter: the `Accum` twin of [`super::tally::bump`].
@@ -411,29 +444,6 @@ fn count_one(counter: &Accum) {
         return;
     };
     counter.add(&armed, 1);
-}
-
-/// A clip that found the polygon wholly inside the plane and returned it untouched.
-///
-/// The two early exits leave the polygon alone; only [`clip_cut`] pays the
-/// snapshot. The clip's cost per call is a blend of three very different
-/// bodies, and this split is what says how much of it a cheaper snapshot
-/// reaches.
-#[inline]
-pub fn clip_kept() {
-    count_one(&CLIP_KEPT);
-}
-
-/// A clip that found the polygon wholly outside the plane and dropped it.
-#[inline]
-pub fn clip_dropped() {
-    count_one(&CLIP_DROPPED);
-}
-
-/// A clip whose plane cuts the polygon, so it snapshots and rebuilds.
-#[inline]
-pub fn clip_cut() {
-    count_one(&CLIP_CUT);
 }
 
 /// One visited candidate face, on the counter for how it ended.
