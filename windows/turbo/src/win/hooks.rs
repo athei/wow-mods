@@ -30978,6 +30978,33 @@ thread_local! {
         const { core::cell::RefCell::new(Vec::new()) };
 }
 
+/// What an armed bucket sort counted, so its cost per comparison is readable.
+#[derive(Default)]
+struct BdlSortTally {
+    /// Comparisons the sort made.
+    cmps: u64,
+    /// Comparisons the two element type tags alone decided.
+    tag: u64,
+}
+
+/// The element type tag the extended comparator's first key reads.
+///
+/// Only the armed sort closure calls this: it answers whether the chain exits
+/// before it reaches anything a precomputed key could hold. A harness build
+/// sorts that bucket through the guest VA and counts nothing, so it has no
+/// caller there.
+#[cfg(not(wow_turbo_diff))]
+#[inline]
+fn bdl_elem_tag(elem_base: u32, index: u32) -> u32 {
+    if elem_base == 0 {
+        return 0;
+    }
+    let slot = elem_base.wrapping_add(index.wrapping_mul(0x40)) as usize as *const u32;
+    // SAFETY: the same 0x40-stride element address the comparator forms, whose first dword is
+    // the type tag it dispatches on; the caller took `elem_base` from the live view's `+0x34`.
+    unsafe { slot.read_unaligned() }
+}
+
 /// Largest element index the sort-key scratch tables will size themselves to.
 ///
 /// A draw list holds a few thousand elements; an index at or beyond this bound
@@ -31014,7 +31041,12 @@ const fn bdl_prio(type_idx: i32) -> u32 {
 /// (a NaN ties with everything under the chain's ordered tests, which no
 /// total key order can express); the caller then sorts with the comparator
 /// chain itself.
-fn bdl_sort_opaque_keyed(slice: &mut [u32], base: *mut u8, view: i32) -> bool {
+fn bdl_sort_opaque_keyed(
+    slice: &mut [u32],
+    base: *mut u8,
+    view: i32,
+    cmps: Option<&mut u64>,
+) -> bool {
     if base.is_null() {
         return false;
     }
@@ -31058,7 +31090,7 @@ fn bdl_sort_opaque_keyed(slice: &mut [u32], base: *mut u8, view: i32) -> bool {
             keys[index as usize] = key;
         }
         let keys = &*keys;
-        crate::math::misc::heap_sort_u_int32__71f860(slice, |a, b| {
+        let cmp = |a: u32, b: u32| -> i32 {
             match keys[a as usize].cmp(&keys[b as usize]) {
                 core::cmp::Ordering::Less => -1,
                 core::cmp::Ordering::Greater => 1,
@@ -31066,7 +31098,15 @@ fn bdl_sort_opaque_keyed(slice: &mut [u32], base: *mut u8, view: i32) -> bool {
                     c_world_view__compare_draw_list_extended__70aa30(a, b, view)
                 }
             }
-        });
+        };
+        match cmps {
+            // Armed: one branch per sort, not per comparison.
+            Some(n) => crate::math::misc::heap_sort_u_int32__71f860(slice, |a, b| {
+                *n = n.wrapping_add(1);
+                cmp(a, b)
+            }),
+            None => crate::math::misc::heap_sort_u_int32__71f860(slice, cmp),
+        }
         true
     })
 }
@@ -31096,9 +31136,20 @@ fn bdl_view_i32(base: *mut u8) -> i32 {
 /// type tag for most pairs while a key compare loads two ten-lane arrays out of
 /// a scratch table. The tiers are keyable; the chain is simply not where the
 /// time is spent once it early-exits.
-fn bdl_sort_transparent(data: *mut u32, count: u32, base: *mut u8) {
+fn bdl_sort_transparent(
+    data: *mut u32,
+    count: u32,
+    base: *mut u8,
+    tally: Option<&mut BdlSortTally>,
+) {
     #[cfg(wow_turbo_diff)]
     {
+        // The harness build sorts this bucket through the guest VA on purpose —
+        // the one comparator call site the thunk-level harness can observe — so
+        // there is nothing here to count and the tally stays at zero.
+        if let Some(t) = tally {
+            *t = BdlSortTally::default();
+        }
         const CMP_TRANS: *const core::ffi::c_void =
             (crate::win::EXPECTED_IMAGE_BASE + 0x30_aa30) as *const core::ffi::c_void;
         heap_sort_u_int32__71f860(CMP_TRANS, data, count, base.cast());
@@ -31112,9 +31163,24 @@ fn bdl_sort_transparent(data: *mut u32, count: u32, base: *mut u8) {
         // for the duration of the sort, exactly as the stock caller passes.
         let slice = unsafe { core::slice::from_raw_parts_mut(data, count as usize) };
         let view = bdl_view_i32(base);
-        crate::math::misc::heap_sort_u_int32__71f860(slice, |a, b| {
-            c_world_view__compare_draw_list_extended__70aa30(a, b, view)
-        });
+        match tally {
+            // Armed: one branch per sort, not per comparison.
+            Some(t) => {
+                // SAFETY: `base` is the live view and `+0x34` is its element-array base slot,
+                // the same one the comparator loads on every call.
+                let elem_base = unsafe { bdl_rd32(base, 0x34) };
+                crate::math::misc::heap_sort_u_int32__71f860(slice, |a, b| {
+                    t.cmps = t.cmps.wrapping_add(1);
+                    if bdl_elem_tag(elem_base, a) != bdl_elem_tag(elem_base, b) {
+                        t.tag = t.tag.wrapping_add(1);
+                    }
+                    c_world_view__compare_draw_list_extended__70aa30(a, b, view)
+                });
+            }
+            None => crate::math::misc::heap_sort_u_int32__71f860(slice, |a, b| {
+                c_world_view__compare_draw_list_extended__70aa30(a, b, view)
+            }),
+        }
     }
 }
 
@@ -31127,7 +31193,7 @@ fn bdl_sort_transparent(data: *mut u32, count: u32, base: *mut u8) {
 /// declines it falls back to the chain comparator, called directly through
 /// the shared kernel — routing through the guest VA would detour back into
 /// the same Rust fn once per comparison.
-fn bdl_sort_opaque(data: *mut u32, count: u32, base: *mut u8) {
+fn bdl_sort_opaque(data: *mut u32, count: u32, base: *mut u8, cmps: Option<&mut u64>) {
     if data.is_null() || count <= 1 {
         return;
     }
@@ -31135,7 +31201,18 @@ fn bdl_sort_opaque(data: *mut u32, count: u32, base: *mut u8) {
     // the duration of the sort, exactly as the stock caller passes them.
     let slice = unsafe { core::slice::from_raw_parts_mut(data, count as usize) };
     let view = bdl_view_i32(base);
-    if bdl_sort_opaque_keyed(slice, base, view) {
+    if let Some(n) = cmps {
+        // Armed: one branch per sort, and both buckets accumulate into one total.
+        if bdl_sort_opaque_keyed(slice, base, view, Some(&mut *n)) {
+            return;
+        }
+        crate::math::misc::heap_sort_u_int32__71f860(slice, |a, b| {
+            *n = n.wrapping_add(1);
+            c_world_view__compare_draw_list_opaque__70ae10(a, b, view)
+        });
+        return;
+    }
+    if bdl_sort_opaque_keyed(slice, base, view, None) {
         return;
     }
     crate::math::misc::heap_sort_u_int32__71f860(slice, |a, b| {
@@ -31827,91 +31904,199 @@ fn bdl_refresh_phase(base: *mut u8, mut pending: Option<&mut BdlAnimPending>, ti
     }
 }
 
+/// Bucket-0 texture dedup through the 251-entry scratch (0x7086a7..0x708745).
+///
+/// Each record's `+0x24` ends up pointing at the canonical (first) record with
+/// the same sort hash, which is also the key the bucket-0 sort then orders on.
+///
+/// `COUNT` picks the armed variant, which returns the probe steps it took and
+/// the equality-comparator calls it made — the pair that says whether the fixed
+/// 251-slot scratch saturates. It is a const generic rather than a flag because
+/// the last version of these counters was deleted for costing an unarmed
+/// session an add per probe step; folded away at monomorphisation they cost
+/// nothing.
+fn bdl_dedup<const COUNT: bool>(base: *mut u8, count: u32) -> (u32, u32) {
+    const TABLE: *mut u32 = (crate::win::EXPECTED_IMAGE_BASE + 0x8e_fff8) as *mut u32;
+
+    let mut steps: u32 = 0;
+    let mut cmps: u32 = 0;
+    // 0x7086a7: clear the 251-dword scratch to -1.
+    for i in 0..0xfbusize {
+        // SAFETY: `TABLE` is the client's static 251-dword dedup scratch at 0xcefff8 and
+        // `i < 0xfb`, so the offset stays inside it.
+        let slot = unsafe { TABLE.add(i) };
+        // SAFETY: in-bounds slot per above, in writable static storage.
+        unsafe { slot.write(0xffff_ffff) };
+    }
+    // 0x7086c0: dedup probe — each record's +0x24 points at the canonical
+    // (first) record with the same sort-hash.
+    for i in 0..count as usize {
+        // SAFETY: same live view; `+0x44` is the bucket-0 index header's storage pointer,
+        // re-read per iteration as the stock loop does.
+        let b0data = unsafe { bdl_rd32(base, 0x44) } as usize;
+        // SAFETY: `i < count`, and `count` is that header's element count read at `+0x40`,
+        // so the dword element is in bounds.
+        let idx_slot = unsafe { (b0data as *const u32).add(i) };
+        // SAFETY: in-bounds index element, filled by the builder's classification phase
+        // before it calls this helper.
+        let rec_idx = unsafe { idx_slot.read() };
+        // SAFETY: `+0x34` is the storage pointer of the view's draw-record array header at
+        // `+0x2c`, holding the 0x40-byte records this bucket indexes.
+        let recbase = unsafe { bdl_rd32(base, 0x34) } as usize;
+        let recptr = (recbase + (rec_idx as usize) * 0x40) as *const u8;
+        let hash = bdl_compute_sort_hash(recptr);
+        let start = hash % 0xfb;
+        let mut edi = start;
+        loop {
+            edi += 1;
+            if edi >= 0xfb {
+                edi = 0;
+            }
+            if COUNT {
+                steps = steps.wrapping_add(1);
+            }
+            // SAFETY: `edi` was just wrapped below 0xfb, so it names a dword inside the
+            // 251-entry scratch.
+            let probe = unsafe { TABLE.add(edi as usize) };
+            // SAFETY: in-bounds scratch slot, initialised to -1 by the clear loop above,
+            // which runs under this same `count > 1` guard.
+            let entry = unsafe { probe.read() };
+            if entry == 0xffff_ffff || edi == start {
+                // SAFETY: `edi` is unchanged since the probe, so this is that same
+                // in-bounds writable scratch slot.
+                unsafe { probe.write(rec_idx) };
+                break;
+            }
+            if COUNT {
+                cmps = cmps.wrapping_add(1);
+            }
+            if bdl_draw_list_equal(rec_idx, entry, base) == 0 {
+                break;
+            }
+        }
+        // SAFETY: the probe loop left `edi < 0xfb`, so this names a scratch dword.
+        let canon_slot = unsafe { TABLE.add(edi as usize) };
+        // SAFETY: initialised either way — the clear loop wrote -1 into every slot, and
+        // the probe may have overwritten this one with `rec_idx`.
+        let canonical = unsafe { canon_slot.read() };
+        // SAFETY: same record-array storage pointer at `+0x34`, re-read because the hash
+        // and equality calls above ran in between.
+        let recbase2 = unsafe { bdl_rd32(base, 0x34) } as usize;
+        // SAFETY: `rec_idx` came off bucket-0, which the builder fills with indices into
+        // that 0x40-stride record array; `+0x24` is the record's canonical-index dword.
+        unsafe { ((recbase2 + (rec_idx as usize) * 0x40 + 0x24) as *mut u32).write(canonical) };
+    }
+    (steps, cmps)
+}
+
 /// Texture-dedup + bucket heap-sorts (0x70868b..0x7088f9).
 ///
 /// Dedup the bucket-0 records through the 251-entry open-addressing scratch
 /// (`0xcefff8`), heap-sort bucket-0 by texture, run-merge equal-texture runs
 /// (single-record runs spill to the `this+0x4c` bucket), then heap-sort the
 /// three remaining buckets.
-fn bdl_finalize(base: *mut u8) {
-    const TABLE: *mut u32 = (crate::win::EXPECTED_IMAGE_BASE + 0x8e_fff8) as *mut u32;
+///
+/// The largest phase of the build, so `probe` splits it five ways for the
+/// `seam finalize` line; unarmed every bracket is a zero subtraction and the
+/// sorts take their uncounted comparator.
+fn bdl_finalize(base: *mut u8, probe: Option<&super::tally::Armed>) {
+    let timed = probe.is_some();
+    let mut fin = super::seam_probe::FinalizeStats::default();
+    let t_entry = bdl_tick(timed);
 
     // SAFETY: `base` is the `CWorldView` `this` the draw-list builder null-checked on entry;
     // `+0x40` is the element-count dword of its bucket-0 index header at `+0x3c`.
     let count = unsafe { bdl_rd32(base, 0x40) };
+    fin.bucket0_in = count;
     if count > 1 {
-        // 0x7086a7: clear the 251-dword scratch to -1.
-        for i in 0..0xfbusize {
-            // SAFETY: `TABLE` is the client's static 251-dword dedup scratch at 0xcefff8 and
-            // `i < 0xfb`, so the offset stays inside it.
-            let slot = unsafe { TABLE.add(i) };
-            // SAFETY: in-bounds slot per above, in writable static storage.
-            unsafe { slot.write(0xffff_ffff) };
-        }
-        // 0x7086c0: dedup probe — each record's +0x24 points at the canonical
-        // (first) record with the same sort-hash.
-        for i in 0..count as usize {
-            // SAFETY: same live view; `+0x44` is the bucket-0 index header's storage pointer,
-            // re-read per iteration as the stock loop does.
-            let b0data = unsafe { bdl_rd32(base, 0x44) } as usize;
-            // SAFETY: `i < count`, and `count` is that header's element count read at `+0x40`,
-            // so the dword element is in bounds.
-            let idx_slot = unsafe { (b0data as *const u32).add(i) };
-            // SAFETY: in-bounds index element, filled by the builder's classification phase
-            // before it calls this helper.
-            let rec_idx = unsafe { idx_slot.read() };
-            // SAFETY: `+0x34` is the storage pointer of the view's draw-record array header at
-            // `+0x2c`, holding the 0x40-byte records this bucket indexes.
-            let recbase = unsafe { bdl_rd32(base, 0x34) } as usize;
-            let recptr = (recbase + (rec_idx as usize) * 0x40) as *const u8;
-            let hash = bdl_compute_sort_hash(recptr);
-            let start = hash % 0xfb;
-            let mut edi = start;
-            loop {
-                edi += 1;
-                if edi >= 0xfb {
-                    edi = 0;
-                }
-                // SAFETY: `edi` was just wrapped below 0xfb, so it names a dword inside the
-                // 251-entry scratch.
-                let probe = unsafe { TABLE.add(edi as usize) };
-                // SAFETY: in-bounds scratch slot, initialised to -1 by the clear loop above,
-                // which runs under this same `count > 1` guard.
-                let entry = unsafe { probe.read() };
-                if entry == 0xffff_ffff || edi == start {
-                    // SAFETY: `edi` is unchanged since the probe, so this is that same
-                    // in-bounds writable scratch slot.
-                    unsafe { probe.write(rec_idx) };
-                    break;
-                }
-                if bdl_draw_list_equal(rec_idx, entry, base) == 0 {
-                    break;
-                }
-            }
-            // SAFETY: the probe loop left `edi < 0xfb`, so this names a scratch dword.
-            let canon_slot = unsafe { TABLE.add(edi as usize) };
-            // SAFETY: initialised either way — the clear loop wrote -1 into every slot, and
-            // the probe may have overwritten this one with `rec_idx`.
-            let canonical = unsafe { canon_slot.read() };
-            // SAFETY: same record-array storage pointer at `+0x34`, re-read because the hash
-            // and equality calls above ran in between.
-            let recbase2 = unsafe { bdl_rd32(base, 0x34) } as usize;
-            // SAFETY: `rec_idx` came off bucket-0, which the builder fills with indices into
-            // that 0x40-stride record array; `+0x24` is the record's canonical-index dword.
-            unsafe { ((recbase2 + (rec_idx as usize) * 0x40 + 0x24) as *mut u32).write(canonical) };
-        }
+        let (steps, cmps) = if timed {
+            bdl_dedup::<true>(base, count)
+        } else {
+            bdl_dedup::<false>(base, count)
+        };
+        fin.probe_steps = steps;
+        fin.cmp_calls = cmps;
     }
+    let t_dedup = bdl_tick(timed);
+    fin.dedup_ticks = t_dedup.wrapping_sub(t_entry);
 
     // 0x708747: heap-sort bucket-0 by texture.
     // SAFETY: live `CWorldView`; `+0x44` is the bucket-0 index header's storage pointer, whose
     // `count` elements the sort below reorders in place.
     let b0data = unsafe { bdl_rd32(base, 0x44) } as *mut u32;
     bdl_sort_by_tex(b0data, count, base);
+    let t_texsort = bdl_tick(timed);
+    fin.tex_sort_ticks = t_texsort.wrapping_sub(t_dedup);
 
-    // 0x708763: run-merge the sorted bucket. `i` walks runs; `out` is the
-    // compacted write cursor. Equal-texture runs (>1) stay, marking the leader's
-    // +0x20 with the run length; singletons spill to the `this+0x4c` bucket.
+    let (out, runs) = if timed {
+        bdl_run_merge::<true>(base, count)
+    } else {
+        bdl_run_merge::<false>(base, count)
+    };
+    fin.bucket0_out = out;
+    fin.runs = runs;
+    fin.spilled = count.wrapping_sub(out);
+    let t_merge = bdl_tick(timed);
+    fin.merge_ticks = t_merge.wrapping_sub(t_texsort);
+
+    // 0x70885a: commit the compacted bucket-0 count.
+    // SAFETY: live view; `+0x3c` is the capacity dword of the bucket-0 index header.
+    let cap = unsafe { bdl_rd32(base, 0x3c) };
+    if out > count && out > cap {
+        // SAFETY: `base` is the live view; `+0x3c` is the head of that same index header.
+        let ctl = unsafe { base.add(0x3c) };
+        // SAFETY: `ctl` is a live `{cap@0,count@4,data@8,gran@0xc}` index header; the grow
+        // rewrites only header fields and defers reallocation to the client's set-capacity fn.
+        unsafe { bdl_index_grow_pow2(ctl, out) };
+    }
+    // SAFETY: `+0x40` is the writable element-count dword of the bucket-0 index header, an
+    // in-bounds field of the live view.
+    unsafe { bdl_wr32(base, 0x40, out) };
+
+    // 0x7088b8/0x7088ca/0x7088dc: heap-sort the remaining three buckets.
+    // SAFETY: live view; `+0x54` is the storage pointer of the transparent-bucket index header
+    // at `+0x4c` — the bucket the singleton spill above appended to.
+    let t_data = unsafe { bdl_rd32(base, 0x54) } as *mut u32;
+    // SAFETY: `+0x50` is that same header's element-count dword.
+    let t_cnt = unsafe { bdl_rd32(base, 0x50) };
+    fin.transparent = t_cnt;
+    let mut trans_tally = BdlSortTally::default();
+    bdl_sort_transparent(t_data, t_cnt, base, timed.then_some(&mut trans_tally));
+    fin.transparent_cmps = trans_tally.cmps;
+    fin.transparent_tag = trans_tally.tag;
+    let t_trans = bdl_tick(timed);
+    fin.transparent_ticks = t_trans.wrapping_sub(t_merge);
+
+    // SAFETY: live view; `+0x64` is the storage pointer of the index header at `+0x5c`.
+    let a_data = unsafe { bdl_rd32(base, 0x64) } as *mut u32;
+    // SAFETY: `+0x60` is that same header's element-count dword.
+    let a_cnt = unsafe { bdl_rd32(base, 0x60) };
+    let mut opaque_cmps: u64 = 0;
+    bdl_sort_opaque(a_data, a_cnt, base, timed.then_some(&mut opaque_cmps));
+    // SAFETY: live view; `+0x74` is the storage pointer of the index header at `+0x6c`.
+    let r_data = unsafe { bdl_rd32(base, 0x74) } as *mut u32;
+    // SAFETY: `+0x70` is that same header's element-count dword.
+    let r_cnt = unsafe { bdl_rd32(base, 0x70) };
+    bdl_sort_opaque(r_data, r_cnt, base, timed.then_some(&mut opaque_cmps));
+    fin.opaque = a_cnt.wrapping_add(r_cnt);
+    fin.opaque_cmps = opaque_cmps;
+    fin.opaque_ticks = bdl_tick(timed).wrapping_sub(t_trans);
+
+    if let Some(armed) = probe {
+        super::seam_probe::finalize_pass(armed, &fin);
+    }
+}
+
+/// Run-merge of the texture-sorted bucket 0 (0x708763..0x708857).
+///
+/// `i` walks runs; `out` is the compacted write cursor. Equal-texture runs (>1)
+/// stay, marking the leader's `+0x20` with the run length; singletons spill to
+/// the `this+0x4c` bucket. Returns the compacted count and, under `COUNT`, how
+/// many runs it kept — the average run length is what says how well the dedup
+/// grouped, and the spill is the difference between the two counts.
+fn bdl_run_merge<const COUNT: bool>(base: *mut u8, count: u32) -> (u32, u32) {
     let mut out: u32 = 0;
+    let mut runs: u32 = 0;
     if count > 0 {
         let mut i: u32 = 0;
         while i < count {
@@ -31953,6 +32138,9 @@ fn bdl_finalize(base: *mut u8) {
             // whose records are 0x40 bytes.
             let recbase = unsafe { bdl_rd32(base, 0x34) } as usize;
             if runlen > 1 {
+                if COUNT {
+                    runs = runs.wrapping_add(1);
+                }
                 // SAFETY: `leader` is a bucket-0 index into that record array; `+0x20` is the
                 // record dword the run leader carries its run length in.
                 unsafe { ((recbase + (leader as usize) * 0x40 + 0x20) as *mut u32).write(runlen) };
@@ -31972,37 +32160,7 @@ fn bdl_finalize(base: *mut u8) {
             }
         }
     }
-    // 0x70885a: commit the compacted bucket-0 count.
-    // SAFETY: live view; `+0x3c` is the capacity dword of the bucket-0 index header.
-    let cap = unsafe { bdl_rd32(base, 0x3c) };
-    if out > count && out > cap {
-        // SAFETY: `base` is the live view; `+0x3c` is the head of that same index header.
-        let ctl = unsafe { base.add(0x3c) };
-        // SAFETY: `ctl` is a live `{cap@0,count@4,data@8,gran@0xc}` index header; the grow
-        // rewrites only header fields and defers reallocation to the client's set-capacity fn.
-        unsafe { bdl_index_grow_pow2(ctl, out) };
-    }
-    // SAFETY: `+0x40` is the writable element-count dword of the bucket-0 index header, an
-    // in-bounds field of the live view.
-    unsafe { bdl_wr32(base, 0x40, out) };
-
-    // 0x7088b8/0x7088ca/0x7088dc: heap-sort the remaining three buckets.
-    // SAFETY: live view; `+0x54` is the storage pointer of the transparent-bucket index header
-    // at `+0x4c` — the bucket the singleton spill above appended to.
-    let t_data = unsafe { bdl_rd32(base, 0x54) } as *mut u32;
-    // SAFETY: `+0x50` is that same header's element-count dword.
-    let t_cnt = unsafe { bdl_rd32(base, 0x50) };
-    bdl_sort_transparent(t_data, t_cnt, base);
-    // SAFETY: live view; `+0x64` is the storage pointer of the index header at `+0x5c`.
-    let a_data = unsafe { bdl_rd32(base, 0x64) } as *mut u32;
-    // SAFETY: `+0x60` is that same header's element-count dword.
-    let a_cnt = unsafe { bdl_rd32(base, 0x60) };
-    bdl_sort_opaque(a_data, a_cnt, base);
-    // SAFETY: live view; `+0x74` is the storage pointer of the index header at `+0x6c`.
-    let r_data = unsafe { bdl_rd32(base, 0x74) } as *mut u32;
-    // SAFETY: `+0x70` is that same header's element-count dword.
-    let r_cnt = unsafe { bdl_rd32(base, 0x70) };
-    bdl_sort_opaque(r_data, r_cnt, base);
+    (out, runs)
 }
 
 /// `CWorldView::BuildDrawList` (0x707680).
@@ -32224,7 +32382,7 @@ pub fn c_world_view__build_draw_list__707680(
     phases.child = t_finalize.wrapping_sub(t_child);
 
     // 0x70868b: dedup + heap-sort the buckets.
-    bdl_finalize(base);
+    bdl_finalize(base, probe.as_ref());
 
     if let Some(armed) = &probe {
         let end = bdl_tick(timed);

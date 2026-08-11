@@ -9,7 +9,10 @@
 //! forked animate pass pays at the join against the per-root cost its lanes
 //! absorb; where a draw-list build's game-thread time goes phase by phase,
 //! which is what bounds any attempt to overlap that join with the phases
-//! after it; how many dynamic-buffer lock cycles the particle and
+//! after it; which of the five steps inside the finalize phase holds that
+//! phase's time, over how many records and how many comparisons, which is
+//! what ranks the levers against the largest phase of the build; how many
+//! dynamic-buffer lock cycles the particle and
 //! precipitation paths pay per session; what grain the per-emitter particle
 //! draws offer a fork (draws per second, live particles per draw with a
 //! histogram whose buckets end at 4/16/64/256, the quad build's cost spread,
@@ -66,6 +69,27 @@ static BDL_REFRESH_TICKS: Accum = Accum::zero();
 static BDL_SPATIAL_TICKS: Accum = Accum::zero();
 static BDL_CHILD_TICKS: Accum = Accum::zero();
 static BDL_FINALIZE_TICKS: Accum = Accum::zero();
+
+static FIN_PASSES: Counter = Counter::zero();
+static FIN_B0_IN_SUM: Accum = Accum::zero();
+static FIN_B0_IN_MAX: Counter = Counter::zero();
+static FIN_B0_OUT_SUM: Accum = Accum::zero();
+static FIN_RUNS_SUM: Accum = Accum::zero();
+static FIN_SPILL_SUM: Accum = Accum::zero();
+static FIN_PROBE_STEPS: Accum = Accum::zero();
+static FIN_CMP_CALLS: Accum = Accum::zero();
+static FIN_TRANS_SUM: Accum = Accum::zero();
+static FIN_TRANS_MAX: Counter = Counter::zero();
+static FIN_OPAQUE_SUM: Accum = Accum::zero();
+static FIN_OPAQUE_MAX: Counter = Counter::zero();
+static FIN_TRANS_CMPS: Accum = Accum::zero();
+static FIN_TRANS_TAG: Accum = Accum::zero();
+static FIN_OPAQUE_CMPS: Accum = Accum::zero();
+static FIN_DEDUP_TICKS: Accum = Accum::zero();
+static FIN_TEXSORT_TICKS: Accum = Accum::zero();
+static FIN_MERGE_TICKS: Accum = Accum::zero();
+static FIN_TRANS_TICKS: Accum = Accum::zero();
+static FIN_OPAQUE_TICKS: Accum = Accum::zero();
 
 static PARTICLE_LOCKS: Counter = Counter::zero();
 static RAIN_LOCKS: Counter = Counter::zero();
@@ -240,6 +264,86 @@ pub fn bdl_pass(armed: &Armed, t: &BdlPhases) {
     BDL_SPATIAL_TICKS.add(armed, t.spatial);
     BDL_CHILD_TICKS.add(armed, t.child);
     BDL_FINALIZE_TICKS.add(armed, t.finalize);
+}
+
+/// One finalize phase: what it walked, and which of its five steps holds it.
+///
+/// The phase is the largest of the build, and `seam bdl` prices it as one
+/// number. These split it the way the code is written — dedup (the scratch
+/// clear and the probe loop), the bucket-0 texture sort, the run-merge, the
+/// transparent sort, the two opaque sorts — and give each step the population
+/// it walked, so a step's cost per record is readable rather than inferred.
+///
+/// The two opaque sorts share one bracket and one population: they run the
+/// same comparator over two arrays, and it is their sum that ranks against
+/// the transparent sort.
+///
+/// `probe_steps` and `cmp_calls` answer whether the 251-slot scratch
+/// saturates: at a low load factor the probe is one step and one comparator
+/// call per record, and the whole dedup is a hash pass; saturated, every
+/// record walks all 251 slots.
+#[derive(Default)]
+pub struct FinalizeStats {
+    /// Bucket-0 records the dedup walked, before the run-merge compacts them.
+    pub bucket0_in: u32,
+    /// Bucket-0 records left after the run-merge.
+    pub bucket0_out: u32,
+    /// Equal-texture runs the merge kept in bucket 0.
+    pub runs: u32,
+    /// Singletons the merge spilled into the transparent bucket.
+    pub spilled: u32,
+    /// Slots the dedup probe examined, summed over the records.
+    pub probe_steps: u32,
+    /// Equality comparator calls the probe made.
+    pub cmp_calls: u32,
+    /// Transparent-bucket elements sorted, spill included.
+    pub transparent: u32,
+    /// Elements sorted across both opaque buckets.
+    pub opaque: u32,
+    /// Comparisons the transparent sort made.
+    pub transparent_cmps: u64,
+    /// Comparisons the transparent sort decided on the element type tag alone.
+    ///
+    /// The chain's first key. A high share says the comparator already exits
+    /// before it reads anything a precomputed key could hold, which is the
+    /// measurement the rejected ten-lane key was missing.
+    pub transparent_tag: u64,
+    /// Comparisons the two opaque sorts made.
+    pub opaque_cmps: u64,
+    /// Ticks in the scratch clear and the dedup probe loop.
+    pub dedup_ticks: u64,
+    /// Ticks in the bucket-0 texture sort.
+    pub tex_sort_ticks: u64,
+    /// Ticks in the run-merge and its singleton spill.
+    pub merge_ticks: u64,
+    /// Ticks in the transparent-bucket sort.
+    pub transparent_ticks: u64,
+    /// Ticks in the two opaque-bucket sorts.
+    pub opaque_ticks: u64,
+}
+
+/// One finalize phase's populations, comparisons and step costs.
+pub fn finalize_pass(armed: &Armed, f: &FinalizeStats) {
+    FIN_PASSES.bump(armed);
+    FIN_B0_IN_SUM.add(armed, u64::from(f.bucket0_in));
+    FIN_B0_IN_MAX.max(armed, f.bucket0_in);
+    FIN_B0_OUT_SUM.add(armed, u64::from(f.bucket0_out));
+    FIN_RUNS_SUM.add(armed, u64::from(f.runs));
+    FIN_SPILL_SUM.add(armed, u64::from(f.spilled));
+    FIN_PROBE_STEPS.add(armed, u64::from(f.probe_steps));
+    FIN_CMP_CALLS.add(armed, u64::from(f.cmp_calls));
+    FIN_TRANS_SUM.add(armed, u64::from(f.transparent));
+    FIN_TRANS_MAX.max(armed, f.transparent);
+    FIN_OPAQUE_SUM.add(armed, u64::from(f.opaque));
+    FIN_OPAQUE_MAX.max(armed, f.opaque);
+    FIN_TRANS_CMPS.add(armed, f.transparent_cmps);
+    FIN_TRANS_TAG.add(armed, f.transparent_tag);
+    FIN_OPAQUE_CMPS.add(armed, f.opaque_cmps);
+    FIN_DEDUP_TICKS.add(armed, f.dedup_ticks);
+    FIN_TEXSORT_TICKS.add(armed, f.tex_sort_ticks);
+    FIN_MERGE_TICKS.add(armed, f.merge_ticks);
+    FIN_TRANS_TICKS.add(armed, f.transparent_ticks);
+    FIN_OPAQUE_TICKS.add(armed, f.opaque_ticks);
 }
 
 /// One multi-root pass below the fork gate.
@@ -454,6 +558,38 @@ pub fn emit_cumulative() {
             ticks_to_us(BDL_SPATIAL_TICKS.get()),
             ticks_to_us(BDL_CHILD_TICKS.get()),
             ticks_to_us(BDL_FINALIZE_TICKS.get()),
+        );
+    }
+    let fin_passes = FIN_PASSES.get();
+    if fin_passes != 0 {
+        log::debug!(
+            target: super::tally::TARGET,
+            "seam finalize: {fin_passes} passes, b0 in sum {} max {} out {}, runs {}, spill {}, \
+             probe steps {}, cmp calls {}, us dedup {} texsort {} merge {}",
+            FIN_B0_IN_SUM.get(),
+            FIN_B0_IN_MAX.get(),
+            FIN_B0_OUT_SUM.get(),
+            FIN_RUNS_SUM.get(),
+            FIN_SPILL_SUM.get(),
+            FIN_PROBE_STEPS.get(),
+            FIN_CMP_CALLS.get(),
+            ticks_to_us(FIN_DEDUP_TICKS.get()),
+            ticks_to_us(FIN_TEXSORT_TICKS.get()),
+            ticks_to_us(FIN_MERGE_TICKS.get()),
+        );
+        log::debug!(
+            target: super::tally::TARGET,
+            "seam finalize sorts: trans sum {} max {}, cmps {} (tag {}), us {}, \
+             opaque sum {} max {}, cmps {}, us {}",
+            FIN_TRANS_SUM.get(),
+            FIN_TRANS_MAX.get(),
+            FIN_TRANS_CMPS.get(),
+            FIN_TRANS_TAG.get(),
+            ticks_to_us(FIN_TRANS_TICKS.get()),
+            FIN_OPAQUE_SUM.get(),
+            FIN_OPAQUE_MAX.get(),
+            FIN_OPAQUE_CMPS.get(),
+            ticks_to_us(FIN_OPAQUE_TICKS.get()),
         );
     }
     let p = PARTICLE_LOCKS.get();
