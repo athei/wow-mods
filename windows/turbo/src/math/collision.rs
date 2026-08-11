@@ -2363,7 +2363,17 @@ pub fn collision_clip_polygon_by_plane__6318c0(
     // pure for them.
     #[cfg(target_arch = "x86")]
     crate::win::seam_probe::clip_polygon(count);
-    let mut dist = [0.0f32; 15];
+    // The three scratch buffers here are written for the live prefix and read
+    // for the live prefix, and never touched above it — so declaring them
+    // initialised is not free bookkeeping, it is the cost the profiler came
+    // here for. `[0.0f32; 15]` emitted 64 bytes of zero stores ahead of both
+    // band gates, dead on every call that takes one, and the snapshot pair
+    // below was `*verts`/`*tags`, which lowered to a 180-byte `memcpy` call
+    // plus 64 bytes of tag copy for a polygon averaging 3.29 vertices. Leaving
+    // the tails uninitialised removes both without touching an arithmetic
+    // operation. `count` is the caller's clamped live count, so every index
+    // below is bounds-checked against the same 15-vertex capacity as before.
+    let mut dist_buf = [core::mem::MaybeUninit::<f32>::uninit(); 15];
     let mut min_dist = f32::MAX;
     let mut max_dist = -f32::MAX;
     for i in 0..count {
@@ -2375,7 +2385,7 @@ pub fn collision_clip_polygon_by_plane__6318c0(
         if max_dist < d {
             max_dist = d;
         }
-        dist[i] = d;
+        dist_buf[i].write(d);
     }
     if !(min_dist <= eps_neg) {
         #[cfg(target_arch = "x86")]
@@ -2390,8 +2400,14 @@ pub fn collision_clip_polygon_by_plane__6318c0(
     #[cfg(target_arch = "x86")]
     crate::win::seam_probe::clip_cut();
 
-    let saved_verts = *verts;
-    let saved_tags = *tags;
+    // SAFETY: the distance loop above wrote every slot below `count`, and only
+    // those slots are read from here on.
+    let dist = unsafe { dist_buf[..count].assume_init_ref() };
+    let live = count * 3;
+    let mut saved_vert_buf = [core::mem::MaybeUninit::<f32>::uninit(); 45];
+    let mut saved_tag_buf = [core::mem::MaybeUninit::<f32>::uninit(); 15];
+    let saved_verts = saved_vert_buf[..live].write_copy_of_slice(&verts[..live]);
+    let saved_tags = saved_tag_buf[..count].write_copy_of_slice(&tags[..count]);
     let mut out = 0usize;
     // `prev` walks the polygon one step behind `cur`, wrapping once at the
     // start. It reads `(cur + count - 1) % count`, and it was written that way
