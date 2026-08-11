@@ -31060,13 +31060,22 @@ const fn bdl_prio(type_idx: i32) -> u32 {
 /// comparison answers what the chain would have answered. The permutation is
 /// the sort's, not the client's — see `crate::math::misc::intro_sort_by`.
 ///
-/// **The key travels with its index rather than being looked up by it**, and
-/// that is the difference between this paying for itself and not. The previous
-/// shape held one key per *element index* in a table sized by the largest index
-/// in the bucket — ~100 KB, hit at random twice per comparison — and `seam
-/// finalize` measured it spending 8.14 ns to compare two precomputed integers,
-/// which is a cache miss and not arithmetic. Sorting the pairs makes a
-/// partition scan read keys sequentially out of a `bucket * 40`-byte run.
+/// **The key travels with its index rather than being looked up by it.** The
+/// previous shape held one key per *element index* in a table sized by the
+/// largest index in the bucket — ~100 KB, hit at random twice per comparison —
+/// and `seam finalize` measured it spending 8.14 ns to compare two precomputed
+/// integers, which is a cache miss and not arithmetic. Sorting the pairs makes
+/// a partition scan read keys sequentially out of a `bucket * 40`-byte run.
+///
+/// Measured, against a control that moved 0.1%: **7.49 → 6.20 ns a comparison,
+/// −17%**, worth about 0.18 points of wall. Less than the table's share of that
+/// 8.14 ns looked like, and the reason is the other half of this trade — the
+/// sort now moves a 40-byte element per swap where it moved a 4-byte index
+/// before. What is left in the 6.20 ns is that movement plus the tie-break rate
+/// into the chain comparator, and **which of the two dominates is unmeasured**.
+/// A `(u64 head, u32 index)` element with the full chain as its tie-break would
+/// cut the movement by two thirds, and it is gated on the same
+/// which-tier-decides counter the transparent bucket's key needs.
 ///
 /// Returns `false` without sorting when the view or element base is null, an
 /// element index is at or beyond `BDL_KEY_INDEX_CAP`, or a float key is NaN
