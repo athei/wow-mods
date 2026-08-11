@@ -275,7 +275,7 @@ fn install_fmod_hooks() {
         // signature's token count of bytes.
         if !unsafe { wow_hook::signature_matches(va, hook.sig) } {
             log::warn!(
-                target: LOG_TARGET,
+                target: wow_hook::LOG_TARGET,
                 "{} signature mismatch at {va:#010x} (base {base:#010x}) — refusing to patch",
                 hook.label,
             );

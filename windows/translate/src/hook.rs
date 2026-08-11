@@ -113,7 +113,7 @@ fn sites_resolve() -> bool {
             continue;
         }
         log::warn!(
-            target: LOG_TARGET,
+            target: wow_hook::LOG_TARGET,
             "{label} prologue unrecognized at {va:#010x} — wrong client build; refusing to patch",
         );
         all_resolve = false;

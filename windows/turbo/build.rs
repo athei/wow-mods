@@ -741,7 +741,7 @@ fn render(m: &Manifest) -> String {
         out.push_str("        // this process wrote — the baseline the overwrite check reads.\n");
         out.push_str("        ::wow_hook::snapshot_patches();\n");
         out.push_str("        ::log::info!(\n");
-        out.push_str("            target: super::LOG_TARGET,\n");
+        out.push_str("            target: ::wow_hook::LOG_TARGET,\n");
         out.push_str("            \"install_all: {queued} hooks enabled in {} ms\",\n");
         out.push_str("            started.elapsed().as_millis(),\n");
         out.push_str("        );\n");
@@ -1157,7 +1157,7 @@ fn install_thunk(
     // lies within the host image's mapped code.
     if !sigs.iter().any(|sig| unsafe { ::wow_hook::signature_matches(va, sig) }) {
         ::log::warn!(
-            target: super::LOG_TARGET,
+            target: ::wow_hook::LOG_TARGET,
             "{label} signature mismatch at {va:#010x} ({}) — refusing to patch",
             ::wow_hook::prologue_owner(va),
         );

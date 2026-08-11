@@ -184,7 +184,7 @@ fn log_foreign_detours(image_base: usize) {
         if wow_hook::detour_target(va).is_some() {
             found += 1;
             log::info!(
-                target: LOG_TARGET,
+                target: wow_hook::LOG_TARGET,
                 "{label} @ {va:#010x} {}",
                 wow_hook::prologue_owner(va),
             );
@@ -192,7 +192,7 @@ fn log_foreign_detours(image_base: usize) {
     }
     if found == 0 {
         log::info!(
-            target: LOG_TARGET,
+            target: wow_hook::LOG_TARGET,
             "script API: {} unhooked entries checked, none detoured",
             PROBED_ENTRIES.len(),
         );
