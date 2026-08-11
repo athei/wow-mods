@@ -7,7 +7,9 @@
 //! recover); does any model instance get visited twice in one frame through
 //! the `+0x40` stamp (the aliasing hazard a fork must exclude); what a
 //! forked animate pass pays at the join against the per-root cost its lanes
-//! absorb; how many dynamic-buffer lock cycles the particle and
+//! absorb; where a draw-list build's game-thread time goes phase by phase,
+//! which is what bounds any attempt to overlap that join with the phases
+//! after it; how many dynamic-buffer lock cycles the particle and
 //! precipitation paths pay per session; what grain the per-emitter particle
 //! draws offer a fork (draws per second, live particles per draw with a
 //! histogram whose buckets end at 4/16/64/256, the quad build's cost spread,
@@ -50,6 +52,18 @@ static ANIM_PAR_WAIT_TICKS_SUM: Accum = Accum::zero();
 static ANIM_PAR_WAIT_TICKS_MAX: Accum = Accum::zero();
 static ANIM_PAR_WORKER_TICKS: Accum = Accum::zero();
 static ANIM_PAR_FORK_TICKS_SUM: Accum = Accum::zero();
+
+static BDL_PASSES: Counter = Counter::zero();
+static BDL_TOTAL_TICKS: Accum = Accum::zero();
+static BDL_TOTAL_TICKS_MAX: Accum = Accum::zero();
+static BDL_PROLOGUE_TICKS: Accum = Accum::zero();
+static BDL_COLLECT_TICKS: Accum = Accum::zero();
+static BDL_ANIMATE_TICKS: Accum = Accum::zero();
+static BDL_PARTICLES_TICKS: Accum = Accum::zero();
+static BDL_REFRESH_TICKS: Accum = Accum::zero();
+static BDL_SPATIAL_TICKS: Accum = Accum::zero();
+static BDL_CHILD_TICKS: Accum = Accum::zero();
+static BDL_FINALIZE_TICKS: Accum = Accum::zero();
 
 static PARTICLE_LOCKS: Counter = Counter::zero();
 static RAIN_LOCKS: Counter = Counter::zero();
@@ -170,6 +184,59 @@ pub fn anim_par_pass(
     ANIM_PAR_WAIT_TICKS_MAX.max(armed, wait_ticks);
     ANIM_PAR_FORK_TICKS_SUM.add(armed, fork_ticks);
     ANIM_PAR_WORKER_TICKS.add(armed, worker_ticks);
+}
+
+/// Game-thread ticks of one draw-list build, phase by phase.
+///
+/// The phases are the work, not a partition of `total`: the gaps between
+/// them (the arm reads, the root buffer's take and put-back, the bucket count
+/// resets) are what the remainder measures, and a remainder that stops being
+/// small is itself the finding.
+///
+/// `animate` is the dispatch alone — the fork's publish-to-quiescence wall on
+/// a forked pass, the walk on a serial one — so it is the game-thread cost of
+/// animation, while `seam anim par`'s `worker us sum` is the work behind it.
+/// Everything from `particles` on reads what that dispatch wrote, which is
+/// why their sum bounds what overlapping the join could recover.
+#[derive(Default)]
+pub struct BdlPhases {
+    /// The whole build, entry to return.
+    pub total: u64,
+    /// Entry to the animation phase: counter, cache reset, camera matrices.
+    pub prologue: u64,
+    /// The animate-eligible root walk.
+    pub collect: u64,
+    /// The fork's wall, or the serial animate walk.
+    ///
+    /// A forked pass closes the bracket before its own bookkeeping; a serial
+    /// one cannot, so its walk carries the armed per-root brackets inside it
+    /// and reads slightly high.
+    pub animate: u64,
+    /// `UpdateParticlesAndChildren` over the visible list.
+    pub particles: u64,
+    /// The node-bounds refresh that empties that list.
+    pub refresh: u64,
+    /// The bucket resets and the spatial-node walk behind the draw records.
+    pub spatial: u64,
+    /// The child-view walk.
+    pub child: u64,
+    /// Texture dedup and the bucket sorts.
+    pub finalize: u64,
+}
+
+/// One draw-list build's phase costs.
+pub fn bdl_pass(armed: &Armed, t: &BdlPhases) {
+    BDL_PASSES.bump(armed);
+    BDL_TOTAL_TICKS.add(armed, t.total);
+    BDL_TOTAL_TICKS_MAX.max(armed, t.total);
+    BDL_PROLOGUE_TICKS.add(armed, t.prologue);
+    BDL_COLLECT_TICKS.add(armed, t.collect);
+    BDL_ANIMATE_TICKS.add(armed, t.animate);
+    BDL_PARTICLES_TICKS.add(armed, t.particles);
+    BDL_REFRESH_TICKS.add(armed, t.refresh);
+    BDL_SPATIAL_TICKS.add(armed, t.spatial);
+    BDL_CHILD_TICKS.add(armed, t.child);
+    BDL_FINALIZE_TICKS.add(armed, t.finalize);
 }
 
 /// One multi-root pass below the fork gate.
@@ -364,6 +431,24 @@ pub fn emit_cumulative() {
             ticks_to_us(ANIM_PAR_WAIT_TICKS_SUM.get()),
             ticks_to_us(ANIM_PAR_WAIT_TICKS_MAX.get()),
             ticks_to_us(ANIM_PAR_FORK_TICKS_SUM.get()),
+        );
+    }
+    let bdl_passes = BDL_PASSES.get();
+    if bdl_passes != 0 {
+        log::debug!(
+            target: super::tally::TARGET,
+            "seam bdl: {bdl_passes} passes, total us {} max {}, us prologue {} collect {} \
+             animate {} particles {} refresh {} spatial {} child {} finalize {}",
+            ticks_to_us(BDL_TOTAL_TICKS.get()),
+            ticks_to_us(BDL_TOTAL_TICKS_MAX.get()),
+            ticks_to_us(BDL_PROLOGUE_TICKS.get()),
+            ticks_to_us(BDL_COLLECT_TICKS.get()),
+            ticks_to_us(BDL_ANIMATE_TICKS.get()),
+            ticks_to_us(BDL_PARTICLES_TICKS.get()),
+            ticks_to_us(BDL_REFRESH_TICKS.get()),
+            ticks_to_us(BDL_SPATIAL_TICKS.get()),
+            ticks_to_us(BDL_CHILD_TICKS.get()),
+            ticks_to_us(BDL_FINALIZE_TICKS.get()),
         );
     }
     let p = PARTICLE_LOCKS.get();

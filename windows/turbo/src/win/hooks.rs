@@ -31248,6 +31248,16 @@ fn bdl_animate_root_timed(
     }
 }
 
+/// A phase clock read that an unarmed pass does not pay for.
+///
+/// The phase brackets are the only clock reads on the draw-list path, so they
+/// are gated on the arm the same way the per-root brackets beside them are:
+/// unarmed, a bracket is two branches and a subtraction of zero.
+#[inline]
+fn bdl_tick(timed: bool) -> u64 {
+    if timed { wow_shared::tsc::rdtsc() } else { 0 }
+}
+
 /// Fork gate: minimum animate-eligible roots before a pass forks.
 ///
 /// Break-even against the pool's measured 17-22 us empty round trip with
@@ -31437,7 +31447,10 @@ fn bdl_anim_fork(
 /// runs unchanged (camera-relative double-hop walk gated by `[view+4]&4`,
 /// else the plain single-hop walk). A particle update pass follows either
 /// way.
-fn bdl_anim_phase(base: *mut u8) {
+///
+/// Fills the `collect`, `animate` and `particles` phases of `phases`; the
+/// driver owns the rest of them and submits the record.
+fn bdl_anim_phase(base: *mut u8, phases: &mut super::seam_probe::BdlPhases) {
     // Whether a hook of ours is still installed is not a question only an
     // instrumented session gets to ask: an entry another module takes is dead
     // for every player. This is the cheapest always-on tick available — one
@@ -31461,7 +31474,10 @@ fn bdl_anim_phase(base: *mut u8) {
     // tests bit 2 of.
     let worker_arm = (unsafe { bdl_rd32(view, 4) } & 4) != 0;
     let mut root_buf = BDL_ANIM_ROOTS.with(core::cell::RefCell::take);
+    let t_collect = bdl_tick(timed);
     bdl_collect_anim_roots(base, &mut root_buf);
+    let t_animate = bdl_tick(timed);
+    phases.collect = t_animate.wrapping_sub(t_collect);
     let fork = root_buf.len() >= BDL_ANIM_MIN_ROOTS;
     if !fork && root_buf.len() > 1 {
         super::seam_probe::anim_par_gated();
@@ -31469,6 +31485,10 @@ fn bdl_anim_phase(base: *mut u8) {
     if fork {
         let mut tick_buf = BDL_ANIM_TICKS.with(core::cell::RefCell::take);
         let stats = bdl_anim_fork(base, &root_buf, &mut tick_buf, timed);
+        // Closed before the armed bookkeeping below, which walks the tick
+        // array: the phase is meant to be the dispatch a live session pays,
+        // not what measuring it costs.
+        phases.animate = bdl_tick(timed).wrapping_sub(t_animate);
         if timed {
             roots = root_buf.len() as u32;
             for &dt in &tick_buf {
@@ -31529,6 +31549,7 @@ fn bdl_anim_phase(base: *mut u8) {
             // paired 0x706cd0 call above was already handed.
             unsafe { core::mem::transmute(SUB_706D00) };
         f2(view);
+        phases.animate = bdl_tick(timed).wrapping_sub(t_animate);
     } else {
         // 0x7077d3: plain single-hop walk.
         // SAFETY: `base` is that same `CWorldView`; `+0x20` is its visible-list head pointer
@@ -31549,9 +31570,11 @@ fn bdl_anim_phase(base: *mut u8) {
             // the visible list is chained through.
             node = unsafe { bdl_rdp(node, 0x48) };
         }
+        phases.animate = bdl_tick(timed).wrapping_sub(t_animate);
     }
     BDL_ANIM_ROOTS.with(|slot| slot.replace(root_buf));
     // 0x707830: UpdateParticlesAndChildren over the visible list.
+    let t_particles = bdl_tick(timed);
     // SAFETY: `base` is that same `CWorldView`; `+0x20` is its visible-list head pointer
     // field, re-read here because the stock code at 0x707830 reloads the head for this pass.
     let mut node = unsafe { bdl_rdp(base, 0x20) };
@@ -31563,6 +31586,7 @@ fn bdl_anim_phase(base: *mut u8) {
         // visible list is chained through.
         node = unsafe { bdl_rdp(node, 0x48) };
     }
+    phases.particles = bdl_tick(timed).wrapping_sub(t_particles);
     if let Some(armed) = &probe {
         super::seam_probe::anim_phase(armed, worker_arm, roots, ticks_sum, ticks_max, list_len);
     }
@@ -31784,6 +31808,10 @@ pub fn c_world_view__build_draw_list__707680(
         return 0;
     }
     let base = this.cast::<u8>();
+    let probe = super::tally::arm();
+    let timed = probe.is_some();
+    let mut phases = super::seam_probe::BdlPhases::default();
+    let t_entry = bdl_tick(timed);
 
     // 0x707696: inc the per-frame counter.
     // SAFETY: `base` is the non-null `CWorldView` `this` the draw-list hook was entered
@@ -31879,10 +31907,14 @@ pub fn c_world_view__build_draw_list__707680(
     // SAFETY: as above; `+0x9c` is the camera 4x4 `GetCurrentMatrix` filled above.
     let cam_in = unsafe { base.add(0x9c).cast::<f32>() };
     bdl_matrix_inverse(inv_out, core::ptr::null(), cam_in);
+    phases.prologue = bdl_tick(timed).wrapping_sub(t_entry);
 
     // 0x707757: animation phase; 0x707845: node-bounds refresh.
-    bdl_anim_phase(base);
+    bdl_anim_phase(base, &mut phases);
+    let t_refresh = bdl_tick(timed);
     bdl_refresh_phase(base);
+    let t_spatial = bdl_tick(timed);
+    phases.refresh = t_spatial.wrapping_sub(t_refresh);
 
     // 0x70786a..0x707890: reset the bucket counts and the record-array count.
     // SAFETY: `base` is the live `CWorldView`; index-array headers are
@@ -31928,6 +31960,8 @@ pub fn c_world_view__build_draw_list__707680(
         // node can splice further elements onto the same head.
         node = unsafe { bdl_rdp(base, 0x24) };
     }
+    let t_child = bdl_tick(timed);
+    phases.spatial = t_child.wrapping_sub(t_spatial);
 
     // 0x708393..0x708685: walk the child-view list off this+0x28.
     // SAFETY: `base` is the live `CWorldView`; `+0x28` is the head slot of the second draw
@@ -31954,10 +31988,18 @@ pub fn c_world_view__build_draw_list__707680(
         // child can splice further elements onto the same head.
         child = unsafe { bdl_rdp(base, 0x28) };
     }
+    let t_finalize = bdl_tick(timed);
+    phases.child = t_finalize.wrapping_sub(t_child);
 
     // 0x70868b: dedup + heap-sort the buckets.
     bdl_finalize(base);
 
+    if let Some(armed) = &probe {
+        let end = bdl_tick(timed);
+        phases.finalize = end.wrapping_sub(t_finalize);
+        phases.total = end.wrapping_sub(t_entry);
+        super::seam_probe::bdl_pass(armed, &phases);
+    }
     1
 }
 
