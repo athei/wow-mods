@@ -2936,6 +2936,18 @@ pub fn collision_sweep_polygon_against_faces__632700(
     // asks for and how many of them buy nothing.
     #[cfg(target_arch = "x86")]
     crate::win::seam_probe::sweep_face_pass();
+    // The scratch polygon outlives the iteration that fills it. Declaring it
+    // here rather than per face is not a style choice: the buffers are 45 and
+    // 15 floats, the seed uses 9 and 3 of them, and the compiler cannot know
+    // the rest is dead, so a per-face declaration emitted 208 bytes of stores
+    // into the loop body — thirteen `movdqu`s ahead of a 36-byte copy, on a
+    // loop that runs about a million times a second. Only the seeded prefix is
+    // ever read: the polygon starts at three vertices, both callees read
+    // strictly below the live count, and every slot they emit they also write.
+    // Whatever the previous face left above the prefix is therefore untouched
+    // and unread.
+    let mut verts = [0.0f32; 45];
+    let mut tags = [0.0f32; 15];
     for (idx, face) in faces.iter().enumerate() {
         let dot = face[0] * sweep_dir[0] + face[1] * sweep_dir[1] + face[2] * sweep_dir[2];
         if !(dot <= front_eps) {
@@ -2943,11 +2955,10 @@ pub fn collision_sweep_polygon_against_faces__632700(
             crate::win::seam_probe::sweep_face_back_facing();
             continue;
         }
-        // Fresh scratch polygon: 3 verts copied from the face, tags = -1
+        // Seed the polygon: 3 verts copied from the face, their tags = -1
         // (0xffffffff), count = 3.
-        let mut verts = [0.0f32; 45];
-        let mut tags = [f32::from_bits(0xffff_ffff); 15];
         verts[..9].copy_from_slice(&face[4..13]);
+        tags[..3].fill(f32::from_bits(0xffff_ffff));
 
         let mut count = 3usize;
         for (i, plane) in clip_planes.iter().take(clip_plane_count).enumerate() {
