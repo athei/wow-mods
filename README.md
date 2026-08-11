@@ -208,7 +208,11 @@ targeted fixes:
   frame happened to run. Loading screens and interface reloads are marked, so
   one-time start-up work is not mistaken for what a session costs while
   playing. The instrumentation measures its own overhead and reports it
-  separately, and is inert unless that filter is enabled.
+  separately, and is inert unless that filter is enabled. The per-second
+  tables and the per-script attribution dumps sit on their own sub-targets,
+  so `RUST_LOG=wow::events=debug,wow::events::window=info` keeps the periodic
+  cumulative report without a table every second; silencing a sub-target
+  costs its lines, never a measurement.
 - **Hot VM leaves.** Table hashing and lookup, number↔string conversion and
   the constant-table path are ported to SSE.
 

@@ -67,6 +67,17 @@
 //! parent's. Summing the rows can therefore land slightly above `signals`, and
 //! does whenever nesting occurs.
 //!
+//! Log targets. The gauge emits at three very different rates, so they sit on
+//! three targets and a reader can keep the rare lines without the rest:
+//! [`super::tally::TARGET`] (`wow::events`) carries the once-in-a-while
+//! output — the armed line, world and UI lifecycle, and the 60 s cumulative
+//! pass with every sibling module's counters folded in; [`TARGET_WINDOW`] the
+//! per-second tables; [`TARGET_SCRIPT`] the one-line-per-script-file and
+//! one-line-per-registered-event attribution dumps. `wow::events` alone is
+//! the ARM: silencing a child costs its lines and the work of formatting
+//! them, never a counter, so `wow=debug,wow::events::window=info` still
+//! measures everything and just stops printing it every second.
+//!
 //! Event registry (fixed client globals): base `*(0xceef68)`, count
 //! `*(0xceef64)`, stride 0x10 — entry+0x0 event name, entry+0xc intrusive
 //! listener list (node+0x4 next, low-bit-tagged terminator; node+0x8 the
@@ -83,6 +94,20 @@ use std::{
 };
 
 use rustc_hash::FxHashMap;
+
+/// Target for the per-second window tables, the gauge's loudest output.
+///
+/// A child of the arm's target rather than the arm itself: `env_logger`
+/// resolves a target against its longest matching directive, so
+/// `wow::events::window=info` quiets these six lines a second while
+/// `wow=debug` keeps arming the gauge and printing everything else.
+const TARGET_WINDOW: &str = "wow::events::window";
+/// Target for the per-script-file and per-registered-event attribution dumps.
+///
+/// Both enumerate once over something the session loaded rather than
+/// reporting on a cadence, which is a different kind of noise from the window
+/// tables: hundreds of lines at load, then nothing.
+const TARGET_SCRIPT: &str = "wow::events::script";
 
 /// Address holding the event-registry entry count.
 const REGISTRY_COUNT: usize = 0x00ce_ef64;
@@ -565,7 +590,7 @@ fn owner_of(st: &mut State, chunk: (usize, u32)) -> NameBuf {
     // name is already the row they group under.
     if text.contains(&b'\\') {
         log::debug!(
-            target: super::tally::TARGET,
+            target: TARGET_SCRIPT,
             "chunk: {:?} -> {}",
             String::from_utf8_lossy(&text[..text.len().min(120)]),
             name_str(&owner),
@@ -1275,13 +1300,25 @@ fn maybe_emit(st: &mut State) {
     // belongs to, and from there into the cumulative tables by the ordinary
     // merge.
     st.window.span_rejects += u64::from(SPAN_REJECTS.swap(0, Ordering::Relaxed));
-    emit_tables(&st.window, window_ms, TOP_PER_SECOND, "");
+    // Ranking and formatting several tables is the expensive half of an
+    // emission, so a reader who silenced the per-second target skips the work
+    // and not just the output. The window still closes and still merges: the
+    // cumulative pass is built out of these windows.
+    if log::log_enabled!(target: TARGET_WINDOW, log::Level::Debug) {
+        emit_tables(&st.window, window_ms, TOP_PER_SECOND, "", TARGET_WINDOW);
+    }
     let window = std::mem::take(&mut st.window);
     merge(&mut st.cumulative, window);
     st.window_start = now;
     let cum_ms = super::hooks::clock_ticks_to_ms(span(st.cumulative_emit, now));
     if cum_ms >= CUMULATIVE_MS {
-        emit_tables(&st.cumulative, cum_ms, TOP_CUMULATIVE, "total ");
+        emit_tables(
+            &st.cumulative,
+            cum_ms,
+            TOP_CUMULATIVE,
+            "total ",
+            super::tally::TARGET,
+        );
         // A memo that never hits looks exactly like one that works: its target
         // is reached from a script, not through the dispatch this gauge
         // measures, so no table above can show it.
@@ -1416,7 +1453,7 @@ fn push_event_tail(line: &mut String, rows: &[&EventRow], shown: usize, skip: us
 /// frame it happened to attach a handler to. The stock interface files bucket
 /// under their own names, which separates what shipped with the client from
 /// what a user installed.
-fn emit_owners(t: &Tables, top: usize, label: &str) {
+fn emit_owners(t: &Tables, top: usize, label: &str, target: &str) {
     if t.owners.is_empty() {
         return;
     }
@@ -1440,7 +1477,7 @@ fn emit_owners(t: &Tables, top: usize, label: &str) {
         push_ms(&mut line, ticks);
         line.push_str(" ms;");
     }
-    log::debug!(target: super::tally::TARGET, "{line}");
+    log::debug!(target: target, "{line}");
 }
 
 /// Emit where the body time sat on the cost scale.
@@ -1449,7 +1486,7 @@ fn emit_owners(t: &Tables, top: usize, label: &str) {
 /// for and no faster dispatch can remove, since it is already inside the
 /// protected call; mass in the tail is what the scripts are doing. Which end
 /// carries the time decides what is worth attacking.
-fn emit_body_histogram(t: &Tables, label: &str) {
+fn emit_body_histogram(t: &Tables, label: &str, target: &str) {
     if t.body_calls == 0 {
         return;
     }
@@ -1467,7 +1504,7 @@ fn emit_body_histogram(t: &Tables, label: &str) {
         push_ms(&mut line, *ticks);
         line.push_str(" ms;");
     }
-    log::debug!(target: super::tally::TARGET, "{line}");
+    log::debug!(target: target, "{line}");
 }
 
 /// Emit the client's C script API, ranked by cost, with the tail folded in.
@@ -1477,7 +1514,7 @@ fn emit_body_histogram(t: &Tables, label: &str) {
 /// and a table of a few hundred strings would have to ship to say no more.
 /// Ranked [`TOP_API`] deep rather than to the shared cap, for the reason given
 /// there.
-fn emit_api(t: &Tables, label: &str) {
+fn emit_api(t: &Tables, label: &str, target: &str) {
     if t.api.is_empty() {
         return;
     }
@@ -1502,7 +1539,7 @@ fn emit_api(t: &Tables, label: &str) {
         push_ms(&mut line, t.api_dropped_ticks);
         line.push_str(" ms)");
     }
-    log::debug!(target: super::tally::TARGET, "{line}");
+    log::debug!(target: target, "{line}");
 }
 
 /// Emit the quarantined C-API spans, when any exist (see [`API_SUSPECT_US`]).
@@ -1510,7 +1547,7 @@ fn emit_api(t: &Tables, label: &str) {
 /// One row per entry address with count, total and worst span, so the reader
 /// can decide per address which of the two meanings applies. Printed after the
 /// ranked table it was kept out of.
-fn emit_api_suspect(t: &Tables, label: &str) {
+fn emit_api_suspect(t: &Tables, label: &str, target: &str) {
     if t.api_suspect.is_empty() && t.api_suspect_dropped == 0 {
         return;
     }
@@ -1530,7 +1567,7 @@ fn emit_api_suspect(t: &Tables, label: &str) {
         push_ms(&mut line, t.api_suspect_dropped_ticks);
         line.push_str(" ms)");
     }
-    log::debug!(target: super::tally::TARGET, "{line}");
+    log::debug!(target: target, "{line}");
 }
 
 /// Build the header: the window total, split both ways, then the api/vm split.
@@ -1576,7 +1613,7 @@ fn header_line(t: &Tables, span_ms: u64, label: &str) -> String {
 }
 
 /// Emit one events line and one handlers line for a window.
-fn emit_tables(t: &Tables, span_ms: u64, top: usize, label: &str) {
+fn emit_tables(t: &Tables, span_ms: u64, top: usize, label: &str, target: &str) {
     if t.signals == 0 && t.handler_calls == 0 {
         return;
     }
@@ -1621,11 +1658,11 @@ fn emit_tables(t: &Tables, span_ms: u64, top: usize, label: &str) {
         skip = shown + i;
     }
     push_event_tail(&mut line, &rows, shown, skip);
-    log::debug!(target: super::tally::TARGET, "{line}");
-    emit_owners(t, top, label);
-    emit_body_histogram(t, label);
-    emit_api(t, label);
-    emit_api_suspect(t, label);
+    log::debug!(target: target, "{line}");
+    emit_owners(t, top, label, target);
+    emit_body_histogram(t, label, target);
+    emit_api(t, label, target);
+    emit_api_suspect(t, label, target);
     if t.handlers.is_empty() {
         return;
     }
@@ -1649,7 +1686,7 @@ fn emit_tables(t: &Tables, span_ms: u64, top: usize, label: &str) {
         push_ms(&mut line, t.dropped_ticks);
         line.push_str(" ms)");
     }
-    log::debug!(target: super::tally::TARGET, "{line}");
+    log::debug!(target: target, "{line}");
 }
 
 /// Dump every event with at least one listener (fires on each world enter).
@@ -1671,7 +1708,7 @@ fn dump_registry() {
         // name.
         let p = unsafe { *(entry as *const *const u8) };
         let name = name_from_cstr(p);
-        log::debug!(target: super::tally::TARGET, "reg: {} listeners={n}", name_str(&name));
+        log::debug!(target: TARGET_SCRIPT, "reg: {} listeners={n}", name_str(&name));
     }
     log::debug!(
         target: super::tally::TARGET,
