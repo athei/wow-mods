@@ -21062,12 +21062,23 @@ fn gc_par_begin(shared: &GcParShared, mut spec: GcJob) -> GcJob {
 /// live for the process lifetime. A failed spawn means the process is
 /// already beyond saving (32-bit address-space exhaustion), so it panics
 /// rather than limping.
+///
+/// The cap is a cap and not a share of `available_parallelism`, because that
+/// count includes efficiency cores (18 logical, 6 of them performance, on the
+/// machine this was tuned against) and the jobs here want performance cores.
+/// It sets the animate fork's lane count, and that fork hard-joins, so its
+/// cost to the game thread is the whole work divided by the lanes: a lane is
+/// worth roughly 0.9% of wall at city grain. The ceiling is what the rest of
+/// the process needs, since a lane the scheduler preempts holds the join open
+/// for everyone — game thread, mtld3d's encoder and the audio thread each
+/// want one, and the pool is only ~5% duty cycle, which is what makes even
+/// this much oversubscription survivable.
 fn gc_pool() -> &'static GcParShared {
     static POOL: std::sync::OnceLock<std::sync::Arc<GcParShared>> = std::sync::OnceLock::new();
     POOL.get_or_init(|| {
         let workers = std::thread::available_parallelism()
             .map_or(2, |p| p.get().saturating_sub(1))
-            .clamp(1, 3);
+            .clamp(1, 4);
         let shared = std::sync::Arc::new(GcParShared {
             injector: std::sync::Mutex::new(Vec::new()),
             thread_q: std::sync::Mutex::new(Vec::new()),
