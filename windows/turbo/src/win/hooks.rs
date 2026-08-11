@@ -31026,7 +31026,7 @@ const fn bdl_prio(type_idx: i32) -> u32 {
     unsafe { slot.read() }
 }
 
-/// Keyed opaque-bucket sort: precompute one packed key per element, then heap-sort by key.
+/// Keyed opaque-bucket sort: precompute one packed key per element, then sort by key.
 ///
 /// Reads the `worldView` fields the comparator (0x70ae10) reads once per
 /// comparison (the element array base `+0x34`, the sort-flags dword `+0x148`,
@@ -31034,8 +31034,9 @@ const fn bdl_prio(type_idx: i32) -> u32 {
 /// permutes the index array and nothing writes those fields while it runs.
 /// Keys order exactly as the comparator chain decides
 /// (`crate::math::world::draw_elem_sort_key`); equal keys fall through to the
-/// extended comparator (0x70aa30) just as the chain does, so the pairwise
-/// comparison results, and with them the heap-sort permutation, are identical.
+/// extended comparator (0x70aa30) just as the chain does, so every pairwise
+/// comparison answers what the chain would have answered. The permutation is
+/// the sort's, not the client's — see `intro_sort_u_int32`.
 /// Returns `false` without sorting when the view or element base is null, an
 /// element index is at or beyond `BDL_KEY_INDEX_CAP`, or a float key is NaN
 /// (a NaN ties with everything under the chain's ordered tests, which no
@@ -31101,11 +31102,11 @@ fn bdl_sort_opaque_keyed(
         };
         match cmps {
             // Armed: one branch per sort, not per comparison.
-            Some(n) => crate::math::misc::heap_sort_u_int32__71f860(slice, |a, b| {
+            Some(n) => crate::math::misc::intro_sort_u_int32(slice, |a, b| {
                 *n = n.wrapping_add(1);
                 cmp(a, b)
             }),
-            None => crate::math::misc::heap_sort_u_int32__71f860(slice, cmp),
+            None => crate::math::misc::intro_sort_u_int32(slice, cmp),
         }
         true
     })
@@ -31117,11 +31118,14 @@ fn bdl_view_i32(base: *mut u8) -> i32 {
     base as usize as i32
 }
 
-/// Transparent-bucket heap sort with our own `CWorldView__CompareDrawListExtended` hook.
+/// Transparent-bucket sort with our own `CWorldView__CompareDrawListExtended` hook.
 ///
-/// The comparator (0x70aa30) is pairwise through and through (texture-pointer
-/// walks over variable-length streams), so this bucket has no precomputed-key
-/// form; the win is calling the hook directly through the shared kernel. A
+/// The most expensive thing the draw-list build does: `seam finalize` puts this
+/// one sort at 5.88% of wall on a busy Stormwind scene, 75% of the finalize
+/// phase, over 1577 elements per pass at 10.75 ns a comparison. The comparator
+/// (0x70aa30) is pairwise through and through (texture-pointer walks over
+/// variable-length streams), so this bucket has no precomputed-key form; the
+/// win is calling the hook directly through the shared kernel. A
 /// `wow_turbo_diff` build routes through the guest VA instead, on purpose:
 /// the patched prologue enters the thunk, which is the only comparator call
 /// site the thunk-level DIFF harness can observe (the sibling comparators are
@@ -31129,13 +31133,18 @@ fn bdl_view_i32(base: *mut u8) -> i32 {
 /// through the VA every comparison would just bounce off the patched prologue
 /// and detour back into the same Rust fn.
 ///
-/// A partial key over the chain's leading tiers was built and measured, and it
-/// is not worth having. It works: it decided 99.4% of 124M comparisons and cut
-/// comparator time by 93%. But the whole path came out unchanged, 11.7 ns per
-/// comparison against 11.3 ns, because the chain already exits on the element
-/// type tag for most pairs while a key compare loads two ten-lane arrays out of
-/// a scratch table. The tiers are keyable; the chain is simply not where the
-/// time is spent once it early-exits.
+/// A partial key over the chain's leading tiers was built and measured and left
+/// out: it decided 99.4% of 124M comparisons and cut comparator time by 93%,
+/// and the whole path came out unchanged at 11.7 ns per comparison against
+/// 11.3. **The reason recorded at the time — that the chain already exits on
+/// the element type tag for most pairs — is wrong.** The tag counter says it
+/// decides *no* comparisons at all: 0 of 660M across two armed windows, every
+/// element in the bucket carrying the same tag. What the same capture does show
+/// is the keyed sibling bucket paying 8.14 ns to compare two precomputed
+/// integers, which is a cache miss, not arithmetic: both key tables are indexed
+/// by element index and run to ~100 KB. The key worked and then paid for its
+/// own lookup. A key packed next to its index, rather than indexed by it, is
+/// the form that has not been tried.
 fn bdl_sort_transparent(
     data: *mut u32,
     count: u32,
@@ -31169,7 +31178,7 @@ fn bdl_sort_transparent(
                 // SAFETY: `base` is the live view and `+0x34` is its element-array base slot,
                 // the same one the comparator loads on every call.
                 let elem_base = unsafe { bdl_rd32(base, 0x34) };
-                crate::math::misc::heap_sort_u_int32__71f860(slice, |a, b| {
+                crate::math::misc::intro_sort_u_int32(slice, |a, b| {
                     t.cmps = t.cmps.wrapping_add(1);
                     if bdl_elem_tag(elem_base, a) != bdl_elem_tag(elem_base, b) {
                         t.tag = t.tag.wrapping_add(1);
@@ -31177,18 +31186,19 @@ fn bdl_sort_transparent(
                     c_world_view__compare_draw_list_extended__70aa30(a, b, view)
                 });
             }
-            None => crate::math::misc::heap_sort_u_int32__71f860(slice, |a, b| {
+            None => crate::math::misc::intro_sort_u_int32(slice, |a, b| {
                 c_world_view__compare_draw_list_extended__70aa30(a, b, view)
             }),
         }
     }
 }
 
-/// Opaque-bucket heap sort with our own `CWorldView__CompareDrawListOpaque` hook (0x70ae10).
+/// Opaque-bucket sort with our own `CWorldView__CompareDrawListOpaque` hook (0x70ae10).
 ///
-/// Sorts by precomputed per-element keys when the list admits them (see
+/// Both opaque buckets, roughly 743 elements a pass between them and 1.88% of
+/// wall. Sorts by precomputed per-element keys when the list admits them (see
 /// `bdl_sort_opaque_keyed`): the comparator chain re-reads both elements'
-/// sort fields on every comparison, so an n-log-n heap sort pays that walk
+/// sort fields on every comparison, so an n-log-n sort pays that walk
 /// n-log-n times where one key pass pays it n times. When the keyed path
 /// declines it falls back to the chain comparator, called directly through
 /// the shared kernel — routing through the guest VA would detour back into
@@ -31206,7 +31216,7 @@ fn bdl_sort_opaque(data: *mut u32, count: u32, base: *mut u8, cmps: Option<&mut 
         if bdl_sort_opaque_keyed(slice, base, view, Some(&mut *n)) {
             return;
         }
-        crate::math::misc::heap_sort_u_int32__71f860(slice, |a, b| {
+        crate::math::misc::intro_sort_u_int32(slice, |a, b| {
             *n = n.wrapping_add(1);
             c_world_view__compare_draw_list_opaque__70ae10(a, b, view)
         });
@@ -31215,7 +31225,7 @@ fn bdl_sort_opaque(data: *mut u32, count: u32, base: *mut u8, cmps: Option<&mut 
     if bdl_sort_opaque_keyed(slice, base, view, None) {
         return;
     }
-    crate::math::misc::heap_sort_u_int32__71f860(slice, |a, b| {
+    crate::math::misc::intro_sort_u_int32(slice, |a, b| {
         c_world_view__compare_draw_list_opaque__70ae10(a, b, view)
     });
 }
@@ -31231,12 +31241,15 @@ fn bdl_cmp_by_tex(a: u32, b: u32, this: *const u8) -> i32 {
     c_world_view__compare_draw_list_by_texture__70aa00(a, b, this)
 }
 
-/// Keyed bucket-0 sort: precompute each element's texture key, then heap-sort by key.
+/// Keyed bucket-0 sort: precompute each element's texture key, then sort by key.
 ///
 /// The comparator (0x70aa00) orders by the single unsigned dword at element
 /// `+0x24` and nothing else, so a three-way compare of precomputed keys is
 /// its exact result (equal keys are the comparator's 0, there is no deeper
-/// tier) and the heap-sort permutation is identical. The key pass mirrors the
+/// tier). The permutation among those equal keys is the sort's, not the
+/// client's — see `intro_sort_u_int32`; the run-merge below reads only which
+/// elements are adjacent-equal, which no reordering of an equal run changes.
+/// The key pass mirrors the
 /// comparator's address arithmetic, wrapping as the stock `SHL reg,6` does.
 /// Returns `false` without sorting on a null view or element base, or an
 /// element index at or beyond `BDL_KEY_INDEX_CAP`.
@@ -31268,7 +31281,7 @@ fn bdl_sort_by_tex_keyed(slice: &mut [u32], base: *mut u8) -> bool {
             keys[index as usize] = unsafe { slot.cast::<u32>().read_unaligned() };
         }
         let keys = &*keys;
-        crate::math::misc::heap_sort_u_int32__71f860(slice, |a, b| {
+        crate::math::misc::intro_sort_u_int32(slice, |a, b| {
             match keys[a as usize].cmp(&keys[b as usize]) {
                 core::cmp::Ordering::Less => -1,
                 core::cmp::Ordering::Greater => 1,
@@ -31279,7 +31292,7 @@ fn bdl_sort_by_tex_keyed(slice: &mut [u32], base: *mut u8) -> bool {
     })
 }
 
-/// Bucket-0 (texture-major) heap sort with our own `CWorldView__CompareDrawListByTexture` hook.
+/// Bucket-0 (texture-major) sort with our own `CWorldView__CompareDrawListByTexture` hook.
 ///
 /// Sorts by precomputed per-element texture keys when the list admits them
 /// (see `bdl_sort_by_tex_keyed`); otherwise the hook (0x70aa00) is used as
@@ -31297,7 +31310,7 @@ fn bdl_sort_by_tex(data: *mut u32, count: u32, base: *mut u8) {
     if bdl_sort_by_tex_keyed(slice, base) {
         return;
     }
-    crate::math::misc::heap_sort_u_int32__71f860(slice, |a, b| bdl_cmp_by_tex(a, b, base));
+    crate::math::misc::intro_sort_u_int32(slice, |a, b| bdl_cmp_by_tex(a, b, base));
 }
 
 /// `CM2Shared::AnimateBones` (hooked) with the stock identity transform.
