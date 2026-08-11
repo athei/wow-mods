@@ -21066,13 +21066,23 @@ fn gc_par_begin(shared: &GcParShared, mut spec: GcJob) -> GcJob {
 /// The cap is a cap and not a share of `available_parallelism`, because that
 /// count includes efficiency cores (18 logical, 6 of them performance, on the
 /// machine this was tuned against) and the jobs here want performance cores.
-/// It sets the animate fork's lane count, and that fork hard-joins, so its
-/// cost to the game thread is the whole work divided by the lanes: a lane is
-/// worth roughly 0.9% of wall at city grain. The ceiling is what the rest of
-/// the process needs, since a lane the scheduler preempts holds the join open
-/// for everyone — game thread, mtld3d's encoder and the audio thread each
-/// want one, and the pool is only ~5% duty cycle, which is what makes even
-/// this much oversubscription survivable.
+///
+/// Four is measured. The animate fork hard-joins, so its cost to the game
+/// thread is the work divided by the lanes, and a busy-Stormwind A/B held the
+/// fork's wall per animate entry flat (0.5498 → 0.5538 us) across a scene
+/// whose per-unit cost rose ~18%, measured independently on two fixed-work
+/// game-thread quantities (the particle pre-scan per emitter and the consume
+/// bracket per draw). Flat against a baseline that should have risen is a
+/// ~15% cut in the fork's wall, about 0.85% of frame time.
+///
+/// Five would be past the ceiling. Six performance cores, and the game
+/// thread, mtld3d's encoder and the audio thread each want one; the fourth
+/// worker already costs a worse tail (pool time inflates ~14.5% beyond the
+/// machine-wide slowdown, the worst single-root bracket triples to 2.5 ms,
+/// and the particle consume's worst wait goes 56 → 330 us), which is lanes
+/// sitting descheduled. It captured ~60% of its ideal speedup rather than
+/// all of it, and under a hard join the wall is set by the slowest lane, so
+/// the next one past the ceiling costs throughput rather than just tail.
 fn gc_pool() -> &'static GcParShared {
     static POOL: std::sync::OnceLock<std::sync::Arc<GcParShared>> = std::sync::OnceLock::new();
     POOL.get_or_init(|| {
