@@ -42,7 +42,7 @@ struct Function {
     /// caller-saved registers live across calls to these internal functions.
     /// Orthogonal to `abi`; drives the save/restore shim.
     preserve: Vec<String>,
-    /// Install this hook only when the `wow::events` gauge is armed.
+    /// Install this hook only when the event gauge is armed.
     ///
     /// For an observation hook whose target is hot enough that even a
     /// trampoline on the unarmed path is a measurable tax — `luaD_precall` runs
@@ -632,10 +632,7 @@ fn render(m: &Manifest) -> String {
                 install_body,
                 "    // Observation hook on a path too hot to detour for nothing: stock"
             );
-            let _ = writeln!(
-                install_body,
-                "    // unless the `wow::events` gauge is armed."
-            );
+            let _ = writeln!(install_body, "    // unless the event gauge is armed.");
             let _ = writeln!(install_body, "    if super::events::armed() {{");
         }
         let _ = writeln!(

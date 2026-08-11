@@ -199,7 +199,7 @@ targeted fixes:
   pacing policy is left untouched: an earlier release widened the growth
   threshold to collect less often, which let enough garbage accumulate on
   addon-heavy raid setups to cause multi-second freezes, and was reverted.
-- **Script-cost observability.** With `RUST_LOG=wow::events=debug` the client
+- **Script-cost observability.** With `RUST_LOG=wow::gauge=debug` the client
   reports, every second, what its interface actually spent: the cost of each
   addon's scripts, of the client's own interface, and of the dispatch around
   them, plus how that cost is distributed between many cheap handler calls and
@@ -208,9 +208,9 @@ targeted fixes:
   frame happened to run. Loading screens and interface reloads are marked, so
   one-time start-up work is not mistaken for what a session costs while
   playing. The instrumentation measures its own overhead and reports it
-  separately, and is inert unless that filter is enabled. The per-second
+  separately, and is inert unless that filter is enabled. The live per-second
   tables and the per-script attribution dumps sit on their own sub-targets,
-  so `RUST_LOG=wow::events=debug,wow::events::window=info` keeps the periodic
+  so `RUST_LOG=wow::gauge=debug,wow::gauge::live=info` keeps the periodic
   cumulative report without a table every second; silencing a sub-target
   costs its lines, never a measurement.
 - **Hot VM leaves.** Table hashing and lookup, number↔string conversion and

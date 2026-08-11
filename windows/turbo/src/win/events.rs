@@ -1,9 +1,9 @@
-//! Event-dispatch gauge behind the `wow::events` debug filter.
+//! Event-dispatch gauge behind the `wow::gauge` debug filter.
 //!
 //! Observation-only instrumentation over the client's script event dispatch:
 //! the adapters in `hooks.rs` forward every call to the original and, when the
 //! gauge is armed, time it and attribute the cost. Armed means the
-//! `wow::events` target has debug logging enabled; otherwise every entry point
+//! `wow::gauge` target has debug logging enabled; otherwise every entry point
 //! here is a plain delegate and the tables are never touched, so a shipped
 //! build adds nothing at the default filter.
 //!
@@ -69,13 +69,13 @@
 //!
 //! Log targets. The gauge emits at three very different rates, so they sit on
 //! three targets and a reader can keep the rare lines without the rest:
-//! [`super::tally::TARGET`] (`wow::events`) carries the once-in-a-while
-//! output — the armed line, world and UI lifecycle, and the 60 s cumulative
-//! pass with every sibling module's counters folded in; [`TARGET_WINDOW`] the
-//! per-second tables; [`TARGET_SCRIPT`] the one-line-per-script-file and
-//! one-line-per-registered-event attribution dumps. `wow::events` alone is
+//! [`super::tally::TARGET`] (`wow::gauge`) carries the once-in-a-while
+//! output: the armed line, world and UI lifecycle, and the 60 s cumulative
+//! pass with every sibling module's counters folded in. [`TARGET_LIVE`] is
+//! the per-second tables, [`TARGET_SCRIPT`] the one-line-per-script-file and
+//! one-line-per-registered-event attribution dumps. `wow::gauge` alone is
 //! the ARM: silencing a child costs its lines and the work of formatting
-//! them, never a counter, so `wow=debug,wow::events::window=info` still
+//! them, never a counter, so `wow=debug,wow::gauge::live=info` still
 //! measures everything and just stops printing it every second.
 //!
 //! Event registry (fixed client globals): base `*(0xceef68)`, count
@@ -95,19 +95,19 @@ use std::{
 
 use rustc_hash::FxHashMap;
 
-/// Target for the per-second window tables, the gauge's loudest output.
+/// Target for the live per-second tables, the gauge's loudest output.
 ///
 /// A child of the arm's target rather than the arm itself: `env_logger`
 /// resolves a target against its longest matching directive, so
-/// `wow::events::window=info` quiets these six lines a second while
+/// `wow::gauge::live=info` quiets these six lines a second while
 /// `wow=debug` keeps arming the gauge and printing everything else.
-const TARGET_WINDOW: &str = "wow::events::window";
+const TARGET_LIVE: &str = "wow::gauge::live";
 /// Target for the per-script-file and per-registered-event attribution dumps.
 ///
 /// Both enumerate once over something the session loaded rather than
-/// reporting on a cadence, which is a different kind of noise from the window
+/// reporting on a cadence, which is a different kind of noise from the live
 /// tables: hundreds of lines at load, then nothing.
-const TARGET_SCRIPT: &str = "wow::events::script";
+const TARGET_SCRIPT: &str = "wow::gauge::script";
 
 /// Address holding the event-registry entry count.
 const REGISTRY_COUNT: usize = 0x00ce_ef64;
@@ -1304,8 +1304,8 @@ fn maybe_emit(st: &mut State) {
     // emission, so a reader who silenced the per-second target skips the work
     // and not just the output. The window still closes and still merges: the
     // cumulative pass is built out of these windows.
-    if log::log_enabled!(target: TARGET_WINDOW, log::Level::Debug) {
-        emit_tables(&st.window, window_ms, TOP_PER_SECOND, "", TARGET_WINDOW);
+    if log::log_enabled!(target: TARGET_LIVE, log::Level::Debug) {
+        emit_tables(&st.window, window_ms, TOP_PER_SECOND, "", TARGET_LIVE);
     }
     let window = std::mem::take(&mut st.window);
     merge(&mut st.cumulative, window);

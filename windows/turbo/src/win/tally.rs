@@ -1,7 +1,7 @@
 //! Counter primitives for the armed instrumentation: one arm, two disciplines.
 //!
 //! Every diagnostic counter in the crate is written through this module and
-//! rides one arm, the event gauge's `wow::events` at debug, resolved once. An
+//! rides one arm, the event gauge's `wow::gauge` at debug, resolved once. An
 //! unarmed session therefore pays a cached load and a branch per counting site
 //! and touches no counter at all. The exception is a permanent tripwire that
 //! has to fire at the default filter, which counts on its cold branch only and
@@ -25,7 +25,7 @@
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 /// Log target every cumulative counter line is written to.
-pub const TARGET: &str = "wow::events";
+pub const TARGET: &str = "wow::gauge";
 
 /// Proof that the arm was read, without which no counter can be written.
 ///

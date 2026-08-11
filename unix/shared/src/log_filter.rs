@@ -53,21 +53,21 @@ mod tests {
 
     #[test]
     fn a_child_target_can_be_silenced_without_silencing_its_parent() {
-        let f = "wow=debug,wow::events::window=info";
-        assert!(enabled(f, "wow::events", log::Level::Debug));
-        assert!(enabled(f, "wow::events::script", log::Level::Debug));
-        assert!(!enabled(f, "wow::events::window", log::Level::Debug));
+        let f = "wow=debug,wow::gauge::live=info";
+        assert!(enabled(f, "wow::gauge", log::Level::Debug));
+        assert!(enabled(f, "wow::gauge::script", log::Level::Debug));
+        assert!(!enabled(f, "wow::gauge::live", log::Level::Debug));
         // Still a warning channel: silencing is a volume control, not a mute.
-        assert!(enabled(f, "wow::events::window", log::Level::Warn));
+        assert!(enabled(f, "wow::gauge::live", log::Level::Warn));
     }
 
     #[test]
     fn arming_a_parent_arms_every_child() {
         let f = "wow=debug";
         for t in [
-            "wow::events",
-            "wow::events::window",
-            "wow::events::script",
+            "wow::gauge",
+            "wow::gauge::live",
+            "wow::gauge::script",
             "wow::gc",
         ] {
             assert!(enabled(f, t, log::Level::Debug), "{t}");
@@ -76,7 +76,7 @@ mod tests {
 
     #[test]
     fn an_unasked_for_namespace_stays_at_the_info_baseline() {
-        let f = "wow::events=debug";
+        let f = "wow::gauge=debug";
         assert!(!enabled(f, "wow::gc", log::Level::Debug));
         assert!(enabled(f, "wow::gc", log::Level::Info));
     }

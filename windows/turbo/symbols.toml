@@ -31,7 +31,7 @@
 # thunk, and the install wiring. The reimpl is plain Rust at `crate::hooks::<snake>`.
 #
 # One OPTIONAL top-level field exists: `armed_only = true` puts the install step
-# behind the `wow::events` gauge's arming check, so an unarmed run leaves the
+# behind the event gauge's arming check, so an unarmed run leaves the
 # function stock. It is for observation hooks whose target is hot enough that
 # even a trampoline on the unarmed path would be a measurable tax.
 #
@@ -4485,9 +4485,9 @@ ret  = "*mut u8"
 args = ["i32", "u32", "u32"]
 preserve = []
 
-# --- FrameScript event-dispatch gauge (`wow::events`) ---
+# --- FrameScript event-dispatch gauge (`wow::gauge`) ---
 # Observation-only hooks: every adapter runs the original and replaces nothing;
-# the whole gauge is inert unless `wow::events` debug logging is enabled.
+# the whole gauge is inert unless `wow::gauge` debug logging is enabled.
 # Event registry: base *(0xceef68), count *(0xceef64), stride 0x10 — entry+0x0
 # is the event name, entry+0xc the intrusive listener list (node+0x4 next
 # tagged low-bit-terminated, node+0x8 the listening frame). A frame's name
@@ -4568,7 +4568,7 @@ preserve = []
 
 # Paramless invoke core: `fastcall(ecx = funcRef, edx = object)`. Binds the
 # global `this` around a pcall of the ref'd function (nargs = 0; handlers
-# read globals). Sole caller is 0x702690, so the `wow::events` gauge wrapper
+# read globals). Sole caller is 0x702690, so the event gauge wrapper
 # stays above this hook and times the improvement directly.
 [functions.FrameScript__ExecuteFunctionWithObject__704d50]
 rva  = 0x304d50

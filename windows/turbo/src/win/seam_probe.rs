@@ -20,7 +20,7 @@
 //! sampler's collision share when the callers above these entries carry no
 //! frame pointers.
 //!
-//! Counters ride the same arm as the event gauge (`wow::events` at debug):
+//! Counters ride the same arm as the event gauge (`wow::gauge` at debug):
 //! unarmed, every entry point is a load and a branch. All writers are the
 //! game thread except the two bone-animation entry counters, which the
 //! client's own worker thread can also reach and which are therefore declared

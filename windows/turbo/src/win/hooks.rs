@@ -20767,8 +20767,8 @@ struct GcParShared {
     /// A participant revalidates the generation before every chunk claim, and
     /// taking the `job` mutex to read one `u64` puts a lock (and, contended, a
     /// futex wait) inside a loop whose body is a couple of microseconds. The
-    /// mutex never made the check atomic with the claim that follows it —
-    /// it is released first either way — so what keeps a stale participant
+    /// mutex never made the check atomic with the claim that follows it (it
+    /// is released first either way), so what keeps a stale participant
     /// off a newer job's cursor is `active`, raised before the check and
     /// lowered after the work: a coordinator publishes only after its join
     /// has observed `active == 0`. This mirror carries the same read with the
@@ -22750,8 +22750,8 @@ static PQ_PASS_VIEW: core::sync::atomic::AtomicUsize = core::sync::atomic::Atomi
 static PQ_PASS_CURSOR: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
 /// Entries a draw reached in the live pass table (game thread, armed only).
 ///
-/// Nothing but the retire line reads it — how far the pre-scan over-predicted
-/// the pass — so it counts under the arm like any other diagnostic.
+/// Nothing but the retire line reads it (how far the pre-scan over-predicted
+/// the pass), so it counts under the arm like any other diagnostic.
 static PQ_PASS_CONSUMED: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
 
 /// The `C44Matrix::Multiply` chain (`0x7bc6a0`), called by name.
@@ -23452,7 +23452,7 @@ pub fn cm2_scene__draw_batch_pass_entry__70b360(
             let n = TIMEOUTS.fetch_add(1, Ordering::Relaxed);
             if n < 8 || n.is_multiple_of(64) {
                 log::warn!(
-                    target: "wow::events",
+                    target: super::tally::TARGET,
                     "particle pass join timed out (#{n}); leaking one {len}-entry pass table",
                 );
             }
@@ -31392,7 +31392,7 @@ fn bdl_anim_fork(
             // stalls every frame, and the first line already says everything
             // the next thousand would.
             wow_shared::log_once_warn!(
-                target: "wow::events",
+                target: super::tally::TARGET,
                 "animate fork join stalled past the deadline over {} roots; waiting it out",
                 roots.len(),
             );
@@ -42358,7 +42358,7 @@ pub fn c_gx_device__apply_texture_stage_state__5a29d0(
 
 /// `SignalEvent` — paramless event dispatch, `__fastcall(ecx = event id)`.
 ///
-/// Observation wrapper for the `wow::events` gauge: the original always runs;
+/// Observation wrapper for the event gauge: the original always runs;
 /// when the gauge is armed the whole dispatch (listener walk included) is
 /// timed and attributed to the event. Inert delegate otherwise.
 pub fn signal_event__703e50(event_id: i32) {
@@ -42368,7 +42368,7 @@ pub fn signal_event__703e50(event_id: i32) {
 /// `SignalEventParam` — parameterized event dispatch, variadic `cdecl`.
 ///
 /// `tap` entry: the shim hands over the argument area (argument 0 = event id)
-/// and tail-jumps to the original. When the `wow::events` gauge is armed this
+/// and tail-jumps to the original. When the event gauge is armed this
 /// stores the current event for the per-listener attribution in
 /// [`frame_script_invoke_handler_formatted_v__702710`]; no-op otherwise.
 pub fn signal_event_param__703f50(args: *const u32) {
@@ -42378,7 +42378,7 @@ pub fn signal_event_param__703f50(args: *const u32) {
 /// `FrameScript_InvokeHandler` — one paramless handler call, `__thiscall`.
 ///
 /// `ecx` = the frame, one stack argument (the frame's handler slot at
-/// frame+0xc), `RET 0x4`. Observation wrapper for the `wow::events` gauge:
+/// frame+0xc), `RET 0x4`. Observation wrapper for the event gauge:
 /// the original always runs; armed, the call is timed and attributed to the
 /// frame's name and (under `SignalEvent`) to the current event.
 pub fn frame_script_invoke_handler__702690(frame: *mut core::ffi::c_void, handler_slot: *mut u32) {
@@ -42398,7 +42398,7 @@ pub fn frame_script_invoke_handler_formatted__7026f0(args: *const u32) {
 ///
 /// `cdecl(frame, handlerSlot, format, va_list)`, the fixed-arity core with
 /// exactly two callers (`SignalEventParam` per listener, the variadic UI
-/// wrapper). Observation wrapper for the `wow::events` gauge: the original
+/// wrapper). Observation wrapper for the event gauge: the original
 /// always runs; armed, the call is timed and attributed.
 pub fn frame_script_invoke_handler_formatted_v__702710(
     frame: *mut core::ffi::c_void,
@@ -42411,7 +42411,7 @@ pub fn frame_script_invoke_handler_formatted_v__702710(
 
 /// `luaD_precall` — every Lua-level call, `__fastcall(ecx = L, edx = func)`.
 ///
-/// Observation wrapper for the `wow::events` gauge, installed only when the
+/// Observation wrapper for the event gauge, installed only when the
 /// gauge is armed: the original always runs, and a call that lands on a C
 /// closure (the client's own script API) is timed and billed to that function's
 /// entry address. A call that only prepares a Lua closure is left alone, so what
