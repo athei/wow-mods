@@ -5,6 +5,15 @@
 //! thunks `MinHook` installs, and `install_all`), the [`hooks`] FFI adapters the
 //! thunks dispatch to, and the `DllMain` entry. The portable reimplementation
 //! logic the adapters call lives in `crate::math`.
+//!
+//! That direction has one deliberate exception, and [`seam_probe`] is `pub` to
+//! carry it: a kernel entered from several adapters at once can only be counted
+//! honestly from inside itself. `crate::math::collision`'s polygon clip is the
+//! case — the hottest function in the process, reached from its own guest
+//! adapter and from two sibling kernels — so counting it at the call sites
+//! would be three approximations of one number. The call is `cfg`-gated to the
+//! 32-bit target, which is the only one this module is compiled for, so the
+//! host tests still build those kernels with nothing of `win` in them.
 
 #[cfg(wow_turbo_diff)]
 mod diff;
@@ -17,7 +26,7 @@ mod hooks;
 mod lua;
 mod objmgr;
 mod script_method;
-mod seam_probe;
+pub mod seam_probe;
 mod symbols;
 mod tally;
 mod transmog;

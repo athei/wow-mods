@@ -91,6 +91,23 @@ static FIN_MERGE_TICKS: Accum = Accum::zero();
 static FIN_TRANS_TICKS: Accum = Accum::zero();
 static FIN_OPAQUE_TICKS: Accum = Accum::zero();
 
+static CLIP_CALLS: Accum = Accum::zero();
+static CLIP_VERTS: Accum = Accum::zero();
+static CLIP_HIST: [Counter; CLIP_HIST_EDGES.len() + 1] = [
+    Counter::zero(),
+    Counter::zero(),
+    Counter::zero(),
+    Counter::zero(),
+];
+
+/// Upper edges for the clip's vertex-count histogram; one bucket past.
+///
+/// The polygon is seeded at 3 and grows by at most one vertex per plane, so
+/// the interesting question is how much of the distribution sits at or below
+/// four — which is what says whether a four-wide vector pass over the distance
+/// loop would have lanes to fill.
+const CLIP_HIST_EDGES: [u32; 3] = [3, 4, 8];
+
 static PARTICLE_LOCKS: Counter = Counter::zero();
 static RAIN_LOCKS: Counter = Counter::zero();
 
@@ -355,6 +372,28 @@ pub fn anim_par_gated() {
     super::tally::bump(&ANIM_PAR_GATED);
 }
 
+/// One polygon clip, and how many vertices it walked.
+///
+/// The profiler put `collision_clip_polygon_by_plane` at 6.14% of the thread,
+/// the hottest function in the process, and a sampler cannot say whether that
+/// is a call rate or a cost per call. This says which: the rate against the
+/// movement counters above it, and the vertex distribution against the choice
+/// between making the loop cheaper and running it less.
+#[inline]
+pub fn clip_polygon(count: usize) {
+    let Some(armed) = super::tally::arm() else {
+        return;
+    };
+    let n = u32::try_from(count).unwrap_or(u32::MAX);
+    CLIP_CALLS.add(&armed, 1);
+    CLIP_VERTS.add(&armed, u64::from(n));
+    let bucket = CLIP_HIST_EDGES
+        .iter()
+        .position(|&edge| n <= edge)
+        .unwrap_or(CLIP_HIST_EDGES.len());
+    CLIP_HIST[bucket].bump(&armed);
+}
+
 /// One dynamic-buffer resize/lock cycle in the particle emitter render.
 #[inline]
 pub fn particle_lock() {
@@ -596,6 +635,18 @@ pub fn emit_cumulative() {
     let r = RAIN_LOCKS.get();
     if p != 0 || r != 0 {
         log::debug!(target: super::tally::TARGET, "seam locks: particle {p}, rain {r}");
+    }
+    let clip_calls = CLIP_CALLS.get();
+    if clip_calls != 0 {
+        log::debug!(
+            target: super::tally::TARGET,
+            "seam clip: {clip_calls} calls, verts {}, hist {}/{}/{}/{}",
+            CLIP_VERTS.get(),
+            CLIP_HIST[0].get(),
+            CLIP_HIST[1].get(),
+            CLIP_HIST[2].get(),
+            CLIP_HIST[3].get(),
+        );
     }
     let ground = TRACE_GROUND.get();
     let sweep = TRACE_SWEEP.get();

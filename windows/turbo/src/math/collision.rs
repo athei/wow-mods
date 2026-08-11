@@ -2352,6 +2352,16 @@ pub fn collision_clip_polygon_by_plane__6318c0(
     if count == 0 {
         return 0;
     }
+    // The one place a math kernel reaches into the counter module, and the
+    // reason is that there is no other honest place to put it: this is the
+    // hottest function in the process by a factor of two, and it is entered
+    // from three directions — the guest adapter and two sibling kernels — so
+    // counting at the call sites would be three approximations of one number,
+    // each with its own early-out to reason about. `win` is compiled only for
+    // the 32-bit target, so the host tests build the kernel without it and it
+    // stays pure for them.
+    #[cfg(target_arch = "x86")]
+    crate::win::seam_probe::clip_polygon(count);
     let mut dist = [0.0f32; 15];
     let mut min_dist = f32::MAX;
     let mut max_dist = -f32::MAX;
@@ -2376,8 +2386,14 @@ pub fn collision_clip_polygon_by_plane__6318c0(
     let saved_verts = *verts;
     let saved_tags = *tags;
     let mut out = 0usize;
+    // `prev` walks the polygon one step behind `cur`, wrapping once at the
+    // start. It reads `(cur + count - 1) % count`, and it was written that way
+    // until the sampler put this function at the top of the profile: `count` is
+    // a runtime value, so the remainder lowered to an integer division — twenty
+    // cycles and change on i686 — once per vertex of every clip. Carrying the
+    // index is the same sequence of indices, so the float work is untouched.
+    let mut prev = count - 1;
     for cur in 0..count {
-        let prev = (cur + count - 1) % count;
         let d_prev = dist[prev];
         let d_cur = dist[cur];
         let p = &saved_verts[prev * 3..prev * 3 + 3];
@@ -2402,6 +2418,7 @@ pub fn collision_clip_polygon_by_plane__6318c0(
             }
             clip_emit_vertex(verts, tags, &mut out, c, saved_tags[cur]);
         }
+        prev = cur;
     }
     if out > 2 { out } else { 0 }
 }
