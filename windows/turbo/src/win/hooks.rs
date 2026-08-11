@@ -30969,12 +30969,34 @@ fn bdl_draw_list_equal(a: u32, b: u32, this: *const u8) -> i32 {
     render_batch__compare_sort_key__70a710(a as i32, b as i32, this.cast_mut())
 }
 
+/// One opaque-bucket element: its sort key and the index that key belongs to.
+///
+/// The key travels WITH the index through the sort, which is the whole point of
+/// the type. Keying by element index into a side table instead was measured at
+/// 8.14 ns to compare two precomputed integers — a table sized by the largest
+/// element index runs to ~100 KB and is hit at random once per comparison, so
+/// the key cost what it saved. Forty bytes is above the size this codebase
+/// derives `Copy` at, and it is derived anyway because the sort needs it for
+/// the pivot and the insertion pass; that memcpy per swap is the trade being
+/// made for a sequential partition scan.
+#[derive(Clone, Copy)]
+struct BdlOpaqueKey {
+    /// The nine-lane key, ordered exactly as the comparator chain decides.
+    key: [u32; 9],
+    /// The draw-element index this key was computed from.
+    index: u32,
+}
+
 thread_local! {
-    /// Key scratch for the opaque draw-list sort, indexed by element index.
-    static BDL_OPAQUE_KEYS: core::cell::RefCell<Vec<[u32; 9]>> =
+    /// Key-and-index scratch for the opaque draw-list sorts, in bucket order.
+    static BDL_OPAQUE_KEYS: core::cell::RefCell<Vec<BdlOpaqueKey>> =
         const { core::cell::RefCell::new(Vec::new()) };
-    /// Key scratch for the bucket-0 (texture-major) sort, indexed by element index.
-    static BDL_TEX_KEYS: core::cell::RefCell<Vec<u32>> =
+    /// Key-and-index scratch for the bucket-0 (texture-major) sort, in bucket order.
+    ///
+    /// One `u64` per element, `key << 32 | index`: the texture comparator orders
+    /// on a single dword and has no deeper tier, so ordering the packed word
+    /// orders by key and settles equal keys by ascending index.
+    static BDL_TEX_KEYS: core::cell::RefCell<Vec<u64>> =
         const { core::cell::RefCell::new(Vec::new()) };
 }
 
@@ -31026,7 +31048,7 @@ const fn bdl_prio(type_idx: i32) -> u32 {
     unsafe { slot.read() }
 }
 
-/// Keyed opaque-bucket sort: precompute one packed key per element, then sort by key.
+/// Keyed opaque-bucket sort: pack one key beside each index, then sort the pairs.
 ///
 /// Reads the `worldView` fields the comparator (0x70ae10) reads once per
 /// comparison (the element array base `+0x34`, the sort-flags dword `+0x148`,
@@ -31036,7 +31058,16 @@ const fn bdl_prio(type_idx: i32) -> u32 {
 /// (`crate::math::world::draw_elem_sort_key`); equal keys fall through to the
 /// extended comparator (0x70aa30) just as the chain does, so every pairwise
 /// comparison answers what the chain would have answered. The permutation is
-/// the sort's, not the client's — see `intro_sort_u_int32`.
+/// the sort's, not the client's — see `crate::math::misc::intro_sort_by`.
+///
+/// **The key travels with its index rather than being looked up by it**, and
+/// that is the difference between this paying for itself and not. The previous
+/// shape held one key per *element index* in a table sized by the largest index
+/// in the bucket — ~100 KB, hit at random twice per comparison — and `seam
+/// finalize` measured it spending 8.14 ns to compare two precomputed integers,
+/// which is a cache miss and not arithmetic. Sorting the pairs makes a
+/// partition scan read keys sequentially out of a `bucket * 40`-byte run.
+///
 /// Returns `false` without sorting when the view or element base is null, an
 /// element index is at or beyond `BDL_KEY_INDEX_CAP`, or a float key is NaN
 /// (a NaN ties with everything under the chain's ordered tests, which no
@@ -31064,6 +31095,9 @@ fn bdl_sort_opaque_keyed(
     let flags = unsafe { flags_slot.cast::<u32>().read_unaligned() };
     let prio_enabled = (flags & 4) != 0;
     let tex_enabled = (flags & 2) != 0;
+    // No longer a bound on a table's size — the scratch is one entry per bucket
+    // element now — but still the sanity bound on an element index this walk
+    // will turn into an address, so it stays.
     let Some(&max_index) = slice.iter().max() else {
         return false;
     };
@@ -31072,7 +31106,8 @@ fn bdl_sort_opaque_keyed(
     }
     BDL_OPAQUE_KEYS.with(|cell| {
         let mut keys = cell.borrow_mut();
-        keys.resize(max_index as usize + 1, [0; 9]);
+        keys.clear();
+        keys.reserve(slice.len());
         for &index in slice.iter() {
             // SAFETY: `index*0x40` addresses an in-bounds 0x40-byte element
             // (caller-validated), the same address the comparator computes.
@@ -31088,25 +31123,27 @@ fn bdl_sort_opaque_keyed(
             else {
                 return false;
             };
-            keys[index as usize] = key;
+            keys.push(BdlOpaqueKey { key, index });
         }
-        let keys = &*keys;
-        let cmp = |a: u32, b: u32| -> i32 {
-            match keys[a as usize].cmp(&keys[b as usize]) {
+        let cmp = |a: &BdlOpaqueKey, b: &BdlOpaqueKey| -> i32 {
+            match a.key.cmp(&b.key) {
                 core::cmp::Ordering::Less => -1,
                 core::cmp::Ordering::Greater => 1,
                 core::cmp::Ordering::Equal => {
-                    c_world_view__compare_draw_list_extended__70aa30(a, b, view)
+                    c_world_view__compare_draw_list_extended__70aa30(a.index, b.index, view)
                 }
             }
         };
         match cmps {
             // Armed: one branch per sort, not per comparison.
-            Some(n) => crate::math::misc::intro_sort_u_int32(slice, |a, b| {
+            Some(n) => crate::math::misc::intro_sort_by(&mut keys, |a, b| {
                 *n = n.wrapping_add(1);
                 cmp(a, b)
             }),
-            None => crate::math::misc::intro_sort_u_int32(slice, cmp),
+            None => crate::math::misc::intro_sort_by(&mut keys, cmp),
+        }
+        for (dst, packed) in slice.iter_mut().zip(keys.iter()) {
+            *dst = packed.index;
         }
         true
     })
@@ -31241,18 +31278,22 @@ fn bdl_cmp_by_tex(a: u32, b: u32, this: *const u8) -> i32 {
     c_world_view__compare_draw_list_by_texture__70aa00(a, b, this)
 }
 
-/// Keyed bucket-0 sort: precompute each element's texture key, then sort by key.
+/// Keyed bucket-0 sort: pack each texture key above its index, then sort the words.
 ///
 /// The comparator (0x70aa00) orders by the single unsigned dword at element
-/// `+0x24` and nothing else, so a three-way compare of precomputed keys is
-/// its exact result (equal keys are the comparator's 0, there is no deeper
-/// tier). The permutation among those equal keys is the sort's, not the
-/// client's — see `intro_sort_u_int32`; the run-merge below reads only which
-/// elements are adjacent-equal, which no reordering of an equal run changes.
+/// `+0x24` and nothing else, so ordering `key << 32 | index` is its exact
+/// result with the equal-key case settled by ascending index — the comparator's
+/// 0, and no deeper tier to consult. Sorting the packed word rather than
+/// indices into a key table is the same locality argument as
+/// `bdl_sort_opaque_keyed`, and here it costs nothing at all: the pair fits a
+/// register. The run-merge below reads only which elements are adjacent-equal,
+/// which no reordering within an equal run changes, and it picks its leader
+/// from a run the dedup has already proved render-state-identical.
 /// The key pass mirrors the
 /// comparator's address arithmetic, wrapping as the stock `SHL reg,6` does.
 /// Returns `false` without sorting on a null view or element base, or an
-/// element index at or beyond `BDL_KEY_INDEX_CAP`.
+/// element index at or beyond `BDL_KEY_INDEX_CAP` — which is also what keeps
+/// the index inside the low half of the packed word.
 fn bdl_sort_by_tex_keyed(slice: &mut [u32], base: *mut u8) -> bool {
     if base.is_null() {
         return false;
@@ -31272,22 +31313,25 @@ fn bdl_sort_by_tex_keyed(slice: &mut [u32], base: *mut u8) -> bool {
     }
     BDL_TEX_KEYS.with(|cell| {
         let mut keys = cell.borrow_mut();
-        keys.resize(max_index as usize + 1, 0);
+        keys.clear();
+        keys.reserve(slice.len());
         for &index in slice.iter() {
             let offset = (index as usize).wrapping_mul(0x40).wrapping_add(0x24);
             let slot = elem_base.wrapping_add(offset);
             // SAFETY: `slot` addresses the element's texture-key dword, exactly
             // the dword the comparator loads with `MOV EAX,[ECX + 0x24]`.
-            keys[index as usize] = unsafe { slot.cast::<u32>().read_unaligned() };
+            let key = unsafe { slot.cast::<u32>().read_unaligned() };
+            keys.push(u64::from(key) << 32 | u64::from(index));
         }
-        let keys = &*keys;
-        crate::math::misc::intro_sort_u_int32(slice, |a, b| {
-            match keys[a as usize].cmp(&keys[b as usize]) {
-                core::cmp::Ordering::Less => -1,
-                core::cmp::Ordering::Greater => 1,
-                core::cmp::Ordering::Equal => 0,
-            }
+        crate::math::misc::intro_sort_by(&mut keys, |a, b| match a.cmp(b) {
+            core::cmp::Ordering::Less => -1,
+            core::cmp::Ordering::Greater => 1,
+            core::cmp::Ordering::Equal => 0,
         });
+        for (dst, packed) in slice.iter_mut().zip(keys.iter()) {
+            // The index is the low half of the word that was just sorted.
+            *dst = (*packed & 0xffff_ffff) as u32;
+        }
         true
     })
 }

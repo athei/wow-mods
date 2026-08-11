@@ -1409,26 +1409,42 @@ const INTRO_SORT_INSERTION: usize = 16;
 ///
 /// `cmp(a, b) > 0` orders `a` after `b`, exactly as
 /// [`heap_sort_u_int32__71f860`] takes it, so a call site swaps one for the
-/// other without touching its comparator. Median-of-three quicksort, an
-/// insertion pass below [`INTRO_SORT_INSERTION`], and a fall back to the
-/// heapsort once the recursion passes `2*log2(n)` levels, which is what bounds
-/// the worst case at `O(n log n)`.
+/// other without touching its comparator. A thin shim over [`intro_sort_by`],
+/// which carries the design.
+pub fn intro_sort_u_int32<F: FnMut(u32, u32) -> i32>(array: &mut [u32], mut cmp: F) {
+    intro_sort_by(array, |a, b| cmp(*a, *b));
+}
+
+/// In-place introsort of anything `Copy`, ordered by a caller-supplied comparator.
 ///
-/// **It does not reproduce the heapsort's permutation.** Elements the
-/// comparator calls equal come out in a different order, and the client's
-/// draw-list buckets are sorted with comparators whose "equal" means equal in
-/// every tier they test, depth included. What it buys is the comparison count:
-/// on 1577 pseudo-random keys, the size of a busy scene's transparent bucket,
-/// it spends 18,831 comparisons against the heapsort's 28,749 — a third fewer,
-/// of a comparator that chases five pointer levels per element and is measured
-/// in game at 10.75 ns a call. The test below pins that ratio.
+/// `cmp(a, b) > 0` orders `a` after `b`. Median-of-three quicksort, an
+/// insertion pass below [`INTRO_SORT_INSERTION`], and a fall back to a heapsort
+/// once the recursion passes `2*log2(n)` levels, which is what bounds the worst
+/// case at `O(n log n)`.
+///
+/// **It does not reproduce the client heapsort's permutation.** Elements the
+/// comparator calls equal come out in a different order, and the draw-list
+/// buckets are sorted with comparators whose "equal" means equal in every tier
+/// they test, depth included. What it buys is the comparison count: on 1577
+/// pseudo-random keys, the size of a busy scene's transparent bucket, it spends
+/// 18,831 comparisons against the heapsort's 28,749 — a third fewer, of a
+/// comparator that chases five pointer levels per element and is measured in
+/// game at 10.75 ns a call. The test below pins that ratio. In the field it was
+/// worth 3.02 points of wall across the four draw-list bucket sorts.
+///
+/// Generic over the element rather than fixed to an index, because the payoff
+/// for the keyed buckets is sorting the key *next to* its index: a partition
+/// scan then reads keys sequentially, where a table indexed by element number
+/// costs a cache miss per comparison. `T` is `Copy` for the pivot and the
+/// insertion pass, which is a real cost to weigh when sizing what travels —
+/// every swap moves the whole element.
 ///
 /// Nothing here can panic on a comparator that is not a strict weak order —
 /// a client crash is not an acceptable answer to bad input. Both partition
 /// scans carry their own bounds guard rather than relying on the sentinel the
 /// ordering would otherwise provide, and the split is clamped so every
 /// recursion step shrinks.
-pub fn intro_sort_u_int32<F: FnMut(u32, u32) -> i32>(array: &mut [u32], mut cmp: F) {
+pub fn intro_sort_by<T: Copy, F: FnMut(&T, &T) -> i32>(array: &mut [T], mut cmp: F) {
     let depth = 2 * (usize::BITS - array.len().leading_zeros()) as usize;
     intro_sort_range(array, &mut cmp, depth);
 }
@@ -1437,7 +1453,11 @@ pub fn intro_sort_u_int32<F: FnMut(u32, u32) -> i32>(array: &mut [u32], mut cmp:
 ///
 /// Recurses into the smaller side and loops on the larger, which is what keeps
 /// the stack at `O(log n)` frames however the partition falls.
-fn intro_sort_range<F: FnMut(u32, u32) -> i32>(array: &mut [u32], cmp: &mut F, mut depth: usize) {
+fn intro_sort_range<T: Copy, F: FnMut(&T, &T) -> i32>(
+    array: &mut [T],
+    cmp: &mut F,
+    mut depth: usize,
+) {
     let mut rest = array;
     loop {
         if rest.len() <= INTRO_SORT_INSERTION {
@@ -1445,7 +1465,7 @@ fn intro_sort_range<F: FnMut(u32, u32) -> i32>(array: &mut [u32], cmp: &mut F, m
             return;
         }
         if depth == 0 {
-            heap_sort_u_int32__71f860(rest, &mut *cmp);
+            intro_sort_heap_fallback(rest, cmp);
             return;
         }
         depth -= 1;
@@ -1461,12 +1481,54 @@ fn intro_sort_range<F: FnMut(u32, u32) -> i32>(array: &mut [u32], cmp: &mut F, m
     }
 }
 
+/// Heapsort, the introsort's depth-limit fallback.
+///
+/// The same algorithm as [`heap_sort_u_int32__71f860`], which stays a separate
+/// verbatim reimplementation of the client's function rather than being routed
+/// through here: that one has to keep reproducing the original whatever this
+/// one does.
+fn intro_sort_heap_fallback<T: Copy, F: FnMut(&T, &T) -> i32>(array: &mut [T], cmp: &mut F) {
+    let count = array.len();
+    if count <= 1 {
+        return;
+    }
+    let sift = |array: &mut [T], start: usize, len: usize, cmp: &mut F| {
+        let held = array[start];
+        let mut parent = start;
+        let mut child = start * 2 + 1;
+        while child < len {
+            let mut larger = child;
+            if child + 1 < len && cmp(&array[child + 1], &array[child]) > 0 {
+                larger = child + 1;
+            }
+            if cmp(&held, &array[larger]) >= 0 {
+                break;
+            }
+            array[parent] = array[larger];
+            parent = larger;
+            child = larger * 2 + 1;
+        }
+        array[parent] = held;
+    };
+    let mut node = count / 2;
+    while node != 0 {
+        node -= 1;
+        sift(array, node, count, cmp);
+    }
+    let mut end = count - 1;
+    while end != 0 {
+        array.swap(0, end);
+        sift(array, 0, end, cmp);
+        end -= 1;
+    }
+}
+
 /// Insertion sort, the small-slice tail of the introsort.
-fn intro_sort_insertion<F: FnMut(u32, u32) -> i32>(array: &mut [u32], cmp: &mut F) {
+fn intro_sort_insertion<T: Copy, F: FnMut(&T, &T) -> i32>(array: &mut [T], cmp: &mut F) {
     for i in 1..array.len() {
         let held = array[i];
         let mut j = i;
-        while j > 0 && cmp(array[j - 1], held) > 0 {
+        while j > 0 && cmp(&array[j - 1], &held) > 0 {
             array[j] = array[j - 1];
             j -= 1;
         }
@@ -1481,16 +1543,16 @@ fn intro_sort_insertion<F: FnMut(u32, u32) -> i32>(array: &mut [u32], cmp: &mut 
 /// which is what keeps an all-equal run splitting down the middle instead of
 /// degenerating; the median-of-three is what makes that also true of an
 /// already-sorted run, the input a draw list most often hands it.
-fn intro_sort_partition<F: FnMut(u32, u32) -> i32>(array: &mut [u32], cmp: &mut F) -> usize {
+fn intro_sort_partition<T: Copy, F: FnMut(&T, &T) -> i32>(array: &mut [T], cmp: &mut F) -> usize {
     let len = array.len();
     let mid = len / 2;
     let last = len - 1;
-    if cmp(array[mid], array[0]) < 0 {
+    if cmp(&array[mid], &array[0]) < 0 {
         array.swap(0, mid);
     }
-    if cmp(array[last], array[mid]) < 0 {
+    if cmp(&array[last], &array[mid]) < 0 {
         array.swap(mid, last);
-        if cmp(array[mid], array[0]) < 0 {
+        if cmp(&array[mid], &array[0]) < 0 {
             array.swap(0, mid);
         }
     }
@@ -1498,10 +1560,10 @@ fn intro_sort_partition<F: FnMut(u32, u32) -> i32>(array: &mut [u32], cmp: &mut 
     let mut i = 0usize;
     let mut j = last;
     loop {
-        while i < last && cmp(array[i], pivot) < 0 {
+        while i < last && cmp(&array[i], &pivot) < 0 {
             i += 1;
         }
-        while j > 0 && cmp(array[j], pivot) > 0 {
+        while j > 0 && cmp(&array[j], &pivot) > 0 {
             j -= 1;
         }
         if i >= j {
@@ -1642,6 +1704,45 @@ mod tests_intro_sort_u_int32 {
 
         for sorted in [always_after, always_before, always_equal, alternating] {
             assert_eq!(sorted.len(), 500);
+        }
+    }
+
+    /// A key travelling next to its index sorts by the key and carries the index.
+    ///
+    /// The shape the keyed draw-list buckets use: what the sort moves is the
+    /// pair, so a partition scan reads keys sequentially instead of chasing a
+    /// table indexed by element number.
+    #[test]
+    fn carries_a_payload_beside_the_key() {
+        let keys = pseudo_random(400, 40);
+        let mut pairs: Vec<([u32; 9], u32)> = keys
+            .iter()
+            .enumerate()
+            .map(|(i, &k)| {
+                (
+                    [k, k / 2, k / 3, 0, 0, 0, 0, 0, 0],
+                    u32::try_from(i).unwrap(),
+                )
+            })
+            .collect();
+        super::intro_sort_by(&mut pairs, |a, b| match a.0.cmp(&b.0) {
+            core::cmp::Ordering::Less => -1,
+            core::cmp::Ordering::Greater => 1,
+            // The tie-break the opaque bucket uses: the index itself stands in
+            // for the comparator chain here.
+            core::cmp::Ordering::Equal => a.1.cmp(&b.1) as i32,
+        });
+        assert!(
+            pairs
+                .windows(2)
+                .all(|w| (w[0].0, w[0].1) <= (w[1].0, w[1].1))
+        );
+        // Every index survives exactly once, and each still carries its own key.
+        let mut seen: Vec<u32> = pairs.iter().map(|p| p.1).collect();
+        seen.sort_unstable();
+        assert_eq!(seen, (0..400u32).collect::<Vec<_>>());
+        for (key, index) in pairs {
+            assert_eq!(key[0], keys[index as usize]);
         }
     }
 

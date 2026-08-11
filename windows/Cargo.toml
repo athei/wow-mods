@@ -134,7 +134,7 @@ imprecise_flops = "allow"               # 8
 # satisfy them moves code away from the shape being reproduced, for no change
 # in what the function does.
 missing_const_for_fn = "allow"          # 110
-useless_let_if_seq = "allow"            # 22
+useless_let_if_seq = "allow"            # 23
 if_not_else = "allow"                   # 12
 suspicious_operation_groupings = "allow" # 12
 # The tail `match` of a transcribed function: the arms ARE the original's branch
