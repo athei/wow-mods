@@ -196,13 +196,17 @@ fn dispatch(lua: &super::lua::LuaState) -> Option<i32> {
             Some(1)
         }
         b"addCombatText" if lua.argc() >= 6 => {
+            // The reference order is style, text, then the three color
+            // channels, and both strings are read before the numbers because
+            // coercing a number slot to a string rewrites it in place.
+            let style = lua.str_arg(2);
+            let text = lua.coerced_str(3).unwrap_or_default();
             let color = [
-                color_byte(lua.number_arg(2)),
-                color_byte(lua.number_arg(3)),
                 color_byte(lua.number_arg(4)),
+                color_byte(lua.number_arg(5)),
+                color_byte(lua.number_arg(6)),
             ];
-            let text = lua.coerced_str(5).unwrap_or_default();
-            let shown = match lua.str_arg(6) {
+            let shown = match style {
                 Some(b"crit") => worldtext::add_crit_text(&text, color, 255),
                 Some(b"downward") => worldtext::add_small_floating(
                     &text,
@@ -608,10 +612,17 @@ pub fn emit_cumulative() {
 }
 
 /// A script color channel to a byte, the reference's saturating read.
+///
+/// Script colors run 0..1, so the channel scales by 255. A value that lands
+/// outside a byte — a negative channel, or one past 1.0 — answers 255 rather
+/// than clamping toward it, and an absent or non-numeric argument reads as the
+/// 0 the host's number coercion would have handed back.
 fn color_byte(value: Option<f64>) -> u8 {
-    let clamped = value.unwrap_or(255.0).clamp(0.0, 255.0);
-    // Clamped to a byte's range right above.
-    // clamped to [0, 255] above
-    // clamped non-negative above
-    clamped as u8
+    let scaled = value.unwrap_or(0.0) * 255.0;
+    if (0.0..256.0).contains(&scaled) {
+        // In a byte's range, and non-negative, by the test right above.
+        scaled as u8
+    } else {
+        255
+    }
 }
