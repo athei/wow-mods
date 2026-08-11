@@ -52,6 +52,8 @@ static ANIM_PAR_WAIT_TICKS_SUM: Accum = Accum::zero();
 static ANIM_PAR_WAIT_TICKS_MAX: Accum = Accum::zero();
 static ANIM_PAR_WORKER_TICKS: Accum = Accum::zero();
 static ANIM_PAR_FORK_TICKS_SUM: Accum = Accum::zero();
+static ANIM_PAR_STALLS: Accum = Accum::zero();
+static ANIM_PAR_HELPED: Accum = Accum::zero();
 
 static BDL_PASSES: Counter = Counter::zero();
 static BDL_TOTAL_TICKS: Accum = Accum::zero();
@@ -165,25 +167,26 @@ pub fn anim_entry(repeat: bool) {
 
 /// One forked animate pass: its size and where the time went.
 ///
-/// `worker_ticks` is the post-join sum of the per-root brackets across every
-/// lane (the work that left or overlapped the game thread), `wait_ticks` the
-/// coordinator's pure join wait after its own participation, and
-/// `fork_ticks` the publish-to-quiescence wall time. The fork pays off while
-/// `fork_ticks` stays well under the same roots' serial cost (the `seam
-/// anim` line's `root us sum` baseline).
-pub fn anim_par_pass(
-    armed: &Armed,
-    roots: u32,
-    wait_ticks: u64,
-    fork_ticks: u64,
-    worker_ticks: u64,
-) {
+/// `worker us sum` is the sum of the per-root brackets across every lane (the
+/// work that left or overlapped the game thread) and `fork us` the
+/// publish-to-quiescence wall, which is the length of the *window* rather
+/// than a cost: the game thread spends it running the phases that read the
+/// results.
+///
+/// **`wait us` is the number that says what the fork still costs**: the game
+/// thread's per-node stalls plus whatever the final drain had to wait for,
+/// i.e. the part of the window it could not fill with useful work. `stalls`
+/// counts the nodes that were not ready, against the visible-list length, and
+/// `helped` the chunks the game thread animated from inside those stalls.
+pub fn anim_par_pass(armed: &Armed, s: &super::hooks::BdlAnimForkStats) {
     ANIM_PAR_PASSES.bump(armed);
-    ANIM_PAR_ROOTS.add(armed, u64::from(roots));
-    ANIM_PAR_WAIT_TICKS_SUM.add(armed, wait_ticks);
-    ANIM_PAR_WAIT_TICKS_MAX.max(armed, wait_ticks);
-    ANIM_PAR_FORK_TICKS_SUM.add(armed, fork_ticks);
-    ANIM_PAR_WORKER_TICKS.add(armed, worker_ticks);
+    ANIM_PAR_ROOTS.add(armed, u64::from(s.roots));
+    ANIM_PAR_WAIT_TICKS_SUM.add(armed, s.wait_ticks);
+    ANIM_PAR_WAIT_TICKS_MAX.max(armed, s.wait_ticks);
+    ANIM_PAR_FORK_TICKS_SUM.add(armed, s.fork_ticks);
+    ANIM_PAR_WORKER_TICKS.add(armed, s.root_ticks_sum);
+    ANIM_PAR_STALLS.add(armed, u64::from(s.stalls));
+    ANIM_PAR_HELPED.add(armed, u64::from(s.helped));
 }
 
 /// Game-thread ticks of one draw-list build, phase by phase.
@@ -425,12 +428,14 @@ pub fn emit_cumulative() {
         log::debug!(
             target: super::tally::TARGET,
             "seam anim par: {par_passes} passes ({par_gated} gated multi-root), roots {}, \
-             worker us sum {}, wait us sum {} max {}, fork us sum {}",
+             worker us sum {}, wait us sum {} max {}, fork us sum {}, stalls {}, helped {}",
             ANIM_PAR_ROOTS.get(),
             ticks_to_us(ANIM_PAR_WORKER_TICKS.get()),
             ticks_to_us(ANIM_PAR_WAIT_TICKS_SUM.get()),
             ticks_to_us(ANIM_PAR_WAIT_TICKS_MAX.get()),
             ticks_to_us(ANIM_PAR_FORK_TICKS_SUM.get()),
+            ANIM_PAR_STALLS.get(),
+            ANIM_PAR_HELPED.get(),
         );
     }
     let bdl_passes = BDL_PASSES.get();

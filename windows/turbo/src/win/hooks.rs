@@ -19703,12 +19703,24 @@ pub fn cm2_shared__animate_bones__714260(
     }
 
     // Stamp the frame so re-entry within the same frame is a no-op.
+    //
+    // Stock writes it here, last, after the child recursion above — which is
+    // what makes the stamp mean "this instance and its whole attachment
+    // subtree are animated" rather than "someone started on it". The animate
+    // fork's per-node waits read exactly that, so the store is a release: it
+    // publishes every bone matrix written above it to whichever thread sees
+    // the stamp. On i686 it is the same `mov` either way; the barrier is
+    // against the compiler reordering the matrices after it.
     // SAFETY: `this+0x2c` is the live clock-provider pointer.
     let clock = unsafe { anim_ptr(inst, 0x2c) };
     // SAFETY: `clock+0x10` is the frame stamp dword.
     let stamp = unsafe { anim_u32(clock, 0x10) };
-    // SAFETY: `this+0x40` is the writable last-animated stamp.
-    unsafe { anim_put_u32(inst, 0x40, stamp) };
+    // SAFETY: `this+0x40` is the writable last-animated stamp, naturally
+    // aligned inside the instance.
+    let slot = unsafe { inst.add(0x40).cast::<core::sync::atomic::AtomicU32>() };
+    // SAFETY: as above; every reader of it goes through the matching acquire
+    // load in `bdl_anim_stamp`.
+    unsafe { (*slot).store(stamp, core::sync::atomic::Ordering::Release) };
 }
 
 thread_local! {
@@ -20700,9 +20712,10 @@ impl GcJob {
     /// Reuses the sweep's pointer/len spec fields for the roots slice; `g`
     /// smuggles the `CWorldView` base (participants read `base+0x9c` as the
     /// parent matrix) and `strt_hash` an optional per-root tick-slot array of
-    /// the same length (0 when the probe is unarmed). The driver collects
-    /// both buffers fully before publishing and keeps them alive and unmoved
-    /// until its hard join drains every participant.
+    /// the same length (0 when the probe is unarmed). Both buffers are
+    /// collected fully before publishing and are owned by the
+    /// [`BdlAnimPending`] that published them, which keeps them alive and
+    /// unmoved until every participant has drained.
     const fn animate_roots(
         roots_ptr: usize,
         roots_len: usize,
@@ -21067,22 +21080,25 @@ fn gc_par_begin(shared: &GcParShared, mut spec: GcJob) -> GcJob {
 /// count includes efficiency cores (18 logical, 6 of them performance, on the
 /// machine this was tuned against) and the jobs here want performance cores.
 ///
-/// Four is measured. The animate fork hard-joins, so its cost to the game
-/// thread is the work divided by the lanes, and a busy-Stormwind A/B held the
-/// fork's wall per animate entry flat (0.5498 → 0.5538 us) across a scene
-/// whose per-unit cost rose ~18%, measured independently on two fixed-work
-/// game-thread quantities (the particle pre-scan per emitter and the consume
-/// bracket per draw). Flat against a baseline that should have risen is a
-/// ~15% cut in the fork's wall, about 0.85% of frame time.
+/// Four is measured. Lanes set how long the animate fork's window stays
+/// open, and what the game thread loses to that fork is the part of the
+/// window its own phases cannot fill, so a lane cuts that residue directly. A
+/// busy-Stormwind A/B held the fork's wall per animate entry flat (0.5498 →
+/// 0.5538 us) across a scene whose per-unit cost rose ~18%, measured
+/// independently on two fixed-work game-thread quantities (the particle
+/// pre-scan per emitter and the consume bracket per draw); flat against a
+/// baseline that should have risen is a ~15% cut in that wall, about 0.85% of
+/// frame time.
 ///
 /// Five would be past the ceiling. Six performance cores, and the game
 /// thread, mtld3d's encoder and the audio thread each want one; the fourth
 /// worker already costs a worse tail (pool time inflates ~14.5% beyond the
 /// machine-wide slowdown, the worst single-root bracket triples to 2.5 ms,
 /// and the particle consume's worst wait goes 56 → 330 us), which is lanes
-/// sitting descheduled. It captured ~60% of its ideal speedup rather than
-/// all of it, and under a hard join the wall is set by the slowest lane, so
-/// the next one past the ceiling costs throughput rather than just tail.
+/// sitting descheduled. It captured ~60% of its ideal speedup rather than all
+/// of it, and a preempted lane holds the window open for every phase waiting
+/// behind it, so the next one past the ceiling costs throughput rather than
+/// just tail.
 fn gc_pool() -> &'static GcParShared {
     static POOL: std::sync::OnceLock<std::sync::Arc<GcParShared>> = std::sync::OnceLock::new();
     POOL.get_or_init(|| {
@@ -31272,8 +31288,8 @@ thread_local! {
     /// Reused root-pointer buffer for the animate fork's collect walk.
     ///
     /// Game-thread owned; taken for the duration of the pass and put back
-    /// after the hard join, so capacity converges to the session's list
-    /// maximum instead of reallocating per frame.
+    /// once the fork that owns them has quiesced, so capacity converges to
+    /// the session's list maximum instead of reallocating per frame.
     static BDL_ANIM_ROOTS: core::cell::RefCell<Vec<usize>> =
         const { core::cell::RefCell::new(Vec::new()) };
     /// Per-root tick slots paralleling `BDL_ANIM_ROOTS`, armed passes only.
@@ -31322,120 +31338,283 @@ fn bdl_collect_anim_roots(base: *mut u8, out: &mut Vec<usize>) {
 /// claim would instead hand a parent half-updated bones on collision. The
 /// `repeat` seam counter stays as the tripwire.
 fn gc_par_animate_roots(shared: &GcParShared, job: &GcJob) {
+    while gc_par_animate_chunk(shared, job) {}
+}
+
+/// Claim and animate one chunk; `false` once the cursor or the epoch is spent.
+///
+/// The single step [`gc_par_animate_roots`] loops on, split out because the
+/// game thread claims one chunk at a time from inside its per-node waits: a
+/// lane that never comes back would starve the very node it is waiting for.
+fn gc_par_animate_chunk(shared: &GcParShared, job: &GcJob) -> bool {
     use core::sync::atomic::Ordering;
     const CHUNK: usize = 2;
-    loop {
-        shared.active.fetch_add(1, Ordering::SeqCst);
-        if shared.cur_epoch.load(Ordering::SeqCst) != job.epoch {
-            shared.active.fetch_sub(1, Ordering::SeqCst);
-            break;
+    shared.active.fetch_add(1, Ordering::SeqCst);
+    if shared.cur_epoch.load(Ordering::SeqCst) != job.epoch {
+        shared.active.fetch_sub(1, Ordering::SeqCst);
+        return false;
+    }
+    let start = shared.bucket_cursor.fetch_add(CHUNK, Ordering::SeqCst);
+    if start >= job.spans_len {
+        shared.active.fetch_sub(1, Ordering::SeqCst);
+        return false;
+    }
+    let end = (start + CHUNK).min(job.spans_len);
+    for i in start..end {
+        let root_slot = (job.spans_ptr as *const usize).wrapping_add(i);
+        // SAFETY: `i < spans_len`, the epoch was validated with `active`
+        // held, and the pending fork keeps the roots slice alive and unmoved
+        // until it quiesces; each slot holds a visible-list node collected
+        // this pass.
+        let node = unsafe { *root_slot };
+        if job.strt_hash == 0 {
+            bdl_animate_bones_identity(job.g as *mut u8, node as *const u8);
+        } else {
+            let t0 = wow_shared::tsc::rdtsc();
+            bdl_animate_bones_identity(job.g as *mut u8, node as *const u8);
+            let dt = wow_shared::tsc::rdtsc().wrapping_sub(t0);
+            let tick_slot = (job.strt_hash as *mut u64).wrapping_add(i);
+            // SAFETY: the tick array parallels the roots slice (same length,
+            // owned by the pending fork, live until it quiesces), and cursor
+            // claims are exclusive per index, so slot `i` has a single writer.
+            unsafe { *tick_slot = dt };
         }
-        let start = shared.bucket_cursor.fetch_add(CHUNK, Ordering::SeqCst);
-        if start >= job.spans_len {
-            shared.active.fetch_sub(1, Ordering::SeqCst);
-            break;
+    }
+    shared.active.fetch_sub(1, Ordering::SeqCst);
+    true
+}
+
+/// A published animate fork the phases after it join one node at a time.
+///
+/// Every phase after the fork reads what `AnimateBones` wrote, but the
+/// dependency is per instance rather than per pass, and `AnimateBones`
+/// publishes it: it writes `inst+0x40 = stamp` after recursing into attached
+/// children, so `inst+0x40 == stamp` means that instance *and its whole
+/// attachment subtree* are animated. The game thread therefore walks the
+/// visible list in stock order and waits only on the node it is about to
+/// touch, so the particle-update and bounds-refresh walks run against the
+/// front of the list while the pool is still animating the back of it.
+///
+/// Waiting in place is what keeps this equivalent to running the phases
+/// afterwards: skipping ahead to a ready node would reorder the
+/// `view+0x24`/`+0x28` push-fronts, and with them the draw-record order and
+/// the tie-breaking in `bdl_finalize`'s sorts.
+///
+/// The roots and per-root tick buffers are owned here because they are what
+/// the workers read, and they must stay alive and unmoved until quiescence —
+/// several phases after the publish, so [`Drop`] guarantees it.
+struct BdlAnimPending {
+    /// The published job, revalidated by every chunk claim.
+    job: GcJob,
+    /// Root pointers the workers claim from; owned for the job's lifetime.
+    roots: Vec<usize>,
+    /// Per-root tick slots paralleling `roots`, armed passes only.
+    ticks: Vec<u64>,
+    /// Publish tick, for the fork's wall.
+    published: u64,
+    /// Nodes that were not animated yet when the game thread reached them.
+    stalls: u32,
+    /// Ticks spent in those waits, help included.
+    stall_ticks: u64,
+    /// Chunks the game thread claimed from inside a wait.
+    helped: u32,
+    /// Whether the stall deadline has already been reported this pass.
+    warned: bool,
+}
+
+impl BdlAnimPending {
+    /// Publish the root list to the pool and return without joining.
+    ///
+    /// The coordinator does not participate here: it has the phases after
+    /// this one to run, and it claims chunks from inside its waits instead,
+    /// so a short list still gets the fourth lane and a long one gets the
+    /// overlap.
+    fn publish(base: *mut u8, mut roots: Vec<usize>, mut ticks: Vec<u64>, timed: bool) -> Self {
+        let ticks_ptr = if timed {
+            ticks.clear();
+            ticks.resize(roots.len(), 0);
+            ticks.as_mut_ptr() as usize
+        } else {
+            0
+        };
+        let published = wow_shared::tsc::rdtsc();
+        let job = gc_par_begin(
+            gc_pool(),
+            GcJob::animate_roots(
+                roots.as_mut_ptr() as usize,
+                roots.len(),
+                base as usize,
+                ticks_ptr,
+            ),
+        );
+        Self {
+            job,
+            roots,
+            ticks,
+            published,
+            stalls: 0,
+            stall_ticks: 0,
+            helped: 0,
+            warned: false,
         }
-        let end = (start + CHUNK).min(job.spans_len);
-        for i in start..end {
-            let root_slot = (job.spans_ptr as *const usize).wrapping_add(i);
-            // SAFETY: `i < spans_len`, the epoch was validated with `active`
-            // held, and the driver keeps the roots slice alive and unmoved
-            // until its hard join; each slot holds a visible-list node
-            // collected this pass.
-            let node = unsafe { *root_slot };
-            if job.strt_hash == 0 {
-                bdl_animate_bones_identity(job.g as *mut u8, node as *const u8);
+    }
+
+    /// Whether every claim is spent and no lane is still inside one.
+    fn drained(&self) -> bool {
+        use core::sync::atomic::Ordering;
+        let shared = gc_pool();
+        shared.bucket_cursor.load(Ordering::SeqCst) >= self.roots.len()
+            && shared.active.load(Ordering::SeqCst) == 0
+    }
+
+    /// Block until `node` is animated, helping the pool while it is not.
+    ///
+    /// Draining is the escape, and it is not optional: an instance with no
+    /// skeleton (`+0x10 == 0`), an attachment whose visibility byte is clear
+    /// and a child with attachment id `0xffff` are all never animated and so
+    /// never stamped, and a bare stamp wait on one of them would hang the
+    /// frame. Once the pool is drained, everything that will be animated has
+    /// been.
+    fn await_node(&mut self, node: *const u8, timed: bool) {
+        // SAFETY: `node` is a live visible-list instance the caller is about
+        // to hand to a client routine; `+0x2c` is its clock-provider pointer
+        // and `+0x40` its last-animated stamp, the pair `AnimateBones` itself
+        // reads to decide whether this instance still needs animating.
+        let clock = unsafe { bdl_rdp(node, 0x2c) };
+        if clock.is_null() {
+            return;
+        }
+        // SAFETY: `clock` is that non-null provider; `+0x10` is its frame
+        // stamp dword, the value the workers are stamping instances with.
+        let stamp = unsafe { bdl_rd32(clock, 0x10) };
+        if bdl_anim_stamp(node) == stamp {
+            return;
+        }
+        let t0 = wow_shared::tsc::rdtsc();
+        let deadline = t0.wrapping_add(wow_shared::tsc::secs_to_cycles(1) / 20);
+        while bdl_anim_stamp(node) != stamp {
+            if self.drained() {
+                break;
+            }
+            if gc_par_animate_chunk(gc_pool(), &self.job) {
+                self.helped = self.helped.wrapping_add(1);
             } else {
-                let t0 = wow_shared::tsc::rdtsc();
-                bdl_animate_bones_identity(job.g as *mut u8, node as *const u8);
-                let dt = wow_shared::tsc::rdtsc().wrapping_sub(t0);
-                let tick_slot = (job.strt_hash as *mut u64).wrapping_add(i);
-                // SAFETY: the tick array parallels the roots slice (same
-                // length, driver-owned, live across the hard join), and
-                // cursor claims are exclusive per index, so slot `i` has a
-                // single writer.
-                unsafe { *tick_slot = dt };
+                std::thread::yield_now();
+            }
+            if !self.warned && wow_shared::tsc::rdtsc() >= deadline {
+                self.warned = true;
+                // Once per session, not once per pass: a pool that stalls at
+                // all stalls every frame, and the first line already says
+                // everything the next thousand would.
+                wow_shared::log_once_warn!(
+                    target: super::tally::TARGET,
+                    "animate fork join stalled past the deadline over {} roots; waiting it out",
+                    self.roots.len(),
+                );
             }
         }
-        shared.active.fetch_sub(1, Ordering::SeqCst);
+        self.stalls = self.stalls.wrapping_add(1);
+        if timed {
+            self.stall_ticks = self
+                .stall_ticks
+                .wrapping_add(wow_shared::tsc::rdtsc().wrapping_sub(t0));
+        }
+    }
+
+    /// Drain the pool, measure the pass, and hand the buffers back.
+    ///
+    /// The drain is normally already satisfied when this is reached: every
+    /// root is a node of the visible list and the refresh walk waited on each
+    /// one, so the cursor is spent by here. It is done rather than assumed
+    /// because the buffers this hands back are the ones the workers read.
+    fn retire(&mut self, timed: bool) -> BdlAnimForkStats {
+        let t1 = wow_shared::tsc::rdtsc();
+        self.quiesce();
+        let t2 = wow_shared::tsc::rdtsc();
+        let mut root_ticks_sum = 0u64;
+        let mut root_ticks_max = 0u64;
+        if timed {
+            for &dt in &self.ticks {
+                root_ticks_sum = root_ticks_sum.wrapping_add(dt);
+                root_ticks_max = root_ticks_max.max(dt);
+            }
+        }
+        let stats = BdlAnimForkStats {
+            roots: self.roots.len() as u32,
+            wait_ticks: self.stall_ticks.wrapping_add(t2.wrapping_sub(t1)),
+            fork_ticks: t2.wrapping_sub(self.published),
+            root_ticks_sum,
+            root_ticks_max,
+            stalls: self.stalls,
+            helped: self.helped,
+        };
+        BDL_ANIM_ROOTS.with(|slot| slot.replace(core::mem::take(&mut self.roots)));
+        BDL_ANIM_TICKS.with(|slot| slot.replace(core::mem::take(&mut self.ticks)));
+        stats
+    }
+
+    /// Spin, helping, until no lane can still be inside the published job.
+    ///
+    /// Helping rather than only yielding matters on the path [`Drop`] takes:
+    /// the game thread may be the only participant left, and a pool whose
+    /// workers all parked would otherwise never drain the cursor.
+    fn quiesce(&self) {
+        use core::sync::atomic::Ordering;
+        while !self.drained() {
+            if !gc_par_animate_chunk(gc_pool(), &self.job) {
+                std::thread::yield_now();
+            }
+        }
+        gc_pool().done.store(true, Ordering::SeqCst);
+    }
+}
+
+impl Drop for BdlAnimPending {
+    /// Never free the published buffers under a live worker.
+    ///
+    /// The pool reads the roots and tick buffers this owns until it quiesces,
+    /// and they are freed on the line after this one. The window between
+    /// publish and [`retire`](BdlAnimPending::retire) spans two phases and a
+    /// dozen calls into client code, so quiescence cannot be left to the
+    /// happy path. A retired fork has already spent its cursor, which makes
+    /// this a load and a branch.
+    fn drop(&mut self) {
+        self.quiesce();
     }
 }
 
 /// What one forked animate pass measured at its seam.
-struct BdlAnimForkStats {
-    /// Pure join wait: coordinator-participation end to quiescence, in ticks.
-    wait_ticks: u64,
+pub struct BdlAnimForkStats {
+    /// Roots the pass published.
+    pub roots: u32,
+    /// Per-node stall time plus whatever the final drain still had to wait.
+    pub wait_ticks: u64,
     /// Publish-to-quiescence wall ticks for the whole fork.
-    fork_ticks: u64,
+    pub fork_ticks: u64,
+    /// Sum of the per-root brackets across every lane.
+    pub root_ticks_sum: u64,
+    /// The costliest single root.
+    pub root_ticks_max: u64,
+    /// Nodes the game thread had to wait for.
+    pub stalls: u32,
+    /// Chunks the game thread animated from inside those waits.
+    pub helped: u32,
 }
 
-/// Fork the whole root list across the pool and hard-join it.
+/// One instance's last-animated frame stamp, read as the publication it is.
 ///
-/// Takes over BOTH halves of the engine's even/odd split: on a forked pass
-/// the engine worker is never kicked, because kicking it alongside the fork
-/// would double-animate the odd half. The coordinator participates as the
-/// fourth lane, then spins until the cursor is exhausted and no participant
-/// is active. The join is unconditional: a fallback is impossible once
-/// instances are mid-mutation, and the refresh phase would destroy the list
-/// under live workers. Past the deadline it warns once and keeps waiting.
-///
-/// `ticks` is resized to parallel `roots` and filled with per-root costs
-/// when `timed`; unarmed passes publish a null tick array and pay no
-/// bracket.
-fn bdl_anim_fork(
-    base: *mut u8,
-    roots: &[usize],
-    ticks: &mut Vec<u64>,
-    timed: bool,
-) -> BdlAnimForkStats {
-    use core::sync::atomic::Ordering;
-    let ticks_ptr = if timed {
-        ticks.clear();
-        ticks.resize(roots.len(), 0);
-        ticks.as_mut_ptr() as usize
-    } else {
-        0
-    };
-    let shared = gc_pool();
-    let t0 = wow_shared::tsc::rdtsc();
-    let job = gc_par_begin(
-        shared,
-        GcJob::animate_roots(
-            roots.as_ptr() as usize,
-            roots.len(),
-            base as usize,
-            ticks_ptr,
-        ),
-    );
-    gc_par_animate_roots(shared, &job);
-    let t1 = wow_shared::tsc::rdtsc();
-    let deadline = t1.wrapping_add(wow_shared::tsc::secs_to_cycles(1) / 20);
-    let mut warned = false;
-    loop {
-        let drained = shared.bucket_cursor.load(Ordering::SeqCst) >= roots.len()
-            && shared.active.load(Ordering::SeqCst) == 0;
-        if drained {
-            break;
-        }
-        if !warned && wow_shared::tsc::rdtsc() >= deadline {
-            warned = true;
-            // Once per session, not once per pass: a pool that stalls at all
-            // stalls every frame, and the first line already says everything
-            // the next thousand would.
-            wow_shared::log_once_warn!(
-                target: super::tally::TARGET,
-                "animate fork join stalled past the deadline over {} roots; waiting it out",
-                roots.len(),
-            );
-        }
-        std::thread::yield_now();
-    }
-    shared.done.store(true, Ordering::SeqCst);
-    let t2 = wow_shared::tsc::rdtsc();
-    BdlAnimForkStats {
-        wait_ticks: t2.wrapping_sub(t1),
-        fork_ticks: t2.wrapping_sub(t0),
-    }
+/// The workers store this last, after the bone matrices and after recursing
+/// into attached children, so an `Acquire` load here is what makes those
+/// writes visible to the game thread that observes the stamp. On i686 both
+/// sides compile to a plain `mov`; the ordering is against the compiler.
+#[inline]
+fn bdl_anim_stamp(node: *const u8) -> u32 {
+    // SAFETY: `node` is a live model instance; `+0x40` is its last-animated
+    // stamp dword, naturally aligned inside the instance.
+    let slot = unsafe { node.add(0x40).cast::<core::sync::atomic::AtomicU32>() };
+    // SAFETY: as above — the dword is inside the live instance, and every
+    // writer of it goes through the matching release store.
+    unsafe { (*slot).load(core::sync::atomic::Ordering::Acquire) }
 }
 
 /// The per-list animation phase (0x707757..0x707843).
@@ -31449,8 +31628,10 @@ fn bdl_anim_fork(
 /// way.
 ///
 /// Fills the `collect`, `animate` and `particles` phases of `phases`; the
-/// driver owns the rest of them and submits the record.
-fn bdl_anim_phase(base: *mut u8, phases: &mut super::seam_probe::BdlPhases) {
+/// driver owns the rest of them and submits the record. On a forked pass
+/// `animate` is the publish alone — the cost the fork still imposes shows up
+/// as stall time inside `particles` and `refresh`, which is the point.
+fn bdl_anim_phase(base: *mut u8, phases: &mut super::seam_probe::BdlPhases) -> BdlAnimOutcome {
     // Whether a hook of ours is still installed is not a question only an
     // instrumented session gets to ask: an entry another module takes is dead
     // for every player. This is the cheapest always-on tick available — one
@@ -31482,30 +31663,11 @@ fn bdl_anim_phase(base: *mut u8, phases: &mut super::seam_probe::BdlPhases) {
     if !fork && root_buf.len() > 1 {
         super::seam_probe::anim_par_gated();
     }
+    let mut pending = None;
     if fork {
-        let mut tick_buf = BDL_ANIM_TICKS.with(core::cell::RefCell::take);
-        let stats = bdl_anim_fork(base, &root_buf, &mut tick_buf, timed);
-        // Closed before the armed bookkeeping below, which walks the tick
-        // array: the phase is meant to be the dispatch a live session pays,
-        // not what measuring it costs.
+        let tick_buf = BDL_ANIM_TICKS.with(core::cell::RefCell::take);
+        pending = Some(BdlAnimPending::publish(base, root_buf, tick_buf, timed));
         phases.animate = bdl_tick(timed).wrapping_sub(t_animate);
-        if timed {
-            roots = root_buf.len() as u32;
-            for &dt in &tick_buf {
-                ticks_sum = ticks_sum.wrapping_add(dt);
-                ticks_max = ticks_max.max(dt);
-            }
-        }
-        if let Some(armed) = &probe {
-            super::seam_probe::anim_par_pass(
-                armed,
-                roots,
-                stats.wait_ticks,
-                stats.fork_ticks,
-                ticks_sum,
-            );
-        }
-        BDL_ANIM_TICKS.with(|slot| slot.replace(tick_buf));
     } else if worker_arm {
         // 0x707760: sub_706cd0(ecx = view, 0x707600 callback, this).
         const CB: u32 = (crate::win::EXPECTED_IMAGE_BASE + 0x30_7600) as u32;
@@ -31550,6 +31712,7 @@ fn bdl_anim_phase(base: *mut u8, phases: &mut super::seam_probe::BdlPhases) {
             unsafe { core::mem::transmute(SUB_706D00) };
         f2(view);
         phases.animate = bdl_tick(timed).wrapping_sub(t_animate);
+        BDL_ANIM_ROOTS.with(|slot| slot.replace(root_buf));
     } else {
         // 0x7077d3: plain single-hop walk.
         // SAFETY: `base` is that same `CWorldView`; `+0x20` is its visible-list head pointer
@@ -31571,9 +31734,15 @@ fn bdl_anim_phase(base: *mut u8, phases: &mut super::seam_probe::BdlPhases) {
             node = unsafe { bdl_rdp(node, 0x48) };
         }
         phases.animate = bdl_tick(timed).wrapping_sub(t_animate);
+        BDL_ANIM_ROOTS.with(|slot| slot.replace(root_buf));
     }
-    BDL_ANIM_ROOTS.with(|slot| slot.replace(root_buf));
     // 0x707830: UpdateParticlesAndChildren over the visible list.
+    //
+    // The first phase that reads what the animation wrote, and so the first
+    // that waits: it transforms each instance's lights, emitters and ribbons
+    // through that instance's bone matrices. Waiting per node rather than
+    // once for the whole pass is what puts this walk inside the fork's window
+    // instead of after it.
     let t_particles = bdl_tick(timed);
     // SAFETY: `base` is that same `CWorldView`; `+0x20` is its visible-list head pointer
     // field, re-read here because the stock code at 0x707830 reloads the head for this pass.
@@ -31581,27 +31750,67 @@ fn bdl_anim_phase(base: *mut u8, phases: &mut super::seam_probe::BdlPhases) {
     let mut list_len: u32 = 0;
     while !node.is_null() {
         list_len = list_len.wrapping_add(1);
+        if let Some(p) = pending.as_mut() {
+            p.await_node(node, timed);
+        }
         cm2_model__update_particles_and_children__718960(node as *mut core::ffi::c_void);
         // SAFETY: `node` is non-null by the loop condition; `+0x48` is the forward link the
         // visible list is chained through.
         node = unsafe { bdl_rdp(node, 0x48) };
     }
     phases.particles = bdl_tick(timed).wrapping_sub(t_particles);
-    if let Some(armed) = &probe {
-        super::seam_probe::anim_phase(armed, worker_arm, roots, ticks_sum, ticks_max, list_len);
+    BdlAnimOutcome {
+        pending,
+        worker_arm,
+        list_len,
+        roots,
+        ticks_sum,
+        ticks_max,
     }
+}
+
+/// What the animation phase leaves for the driver to finish and report.
+///
+/// The fork outlives this phase now, so the driver has to be the one that
+/// retires it — after the refresh walk, which is the last reader that can
+/// still overlap it. The serial figures ride along because a serial pass
+/// measures its own roots inline while a forked one only knows them once its
+/// lanes are done.
+struct BdlAnimOutcome {
+    /// The published fork, if this pass forked.
+    pending: Option<BdlAnimPending>,
+    /// Whether the client's own two-thread animate arm was set.
+    worker_arm: bool,
+    /// Visible-list length the particle walk counted.
+    list_len: u32,
+    /// Roots a serial pass animated; 0 on a forked pass.
+    roots: u32,
+    /// Their measured cost; 0 on a forked pass.
+    ticks_sum: u64,
+    /// The costliest of them; 0 on a forked pass.
+    ticks_max: u64,
 }
 
 /// Node-bounds refresh phase (0x707845..0x707868).
 ///
 /// Pop each node off `this+0x20`, clear its `+0x44/+0x48` links, and refresh its bounds.
-fn bdl_refresh_phase(base: *mut u8) {
+///
+/// The second reader of the animation, through
+/// `CM2Object::TransformPointToWorld` at the head of `RefreshNodeBounds`, so
+/// it waits per node too. It is also what makes the phases after it safe
+/// without any waiting of their own: every root is a node of this list, so by
+/// the time this walk has emptied the list every root has been waited on and
+/// the fork is complete.
+fn bdl_refresh_phase(base: *mut u8, mut pending: Option<&mut BdlAnimPending>, timed: bool) {
     loop {
         // SAFETY: `base` is the non-null `CWorldView` `this` the draw-list hook was entered
         // with, and `+0x20` is its visible-list head pointer field.
         let node = unsafe { bdl_rdp(base, 0x20) };
         if node.is_null() {
             break;
+        }
+        if let Some(p) = pending.as_deref_mut() {
+            p.await_node(node, timed);
         }
         // SAFETY: `node` came off the visible-list head and is null-checked above; `+0x48` is
         // the forward link the list is walked through.
@@ -31910,11 +32119,34 @@ pub fn c_world_view__build_draw_list__707680(
     phases.prologue = bdl_tick(timed).wrapping_sub(t_entry);
 
     // 0x707757: animation phase; 0x707845: node-bounds refresh.
-    bdl_anim_phase(base, &mut phases);
+    //
+    // A forked animate pass is still live across both of them and is retired
+    // below, once the refresh walk has emptied the visible list and therefore
+    // waited on every root.
+    let mut outcome = bdl_anim_phase(base, &mut phases);
     let t_refresh = bdl_tick(timed);
-    bdl_refresh_phase(base);
+    bdl_refresh_phase(base, outcome.pending.as_mut(), timed);
+    let stats = outcome.pending.take().map(|mut p| p.retire(timed));
     let t_spatial = bdl_tick(timed);
     phases.refresh = t_spatial.wrapping_sub(t_refresh);
+    if let Some(armed) = &probe {
+        let (roots, ticks_sum, ticks_max) = stats
+            .as_ref()
+            .map_or((outcome.roots, outcome.ticks_sum, outcome.ticks_max), |s| {
+                (s.roots, s.root_ticks_sum, s.root_ticks_max)
+            });
+        super::seam_probe::anim_phase(
+            armed,
+            outcome.worker_arm,
+            roots,
+            ticks_sum,
+            ticks_max,
+            outcome.list_len,
+        );
+        if let Some(s) = &stats {
+            super::seam_probe::anim_par_pass(armed, s);
+        }
+    }
 
     // 0x70786a..0x707890: reset the bucket counts and the record-array count.
     // SAFETY: `base` is the live `CWorldView`; index-array headers are
