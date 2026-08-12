@@ -1,11 +1,15 @@
 //! Event-dispatch gauge behind the `wow::script` debug filter.
 //!
 //! Observation-only instrumentation over the client's script event dispatch:
-//! the adapters in `hooks.rs` forward every call to the original and, when the
-//! gauge is armed, time it and attribute the cost. Armed means the
-//! `wow::script` target has debug logging enabled; otherwise every entry point
-//! here is a plain delegate and the tables are never touched, so a shipped
-//! build adds nothing at the default filter.
+//! the adapters in `hooks.rs` forward every call to the original, time it and
+//! attribute the cost. Armed means the `wow::script` target has debug logging
+//! enabled, and every hook this module is reached through is `armed_only` in
+//! the manifest — an unarmed session installs none of them and leaves the
+//! dispatch path stock, so a shipped build adds nothing at the default filter,
+//! not even a detour. That is also why no entry point here carries an unarmed
+//! branch: there is no unarmed caller to serve. The one exception is
+//! [`time_body`], which is called from a reimplementation that installs
+//! unconditionally, so it keeps its own check.
 //!
 //! Attribution model. Event dispatch has two initiators: `SignalEvent`
 //! (paramless, a full wrapper here) and `SignalEventParam` (variadic, entry
@@ -1104,12 +1108,11 @@ fn state() -> std::sync::MutexGuard<'static, State> {
 }
 
 /// `SignalEvent` wrapper — paramless dispatch, timed whole.
+///
+/// Reached only from a hook the manifest installs when the gauge is armed, so
+/// there is no unarmed path to keep cheap here.
 pub fn signal_event(event_id: i32) {
     let original = super::symbols::originals::signal_event__703e50();
-    if !armed() {
-        original(event_id);
-        return;
-    }
     let dump = event_name(event_id);
     let prev = WRAPPER_EVENT.swap(id_tag(event_id), Ordering::Relaxed);
     let depth = DEPTH.fetch_add(1, Ordering::Relaxed);
@@ -1148,9 +1151,6 @@ pub fn signal_event(event_id: i32) {
 
 /// `SignalEventParam` entry tap — store the current event and count it.
 pub fn signal_event_param_tap(args: *const u32) {
-    if !armed() {
-        return;
-    }
     // SAFETY: `args` is the hooked call's argument area; argument 0 is the
     // event id.
     let event_id = unsafe { args.read() }.cast_signed();
@@ -1163,19 +1163,12 @@ pub fn signal_event_param_tap(args: *const u32) {
 
 /// `0x7026f0` entry tap — a UI invoke follows, not an event dispatch.
 pub fn invoke_formatted_tap(_args: *const u32) {
-    if !armed() {
-        return;
-    }
     PARAM_EVENT.store(0, Ordering::Relaxed);
 }
 
 /// `0x702690` wrapper — one paramless handler call, timed.
 pub fn invoke_handler(frame: *mut core::ffi::c_void, handler_slot: *mut u32) {
     let original = super::symbols::originals::frame_script_invoke_handler__702690();
-    if !armed() {
-        original(frame, handler_slot);
-        return;
-    }
     let name = frame_name(frame);
     let ctx = WRAPPER_EVENT.load(Ordering::Relaxed);
     let depth = DEPTH.fetch_add(1, Ordering::Relaxed);
@@ -1197,10 +1190,6 @@ pub fn invoke_handler_formatted_v(
     args: *const u32,
 ) {
     let original = super::symbols::originals::frame_script_invoke_handler_formatted_v__702710();
-    if !armed() {
-        original(frame, handler_slot, format, args);
-        return;
-    }
     let name = frame_name(frame);
     let ctx = PARAM_EVENT.load(Ordering::Relaxed);
     let depth = DEPTH.fetch_add(1, Ordering::Relaxed);

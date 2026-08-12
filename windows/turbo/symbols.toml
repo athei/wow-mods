@@ -4519,6 +4519,10 @@ preserve = []
 # --- FrameScript event-dispatch gauge (`wow::script`) ---
 # Observation-only hooks: every adapter runs the original and replaces nothing;
 # the whole gauge is inert unless `wow::script` debug logging is enabled.
+# All of them are `armed_only`, so a session that will never read the numbers
+# keeps these entries stock rather than paying a detour and a delegate on every
+# handler invoke: the gauge measures the dispatch path, which is the same path
+# it would otherwise tax for nothing.
 # Event registry: base *(0xceef68), count *(0xceef64), stride 0x10 — entry+0x0
 # is the event name, entry+0xc the intrusive listener list (node+0x4 next
 # tagged low-bit-terminated, node+0x8 the listening frame). A frame's name
@@ -4533,6 +4537,7 @@ abi  = "fastcall"
 ret  = "void"
 args = ["i32"]
 preserve = []
+armed_only = true
 
 # Parameterized event dispatch — variadic `cdecl(eventId, format, ...)`, so it
 # carries the `tap` shim: the adapter observes the argument area (arg 0 = event
@@ -4545,6 +4550,7 @@ abi  = "tap"
 ret  = "void"
 args = ["*const u32"]
 preserve = []
+armed_only = true
 
 # Paramless handler invoke: `thiscall(ecx = frame)` + one stack arg (the
 # frame's handler slot at frame+0xc: {funcRef, refOwner}), `RET 0x4`. Called
@@ -4557,6 +4563,7 @@ abi  = "thiscall"
 ret  = "void"
 args = ["*mut core::ffi::c_void", "*mut u32"]
 preserve = []
+armed_only = true
 
 # Formatted handler invoke, variadic `cdecl(frame, handlerSlot, format, ...)`
 # — the va_start wrapper every argument-carrying UI handler goes through
@@ -4570,6 +4577,7 @@ abi  = "tap"
 ret  = "void"
 args = ["*const u32"]
 preserve = []
+armed_only = true
 
 # Formatted handler invoke core, fixed-arity `cdecl(frame, handlerSlot,
 # format, va_list)` — exactly two callers: SignalEventParam (per listener) and
@@ -4583,6 +4591,7 @@ abi  = "cdecl"
 ret  = "void"
 args = ["*mut core::ffi::c_void", "*mut u32", "*const u8", "*const u32"]
 preserve = []
+armed_only = true
 
 # --- FrameScript ExecuteFunction fast path ---
 # The two per-listener invoke primitives every scripted handler funnels
@@ -4630,9 +4639,9 @@ preserve = []
 # Closure layout on the argument: value tag at +0x0 (6 = function), object at
 # +0x8, then `isC` at +0x6 and, at +0xc, the Proto for a Lua closure or the C
 # function pointer for a C one.
-# `armed_only`: this runs orders of magnitude more often than the per-invoke
-# hooks above, so an unarmed session leaves it stock rather than paying a
-# trampoline per Lua call.
+# `armed_only`, as with the gauge's other entries, and here the margin is
+# widest: this runs orders of magnitude more often than the per-invoke hooks
+# above, so an unarmed session would be paying a trampoline per Lua call.
 [functions.luaD_precall__6f6050]
 rva  = 0x2f6050
 sig  = "55 8B EC 51 53 56 8B DA 8B 03"

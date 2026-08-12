@@ -623,18 +623,8 @@ fn render(m: &Manifest) -> String {
         // of `install_all`). Address + signature are inlined here.
         //
         // An `armed_only` entry puts that step behind the gauge's own arming
-        // check, so an unarmed run never patches the address at all. The target
-        // is hot enough that the usual "unarmed cost is one trampoline" argument
-        // does not carry, and the gauge resolves its filter before `install_all`.
-        let ind = if f.armed_only { "    " } else { "" };
-        if f.armed_only {
-            let _ = writeln!(
-                install_body,
-                "    // Observation hook on a path too hot to detour for nothing: stock"
-            );
-            let _ = writeln!(install_body, "    // unless the event gauge is armed.");
-            let _ = writeln!(install_body, "    if super::events::armed() {{");
-        }
+        // check, so an unarmed run never patches the address at all.
+        let ind = open_armed_gate(&mut install_body, f);
         let _ = writeln!(
             install_body,
             "{ind}    queued += usize::from(install_thunk("
@@ -668,9 +658,7 @@ fn render(m: &Manifest) -> String {
         );
         let _ = writeln!(install_body, "{ind}        }},");
         let _ = writeln!(install_body, "{ind}    ));");
-        if f.armed_only {
-            let _ = writeln!(install_body, "    }}");
-        }
+        close_armed_gate(&mut install_body, f);
 
         // Arm this hook's compare switch if it is selected at runtime. Only a
         // hook with a `[diff]` table has the switch (compare mode runs both
@@ -1228,6 +1216,14 @@ fn emit_x87st0(
         f.diff.is_none(),
         "{name}: x87st0 entries cannot carry a [diff] table"
     );
+    // A reimpl, not an observation hook: it has to be installed to do its job,
+    // so a gate here would be a silently disabled function rather than a saved
+    // trampoline. Refuse instead of emitting an ungated install for a manifest
+    // that asked for one.
+    assert!(
+        !f.armed_only,
+        "{name}: armed_only is for observation hooks, not the x87st0 shim"
+    );
 
     // Opaque trampoline handle: the original is not callable through a Rust fn
     // type (its argument lives in ST(0)); stored only so the `originals` accessor
@@ -1352,6 +1348,12 @@ fn emit_x87pow(
     assert!(
         f.diff.is_none(),
         "{name}: x87pow entries cannot carry a [diff] table"
+    );
+    // Same as the x87st0 path: this shim replaces the function, so it is never
+    // optional.
+    assert!(
+        !f.armed_only,
+        "{name}: armed_only is for observation hooks, not the x87pow shim"
     );
 
     // Opaque trampoline handle: the original is not callable through a Rust fn
@@ -1525,41 +1527,75 @@ fn emit_tap(
     out.push('\n');
 
     // Install step: like the named-convention path, plus publishing the raw
-    // trampoline address the naked shim jumps through.
-    let _ = writeln!(install_body, "    queued += usize::from(install_thunk(");
-    let _ = writeln!(install_body, "        image_base,");
-    let _ = writeln!(install_body, "        {:#010x},", f.rva);
-    let _ = writeln!(install_body, "        {},", f.sig.literal());
+    // trampoline address the naked shim jumps through, and the same `armed_only`
+    // gate — the two gauge taps sit on the dispatch path they measure.
+    let ind = open_armed_gate(install_body, f);
     let _ = writeln!(
         install_body,
-        "        {snake}_thunk as *mut ::core::ffi::c_void,"
+        "{ind}    queued += usize::from(install_thunk("
     );
-    let _ = writeln!(install_body, "        {name:?},");
-    let _ = writeln!(install_body, "        |trampoline| {{");
+    let _ = writeln!(install_body, "{ind}        image_base,");
+    let _ = writeln!(install_body, "{ind}        {:#010x},", f.rva);
+    let _ = writeln!(install_body, "{ind}        {},", f.sig.literal());
     let _ = writeln!(
         install_body,
-        "            {screaming}_TRAMPOLINE.store(trampoline as usize, ::core::sync::atomic::Ordering::Release);"
+        "{ind}        {snake}_thunk as *mut ::core::ffi::c_void,"
+    );
+    let _ = writeln!(install_body, "{ind}        {name:?},");
+    let _ = writeln!(install_body, "{ind}        |trampoline| {{");
+    let _ = writeln!(
+        install_body,
+        "{ind}            {screaming}_TRAMPOLINE.store(trampoline as usize, ::core::sync::atomic::Ordering::Release);"
     );
     let _ = writeln!(
         install_body,
-        "            // SAFETY: the trampoline runs the displaced prologue then continues"
+        "{ind}            // SAFETY: the trampoline runs the displaced prologue then continues"
     );
     let _ = writeln!(
         install_body,
-        "            // into the unhooked original, carrying its ABI."
+        "{ind}            // into the unhooked original, carrying its ABI."
     );
-    let _ = writeln!(install_body, "            let original = unsafe {{");
+    let _ = writeln!(install_body, "{ind}            let original = unsafe {{");
     let _ = writeln!(
         install_body,
-        "                ::core::mem::transmute::<*mut ::core::ffi::c_void, {name}Fn>(trampoline)"
+        "{ind}                ::core::mem::transmute::<*mut ::core::ffi::c_void, {name}Fn>(trampoline)"
     );
-    let _ = writeln!(install_body, "            }};");
+    let _ = writeln!(install_body, "{ind}            }};");
     let _ = writeln!(
         install_body,
-        "            let _ = {screaming}_ORIGINAL.set(original);"
+        "{ind}            let _ = {screaming}_ORIGINAL.set(original);"
     );
-    let _ = writeln!(install_body, "        }},");
-    let _ = writeln!(install_body, "    ));");
+    let _ = writeln!(install_body, "{ind}        }},");
+    let _ = writeln!(install_body, "{ind}    ));");
+    close_armed_gate(install_body, f);
+}
+
+/// Open an `armed_only` entry's install gate, and say how far to indent under it.
+///
+/// The target is hot enough that the usual "unarmed cost is one trampoline"
+/// argument does not carry: an observation hook whose whole job is to time the
+/// path it sits on would otherwise tax every call of a session that will never
+/// read the numbers. The gauge resolves its filter before `install_all` runs,
+/// so the decision is available at install time and the function stays stock.
+/// Returns the extra indent the gated lines take, empty for an ungated entry.
+fn open_armed_gate(install_body: &mut String, f: &Function) -> &'static str {
+    if !f.armed_only {
+        return "";
+    }
+    let _ = writeln!(
+        install_body,
+        "    // Observation hook on a path too hot to detour for nothing: stock"
+    );
+    let _ = writeln!(install_body, "    // unless the event gauge is armed.");
+    let _ = writeln!(install_body, "    if super::events::armed() {{");
+    "    "
+}
+
+/// Close the gate [`open_armed_gate`] opened, if it opened one.
+fn close_armed_gate(install_body: &mut String, f: &Function) {
+    if f.armed_only {
+        let _ = writeln!(install_body, "    }}");
+    }
 }
 
 /// Convert a `PascalCase`/`camelCase` manifest key to `snake_case`.

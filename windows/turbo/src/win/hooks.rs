@@ -42988,19 +42988,19 @@ pub fn c_gx_device__apply_texture_stage_state__5a29d0(
 
 /// `SignalEvent` — paramless event dispatch, `__fastcall(ecx = event id)`.
 ///
-/// Observation wrapper for the event gauge: the original always runs;
-/// when the gauge is armed the whole dispatch (listener walk included) is
-/// timed and attributed to the event. Inert delegate otherwise.
+/// Observation wrapper for the event gauge, installed only when the gauge is
+/// armed: the original always runs, and the whole dispatch (listener walk
+/// included) is timed and attributed to the event.
 pub fn signal_event__703e50(event_id: i32) {
     crate::win::events::signal_event(event_id);
 }
 
 /// `SignalEventParam` — parameterized event dispatch, variadic `cdecl`.
 ///
-/// `tap` entry: the shim hands over the argument area (argument 0 = event id)
-/// and tail-jumps to the original. When the event gauge is armed this
-/// stores the current event for the per-listener attribution in
-/// [`frame_script_invoke_handler_formatted_v__702710`]; no-op otherwise.
+/// `tap` entry, installed only when the event gauge is armed: the shim hands
+/// over the argument area (argument 0 = event id) and tail-jumps to the
+/// original, and this stores the current event for the per-listener
+/// attribution in [`frame_script_invoke_handler_formatted_v__702710`].
 pub fn signal_event_param__703f50(args: *const u32) {
     crate::win::events::signal_event_param_tap(args);
 }
@@ -43008,18 +43008,20 @@ pub fn signal_event_param__703f50(args: *const u32) {
 /// `FrameScript_InvokeHandler` — one paramless handler call, `__thiscall`.
 ///
 /// `ecx` = the frame, one stack argument (the frame's handler slot at
-/// frame+0xc), `RET 0x4`. Observation wrapper for the event gauge:
-/// the original always runs; armed, the call is timed and attributed to the
-/// frame's name and (under `SignalEvent`) to the current event.
+/// frame+0xc), `RET 0x4`. Observation wrapper for the event gauge, installed
+/// only when the gauge is armed: the original always runs, and the call is
+/// timed and attributed to the frame's name and (under `SignalEvent`) to the
+/// current event.
 pub fn frame_script_invoke_handler__702690(frame: *mut core::ffi::c_void, handler_slot: *mut u32) {
     crate::win::events::invoke_handler(frame, handler_slot);
 }
 
 /// `FrameScript_InvokeHandler` (formatted) — variadic `cdecl` UI wrapper.
 ///
-/// `tap` entry marking a boundary: every handler reached from here is a UI
-/// invoke (`OnUpdate`, `OnClick`, ...), not an event dispatch, so the armed
-/// gauge clears the current-event slot. No-op otherwise.
+/// `tap` entry marking a boundary, installed only when the event gauge is
+/// armed: every handler reached from here is a UI invoke (`OnUpdate`,
+/// `OnClick`, ...), not an event dispatch, so the gauge clears the
+/// current-event slot.
 pub fn frame_script_invoke_handler_formatted__7026f0(args: *const u32) {
     crate::win::events::invoke_formatted_tap(args);
 }
@@ -43028,8 +43030,9 @@ pub fn frame_script_invoke_handler_formatted__7026f0(args: *const u32) {
 ///
 /// `cdecl(frame, handlerSlot, format, va_list)`, the fixed-arity core with
 /// exactly two callers (`SignalEventParam` per listener, the variadic UI
-/// wrapper). Observation wrapper for the event gauge: the original
-/// always runs; armed, the call is timed and attributed.
+/// wrapper). Observation wrapper for the event gauge, installed only when the
+/// gauge is armed: the original always runs, and the call is timed and
+/// attributed.
 pub fn frame_script_invoke_handler_formatted_v__702710(
     frame: *mut core::ffi::c_void,
     handler_slot: *mut u32,
