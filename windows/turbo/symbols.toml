@@ -673,6 +673,13 @@ preserve = []
 # under test here is the composition and the pinned quarter-turn matrix. The
 # trig residual that forces `ulp`/`abs` on `C44Matrix__SetRotationAxisAngle__7bdb00`
 # is common to both sides of this comparison and cancels.
+#
+# ARM THIS ENTRY ALONE. That cancellation is what the byte compare rests on, and
+# arming `all` breaks it: `C44Matrix__SetRotationAxisAngle__7bdb00` armed means
+# the game proceeds on ITS original's value, so the shell used as ground truth
+# here composes with the hardware trig while this side composes with the
+# polynomial. The result is a guaranteed one-ulp report on the cosine lanes that
+# says nothing about this entry — measured, not predicted.
 # No `orig_twice`, for the reason the quaternion rotate gives: the mode is
 # `inout`, so a second run of the original would read the first run's output.
 [functions.C44Matrix__RotateAxisAngle__7bdd60.diff]
