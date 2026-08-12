@@ -656,6 +656,30 @@ mode  = "inout"
 out   = { arg = 1, len = 64 }
 float = "bytes"
 
+[functions.C44Matrix__RotateAxisAngle__7bdd60]
+rva  = 0x3bdd60
+sig  = "55 8B EC ?? ?? ?? ?? 00 00 8B 45 10 8B 55 0C"
+abi  = "thiscall"
+ret  = "void"
+args = ["*mut f32", "f32", "*const f32", "i32"]
+preserve = []
+
+
+# Golden-diff the rotated receiver (inout = arg 0). len = 64 spans the whole
+# C44Matrix: arg 0 is redirected to a fixed-size scratch buffer, so the region
+# has to cover everything the reimplementation reads as well as what it writes.
+# Byte compare, not a tolerance: the reimplementation composes through the same
+# two kernels the original calls, both of them already hooked, so the only thing
+# under test here is the composition and the pinned quarter-turn matrix. The
+# trig residual that forces `ulp`/`abs` on `C44Matrix__SetRotationAxisAngle__7bdb00`
+# is common to both sides of this comparison and cancels.
+# No `orig_twice`, for the reason the quaternion rotate gives: the mode is
+# `inout`, so a second run of the original would read the first run's output.
+[functions.C44Matrix__RotateAxisAngle__7bdd60.diff]
+mode  = "inout"
+out   = { arg = 0, len = 64 }
+float = "bytes"
+
 [functions.C44Matrix__RotateQuaternion__7bddb0]
 rva  = 0x3bddb0
 sig  = "55 8B EC ?? ?? ?? ?? 00 00 8B 45 08 D9 00 56 DC"

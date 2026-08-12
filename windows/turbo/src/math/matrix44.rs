@@ -1447,6 +1447,192 @@ mod tests_c44_matrix__set_rotation_axis_angle__7bdb00 {
     }
 }
 
+/// The angle a quarter turn arrives with: `PI * 0.5` in `f32`, which is exact.
+///
+/// Pinned as bits so the recogniser below is a comparison against a constant
+/// rather than a call into [`crate::math::m2::half_pi_spin__718960`], which is
+/// where the value comes from; a test holds the two together.
+const Z_QUARTER_TURN_ANGLE_BITS: u32 = 0x3fc9_0fdb;
+
+/// [`c44_matrix__set_rotation_axis_angle__7bdb00`] for a quarter turn about `+Z`.
+///
+/// Written out rather than rebuilt because the M2 particle walk asks for this
+/// one rotation on every spline emitter of every node of every frame.
+///
+/// **These are this reimplementation's bits, not the client's.** `0x7bdb00`
+/// builds its rotation from the shared polynomial `sin_cos` where the original
+/// runs `FSINCOS`, and the two differ in the last place — the entry's diff
+/// annotation carries the bound. Pinning what the kernel returns is what keeps
+/// the walk's behaviour unchanged; the test beside this holds the two together
+/// if the trig ever moves.
+///
+/// Three lanes are not what a textbook quarter turn writes, and none of them may
+/// be rounded off in a cleanup. The two diagonal cosines are `-4.371139e-8`
+/// rather than zero, and `[10]` is one ulp below `1.0`: the residual is under
+/// the half-ulp at one, so `1.0f32 - cos` rounds back to exactly `1.0`, and the
+/// diagonal `z * z * t + c` then lands at `1.0 - 4.371139e-8`.
+const Z_QUARTER_TURN: [f32; 16] = [
+    f32::from_bits(0xb33b_bd2e), // cos
+    f32::from_bits(0x3f80_0000), // sin
+    f32::from_bits(0x0000_0000),
+    f32::from_bits(0x0000_0000),
+    f32::from_bits(0xbf80_0000), // -sin
+    f32::from_bits(0xb33b_bd2e), // cos
+    f32::from_bits(0x0000_0000),
+    f32::from_bits(0x0000_0000),
+    f32::from_bits(0x0000_0000),
+    f32::from_bits(0x0000_0000),
+    f32::from_bits(0x3f7f_ffff), // z diagonal, one ulp below 1.0
+    f32::from_bits(0x0000_0000),
+    f32::from_bits(0x0000_0000),
+    f32::from_bits(0x0000_0000),
+    f32::from_bits(0x0000_0000),
+    f32::from_bits(0x3f80_0000),
+];
+
+/// Whether the axis and angle are the exact pair the emitter spin passes.
+///
+/// Bit tests, not value compares. `-0.0 == 0.0` holds, and a negative zero in
+/// the axis reaches the signs of the products the general body forms, so a
+/// value compare would answer for an input the constant was not built from.
+/// `skip_normalize` is deliberately not part of the test: normalizing an exact
+/// unit `+Z` scales by `1.0 / sqrt(1.0)` and returns every component unchanged,
+/// so both flag values build the same matrix — pinned by a test rather than
+/// left as an argument.
+pub const fn is_z_quarter_turn(axis: &[f32; 3], angle: f32) -> bool {
+    axis[0].to_bits() == 0
+        && axis[1].to_bits() == 0
+        && axis[2].to_bits() == 0x3f80_0000
+        && angle.to_bits() == Z_QUARTER_TURN_ANGLE_BITS
+}
+
+/// `C44Matrix::RotateAxisAngle` — pre-multiplies a 4x4 by an axis-angle rotation.
+///
+/// `out = R(axis, angle) * m`. The original at `0x7bdd60` is a shell over two
+/// functions reimplemented here: it builds `R` into a stack local through
+/// `0x7bdb00`, calls `0x7bc6a0` with `(R, this)` — the receiver is pushed
+/// before the build, so it is still the multiply's second operand — and copies
+/// all sixteen floats of the product back over the receiver. Composing at
+/// kernel level replaces two detour crossings with none. It also bypasses the
+/// non-finite probe the multiply adapter carries, which is the trade
+/// [`c44_matrix__rotate_quaternion__7bddb0`] already makes for the same reason.
+///
+/// A quarter turn about `+Z` is answered from [`Z_QUARTER_TURN`]
+/// instead of rebuilt. That is not a general memo: it is the one argument pair
+/// the M2 particle walk passes, and it passes it per spline emitter per node
+/// per frame.
+pub fn c44_matrix__rotate_axis_angle__7bdd60(
+    m: &[f32; 16],
+    axis: &[f32; 3],
+    angle: f32,
+    skip_normalize: bool,
+) -> [f32; 16] {
+    let r = if is_z_quarter_turn(axis, angle) {
+        Z_QUARTER_TURN
+    } else {
+        c44_matrix__set_rotation_axis_angle__7bdb00(axis, angle, skip_normalize)
+    };
+    c44_matrix__multiply__7bc6a0(&r, m)
+}
+
+#[cfg(test)]
+mod tests_c44_matrix__rotate_axis_angle__7bdd60 {
+    use super::{
+        Z_QUARTER_TURN, Z_QUARTER_TURN_ANGLE_BITS, c44_matrix__rotate_axis_angle__7bdd60 as rotate,
+        c44_matrix__set_rotation_axis_angle__7bdb00 as build,
+    };
+
+    #[test]
+    fn the_constant_is_what_the_builder_returns() {
+        // Both flag values, because the recogniser ignores `skip_normalize`:
+        // normalizing an exact unit axis has to leave every component alone.
+        for skip in [false, true] {
+            let want = build(
+                &[0.0, 0.0, 1.0],
+                f32::from_bits(Z_QUARTER_TURN_ANGLE_BITS),
+                skip,
+            );
+            for i in 0..16 {
+                assert_eq!(
+                    Z_QUARTER_TURN[i].to_bits(),
+                    want[i].to_bits(),
+                    "element {i}, skip_normalize {skip}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_constant_is_not_the_textbook_quarter_turn() {
+        // Three lanes a cleanup would "fix". Asserted separately from the
+        // builder comparison so a failure says which reading moved.
+        assert_eq!(Z_QUARTER_TURN[0].to_bits(), 0xb33b_bd2e);
+        assert_eq!(Z_QUARTER_TURN[5].to_bits(), 0xb33b_bd2e);
+        assert_eq!(Z_QUARTER_TURN[10].to_bits(), 0x3f7f_ffff);
+    }
+
+    #[test]
+    fn the_angle_is_the_one_the_walk_passes() {
+        assert_eq!(
+            crate::math::m2::half_pi_spin__718960().to_bits(),
+            Z_QUARTER_TURN_ANGLE_BITS
+        );
+    }
+
+    /// A receiver whose entries all carry a full non-terminating mantissa.
+    ///
+    /// Given as bit patterns for the reason the multiply's own fixtures are: a
+    /// rounded decimal literal is a different float and would stop separating
+    /// the summation the product runs.
+    fn receiver() -> [f32; 16] {
+        let mut w = 0x3f8c_0d31_u32;
+        let mut out = [0.0f32; 16];
+        for cell in &mut out {
+            w = w.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            *cell = f32::from_bits((w & 0x807f_ffff) | 0x3fa0_0000);
+        }
+        out
+    }
+
+    #[test]
+    fn the_product_is_rotation_times_receiver_not_the_other_way_round() {
+        // Both orders compile and both look plausible, so the operand order is
+        // the way a future edit breaks this silently. The original pushes its
+        // receiver before building the rotation, leaving it as the multiply's
+        // second operand.
+        let m = receiver();
+        let r = build(&[0.3, -1.0, 0.8], -1.2, false);
+        let got = rotate(&m, &[0.3, -1.0, 0.8], -1.2, false);
+        let forward = super::c44_matrix__multiply__7bc6a0(&r, &m);
+        let reversed = super::c44_matrix__multiply__7bc6a0(&m, &r);
+        for i in 0..16 {
+            assert_eq!(got[i].to_bits(), forward[i].to_bits(), "element {i}");
+        }
+        assert!((0..16).any(|i| forward[i].to_bits() != reversed[i].to_bits()));
+    }
+
+    #[test]
+    fn rotate_matches_the_shell_it_replaces() {
+        let m = receiver();
+        let constant = (
+            [0.0f32, 0.0, 1.0],
+            f32::from_bits(Z_QUARTER_TURN_ANGLE_BITS),
+        );
+        for (axis, angle) in crate::math::matrix33::axis_angle_sweep()
+            .into_iter()
+            .chain(core::iter::once(constant))
+        {
+            for skip in [false, true] {
+                let want = super::c44_matrix__multiply__7bc6a0(&build(&axis, angle, skip), &m);
+                let got = rotate(&m, &axis, angle, skip);
+                for i in 0..16 {
+                    assert_eq!(got[i].to_bits(), want[i].to_bits(), "element {i}");
+                }
+            }
+        }
+    }
+}
+
 /// `C44Matrix::TransformPoint` (column-major variant).
 ///
 /// Transforms a 3D point by a 4×4 matrix with implied `w = 1`, applying the

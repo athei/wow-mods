@@ -188,6 +188,9 @@ static PART_PRE_WORKER_TICKS: Accum = Accum::zero();
 /// Upper edges for the live-particles-per-draw histogram; one bucket past.
 const PART_HIST_EDGES: [u32; 4] = [4, 16, 64, 256];
 
+static ROTATE_CALLS: Accum = Accum::zero();
+static ROTATE_CONSTANT: Accum = Accum::zero();
+
 static PHYS_NODES: Accum = Accum::zero();
 static PHYS_UPAC_TICKS: Accum = Accum::zero();
 static PHYS_EMITTERS: Accum = Accum::zero();
@@ -507,6 +510,24 @@ pub fn sweep_face_swept() {
 #[inline]
 pub fn sweep_face_pass() {
     count_one(&FACE_PASSES);
+}
+
+/// One axis-angle rotate, and whether it was answered from the pinned constant.
+///
+/// Counts only, no clock: the site runs at hundreds of thousands a second and an
+/// in-situ `rdtsc` costs more than a bracket can report there. `constant` short
+/// of `calls` in a scene with particles is the signal that the M2 walk has
+/// stopped passing the literals the constant was built from, which would put the
+/// rotation back to being rebuilt per emitter with nothing else to say so.
+#[inline]
+pub fn axis_rotate(constant: bool) {
+    let Some(armed) = super::tally::arm() else {
+        return;
+    };
+    ROTATE_CALLS.add(&armed, 1);
+    if constant {
+        ROTATE_CONSTANT.add(&armed, 1);
+    }
 }
 
 /// One dynamic-buffer resize/lock cycle in the particle emitter render.
@@ -987,6 +1008,14 @@ pub fn emit_cumulative() {
             ticks_to_us(PHYS_EMIT_TICKS.get()),
             PHYS_STEPS.get(),
             PHYS_STEPS_MAX.get(),
+        );
+    }
+    let rotate_calls = ROTATE_CALLS.get();
+    if rotate_calls != 0 {
+        log::debug!(
+            target: super::tally::TARGET,
+            "seam axisrot: {rotate_calls} calls, constant {}",
+            ROTATE_CONSTANT.get(),
         );
     }
     let pre_passes = PART_PRE_PASSES.get();

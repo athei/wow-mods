@@ -879,6 +879,57 @@ pub fn c44_matrix__rotate_quaternion__7bddb0(this: *mut f32, quat_xyzw: *const f
     unsafe { this.cast::<[f32; 16]>().write_unaligned(product) };
 }
 
+/// `C44Matrix::RotateAxisAngle` — `__thiscall(ecx = this 4x4, stack = angle, axis, flag)`.
+///
+/// Pre-multiplies the receiver by the axis-angle rotation, in place
+/// (`this = R(axis, angle) * this`). A non-zero `skip_normalize` trusts a
+/// unit-length axis. `RET 0xC`; the original returns a pointer past its own
+/// dead stack frame, which no caller can use, so this returns nothing.
+///
+/// The original is a shell over two functions reimplemented here — it builds `R`
+/// through `0x7bdb00` and composes through `0x7bc6a0` — so every call crossed
+/// the detour twice. Composing in one body removes both crossings. The
+/// non-finite probe the multiply adapter carries is kept here rather than lost
+/// with them: the receiver arrives from a bone matrix, an emitter offset and a
+/// `D3DX` product, which is exactly where a manufactured NaN shows up.
+pub fn c44_matrix__rotate_axis_angle__7bdd60(
+    this: *mut f32,
+    angle: f32,
+    axis: *const f32,
+    skip_normalize: i32,
+) {
+    if this.is_null() || axis.is_null() {
+        return;
+    }
+    // SAFETY: the receiver `this` addresses a `C44Matrix` — 16 contiguous, aligned
+    // `f32`; non-null checked above. Read before the product overwrites it.
+    let m = &unsafe { this.cast::<[f32; 16]>().read_unaligned() };
+    // SAFETY: `axis` addresses three contiguous, possibly-unaligned `f32` (a
+    // `C3Vector`); non-null checked above, read-only.
+    let a = &unsafe { axis.cast::<[f32; 3]>().read_unaligned() };
+
+    super::seam_probe::axis_rotate(crate::math::matrix44::is_z_quarter_turn(a, angle));
+    let product = crate::math::matrix44::c44_matrix__rotate_axis_angle__7bdd60(
+        m,
+        a,
+        angle,
+        skip_normalize != 0,
+    );
+    // Build the verbose input dump only on a non-finite product, so the hot path
+    // pays just the cheap scan.
+    if product.iter().any(|v| !v.is_finite()) {
+        let mut io = [0.0_f32; 20];
+        io[..16].copy_from_slice(m);
+        io[16..19].copy_from_slice(a);
+        io[19] = angle;
+        trip_nonfinite("C44Matrix.RotateAxisAngle", &io, &product);
+    }
+
+    // SAFETY: `this` addresses 16 contiguous, aligned `f32`; the original copies
+    // all sixteen floats of the product back over the receiver.
+    unsafe { this.cast::<[f32; 16]>().write_unaligned(product) };
+}
+
 /// `C44Matrix::ScaleRowsVec` — `__thiscall(ecx = this 4x4 matrix, stack = scale_xyz)`.
 ///
 /// In place, scales the upper-left 3x3 row-wise: row `i` of the matrix is
@@ -7311,15 +7362,11 @@ pub fn cg_object_c__update_shadow_transform__613ef0(this: *mut u8, force_update:
     get_position(this, position.as_mut_ptr());
     c44_matrix__translate__7bdc40(xform.as_mut_ptr(), position.as_ptr());
 
-    // Z-axis rotation by the facing angle.
+    // Z-axis rotation by the facing angle. RotateAxisAngle (0x7bdd60) is our own
+    // hook — direct call.
     let facing = get_facing(this);
     let axis: [f32; 3] = [0.0, 0.0, 1.0];
-    // 0x7bdd60 RotateAxisAngle — thiscall(xform; facing, axis, flag), RET 0xC.
-    const ROTATE_VA: usize = BASE + 0x3b_dd60;
-    // SAFETY: image base verified at load; signature matches the callee.
-    let rotate_axis: extern "thiscall" fn(*mut f32, f32, *const f32, u32) -> u32 =
-        unsafe { core::mem::transmute(ROTATE_VA) };
-    rotate_axis(xform.as_mut_ptr(), facing, axis.as_ptr(), 1);
+    c44_matrix__rotate_axis_angle__7bdd60(xform.as_mut_ptr(), facing, axis.as_ptr(), 1);
 
     // Uniform scale = s94 * s90 * (model ? s9c : s98).
     // SAFETY: live object; +0xdc is the scale-override model flag.
@@ -29863,14 +29910,13 @@ pub fn cm2_model__update_particles_and_children__718960(this: *mut core::ffi::c_
                     unsafe { core::mem::transmute(D3DXMUL_VA) };
                 d3dx_mul(lc.as_mut_ptr(), lc.as_ptr(), model_mat);
 
-                // BuildAxisAngleRotate(this=lc, PI/2, axis=&{0,0,1}, 1). __thiscall ret 0xc.
+                // RotateAxisAngle(this=lc, PI/2, axis=&{0,0,1}, 1) — our own hook,
+                // called directly. The axis, angle and flag are literals, so the
+                // rotation is one constant and the hook answers it from a pinned
+                // matrix instead of rebuilding it per emitter.
                 let axis = [0.0f32, 0.0, 1.0];
                 let angle = crate::math::m2::half_pi_spin__718960();
-                const AXISANG_VA: usize = EXPECTED_IMAGE_BASE + 0x3b_dd60;
-                // SAFETY: fixed `.text` VA; __thiscall(ecx=out, f32, vec3*, i32) ret 0xc.
-                let build_rot: extern "thiscall" fn(*mut f32, f32, *const f32, i32) =
-                    unsafe { core::mem::transmute(AXISANG_VA) };
-                build_rot(lc.as_mut_ptr(), angle, axis.as_ptr(), 1);
+                c44_matrix__rotate_axis_angle__7bdd60(lc.as_mut_ptr(), angle, axis.as_ptr(), 1);
 
                 // UpdateWithSubsteps(eobj, dt, lc, (this+0x2c)+0x10c, this+0x17c).
                 // __thiscall ret 0x10 (4 stack args).
