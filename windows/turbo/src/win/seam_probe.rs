@@ -121,6 +121,12 @@ static FACE_SWEPT: Accum = Accum::zero();
 static PARTICLE_LOCKS: Counter = Counter::zero();
 static RAIN_LOCKS: Counter = Counter::zero();
 
+static MAPCHUNK_CALLS: Accum = Accum::zero();
+static MAPCHUNK_OVERLAP: Accum = Accum::zero();
+static MAPCHUNK_NODES: Accum = Accum::zero();
+static MAPCHUNK_INSERTED: Accum = Accum::zero();
+static MAPCHUNK_SUBS: Accum = Accum::zero();
+
 static TRACE_GROUND: Counter = Counter::zero();
 static TRACE_SWEEP: Counter = Counter::zero();
 static TRACE_TERRAIN: Counter = Counter::zero();
@@ -129,6 +135,17 @@ static TRACE_GEOMETRY: Counter = Counter::zero();
 static TRACE_WMO_QUERY: Counter = Counter::zero();
 static TRACE_DOODAD_QUERY: Counter = Counter::zero();
 static TRACE_GRID_BUILD: Counter = Counter::zero();
+
+static TSCENE_CALLS: Accum = Accum::zero();
+static TSCENE_TICKS_SUM: Accum = Accum::zero();
+static TSCENE_TICKS_MAX: Accum = Accum::zero();
+static TSCENE_LIST_SUM: Accum = Accum::zero();
+static TSCENE_LIST_MAX: Counter = Counter::zero();
+static TSCENE_CAND_SUM: Accum = Accum::zero();
+static TSCENE_CAND_MAX: Counter = Counter::zero();
+static TSCENE_GEOM: Accum = Accum::zero();
+static TSCENE_TWO_PASS: Accum = Accum::zero();
+static TSCENE_HITS: Accum = Accum::zero();
 
 static PART_DRAWS: Counter = Counter::zero();
 static PART_CLAMPED: Counter = Counter::zero();
@@ -170,6 +187,13 @@ static PART_PRE_WORKER_TICKS: Accum = Accum::zero();
 
 /// Upper edges for the live-particles-per-draw histogram; one bucket past.
 const PART_HIST_EDGES: [u32; 4] = [4, 16, 64, 256];
+
+static PHYS_NODES: Accum = Accum::zero();
+static PHYS_UPAC_TICKS: Accum = Accum::zero();
+static PHYS_EMITTERS: Accum = Accum::zero();
+static PHYS_EMIT_TICKS: Accum = Accum::zero();
+static PHYS_STEPS: Accum = Accum::zero();
+static PHYS_STEPS_MAX: Counter = Counter::zero();
 
 /// One draw-list animation pass: which arm ran and what it walked.
 ///
@@ -497,6 +521,59 @@ pub fn rain_lock() {
     super::tally::bump(&RAIN_LOCKS);
 }
 
+/// One `CMapChunk::Update` tick: its cost, and which half of the body holds it.
+///
+/// This tick is the largest named cost of open-world play — around 7% of guest
+/// samples both questing and travelling a city, and near-absent indoors — while
+/// its arithmetic is four flops. So the question is call count against a fixed
+/// per-call body, and these split the two halves the body actually has: the
+/// *tick* (screen-Z, fog flag, the chunk and detail fade timers, the four
+/// sub-object timers) and the *insert* (`height_bucket` re-insertion of the
+/// chunk, its scene-node list and its four sub-objects, entered only when the
+/// chunk AABB overlaps the view box).
+///
+/// `overlap` is how often the insert half ran at all, `nodes` the scene-node
+/// list steps walked, `inserted` the nodes that passed the visibility test and
+/// `subs` the sub-objects re-inserted.
+///
+/// **This family deliberately carries NO timing, and the reason is a measured
+/// one: at the call rate this tick runs (~190k/s in a city, ~1400 per draw-list
+/// pass) a two-`rdtsc` bracket costs more than the body it measures.** An armed
+/// build read the bracket at 1.90% of wall against a 0.45% sampler share, a
+/// 75 ns/call gap that is exactly Rosetta's `rdtsc` emulation cost — and the
+/// counter's own share of the emulation traffic predicted the profile's
+/// `rdtsc` line to within a point. The 11.1 ns bracket that is free at
+/// `seam bdl`'s thousands-per-second is not free here. Take the time share
+/// from the sampler, which books the emulation to the host and so does not
+/// suffer this, and take from these counters what the sampler cannot see: the
+/// call rate and the populations the body walks.
+///
+/// Not measured here either: chunks per frame. This callee's caller
+/// (`CMapTile__UpdateVisibleChunks`) is not hooked, so derive the grain from
+/// `calls` against the frame rate rather than expecting a per-pass figure.
+pub struct MapChunkStats {
+    /// The chunk AABB overlapped the view box, so the insert half ran.
+    pub overlap: bool,
+    /// Scene-node list steps walked.
+    pub nodes: u32,
+    /// Scene-node objects actually re-inserted.
+    pub inserted: u32,
+    /// Sub-objects whose bounds overlapped and were re-inserted.
+    pub subs: u32,
+}
+
+/// One `CMapChunk::Update` call.
+#[inline]
+pub fn map_chunk_update(armed: &Armed, s: &MapChunkStats) {
+    MAPCHUNK_CALLS.add(armed, 1);
+    if s.overlap {
+        MAPCHUNK_OVERLAP.add(armed, 1);
+    }
+    MAPCHUNK_NODES.add(armed, u64::from(s.nodes));
+    MAPCHUNK_INSERTED.add(armed, u64::from(s.inserted));
+    MAPCHUNK_SUBS.add(armed, u64::from(s.subs));
+}
+
 /// One ground-move step (`CMovement`), the per-unit movement entry of the collision cluster.
 #[inline]
 pub fn trace_ground() {
@@ -519,6 +596,56 @@ pub fn trace_terrain() {
 #[inline]
 pub fn trace_scene() {
     super::tally::bump(&TRACE_SCENE);
+}
+
+/// One `CM2Scene::TraceLine`: what it walked, not just that it ran.
+///
+/// This is the hottest named function of a crowded raid fight, driven almost
+/// entirely by `CWorldFrame::PickCursorTarget` — the per-frame mouse hover
+/// pick. Trace *rate* barely varies with the scene while the per-trace cost
+/// moves by most of an order of magnitude between a crowded raid and open
+/// country, which says the cost is O(scene instances) rather than O(traces).
+/// `trace_scene()` above counts calls and so cannot see that; these measure it.
+///
+/// `list` is the `+0x130` instance-list length — **the body walks it twice**,
+/// once purely to size the candidate buffers and again for the broad phase, so
+/// `list` against `ticks` prices the walk that a high-water-mark buffer grow
+/// would remove. `cands` is how many survived the bounding-sphere reject and
+/// `geom` how many narrow-phase geometry tests actually ran, which together say
+/// whether the broad phase or the narrow phase holds the time. `two_pass`
+/// counts the traces that ran the second pass (`p_max_dist` non-null and no hit
+/// in the first).
+pub struct TraceSceneStats {
+    /// Whole-body ticks.
+    pub ticks: u64,
+    /// `+0x130` instance-list length, walked twice per call.
+    pub list: u32,
+    /// Candidates that survived the bounding-sphere reject.
+    pub cands: u32,
+    /// Narrow-phase geometry tests run.
+    pub geom: u32,
+    /// The second pass ran.
+    pub two_pass: bool,
+    /// The trace returned a hit.
+    pub hit: bool,
+}
+
+/// One `CM2Scene::TraceLine` call.
+pub fn trace_scene_pass(armed: &Armed, s: &TraceSceneStats) {
+    TSCENE_CALLS.add(armed, 1);
+    TSCENE_TICKS_SUM.add(armed, s.ticks);
+    TSCENE_TICKS_MAX.max(armed, s.ticks);
+    TSCENE_LIST_SUM.add(armed, u64::from(s.list));
+    TSCENE_LIST_MAX.max(armed, s.list);
+    TSCENE_CAND_SUM.add(armed, u64::from(s.cands));
+    TSCENE_CAND_MAX.max(armed, s.cands);
+    TSCENE_GEOM.add(armed, u64::from(s.geom));
+    if s.two_pass {
+        TSCENE_TWO_PASS.add(armed, 1);
+    }
+    if s.hit {
+        TSCENE_HITS.add(armed, 1);
+    }
 }
 
 /// One geometry collection over the world's spatial nodes.
@@ -572,6 +699,38 @@ pub fn particle_draw(armed: &Armed, count: u32, cap: u32, emitted: u32, t0: u64,
     let dt = t1.saturating_sub(t0);
     PART_BUILD_TICKS_SUM.add(armed, dt);
     PART_BUILD_TICKS_MAX.max(armed, dt);
+}
+
+/// One top-level `UpdateParticlesAndChildren` call in the draw-list walk.
+///
+/// `seam bdl` prices the whole `particles` phase as one number, and in a
+/// crowded raid fight that number is the largest single game-thread cost in the
+/// mod. The fork moved the quad *build* off the game thread; everything this
+/// bracket covers stayed on it. Recording the top-level call only — the body
+/// recurses into itself for child models — keeps this a partition of the phase
+/// rather than a sum over a tree.
+///
+/// Reconciles as: `seam bdl` particles − `upac us` = the per-node fork stalls
+/// and loop overhead; `upac us` − `emit us` = the recursive walk plus the
+/// axis-angle matrix chain; `emit us` = the physics half.
+#[inline]
+pub fn pq_upac_node(armed: &Armed, ticks: u64) {
+    PHYS_NODES.add(armed, 1);
+    PHYS_UPAC_TICKS.add(armed, ticks);
+}
+
+/// One `CParticleEmitter::UpdateFixedStep`: the physics half, and its multiplier.
+///
+/// `steps` is how many `Update` calls the catch-up loop ran for this emitter
+/// (the fixed-step count plus the tail call), which is what says whether the
+/// physics cost is per-emitter work or a substep multiplier on it — and
+/// therefore how much a fork of this half would actually recover.
+#[inline]
+pub fn pq_emitter_physics(armed: &Armed, ticks: u64, steps: u32) {
+    PHYS_EMITTERS.add(armed, 1);
+    PHYS_EMIT_TICKS.add(armed, ticks);
+    PHYS_STEPS.add(armed, u64::from(steps));
+    PHYS_STEPS_MAX.max(armed, steps);
 }
 
 /// One published particle pass job: its size and what the pre-scan cost.
@@ -727,6 +886,17 @@ pub fn emit_cumulative() {
     if p != 0 || r != 0 {
         log::debug!(target: super::tally::TARGET, "seam locks: particle {p}, rain {r}");
     }
+    let mc_calls = MAPCHUNK_CALLS.get();
+    if mc_calls != 0 {
+        log::debug!(
+            target: super::tally::TARGET,
+            "seam mapchunk: {mc_calls} calls, overlap {}, nodes {}, inserted {}, subs {}",
+            MAPCHUNK_OVERLAP.get(),
+            MAPCHUNK_NODES.get(),
+            MAPCHUNK_INSERTED.get(),
+            MAPCHUNK_SUBS.get(),
+        );
+    }
     let clip_calls = CLIP_CALLS.get();
     if clip_calls != 0 {
         log::debug!(
@@ -769,6 +939,23 @@ pub fn emit_cumulative() {
              geom {geometry}, wmo {wmo}, doodad {doodad}, grid {grid}",
         );
     }
+    let tscene_calls = TSCENE_CALLS.get();
+    if tscene_calls != 0 {
+        log::debug!(
+            target: super::tally::TARGET,
+            "seam trace scene: {tscene_calls} calls, us sum {} max {}, list sum {} max {}, \
+             cands sum {} max {}, geom {}, two-pass {}, hits {}",
+            ticks_to_us(TSCENE_TICKS_SUM.get()),
+            ticks_to_us(TSCENE_TICKS_MAX.get()),
+            TSCENE_LIST_SUM.get(),
+            TSCENE_LIST_MAX.get(),
+            TSCENE_CAND_SUM.get(),
+            TSCENE_CAND_MAX.get(),
+            TSCENE_GEOM.get(),
+            TSCENE_TWO_PASS.get(),
+            TSCENE_HITS.get(),
+        );
+    }
     let draws = PART_DRAWS.get();
     if draws != 0 {
         log::debug!(
@@ -787,6 +974,19 @@ pub fn emit_cumulative() {
             PART_EMITTED_SUM.get(),
             ticks_to_us(PART_BUILD_TICKS_SUM.get()),
             ticks_to_us(PART_BUILD_TICKS_MAX.get()),
+        );
+    }
+    let phys_nodes = PHYS_NODES.get();
+    if phys_nodes != 0 {
+        log::debug!(
+            target: super::tally::TARGET,
+            "seam particles phys: {phys_nodes} nodes, upac us {}, emitters {}, emit us {}, \
+             steps {} max {}",
+            ticks_to_us(PHYS_UPAC_TICKS.get()),
+            PHYS_EMITTERS.get(),
+            ticks_to_us(PHYS_EMIT_TICKS.get()),
+            PHYS_STEPS.get(),
+            PHYS_STEPS_MAX.get(),
         );
     }
     let pre_passes = PART_PRE_PASSES.get();

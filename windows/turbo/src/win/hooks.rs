@@ -12903,6 +12903,15 @@ pub fn c_map_chunk__update__6afad0(chunk: i32) {
         return;
     }
     let base = chunk as usize as *mut u8;
+    // Counts only, no bracket: at ~190k calls a second the two `rdtsc` reads
+    // would cost more than this body — measured, see `MapChunkStats`.
+    let probe = super::tally::arm();
+    let mut seam = super::seam_probe::MapChunkStats {
+        overlap: false,
+        nodes: 0,
+        inserted: 0,
+        subs: 0,
+    };
 
     const PLANE: *const [f32; 4] = (crate::win::EXPECTED_IMAGE_BASE + 0x87_bcb0) as *const [f32; 4];
     const FOG_Z_THRESH: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x46_7960) as *const f32;
@@ -13069,6 +13078,7 @@ pub fn c_map_chunk__update__6afad0(chunk: i32) {
     // SAFETY: `bmax_ptr` addresses 3 contiguous, aligned floats.
     let box_max = unsafe { bmax_ptr.cast::<[f32; 3]>().read_unaligned() };
     if crate::math::world::map_chunk_box_overlaps_view(box_min, box_max, view_lo, view_hi) {
+        seam.overlap = true;
         // SAFETY: fixed, initialized `.data` per-frame vertex-index dword in the host.
         let vidx = unsafe { VERT_INDEX.read() } as usize;
         // SAFETY: `VERT_TABLE + vidx` selects a valid entry of the host vertex-index table.
@@ -13097,6 +13107,7 @@ pub fn c_map_chunk__update__6afad0(chunk: i32) {
             node = 0;
         }
         while (node & 1) == 0 && node != 0 {
+            seam.nodes = seam.nodes.wrapping_add(1);
             // SAFETY: `node+4` holds the scene-object pointer (node is untagged here).
             let obj_ptr = (node as usize + 4) as *const i32;
             // SAFETY: `obj_ptr` is aligned and initialized.
@@ -13116,6 +13127,7 @@ pub fn c_map_chunk__update__6afad0(chunk: i32) {
                 // SAFETY: `f174p` is aligned and initialized.
                 let f174 = unsafe { f174p.cast::<i32>().read() };
                 if f88 != 0 || f174 != 0 {
+                    seam.inserted = seam.inserted.wrapping_add(1);
                     height_bucket_insert_node_from_object__6816f0(obj);
                 }
             }
@@ -13151,9 +13163,14 @@ pub fn c_map_chunk__update__6afad0(chunk: i32) {
         let smin = [box6[0], box6[1], box6[2]];
         let smax = [box6[3], box6[4], box6[5]];
         if crate::math::world::map_chunk_box_overlaps_view(smin, smax, view_lo, view_hi) {
+            seam.subs = seam.subs.wrapping_add(1);
             let center = crate::math::world::map_chunk_box_center(smin, smax, half);
             height_bucket_insert_node_at_pos_sub__681970(sub, i, center.as_ptr());
         }
+    }
+
+    if let Some(armed) = probe.as_ref() {
+        super::seam_probe::map_chunk_update(armed, &seam);
     }
 }
 
@@ -24307,6 +24324,11 @@ pub fn c_particle_emitter__update_fixed_step__7b5880(
     // Sub-emitter rate-window reseed helper (unhooked).
     const RESEED_VA: usize = BASE + 0x3b_9cf0;
 
+    let probe = super::tally::arm();
+    let timed = probe.is_some();
+    let t_entry = bdl_tick(timed);
+    let mut steps = 1u32;
+
     let base = this.cast::<u8>();
     // SAFETY: fixed engine f32 global in the live host image (base verified
     // at load); read by value.
@@ -24381,6 +24403,7 @@ pub fn c_particle_emitter__update_fixed_step__7b5880(
                     .cast::<[f32; 3]>()
                     .write_unaligned(scaled)
             };
+            steps = steps.wrapping_add(count);
             for _ in 0..count {
                 // Update (0x7b5a10) is our own hook — direct call, no detour.
                 c_particle_emitter__update__7b5a10(this, step, spawn_arg);
@@ -24389,6 +24412,10 @@ pub fn c_particle_emitter__update_fixed_step__7b5880(
         }
     };
     c_particle_emitter__update__7b5a10(this, tail_dt, spawn_arg);
+
+    if let Some(armed) = probe.as_ref() {
+        super::seam_probe::pq_emitter_physics(armed, bdl_tick(true).wrapping_sub(t_entry), steps);
+    }
 }
 
 /// One particle spawn of `CParticleEmitter::EmitParticles` (shared by all three arms).
@@ -26690,7 +26717,22 @@ pub fn cm2_scene__trace_line__7089c0(
         let inv_seg = 1.0 / seg_len;
         let dir = [inv_seg * dx, inv_seg * dy, inv_seg * dz];
 
+        // Past the two degenerate-segment exits, so this is a trace that walks
+        // the scene. Those exits stay counted by `trace_scene()` alone, which is
+        // why `seam trace scene`'s call count is the smaller of the two.
+        let probe = super::tally::arm();
+        let timed = probe.is_some();
+        let t_entry = bdl_tick(timed);
+        let mut geom_tests = 0u32;
+
         // Count instances, then size the candidate buffers to fit them all.
+        //
+        // This walk stays. Sizing from the broad-phase cache's length instead
+        // would be wrong the moment the instance list grew since it was filled:
+        // the buffers would be short, and growing them mid-walk frees the
+        // records already written. It is also the cheap half — one dependent
+        // load per node against the bounds and 4x4 transform the cache below
+        // removes.
         let mut count = 0u32;
         let mut node = anim_ptr(this, 0x130);
         while !node.is_null() {
@@ -26700,6 +26742,13 @@ pub fn cm2_scene__trace_line__7089c0(
         trace_grow_candidate_bufs(this, count);
 
         // Broad phase: clear each instance's hit slot and bounding-sphere reject.
+        //
+        // Everything up to the reject is ray-independent, and a frame issues
+        // ~8 traces against one scene, so deriving it once per instance per
+        // animation stamp looks free. It is not, and the reason is measured
+        // rather than assumed: the `+0x130` list is NOT stable between traces —
+        // its head differs on ~62% of calls — so a position-indexed cache never
+        // hits. See `seam trace scene` and do not rebuild it.
         let records = anim_ptr(this, 0x134);
         let index_ptr = anim_ptr(this, 0x138).cast::<u32>();
         let frame_stamp = anim_u32(this, 0x10);
@@ -26713,8 +26762,9 @@ pub fn cm2_scene__trace_line__7089c0(
                     if anim_u32(node, 0x410) != 3 || anim_u32(node, 0x1cc) != 0 {
                         proceed = false;
                     } else {
-                        // Stale-frame refresh: model = local · parent (D3DXMatrixMultiply,
-                        // out = inst+0xfc, a = inst+0xbc, b = this+0x9c).
+                        // Stale-frame refresh: model = local · parent
+                        // (D3DXMatrixMultiply, out = inst+0xfc, a = inst+0xbc,
+                        // b = this+0x9c).
                         let a = trace_mat16u(node.add(0xbc));
                         let b = trace_mat16u(this.add(0x9c));
                         let m = crate::math::matrix44::mul4x4(&a, &b);
@@ -26831,6 +26881,7 @@ pub fn cm2_scene__trace_line__7089c0(
                     }
                 };
                 if do_geom {
+                    geom_tests = geom_tests.wrapping_add(1);
                     let inst = anim_ptr(record, 0);
                     let shared = anim_ptr(anim_ptr(inst, 0x30), 0x130);
                     if anim_u32(inst, 0x410) == 3 {
@@ -26856,6 +26907,19 @@ pub fn cm2_scene__trace_line__7089c0(
         }
 
         anim_put_u32(this, 0x12c, 0);
+        if let Some(armed) = probe.as_ref() {
+            super::seam_probe::trace_scene_pass(
+                armed,
+                &super::seam_probe::TraceSceneStats {
+                    ticks: bdl_tick(true).wrapping_sub(t_entry),
+                    list: count,
+                    cands: cand_count,
+                    geom: geom_tests,
+                    two_pass: pass > 0,
+                    hit: !best.hit.is_null(),
+                },
+            );
+        }
         if best.hit.is_null() {
             return 0;
         }
@@ -31896,7 +31960,11 @@ fn bdl_anim_phase(base: *mut u8, phases: &mut super::seam_probe::BdlPhases) -> B
         if let Some(p) = pending.as_mut() {
             p.await_node(node, timed);
         }
+        let t_node = bdl_tick(timed);
         cm2_model__update_particles_and_children__718960(node as *mut core::ffi::c_void);
+        if let Some(armed) = probe.as_ref() {
+            super::seam_probe::pq_upac_node(armed, bdl_tick(true).wrapping_sub(t_node));
+        }
         // SAFETY: `node` is non-null by the loop condition; `+0x48` is the forward link the
         // visible list is chained through.
         node = unsafe { bdl_rdp(node, 0x48) };
