@@ -29918,22 +29918,15 @@ pub fn cm2_model__update_particles_and_children__718960(this: *mut core::ffi::c_
                 let angle = crate::math::m2::half_pi_spin__718960();
                 c44_matrix__rotate_axis_angle__7bdd60(lc.as_mut_ptr(), angle, axis.as_ptr(), 1);
 
-                // UpdateWithSubsteps(eobj, dt, lc, (this+0x2c)+0x10c, this+0x17c).
-                // __thiscall ret 0x10 (4 stack args).
+                // UpdateWithSubsteps(eobj, dt, lc, (this+0x2c)+0x10c, this+0x17c)
+                // — our own hook, called directly.
                 // SAFETY: `this+0x2c`+0x10c source matrix.
-                let p2 = unsafe { clock.add(0x10c) } as *const core::ffi::c_void;
+                let p2 = unsafe { clock.add(0x10c) } as *const f32;
+                // `*mut` to match the receiving hook's declaration; it only ever
+                // reads through this pointer.
                 // SAFETY: `this+0x17c` bone-matrix pointer.
-                let p3 = unsafe { rd_u32(model, 0x17c) } as usize as *const core::ffi::c_void;
-                const SUBSTEP_VA: usize = EXPECTED_IMAGE_BASE + 0x3b_5230;
-                // SAFETY: fixed `.text` VA; __thiscall(ecx, f32, *const, *const, *const).
-                let substep: extern "thiscall" fn(
-                    *mut core::ffi::c_void,
-                    f32,
-                    *const f32,
-                    *const core::ffi::c_void,
-                    *const core::ffi::c_void,
-                ) = unsafe { core::mem::transmute(SUBSTEP_VA) };
-                substep(eobj, dt, lc.as_ptr(), p2, p3);
+                let p3 = unsafe { rd_u32(model, 0x17c) } as usize as *mut core::ffi::c_void;
+                c_particle_emitter__update_with_substeps__7b5230(eobj, dt, lc.as_ptr(), p2, p3);
 
                 // child count = CountActiveTree(eobj). __thiscall bare-ret, eax=count.
                 const COUNT_VA: usize = EXPECTED_IMAGE_BASE + 0x3b_5fa0;
