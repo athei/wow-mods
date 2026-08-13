@@ -197,6 +197,11 @@ static PHYS_EMITTERS: Accum = Accum::zero();
 static PHYS_EMIT_TICKS: Accum = Accum::zero();
 static PHYS_STEPS: Accum = Accum::zero();
 static PHYS_STEPS_MAX: Counter = Counter::zero();
+static PHYS_PARTICLES: Accum = Accum::zero();
+static PHYS_PARTICLES_ALIGNED: Accum = Accum::zero();
+static PHYS_CULLED: Accum = Accum::zero();
+static PHYS_CHILD_ITERS: Accum = Accum::zero();
+static PHYS_PARAM_DRIFT: Counter = Counter::zero();
 
 /// One draw-list animation pass: which arm ran and what it walked.
 ///
@@ -754,6 +759,49 @@ pub fn pq_emitter_physics(armed: &Armed, ticks: u64, steps: u32) {
     PHYS_STEPS_MAX.max(armed, steps);
 }
 
+/// One `CParticleEmitter::Update` particle walk: what its loop actually did.
+///
+/// `emit us` alone cannot be normalized, because nothing below `UpdateFixedStep`
+/// counted anything: an emitter with two live particles and one with four
+/// hundred were the same event. `particles` is the denominator that makes
+/// `emit us` a per-particle cost and therefore comparable across scenes and
+/// across builds.
+///
+/// The rest bound what a change to the default physics arm can reach.
+/// `aligned` counts particles that went to the client's `0x40`-stride routine
+/// instead, which is still stock code. `culled` counts retirements, which are
+/// also the iterations that do not advance the cursor, so `particles` exceeding
+/// the live count is expected and this says by how much. `child` counts
+/// iterations that stepped a sub-emitter, the one shape that re-reads the
+/// emitter parameters mid-walk.
+///
+/// Counts only, deliberately: at raid grain this loop runs on the order of a
+/// million particles a second, where a two-read `rdtsc` bracket would cost
+/// several times the body it timed. The time comes from the enclosing
+/// `UpdateFixedStep` bracket; only the shape comes from here.
+#[inline]
+pub fn pq_particle_walk(armed: &Armed, particles: u32, aligned: u32, culled: u32, child: u32) {
+    PHYS_PARTICLES.add(armed, u64::from(particles));
+    PHYS_PARTICLES_ALIGNED.add(armed, u64::from(aligned));
+    PHYS_CULLED.add(armed, u64::from(culled));
+    PHYS_CHILD_ITERS.add(armed, u64::from(child));
+}
+
+/// The hoisted emitter parameters disagreed with a fresh read at walk end.
+///
+/// `CParticleEmitter::Update` reads the physics parameters once and reuses them
+/// for the whole walk, rebuilding after the two calls that reach client code.
+/// This is the tripwire on that: any other path that mutates those fields
+/// mid-walk shows up here, and a non-zero reading means the hoist is unsound and
+/// the parameters have to go back to being read per particle.
+#[inline]
+pub fn pq_phys_param_drift() {
+    let Some(armed) = super::tally::arm() else {
+        return;
+    };
+    PHYS_PARAM_DRIFT.bump(&armed);
+}
+
 /// One published particle pass job: its size and what the pre-scan cost.
 pub fn pq_pass(armed: &Armed, emitters: u32, prescan_ticks: u64) {
     PART_PRE_PASSES.bump(armed);
@@ -1002,12 +1050,17 @@ pub fn emit_cumulative() {
         log::debug!(
             target: super::tally::TARGET,
             "seam particles phys: {phys_nodes} nodes, upac us {}, emitters {}, emit us {}, \
-             steps {} max {}",
+             steps {} max {}, particles {} (aligned {}), culled {}, child {}, drift {}",
             ticks_to_us(PHYS_UPAC_TICKS.get()),
             PHYS_EMITTERS.get(),
             ticks_to_us(PHYS_EMIT_TICKS.get()),
             PHYS_STEPS.get(),
             PHYS_STEPS_MAX.get(),
+            PHYS_PARTICLES.get(),
+            PHYS_PARTICLES_ALIGNED.get(),
+            PHYS_CULLED.get(),
+            PHYS_CHILD_ITERS.get(),
+            PHYS_PARAM_DRIFT.get(),
         );
     }
     let rotate_calls = ROTATE_CALLS.get();

@@ -1659,6 +1659,78 @@ ret  = "i32"
 args = ["*mut core::ffi::c_void", "*mut f32", "f32"]
 preserve = ["ecx"]
 
+
+# Golden-diff the particle record. `inout` because the body reads the same
+# record it writes: position, the first-frame bit and velocity are all
+# read-modify-write, and age is read. `0x20` is the default-stride record, which
+# is the whole of what this arm addresses -- the 0x40-stride class goes to
+# stock's own 0x7b28e0 and never reaches here.
+#
+# NOT a byte compare, and the first armed session is why. The original runs the
+# integration on the x87 stack, so its accel add, position add, gravity term and
+# drag all stay at extended precision and round once at the store; the
+# reimplementation is f32 and rounds at every step. Armed with `float = "bytes"`
+# that reads as a divergence on essentially every particle: ~98k in the first
+# minute, all of them one ulp in the low byte of a lane, spread over all six
+# position and velocity floats.
+#
+# That gap is NOT new and did not come from hoisting the emitter constants out of
+# the loop -- the hoisted split is proven bit-identical to the flat body it
+# replaced, over every arm crossed with signed zeros, subnormals, infinities and
+# NaN (`hoist_is_bit_identical_to_the_flat_body`). It has been in the
+# reimplementation since it was written and was simply never looked at, because
+# this entry had no diff table until now. `mode = "inout"` re-seeds from the
+# pre-call record every time, so what the tolerance bounds is the error of ONE
+# step, not accumulated drift.
+#
+# Four ulp alone still left a 0.01% tail, and reading it says why: the survivors
+# are lanes like 0.00082888454 against 0.0008288838, or 0.026990652 against
+# 0.026990706 -- 13 to 29 ulp apart, but 7e-10 and 5e-8 apart in absolute terms,
+# with our value carrying visibly fewer significant mantissa bits. That is
+# cancellation in `pos.z - (dt*g*dt*half) + dt*vz`: the absolute error is
+# unchanged while the result collapses toward zero, so the ULP distance grows
+# without bound. `abs` is the ruler for exactly that case, and a lane has to
+# exceed BOTH to be reported. 1e-6 clears the observed residual with headroom
+# and is far below anything visible in a particle position, while a genuine
+# regression on a small lane still trips it.
+#
+# The residual worth watching is the cull flag rather than the lanes: a
+# one-ulp difference in the cull dot flips the retirement decision when the dot
+# sits within an ulp of zero. That costs one particle one frame of life and is
+# why the return is still compared exactly.
+#
+# One consequence of comparing the record as f32 lanes needs saying, because it
+# reads as a hole and is not one. The record is not all floats: the fade byte at
+# +0xc and the first-frame bit at +0xd fall inside lane 3. Only +0xd is written
+# here, and a flipped bit there lands in the lane's mantissa bits 8-15, which is
+# a difference of 256 ulp -- far outside the tolerance, so it is still reported.
+# The fade byte and the age at +0x1c are read-only to this body and identical on
+# both sides by construction.
+#
+# The emitter (arg 0) is deliberately NOT declared as an input region. It is an
+# instance, not a buffer, and the body only reads from it; a length that covered
+# every field it touches would span 0x180..0x280 for no gain, since a drift
+# check there would be reporting on the client mutating its own emitter between
+# the two runs rather than on anything this reimplementation did.
+#
+# No `ret_mask` yet, on purpose. Every caller tests the return for zero and none
+# reads above AL, so the contract is arguably one byte -- but the mask has to be
+# argued from evidence, not from convenience. If a soak reports return-only
+# divergences, that is stock leaving garbage in the high bits and the mask
+# becomes `0xff` with the call sites written out here; until then a full compare
+# is what tells us.
+#
+# NOTE: our own particle walk calls the body directly, so in a default build
+# nothing reaches this thunk and an armed run would be silent by construction.
+# `c_particle_emitter__update__7b5a10` therefore routes through this VA under
+# `cfg(wow_turbo_diff)` specifically so a `DIFF=1` build puts every live
+# particle through the comparison.
+[functions.CParticleEmitter__UpdateParticlePhysics__7b2680.diff]
+mode  = "inout"
+out   = { arg = 1, len = 0x20 }
+ulp   = 4
+abs   = 1e-6
+
 [functions.CWorld__PointInLiquidGrid__69b350]
 rva  = 0x29b350
 sig  = "55 8B EC 83 EC 14 D9 41 04 D8 25 B4"

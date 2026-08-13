@@ -216,37 +216,138 @@ mod tests_c_particle_emitter__set_gravity__7b4bf0 {
     }
 }
 
-/// Per-particle physics integration for one timestep.
+/// The emitter-invariant half of one particle physics step.
 ///
-/// All emitter parameters and the particle's mutable state are injected by value
-/// (the original reads them from `this` and the particle record). Returns the
-/// updated `(pos, vel, first_frame_flag, alive)`. Snap-to-zero uses a deadband
-/// of magnitude `vel_eps` around exactly zero; the position term carries the
-/// `½·g·dt²` kinematic correction (`half` is the source's literal `0.5`). The
-/// drag coefficient field is read as an integer "enabled" flag by the original
-/// (`drag_enabled`), separate from the float coefficient `drag_coeff`. The
-/// alive/cull test multiplies the pre-drag velocity (scaled by `dt`) against the
-/// updated position; a strictly-positive dot retires the particle.
-// Every emitter field and particle-record slot the original reads out of `this`
-// is injected by value, so the parameter count follows the client's data layout
-// rather than a design choice.
-#[allow(clippy::too_many_arguments)]
-pub fn c_particle_emitter__update_particle_physics__7b2680(
+/// The original reads nine values that cannot change while a single `Update`
+/// walks one emitter's particle list — six emitter fields and three host
+/// constants — and derives four products from them and the timestep. It re-reads
+/// and re-derives all of it for every particle, which is most of what its body
+/// costs. Holding it here lets a caller that owns the whole walk pay once.
+///
+/// Every field is the value the per-particle body would itself have computed, at
+/// the same width and in the same association order, so a step taken through a
+/// hoisted `PhysConst` is bit-identical to one that rebuilds it per particle.
+pub struct PhysConst {
+    /// The timestep. Still per-particle work: it scales the velocity into `vdt`.
+    dt: f32,
+    /// `dt·acceleration`, added to the velocity while the particle is young.
+    dt_accel: [f32; 3],
+    /// `dt·gravity_z`, which the z velocity loses.
+    dt_grav: f32,
+    /// `dt·gravity_z·dt·half` — the ½·g·dt² term the z position loses.
+    grav_pos_term: f32,
+    /// The lifespan the particle's age is tested against before accelerating.
+    lifespan: f32,
+    /// The spawn-velocity bonus added on the first frame the bit is observed.
+    spawn_bonus: [f32; 3],
+    /// Emitter flag `0x40000`: whether that bonus arm runs at all.
+    spawn_bonus_on: bool,
+    /// The drag dword read as the original's integer "enabled" flag.
+    drag_enabled: bool,
+    /// `dt·coefficient`, clamped above by the host drag ceiling.
+    drag: f32,
+    /// Emitter flag `0x800`: whether the cull dot is evaluated.
+    cull_on: bool,
+    /// Half-width of the snap-to-zero velocity deadband.
+    vel_eps: f32,
+}
+
+impl PhysConst {
+    /// Derives the per-emitter constants for one timestep.
+    ///
+    /// `drag_coeff` and `drag_enabled` are the same dword read twice: the
+    /// original tests it as an integer and multiplies it as a float. `half`,
+    /// `drag_clamp` and `vel_eps` are host `.data` floats read by absolute
+    /// address, and `flags` is the emitter flag word.
+    // One parameter per value the original loads, so the count follows the
+    // client's data layout rather than a design choice.
+    #[allow(clippy::too_many_arguments)]
+    #[must_use]
+    pub fn new(
+        dt: f32,
+        lifespan: f32,
+        accel: [f32; 3],
+        spawn_vel_bonus: [f32; 3],
+        grav_z: f32,
+        drag_coeff: f32,
+        drag_enabled: bool,
+        flags: u32,
+        half: f32,
+        drag_clamp: f32,
+        vel_eps: f32,
+    ) -> Self {
+        // Drag factor: `dt·coeff` clamped above by the ceiling. The compare is
+        // `ceiling < drag`, so a NaN product keeps the product — the original's
+        // polarity, and the reason this is not a `min`.
+        let mut drag = dt * drag_coeff;
+        if drag_clamp < drag {
+            drag = drag_clamp;
+        }
+        Self {
+            dt,
+            dt_accel: [dt * accel[0], dt * accel[1], dt * accel[2]],
+            dt_grav: dt * grav_z,
+            // Left-associative, matching the original's `dt·g·dt·half` chain.
+            grav_pos_term: dt * grav_z * dt * half,
+            lifespan,
+            spawn_bonus: spawn_vel_bonus,
+            spawn_bonus_on: flags & 0x4_0000 != 0,
+            drag_enabled,
+            drag,
+            cull_on: flags & 0x800 != 0,
+            vel_eps,
+        }
+    }
+
+    /// Bit-exact comparison, for a caller's mid-walk mutation tripwire.
+    ///
+    /// Compares the float fields by their bits rather than by value, so a NaN
+    /// parameter compares equal to itself. A value comparison would report drift
+    /// on every emitter carrying one, which is the opposite of what the tripwire
+    /// is for.
+    #[must_use]
+    pub fn same_bits(&self, other: &Self) -> bool {
+        let floats = |k: &Self| {
+            [
+                k.dt,
+                k.dt_accel[0],
+                k.dt_accel[1],
+                k.dt_accel[2],
+                k.dt_grav,
+                k.grav_pos_term,
+                k.lifespan,
+                k.spawn_bonus[0],
+                k.spawn_bonus[1],
+                k.spawn_bonus[2],
+                k.drag,
+                k.vel_eps,
+            ]
+        };
+        floats(self)
+            .iter()
+            .zip(floats(other).iter())
+            .all(|(x, y)| x.to_bits() == y.to_bits())
+            && self.spawn_bonus_on == other.spawn_bonus_on
+            && self.drag_enabled == other.drag_enabled
+            && self.cull_on == other.cull_on
+    }
+}
+
+/// Integrates one particle for one timestep against prepared emitter constants.
+///
+/// The per-particle half of the original body. Returns the updated
+/// `(pos, vel, first_frame_flag, alive)`. Snap-to-zero uses a deadband of
+/// magnitude `k.vel_eps` around exactly zero; the position term carries the
+/// `½·g·dt²` kinematic correction. The alive/cull test multiplies the pre-drag
+/// velocity (scaled by `dt`) against the updated position; a strictly-positive
+/// dot retires the particle.
+#[inline]
+pub fn step_particle__7b2680(
+    k: &PhysConst,
     pos: [f32; 3],
     vel: [f32; 3],
     first_frame: bool,
     age: f32,
-    dt: f32,
-    lifespan: f32,
-    accel: [f32; 3],
-    spawn_vel_bonus: [f32; 3],
-    grav_z: f32,
-    drag_coeff: f32,
-    drag_enabled: bool,
-    flags: u32,
-    half: f32,
-    drag_clamp: f32,
-    vel_eps: f32,
 ) -> ([f32; 3], [f32; 3], bool, bool) {
     let mut p = pos;
     let mut v = vel;
@@ -255,57 +356,57 @@ pub fn c_particle_emitter__update_particle_physics__7b2680(
     // Acceleration while the particle is younger than its lifespan
     // (`age < lifespan`, NaN excluded), then snap each component to zero inside
     // the deadband.
-    if age < lifespan {
+    if age < k.lifespan {
         v = [
-            dt * accel[0] + v[0],
-            dt * accel[1] + v[1],
-            dt * accel[2] + v[2],
+            k.dt_accel[0] + v[0],
+            k.dt_accel[1] + v[1],
+            k.dt_accel[2] + v[2],
         ];
-        v = snap_deadband(v, vel_eps);
+        v = snap_deadband(v, k.vel_eps);
     }
 
     // Spawn-velocity bonus on the first frame the bit is observed (flag 0x40000);
     // the first observation consumes the per-particle first-frame bit instead of
     // applying the bonus.
-    if flags & 0x4_0000 != 0 {
+    if k.spawn_bonus_on {
         if ff {
             ff = false;
         } else {
             p = [
-                p[0] + spawn_vel_bonus[0],
-                p[1] + spawn_vel_bonus[1],
-                p[2] + spawn_vel_bonus[2],
+                p[0] + k.spawn_bonus[0],
+                p[1] + k.spawn_bonus[1],
+                p[2] + k.spawn_bonus[2],
             ];
         }
     }
 
     // Position integration. The pre-drag velocity (`v` here) is captured for the
     // cull dot below.
-    let vdt = [dt * v[0], dt * v[1], dt * v[2]];
+    let vdt = [k.dt * v[0], k.dt * v[1], k.dt * v[2]];
     p[0] += vdt[0];
     p[1] += vdt[1];
     // z carries the ½·g·dt² correction: pos.z += dt·vz − ½·g·dt².
-    p[2] = (p[2] - dt * grav_z * dt * half) + vdt[2];
+    p[2] = (p[2] - k.grav_pos_term) + vdt[2];
     // velocity z loses g·dt.
-    v[2] -= dt * grav_z;
+    v[2] -= k.dt_grav;
 
-    // Drag (only when the integer "enabled" field is non-zero): drag factor is
-    // `dt·coeff` clamped above by `drag_clamp` (1.0), applied as `v -= drag·v`.
-    if drag_enabled {
-        let mut drag = dt * drag_coeff;
-        if drag_clamp < drag {
-            drag = drag_clamp;
-        }
-        v = [v[0] - drag * v[0], v[1] - drag * v[1], v[2] - drag * v[2]];
+    // Drag (only when the integer "enabled" field is non-zero), applied as
+    // `v -= drag·v` with the factor already clamped by `PhysConst::new`.
+    if k.drag_enabled {
+        v = [
+            v[0] - k.drag * v[0],
+            v[1] - k.drag * v[1],
+            v[2] - k.drag * v[2],
+        ];
     }
 
-    v = snap_deadband(v, vel_eps);
+    v = snap_deadband(v, k.vel_eps);
 
     // Cull test (flag 0x800): the dot of the pre-drag, dt-scaled velocity with
     // the updated position; strictly positive => the particle moves away and
     // dies. NaN keeps it alive (matches the original's `JNZ`).
     let mut alive = true;
-    if flags & 0x800 != 0 {
+    if k.cull_on {
         let mut dot = vdt[2] * p[2];
         dot += vdt[1] * p[1];
         dot += vdt[0] * p[0];
@@ -327,7 +428,44 @@ fn snap_deadband(v: [f32; 3], eps: f32) -> [f32; 3] {
 
 #[cfg(test)]
 mod tests_c_particle_emitter__update_particle_physics__7b2680 {
-    use super::{c_particle_emitter__update_particle_physics__7b2680 as step, snap_deadband};
+    use super::{PhysConst, snap_deadband, step_particle__7b2680};
+
+    // The original's single-shot shape: rebuild the emitter constants, take one
+    // step. The cases below predate the split and are unchanged by it, which is
+    // the point — the hoisted form must answer them identically.
+    #[allow(clippy::too_many_arguments)]
+    fn step(
+        pos: [f32; 3],
+        vel: [f32; 3],
+        first_frame: bool,
+        age: f32,
+        dt: f32,
+        lifespan: f32,
+        accel: [f32; 3],
+        spawn_vel_bonus: [f32; 3],
+        grav_z: f32,
+        drag_coeff: f32,
+        drag_enabled: bool,
+        flags: u32,
+        half: f32,
+        drag_clamp: f32,
+        vel_eps: f32,
+    ) -> ([f32; 3], [f32; 3], bool, bool) {
+        let k = PhysConst::new(
+            dt,
+            lifespan,
+            accel,
+            spawn_vel_bonus,
+            grav_z,
+            drag_coeff,
+            drag_enabled,
+            flags,
+            half,
+            drag_clamp,
+            vel_eps,
+        );
+        step_particle__7b2680(&k, pos, vel, first_frame, age)
+    }
 
     fn approx(a: [f32; 3], b: [f32; 3]) {
         for (x, y) in a.iter().zip(b.iter()) {
@@ -433,6 +571,195 @@ mod tests_c_particle_emitter__update_particle_physics__7b2680 {
     #[test]
     fn deadband_helper_leaves_zero_and_large() {
         assert_eq!(snap_deadband([0.0, 2.0, 1e-9], 1e-3), [0.0, 2.0, 0.0]);
+    }
+
+    fn consts(grav_z: f32, flags: u32) -> PhysConst {
+        PhysConst::new(
+            0.25,
+            10.0,
+            [1.0, 2.0, 3.0],
+            [4.0, 5.0, 6.0],
+            grav_z,
+            0.5,
+            true,
+            flags,
+            0.5,
+            1.0,
+            1e-6,
+        )
+    }
+
+    #[test]
+    fn drift_comparator_sees_a_changed_field() {
+        // The tripwire has to fire on both halves it guards: a float parameter
+        // and a flag-derived bool.
+        assert!(consts(10.0, 0).same_bits(&consts(10.0, 0)));
+        assert!(!consts(10.0, 0).same_bits(&consts(11.0, 0)));
+        assert!(!consts(10.0, 0).same_bits(&consts(10.0, 0x800)));
+    }
+
+    #[test]
+    fn drift_comparator_calls_nan_parameters_equal() {
+        // Compared by value a NaN gravity would report drift on every emitter
+        // that carries one, which is the opposite of what the tripwire is for.
+        let k = consts(f32::NAN, 0);
+        assert!(k.same_bits(&consts(f32::NAN, 0)));
+    }
+
+    /// The body as it stood before the emitter constants were hoisted out.
+    ///
+    /// Kept verbatim as the oracle for
+    /// [`hoist_is_bit_identical_to_the_flat_body`]. Splitting a kernel is only
+    /// safe if the split is invisible, and "the products are the same operands
+    /// so the results must match" is an argument, not a check. This is the
+    /// check.
+    // The parameter list is the one this oracle is standing in for, so it has to
+    // be that list; collapsing it into the struct under test would defeat the
+    // comparison.
+    #[allow(clippy::too_many_arguments)]
+    fn flat_body(
+        pos: [f32; 3],
+        vel: [f32; 3],
+        first_frame: bool,
+        age: f32,
+        dt: f32,
+        lifespan: f32,
+        accel: [f32; 3],
+        spawn_vel_bonus: [f32; 3],
+        grav_z: f32,
+        drag_coeff: f32,
+        drag_enabled: bool,
+        flags: u32,
+        half: f32,
+        drag_clamp: f32,
+        vel_eps: f32,
+    ) -> ([f32; 3], [f32; 3], bool, bool) {
+        let mut p = pos;
+        let mut v = vel;
+        let mut ff = first_frame;
+        if age < lifespan {
+            v = [
+                dt * accel[0] + v[0],
+                dt * accel[1] + v[1],
+                dt * accel[2] + v[2],
+            ];
+            v = snap_deadband(v, vel_eps);
+        }
+        if flags & 0x4_0000 != 0 {
+            if ff {
+                ff = false;
+            } else {
+                p = [
+                    p[0] + spawn_vel_bonus[0],
+                    p[1] + spawn_vel_bonus[1],
+                    p[2] + spawn_vel_bonus[2],
+                ];
+            }
+        }
+        let vdt = [dt * v[0], dt * v[1], dt * v[2]];
+        p[0] += vdt[0];
+        p[1] += vdt[1];
+        p[2] = (p[2] - dt * grav_z * dt * half) + vdt[2];
+        v[2] -= dt * grav_z;
+        if drag_enabled {
+            let mut drag = dt * drag_coeff;
+            if drag_clamp < drag {
+                drag = drag_clamp;
+            }
+            v = [v[0] - drag * v[0], v[1] - drag * v[1], v[2] - drag * v[2]];
+        }
+        v = snap_deadband(v, vel_eps);
+        let mut alive = true;
+        if flags & 0x800 != 0 {
+            let mut dot = vdt[2] * p[2];
+            dot += vdt[1] * p[1];
+            dot += vdt[0] * p[0];
+            if dot > 0.0 {
+                alive = false;
+            }
+        }
+        (p, v, ff, alive)
+    }
+
+    #[test]
+    fn hoist_is_bit_identical_to_the_flat_body() {
+        // A deterministic sweep rather than a sampler: every arm crossed with
+        // the values that break float reasoning — signed zeros, subnormals,
+        // infinities, NaN, and magnitudes far enough apart that an addition
+        // loses the smaller operand entirely.
+        const VALS: [f32; 10] = [
+            0.0,
+            -0.0,
+            1e-45,
+            -3.5e-6,
+            0.5,
+            -7.0255356,
+            1.0e9,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::NAN,
+        ];
+        const FLAGS: [u32; 4] = [0, 0x800, 0x4_0000, 0x4_0800];
+        let mut checked = 0u32;
+        for (i, &a) in VALS.iter().enumerate() {
+            for (j, &b) in VALS.iter().enumerate() {
+                for &flags in &FLAGS {
+                    for first_frame in [false, true] {
+                        for drag_enabled in [false, true] {
+                            let pos = [a, b, VALS[(i + 3) % VALS.len()]];
+                            let vel = [b, VALS[(j + 5) % VALS.len()], a];
+                            let accel = [VALS[(i + 1) % VALS.len()], b, a];
+                            let spawn = [a, VALS[(j + 2) % VALS.len()], b];
+                            let (dt, lifespan) = (VALS[(i + 7) % VALS.len()], b);
+                            let (age, grav_z) = (a, VALS[(j + 4) % VALS.len()]);
+                            let drag_coeff = VALS[(i + 6) % VALS.len()];
+                            let (half, clamp, eps) = (0.5, 1.0, 1e-6);
+                            let want = flat_body(
+                                pos,
+                                vel,
+                                first_frame,
+                                age,
+                                dt,
+                                lifespan,
+                                accel,
+                                spawn,
+                                grav_z,
+                                drag_coeff,
+                                drag_enabled,
+                                flags,
+                                half,
+                                clamp,
+                                eps,
+                            );
+                            let k = PhysConst::new(
+                                dt,
+                                lifespan,
+                                accel,
+                                spawn,
+                                grav_z,
+                                drag_coeff,
+                                drag_enabled,
+                                flags,
+                                half,
+                                clamp,
+                                eps,
+                            );
+                            let got = step_particle__7b2680(&k, pos, vel, first_frame, age);
+                            let bits = |t: ([f32; 3], [f32; 3], bool, bool)| {
+                                (t.0.map(f32::to_bits), t.1.map(f32::to_bits), t.2, t.3)
+                            };
+                            assert_eq!(
+                                bits(want),
+                                bits(got),
+                                "pos={pos:?} vel={vel:?} dt={dt} flags={flags:#x}"
+                            );
+                            checked += 1;
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(checked, 1600);
     }
 }
 

@@ -3274,9 +3274,18 @@ pub fn c_particle_emitter__update_particle_physics__7b2680(
     if this.is_null() || particle.is_null() {
         return 1;
     }
-    let base = this.cast::<u8>();
-    let pbase = particle.cast::<u8>();
+    let k = phys_const_7b2680(this.cast::<u8>(), dt);
+    i32::from(step_one_particle_7b2680(&k, particle.cast::<u8>()))
+}
 
+/// Reads the emitter constants `CParticleEmitter::UpdateParticlePhysics` uses.
+///
+/// The nine values the original loads per particle and that cannot change while
+/// one `Update` walks an emitter's particle list: six emitter fields spanning
+/// `+0x180`..`+0x278` and three host `.data` floats. The per-particle body reads
+/// them all again for every particle; the walk in
+/// [`c_particle_emitter__update__7b5a10`] reads them once instead.
+fn phys_const_7b2680(base: *const u8, dt: f32) -> crate::math::particle::PhysConst {
     const HALF: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x3f_fa24) as *const f32;
     const DRAG_CLAMP: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x3f_f9d8) as *const f32;
     const VEL_EPS: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x41_d86c) as *const f32;
@@ -3316,6 +3325,28 @@ pub fn c_particle_emitter__update_particle_physics__7b2680(
     let drag_enabled = drag_bits != 0;
     let drag_coeff = f32::from_bits(drag_bits);
 
+    crate::math::particle::PhysConst::new(
+        dt,
+        lifespan,
+        accel,
+        spawn,
+        grav_z,
+        drag_coeff,
+        drag_enabled,
+        flags,
+        half,
+        drag_clamp,
+        vel_eps,
+    )
+}
+
+/// Integrates one particle record in place against prepared emitter constants.
+///
+/// The half of `CParticleEmitter::UpdateParticlePhysics` that genuinely depends
+/// on the particle: reads its position, velocity, age and first-frame bit, steps
+/// them, and writes the three mutable slots back. Returns the alive flag the
+/// original leaves in `EAX`.
+fn step_one_particle_7b2680(k: &crate::math::particle::PhysConst, pbase: *mut u8) -> bool {
     // SAFETY: particle pos lives at byte 0 (3 contiguous, aligned f32).
     let pos_p = pbase;
     // SAFETY: `pos_p` addresses the particle's 3-float position.
@@ -3335,23 +3366,7 @@ pub fn c_particle_emitter__update_particle_physics__7b2680(
     let first_frame = ff_byte & 1 != 0;
 
     let (new_pos, new_vel, new_ff, alive) =
-        crate::math::particle::c_particle_emitter__update_particle_physics__7b2680(
-            pos,
-            vel,
-            first_frame,
-            age,
-            dt,
-            lifespan,
-            accel,
-            spawn,
-            grav_z,
-            drag_coeff,
-            drag_enabled,
-            flags,
-            half,
-            drag_clamp,
-            vel_eps,
-        );
+        crate::math::particle::step_particle__7b2680(k, pos, vel, first_frame, age);
 
     // SAFETY: `pos_p` addresses the writable 3-float position.
     unsafe { pos_p.cast::<[f32; 3]>().write_unaligned(new_pos) };
@@ -3362,7 +3377,7 @@ pub fn c_particle_emitter__update_particle_physics__7b2680(
     // SAFETY: `ff_p` addresses the writable first-frame byte.
     unsafe { ff_p.write(new_ff_byte) };
 
-    i32::from(alive)
+    alive
 }
 
 /// `CWorld::PointInLiquidGrid` — `__fastcall(ecx = pos)`.
@@ -24016,6 +24031,33 @@ unsafe fn query_liquid_kind_arm(
     }
 }
 
+/// Reads the emitter fields `CParticleEmitter::Update`'s particle walk hoists.
+///
+/// The physics parameters (none on the aligned arm, which keeps stock's own
+/// routine) plus the age advance's lifespan `+0xac` and fade threshold `+0xf0`.
+/// Stock reads all of it per particle; the walk reads it here once, and again
+/// after each call that reaches client code.
+fn update_walk_params_7b5a10(
+    base: *const u8,
+    dt: f32,
+    aligned: bool,
+) -> (Option<crate::math::particle::PhysConst>, f32, f32) {
+    // SAFETY: the caller has null-checked the emitter instance `base` addresses,
+    // and +0xac is the lifespan field of that same allocation.
+    let lifespan_field = unsafe { base.add(0xac) };
+    // SAFETY: +0xac is the emitter's lifespan f32, at a 4-aligned offset.
+    let lifespan = unsafe { lifespan_field.cast::<f32>().read() };
+    // SAFETY: +0xf0 is a field of that same instance.
+    let fade_field = unsafe { base.add(0xf0) };
+    // SAFETY: +0xf0 is the emitter's fade-threshold f32, 4-aligned.
+    let fade_threshold = unsafe { fade_field.cast::<f32>().read() };
+    (
+        (!aligned).then(|| phys_const_7b2680(base, dt)),
+        lifespan,
+        fade_threshold,
+    )
+}
+
 /// `CParticleEmitter::Update`.
 ///
 /// `__thiscall(ecx = this, [esp+4] = dt:f32, [esp+8] = already_init:i32)`. Per-frame emitter step
@@ -24024,7 +24066,8 @@ unsafe fn query_liquid_kind_arm(
 /// `this+0x1ac` is set; on the first frame (`already_init == 0`) seeds positions via `0x7b5550`.
 /// Then walks the live-particle index array (`this+0x5c`, count `this+0x64`), advancing each
 /// particle's age, culling the expired (lifespan compare) and setting its fade byte (fade-threshold
-/// compare), delegating physics to the hooked `0x7b2680` (default) or the not-yet-reversed
+/// compare), stepping physics through our own `0x7b2680` body (default, entered past its emitter
+/// reads with the parameters hoisted out of the loop) or the not-yet-reversed
 /// `0x7b28e0` (aligned), running the child-emitter inner step (the second `0x7b5550` position eval)
 /// for survivors, and recycling the dead through the slot-3 cull virtual plus a swap-remove against
 /// the index array. Finally steps each child sub-emitter via `0x7b5880` (which tail-calls back into
@@ -24116,6 +24159,27 @@ pub fn c_particle_emitter__update__7b5a10(
     let particle_array_base = unsafe { array_field.cast::<*mut u8>().read() };
     let particle_stride: usize = if aligned { 0x40 } else { 0x20 };
 
+    // Emitter physics parameters, read ONCE for the walk.
+    //
+    // Stock re-reads six emitter fields and three host constants inside the
+    // physics body for every particle, and re-derives four products from them.
+    // None of it can change between particles: the pre-update virtual and the
+    // spawn seed both ran above, and the only calls left in the loop are the
+    // recycle virtual and the child-emitter step, after each of which this is
+    // rebuilt below. The `drift` counter re-reads once at walk end as the
+    // tripwire on that reasoning.
+    //
+    // The aligned arm keeps stock's own routine, so it needs none of this. The
+    // age advance's two emitter fields ride along for the same reason.
+    let (mut phys, mut age_lifespan, mut age_fade) = update_walk_params_7b5a10(base, dt, aligned);
+
+    // Walk shape for `seam particles phys`; counted, never timed (this loop runs
+    // ~1M particles/s at raid grain, where a bracket costs more than the body).
+    let mut n_particles: u32 = 0;
+    let mut n_aligned: u32 = 0;
+    let mut n_culled: u32 = 0;
+    let mut n_child: u32 = 0;
+
     // Per-particle loop over the live-index array at this+0x5c, count this+0x64.
     // The count shrinks on cull (swap-remove), so it is re-read each iteration.
     let mut i: u32 = 0;
@@ -24147,27 +24211,23 @@ pub fn c_particle_emitter__update__7b5a10(
             // alongside that base pointer.
             unsafe { particle_array_base.add(particle_index as usize * particle_stride) };
 
-        // Age advance + cull/fade decisions (host-tested polarities).
+        n_particles = n_particles.wrapping_add(1);
+
+        // Age advance + cull/fade decisions (host-tested polarities). The
+        // emitter's lifespan (+0xac) and fade threshold (+0xf0) are hoisted with
+        // the physics parameters above.
         //
         // SAFETY: a particle element is 0x20 bytes at minimum (the stride of the
         // default arm), so its age f32 at +0x1c lies inside the element.
         let age_field = unsafe { particle.add(0x1c) };
         // SAFETY: +0x1c is that element's age f32, at a 4-aligned offset.
         let age = unsafe { age_field.cast::<f32>().read() };
-        // SAFETY: +0xac is a field of the non-null emitter instance.
-        let lifespan_field = unsafe { base.add(0xac) };
-        // SAFETY: +0xac is the emitter's lifespan f32, at a 4-aligned offset.
-        let lifespan = unsafe { lifespan_field.cast::<f32>().read() };
-        // SAFETY: +0xf0 is a field of that same instance.
-        let fade_threshold_field = unsafe { base.add(0xf0) };
-        // SAFETY: +0xf0 is the emitter's fade-threshold f32, 4-aligned.
-        let fade_threshold = unsafe { fade_threshold_field.cast::<f32>().read() };
         let (new_age, culled, fade_byte) =
             crate::math::particle::c_particle_emitter__update__7b5a10_age_advance(
                 age,
                 dt,
-                lifespan,
-                fade_threshold,
+                age_lifespan,
+                age_fade,
             );
         // Stock stores the advanced age back (`fst [ebx+0x1c]`) before the cull
         // test, so the write happens even on the cull path.
@@ -24196,10 +24256,11 @@ pub fn c_particle_emitter__update__7b5a10(
             // SAFETY: `fade_field` is a writable `u8` field of that element, and a
             // byte store has no alignment requirement.
             unsafe { fade_field.write(fade_byte) };
-            // Physics dispatch: aligned => 0x7b28e0 (transmute_va), else the
-            // hooked 0x7b2680 by name. Both return the alive flag in EAX. Stock
-            // pushes particle then dt => `phys(this, particle, dt)`.
-            let physics_alive = if aligned {
+            // Physics dispatch: aligned => 0x7b28e0 (transmute_va), else our own
+            // 0x7b2680 body, entered past its emitter reads with the parameters
+            // hoisted above. Stock pushes particle then dt =>
+            // `phys(this, particle, dt)`.
+            if aligned {
                 const ALIGNED_PHYS_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x3b_28e0;
                 let phys: extern "thiscall" fn(*mut core::ffi::c_void, *mut f32, f32) -> i32 =
                     // SAFETY: the host image base is asserted equal to
@@ -24209,23 +24270,52 @@ pub fn c_particle_emitter__update__7b5a10(
                     // (`__thiscall(ecx = this, [esp+4] = particle, [esp+8] = dt)
                     // -> i32 alive`).
                     unsafe { core::mem::transmute(ALIGNED_PHYS_VA) };
-                phys(this, particle.cast::<f32>(), dt)
+                n_aligned = n_aligned.wrapping_add(1);
+                phys(this, particle.cast::<f32>(), dt) != 0
             } else {
-                c_particle_emitter__update_particle_physics__7b2680(
-                    this,
-                    particle.cast::<f32>(),
-                    dt,
-                )
-            };
-            physics_alive != 0
+                #[cfg(wow_turbo_diff)]
+                {
+                    // Under the differential harness the walk goes through the
+                    // patched prologue instead, because the golden comparison
+                    // lives in the generated thunk: calling our body directly
+                    // would bypass it and leave an armed run silent.
+                    const PHYS_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x3b_2680;
+                    let phys_va: extern "thiscall" fn(
+                        *mut core::ffi::c_void,
+                        *mut f32,
+                        f32,
+                    ) -> i32 =
+                        // SAFETY: the host image base is asserted equal to
+                        // `EXPECTED_IMAGE_BASE` at load before any hook is
+                        // installed, and the prototype is the manifest entry's.
+                        unsafe { core::mem::transmute(PHYS_VA) };
+                    phys_va(this, particle.cast::<f32>(), dt) != 0
+                }
+                #[cfg(not(wow_turbo_diff))]
+                {
+                    // `phys` is `Some` on every non-aligned pass, by construction
+                    // above; the fallback keeps this arm total rather than
+                    // trusting that from here.
+                    phys.as_ref()
+                        .is_none_or(|k| step_one_particle_7b2680(k, particle))
+                }
+            }
         };
 
         if alive && !culled {
-            update_child_emitters_7b5a10(base, particle, pre_pos, dt);
+            if update_child_emitters_7b5a10(base, particle, pre_pos, dt) {
+                n_child = n_child.wrapping_add(1);
+                // A child step runs `EmitParticles` against the parent's
+                // placement block, so the hoisted parameters are re-read rather
+                // than assumed to have survived it.
+                (phys, age_lifespan, age_fade) = update_walk_params_7b5a10(base, dt, aligned);
+            }
             // Survivors advance to the next slot.
             i = i.wrapping_add(1);
             continue;
         }
+
+        n_culled = n_culled.wrapping_add(1);
 
         // Cull path: slot-3 virtual (particle recycle) then swap-remove.
         //
@@ -24244,6 +24334,10 @@ pub fn c_particle_emitter__update__7b5a10(
                 // (`__thiscall(ecx = this, [esp+4] = particle) -> void`).
                 unsafe { core::mem::transmute(slot3) };
             cull(this, particle);
+            // The recycle virtual is client code on this emitter, so the hoisted
+            // parameters are re-read for the same reason the index array below
+            // is.
+            (phys, age_lifespan, age_fade) = update_walk_params_7b5a10(base, dt, aligned);
         }
         // Swap-remove against the index array. Re-read everything because the
         // cull virtual may have mutated emitter state.
@@ -24304,6 +24398,24 @@ pub fn c_particle_emitter__update__7b5a10(
         unsafe { live_count_field.cast::<u32>().write(live_count - 1) };
         // Re-process the swapped-in slot: stock does `dec edi; inc edi` so `i`
         // stays put for the next iteration (do NOT advance here).
+    }
+
+    if let Some(armed) = crate::win::tally::arm() {
+        crate::win::seam_probe::pq_particle_walk(&armed, n_particles, n_aligned, n_culled, n_child);
+        // Tripwire on the hoist: the parameters are re-read once here, at walk
+        // end, and compared against what the walk actually used. Once per
+        // emitter rather than once per particle, because a per-particle check
+        // would cost more than the reads it is defending — and any unrebuilt
+        // mutation anywhere in the walk still lands in this comparison.
+        if let Some(used) = phys.as_ref() {
+            let (fresh, fresh_lifespan, fresh_fade) = update_walk_params_7b5a10(base, dt, aligned);
+            let drifted = fresh.as_ref().is_none_or(|f| !used.same_bits(f))
+                || fresh_lifespan.to_bits() != age_lifespan.to_bits()
+                || fresh_fade.to_bits() != age_fade.to_bits();
+            if drifted {
+                crate::win::seam_probe::pq_phys_param_drift();
+            }
+        }
     }
 
     // Child sub-emitter step loop: over this+0x7c entries at this+0x80, call
@@ -25436,12 +25548,17 @@ pub fn c_particle_emitter__update_with_substeps__7b5230(
 /// (`0x7b5550`, the SECOND call site), then restores the saved transform. Walks `parent+0x7c`
 /// children at `parent+0x80`. Impure-driver helper; kept out of the kernel module because it is all
 /// in-place pointer mutation plus a `transmute_va` call-out.
+///
+/// Returns whether it stepped anything. The emitter has no children on most
+/// particles, and the caller needs to know the difference: a child step runs
+/// client code that can reach the parent, so it is where the caller's hoisted
+/// emitter parameters have to be re-read.
 fn update_child_emitters_7b5a10(
     parent_base: *mut u8,
     particle: *mut u8,
     pre_pos: [f32; 3],
     dt: f32,
-) {
+) -> bool {
     // SAFETY: `parent_base` is the emitter `this` of the sole caller, taken after
     // its `this.is_null()` early return; +0x7c is the child-count field of that
     // instance, so the offset stays inside the same allocation.
@@ -25450,7 +25567,7 @@ fn update_child_emitters_7b5a10(
     // loads to bound the child walk.
     let child_count = unsafe { count_field.cast::<u32>().read() };
     if child_count == 0 {
-        return;
+        return false;
     }
     // Inline array of child `this` pointers at parent+0x80 (single load, stock
     // `lea eax,[esi+0x80]; mov ecx,[cursor]`); index directly, no extra deref.
@@ -25542,6 +25659,7 @@ fn update_child_emitters_7b5a10(
         // written back through the same unaligned path.
         unsafe { scratch.cast::<[f32; 3]>().write_unaligned(saved) };
     }
+    true
 }
 
 /// `GxLight::ApplySceneLighting`.

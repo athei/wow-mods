@@ -67,7 +67,7 @@ too_many_lines = "allow"                # 70
 # has no hardware FMA, so `mul_add` lowers to an `fmaf` libcall. (The AVX2
 # native-Windows variant does have FMA, which is why the faithfulness argument
 # is the one that carries this and not the ISA.)
-suboptimal_flops = "allow"              # 1187
+suboptimal_flops = "allow"              # 1192
 # Stricter unsafe discipline.
 missing_safety_doc = "warn"
 not_unsafe_ptr_arg_deref = "warn"
@@ -98,9 +98,9 @@ undocumented_unsafe_blocks = "warn"
 # masks as literals grouped the way the source grouped them. Rewriting any of
 # it to suit a lint makes the reimplementation harder to check against the
 # behaviour it has to match.
-items_after_statements = "allow"        # 862
-cast_ptr_alignment = "allow"            # 925 — reads are already `read_unaligned`
-unreadable_literal = "allow"            # 395 — addresses and bit masks, verbatim
+items_after_statements = "allow"        # 859
+cast_ptr_alignment = "allow"            # 924 — reads are already `read_unaligned`
+unreadable_literal = "allow"            # 396 — addresses and bit masks, verbatim
 similar_names = "allow"                 # 224
 semicolon_if_nothing_returned = "allow" # 156
 many_single_char_names = "allow"        # 42
