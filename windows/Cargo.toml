@@ -98,7 +98,7 @@ undocumented_unsafe_blocks = "warn"
 # masks as literals grouped the way the source grouped them. Rewriting any of
 # it to suit a lint makes the reimplementation harder to check against the
 # behaviour it has to match.
-items_after_statements = "allow"        # 859
+items_after_statements = "allow"        # 847
 cast_ptr_alignment = "allow"            # 924 — reads are already `read_unaligned`
 unreadable_literal = "allow"            # 396 — addresses and bit masks, verbatim
 similar_names = "allow"                 # 224
@@ -133,7 +133,7 @@ imprecise_flops = "allow"               # 8
 # Style preferences that fight the transcription: restructuring control flow to
 # satisfy them moves code away from the shape being reproduced, for no change
 # in what the function does.
-missing_const_for_fn = "allow"          # 111
+missing_const_for_fn = "allow"          # 112
 useless_let_if_seq = "allow"            # 23
 if_not_else = "allow"                   # 12
 suspicious_operation_groupings = "allow" # 12

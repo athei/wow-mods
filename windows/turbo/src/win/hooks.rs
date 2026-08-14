@@ -9436,6 +9436,51 @@ pub fn heap_sort_u_int32__71f860(
     crate::math::misc::heap_sort_u_int32__71f860(slice, |a, b| cmp(a, b, context));
 }
 
+/// The height-bucket projection constants all three insert bodies work from.
+///
+/// The `.data` plane coefficients (`0x87cfb8..0x87cfc4`), bucket scale
+/// (`0x410174`) and bucket bias (`0x46861c`).
+/// `c_map_chunk__update__6afad0` inserts up to `1 + nodes + subs` times per
+/// call and the shipped codegen re-read all six values at every inlined insert
+/// site; one read per call feeds them all. The hooked adapters below still
+/// read per call (stock callers arrive one insert at a time), and the chunk
+/// tick's armed drift check re-reads them at body end so a mid-call mutation
+/// by a stock call-out cannot go unnoticed.
+#[derive(Clone, Copy)]
+pub struct HbPlane {
+    pub coeff: [f32; 4],
+    pub scale: f32,
+    pub bias: f32,
+}
+
+impl HbPlane {
+    #[inline]
+    pub fn read() -> Self {
+        const COEFF: *const [f32; 4] =
+            (crate::win::EXPECTED_IMAGE_BASE + 0x87_cfb8) as *const [f32; 4];
+        const SCALE: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x41_0174) as *const f32;
+        const BIAS: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x46_861c) as *const f32;
+        Self {
+            // SAFETY: fixed, initialized `.data` plane coefficients in the live host image.
+            coeff: unsafe { COEFF.read() },
+            // SAFETY: fixed, initialized `.data` plane scale in the live host image.
+            scale: unsafe { SCALE.read() },
+            // SAFETY: fixed, initialized `.data` plane bias in the live host image.
+            bias: unsafe { BIAS.read() },
+        }
+    }
+
+    #[inline]
+    pub fn same_bits(&self, other: &Self) -> bool {
+        self.coeff
+            .iter()
+            .zip(other.coeff.iter())
+            .all(|(a, b)| a.to_bits() == b.to_bits())
+            && self.scale.to_bits() == other.scale.to_bits()
+            && self.bias.to_bits() == other.bias.to_bits()
+    }
+}
+
 /// `HeightBucket_InsertNodeAtPosSub`.
 ///
 /// (`__fastcall(ecx = object_node, edx = sub_index, stack = world_pos)`). Same
@@ -9455,20 +9500,21 @@ pub fn height_bucket_insert_node_at_pos_sub__681970(
         return;
     }
     // SAFETY: `world_pos` addresses a 3-float world position (x,y,z contiguous).
-    let pos = &unsafe { world_pos.cast::<[f32; 3]>().read_unaligned() };
+    let pos = unsafe { world_pos.cast::<[f32; 3]>().read_unaligned() };
+    height_bucket_insert_node_at_pos_sub_with(object_node, sub_index, &pos, &HbPlane::read());
+}
 
-    const COEFF: *const [f32; 4] = (crate::win::EXPECTED_IMAGE_BASE + 0x87_cfb8) as *const [f32; 4];
-    const SCALE: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x41_0174) as *const f32;
-    const BIAS: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x46_861c) as *const f32;
-    // SAFETY: fixed, initialized `.data` plane coefficients in the live host image.
-    let coeff = unsafe { &*COEFF };
-    // SAFETY: fixed, initialized `.data` plane scale in the live host image.
-    let scale = unsafe { SCALE.read() };
-    // SAFETY: fixed, initialized `.data` plane bias in the live host image.
-    let bias = unsafe { BIAS.read() };
-
+/// [`height_bucket_insert_node_at_pos_sub__681970`], constants caller-supplied.
+///
+/// The chunk tick reads the [`HbPlane`] once per call across all of its inserts.
+pub fn height_bucket_insert_node_at_pos_sub_with(
+    object_node: i32,
+    sub_index: i32,
+    pos: &[f32; 3],
+    hb: &HbPlane,
+) {
     let Some(slot_idx) = crate::math::world::height_bucket_insert_node_at_pos_sub__681970(
-        pos, coeff, scale, bias, sub_index,
+        pos, &hb.coeff, hb.scale, hb.bias, sub_index,
     ) else {
         return;
     };
@@ -9572,21 +9618,17 @@ pub fn height_bucket_insert_node_at_pos__6818b0(object_node: i32, world_pos: *co
         return;
     }
     // SAFETY: `world_pos` addresses a 3-float world position (x,y,z contiguous).
-    let pos = &unsafe { world_pos.cast::<[f32; 3]>().read_unaligned() };
+    let pos = unsafe { world_pos.cast::<[f32; 3]>().read_unaligned() };
+    height_bucket_insert_node_at_pos_with(object_node, &pos, &HbPlane::read());
+}
 
-    const COEFF: *const [f32; 4] = (crate::win::EXPECTED_IMAGE_BASE + 0x87_cfb8) as *const [f32; 4];
-    const SCALE: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x41_0174) as *const f32;
-    const BIAS: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x46_861c) as *const f32;
-    // SAFETY: fixed, initialized `.data` plane coefficients in the live host image.
-    let coeff = unsafe { &*COEFF };
-    // SAFETY: fixed, initialized `.data` plane scale in the live host image.
-    let scale = unsafe { SCALE.read() };
-    // SAFETY: fixed, initialized `.data` plane bias in the live host image.
-    let bias = unsafe { BIAS.read() };
-
-    let Some(bucket) =
-        crate::math::world::height_bucket_insert_node_at_pos__6818b0(pos, coeff, scale, bias)
-    else {
+/// [`height_bucket_insert_node_at_pos__6818b0`], constants caller-supplied.
+///
+/// The chunk tick reads the [`HbPlane`] once per call across all of its inserts.
+pub fn height_bucket_insert_node_at_pos_with(object_node: i32, pos: &[f32; 3], hb: &HbPlane) {
+    let Some(bucket) = crate::math::world::height_bucket_insert_node_at_pos__6818b0(
+        pos, &hb.coeff, hb.scale, hb.bias,
+    ) else {
         return;
     };
 
@@ -9693,6 +9735,17 @@ pub fn height_bucket_insert_node_from_object__6816f0(object_node: i32) {
     if object_node == 0 {
         return;
     }
+    height_bucket_insert_node_from_object_with(object_node, &HbPlane::read());
+}
+
+/// [`height_bucket_insert_node_from_object__6816f0`], constants caller-supplied.
+///
+/// The chunk tick's node walk reads the [`HbPlane`] once per call, not once
+/// per walked node.
+pub fn height_bucket_insert_node_from_object_with(object_node: i32, hb: &HbPlane) {
+    if object_node == 0 {
+        return;
+    }
     let node = object_node as usize as *const u8;
 
     // SAFETY: `node+0x5c` is in-bounds for the 3 contiguous world-pos floats.
@@ -9704,27 +9757,17 @@ pub fn height_bucket_insert_node_from_object__6816f0(object_node: i32) {
     // SAFETY: `base_ptr` is aligned and initialized.
     let base = unsafe { base_ptr.read() };
 
-    const C0: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x87_cfb8) as *const f32;
-    const C1: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x87_cfbc) as *const f32;
-    const C2: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x87_cfc0) as *const f32;
-    const C3: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x87_cfc4) as *const f32;
-    const SCALE: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x41_0174) as *const f32;
-    const BIAS: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x46_861c) as *const f32;
-    // SAFETY: fixed, initialized `.data` plane cx constant in the host image.
-    let cx = unsafe { C0.read() };
-    // SAFETY: fixed, initialized `.data` plane cy constant in the host image.
-    let cy = unsafe { C1.read() };
-    // SAFETY: fixed, initialized `.data` plane cz constant in the host image.
-    let cz = unsafe { C2.read() };
-    // SAFETY: fixed, initialized `.data` plane cw constant in the host image.
-    let cw = unsafe { C3.read() };
-    // SAFETY: fixed, initialized `.data` bucket-scale constant in the host image.
-    let scale = unsafe { SCALE.read() };
-    // SAFETY: fixed, initialized `.data` bucket-bias constant in the host image.
-    let bias = unsafe { BIAS.read() };
-
     let Some(bucket) = crate::math::world::height_bucket_insert_node_from_object__6816f0(
-        pos[0], pos[1], pos[2], base, cx, cy, cz, cw, scale, bias,
+        pos[0],
+        pos[1],
+        pos[2],
+        base,
+        hb.coeff[0],
+        hb.coeff[1],
+        hb.coeff[2],
+        hb.coeff[3],
+        hb.scale,
+        hb.bias,
     ) else {
         return;
     };
@@ -12960,6 +13003,12 @@ pub fn c_map_chunk_grid__query_radius__68b0d0(
 /// evaluation, box-vs-view overlap, box centre, vertex world offset) is the
 /// kernel; every field read/write, global read, and stock-helper call-out is here.
 /// A full reimplementation ignores `_original`.
+///
+/// Two per-call decisions: the box/view overlap tests run the 4-lane SSE
+/// kernel (booleans identical to the scalar one, see its doc), and the
+/// height-bucket projection constants are read once per call ([`HbPlane`])
+/// instead of once per insert, guarded by the armed `drift` re-read at body
+/// end.
 pub fn c_map_chunk__update__6afad0(chunk: i32) {
     if chunk == 0 {
         return;
@@ -12973,7 +13022,12 @@ pub fn c_map_chunk__update__6afad0(chunk: i32) {
         nodes: 0,
         inserted: 0,
         subs: 0,
+        drift: false,
     };
+    // Height-bucket projection constants, read once per call at the first
+    // insert (the shipped codegen re-read all six at every inlined insert
+    // site). The armed drift check at body end guards the hoist.
+    let mut hb: Option<HbPlane> = None;
 
     const PLANE: *const [f32; 4] = (crate::win::EXPECTED_IMAGE_BASE + 0x87_bcb0) as *const [f32; 4];
     const FOG_Z_THRESH: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x46_7960) as *const f32;
@@ -12984,10 +13038,10 @@ pub fn c_map_chunk__update__6afad0(chunk: i32) {
     const FADE_THRESH: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x40_a1e8) as *const f32;
     const DETAIL_FADE_THRESH: *const f32 =
         (crate::win::EXPECTED_IMAGE_BASE + 0x3f_f9d8) as *const f32;
-    const VIEW_LO: *const [f32; 3] =
-        (crate::win::EXPECTED_IMAGE_BASE + 0x87_cb5c) as *const [f32; 3];
-    const VIEW_HI: *const [f32; 3] =
-        (crate::win::EXPECTED_IMAGE_BASE + 0x87_cb68) as *const [f32; 3];
+    const VIEW_LO: *const [f32; 4] =
+        (crate::win::EXPECTED_IMAGE_BASE + 0x87_cb5c) as *const [f32; 4];
+    const VIEW_HI: *const [f32; 4] =
+        (crate::win::EXPECTED_IMAGE_BASE + 0x87_cb68) as *const [f32; 4];
     const VERT_INDEX: *const u32 = (crate::win::EXPECTED_IMAGE_BASE + 0x87_f294) as *const u32;
     const VERT_TABLE: *const i32 = (crate::win::EXPECTED_IMAGE_BASE + 0x46_b580) as *const i32;
     const HALF: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x3f_fa24) as *const f32;
@@ -13000,10 +13054,15 @@ pub fn c_map_chunk__update__6afad0(chunk: i32) {
     let fade_thresh = unsafe { FADE_THRESH.read() };
     // SAFETY: fixed, initialized `.data` detail-fade threshold float in the host image.
     let detail_thresh = unsafe { DETAIL_FADE_THRESH.read() };
-    // SAFETY: fixed, initialized `.data` view-box min corner (3 floats) in the host.
-    let view_lo = unsafe { VIEW_LO.read() };
-    // SAFETY: fixed, initialized `.data` view-box max corner (3 floats) in the host.
-    let view_hi = unsafe { VIEW_HI.read() };
+    // 4-lane view-box reads for the vector overlap kernel: the fourth lane of
+    // the first is `view_hi[0]`, that of the second the `.data` dword after
+    // the view box — both mapped image memory, both ignored by the kernel.
+    // SAFETY: fixed `.data` view-box min corner in the host; the 16-byte read
+    // stays inside the image's `.data` mapping.
+    let view_lo = unsafe { VIEW_LO.read_unaligned() };
+    // SAFETY: fixed `.data` view-box max corner in the host; the 16-byte read
+    // stays inside the image's `.data` mapping.
+    let view_hi = unsafe { VIEW_HI.read_unaligned() };
     // SAFETY: fixed, initialized `.data` `0.5` constant in the host image.
     let half = unsafe { HALF.read() };
 
@@ -13131,16 +13190,20 @@ pub fn c_map_chunk__update__6afad0(chunk: i32) {
     }
 
     // Chunk AABB vs view box: re-insert the chunk + its scene-node objects.
-    // SAFETY: `chunk+0x44` is the in-bounds 3-float box min corner.
+    // 4-lane box reads for the vector overlap kernel: the fourth lanes are the
+    // in-bounds neighbouring chunk fields (`box_max[0]`, the `+0x5c` coord),
+    // ignored by the kernel.
+    // SAFETY: `chunk+0x44..+0x54` is in bounds (box min + the box max x).
     let bmin_ptr = unsafe { base.add(0x44) };
-    // SAFETY: `bmin_ptr` addresses 3 contiguous, aligned floats.
-    let box_min = unsafe { bmin_ptr.cast::<[f32; 3]>().read_unaligned() };
-    // SAFETY: `chunk+0x50` is the in-bounds 3-float box max corner.
+    // SAFETY: `bmin_ptr` addresses 4 contiguous floats.
+    let box_min = unsafe { bmin_ptr.cast::<[f32; 4]>().read_unaligned() };
+    // SAFETY: `chunk+0x50..+0x60` is in bounds (box max + the `+0x5c` coord).
     let bmax_ptr = unsafe { base.add(0x50) };
-    // SAFETY: `bmax_ptr` addresses 3 contiguous, aligned floats.
-    let box_max = unsafe { bmax_ptr.cast::<[f32; 3]>().read_unaligned() };
-    if crate::math::world::map_chunk_box_overlaps_view(box_min, box_max, view_lo, view_hi) {
+    // SAFETY: `bmax_ptr` addresses 4 contiguous floats.
+    let box_max = unsafe { bmax_ptr.cast::<[f32; 4]>().read_unaligned() };
+    if crate::math::world::map_chunk_box_overlaps_view4(box_min, box_max, view_lo, view_hi) {
         seam.overlap = true;
+        let hbp = *hb.get_or_insert_with(HbPlane::read);
         // SAFETY: fixed, initialized `.data` per-frame vertex-index dword in the host.
         let vidx = unsafe { VERT_INDEX.read() } as usize;
         // SAFETY: `VERT_TABLE + vidx` selects a valid entry of the host vertex-index table.
@@ -13158,7 +13221,7 @@ pub fn c_map_chunk__update__6afad0(chunk: i32) {
         let origin = unsafe { origin_ptr.cast::<[f32; 3]>().read_unaligned() };
         let pos = crate::math::world::map_chunk_vertex_world(vert, origin);
 
-        height_bucket_insert_node_at_pos__6818b0(chunk, pos.as_ptr());
+        height_bucket_insert_node_at_pos_with(chunk, &pos, &hbp);
 
         // Walk the chunk's scene-node list (tagged-pointer intrusive list).
         // SAFETY: `chunk+0xe4` is the in-bounds, aligned list-head dword.
@@ -13168,6 +13231,13 @@ pub fn c_map_chunk__update__6afad0(chunk: i32) {
         if (node & 1) != 0 {
             node = 0;
         }
+        // The link base is loop-invariant: nothing inside the walk writes the
+        // chunk (`_from_object_with` mutates only link words and the global
+        // bucket rows, and the stock prev resolver at 0x6876b0 only reads).
+        // SAFETY: `chunk+0xdc` is the in-bounds, aligned link-base dword.
+        let lb_ptr = unsafe { base.add(0xdc) };
+        // SAFETY: `lb_ptr` is aligned and initialized.
+        let link_base = unsafe { lb_ptr.cast::<u32>().read() };
         while (node & 1) == 0 && node != 0 {
             seam.nodes = seam.nodes.wrapping_add(1);
             // SAFETY: `node+4` holds the scene-object pointer (node is untagged here).
@@ -13190,13 +13260,9 @@ pub fn c_map_chunk__update__6afad0(chunk: i32) {
                 let f174 = unsafe { f174p.cast::<i32>().read() };
                 if f88 != 0 || f174 != 0 {
                     seam.inserted = seam.inserted.wrapping_add(1);
-                    height_bucket_insert_node_from_object__6816f0(obj);
+                    height_bucket_insert_node_from_object_with(obj, &hbp);
                 }
             }
-            // SAFETY: `chunk+0xdc` is the in-bounds, aligned link-base dword.
-            let lb_ptr = unsafe { base.add(0xdc) };
-            // SAFETY: `lb_ptr` is aligned and initialized.
-            let link_base = unsafe { lb_ptr.cast::<u32>().read() };
             // SAFETY: `link_base + node + 4` is the node's in-bounds next-link dword.
             let next_ptr = (link_base as usize + node as usize + 4) as *const u32;
             // SAFETY: `next_ptr` is aligned and initialized.
@@ -13214,7 +13280,10 @@ pub fn c_map_chunk__update__6afad0(chunk: i32) {
             continue;
         }
         let sub_obj = sub as usize as *mut u8;
-        let mut box6 = [0.0f32; 6];
+        // One spare lane past the 6 bounds floats so the vector overlap kernel
+        // can take two overlapping 4-lane reads; the stock callee writes only
+        // the first 6.
+        let mut box6 = [0.0f32; 7];
         const SUB_BOUNDS_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x28_df40;
         // SAFETY: fixed `.text` entry (base verified); the transmuted signature
         // matches the declared prototype (`__thiscall(ecx=sub, stack=out) ->
@@ -13222,16 +13291,26 @@ pub fn c_map_chunk__update__6afad0(chunk: i32) {
         let bounds: extern "thiscall" fn(*mut u8, *mut f32) =
             unsafe { core::mem::transmute(SUB_BOUNDS_VA) };
         bounds(sub_obj, box6.as_mut_ptr());
-        let smin = [box6[0], box6[1], box6[2]];
-        let smax = [box6[3], box6[4], box6[5]];
-        if crate::math::world::map_chunk_box_overlaps_view(smin, smax, view_lo, view_hi) {
+        let smin4 = [box6[0], box6[1], box6[2], box6[3]];
+        let smax4 = [box6[3], box6[4], box6[5], box6[6]];
+        if crate::math::world::map_chunk_box_overlaps_view4(smin4, smax4, view_lo, view_hi) {
             seam.subs = seam.subs.wrapping_add(1);
+            let smin = [box6[0], box6[1], box6[2]];
+            let smax = [box6[3], box6[4], box6[5]];
             let center = crate::math::world::map_chunk_box_center(smin, smax, half);
-            height_bucket_insert_node_at_pos_sub__681970(sub, i, center.as_ptr());
+            height_bucket_insert_node_at_pos_sub_with(
+                sub,
+                i,
+                &center,
+                hb.get_or_insert_with(HbPlane::read),
+            );
         }
     }
 
     if let Some(armed) = probe.as_ref() {
+        if let Some(hb0) = hb.as_ref() {
+            seam.drift = !HbPlane::read().same_bits(hb0);
+        }
         super::seam_probe::map_chunk_update(armed, &seam);
     }
 }

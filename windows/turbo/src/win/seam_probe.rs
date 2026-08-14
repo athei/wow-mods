@@ -126,6 +126,7 @@ static MAPCHUNK_OVERLAP: Accum = Accum::zero();
 static MAPCHUNK_NODES: Accum = Accum::zero();
 static MAPCHUNK_INSERTED: Accum = Accum::zero();
 static MAPCHUNK_SUBS: Accum = Accum::zero();
+static MAPCHUNK_DRIFT: Accum = Accum::zero();
 
 static TRACE_GROUND: Counter = Counter::zero();
 static TRACE_SWEEP: Counter = Counter::zero();
@@ -589,6 +590,13 @@ pub struct MapChunkStats {
     pub inserted: u32,
     /// Sub-objects whose bounds overlapped and were re-inserted.
     pub subs: u32,
+    /// The hoisted height-bucket constants failed the bit-compare at body end.
+    ///
+    /// The constants are read once per call across the body's inserts; a
+    /// mismatch on the armed re-read means a stock call-out mutated them
+    /// mid-call and the hoist is unsound. Must stay 0; any non-zero reading
+    /// sends the constants back to per-insert reads.
+    pub drift: bool,
 }
 
 /// One `CMapChunk::Update` call.
@@ -601,6 +609,9 @@ pub fn map_chunk_update(armed: &Armed, s: &MapChunkStats) {
     MAPCHUNK_NODES.add(armed, u64::from(s.nodes));
     MAPCHUNK_INSERTED.add(armed, u64::from(s.inserted));
     MAPCHUNK_SUBS.add(armed, u64::from(s.subs));
+    if s.drift {
+        MAPCHUNK_DRIFT.add(armed, 1);
+    }
 }
 
 /// One ground-move step (`CMovement`), the per-unit movement entry of the collision cluster.
@@ -985,11 +996,13 @@ pub fn emit_cumulative() {
     if mc_calls != 0 {
         log::debug!(
             target: super::tally::TARGET,
-            "seam mapchunk: {mc_calls} calls, overlap {}, nodes {}, inserted {}, subs {}",
+            "seam mapchunk: {mc_calls} calls, overlap {}, nodes {}, inserted {}, subs {}, \
+             drift {}",
             MAPCHUNK_OVERLAP.get(),
             MAPCHUNK_NODES.get(),
             MAPCHUNK_INSERTED.get(),
             MAPCHUNK_SUBS.get(),
+            MAPCHUNK_DRIFT.get(),
         );
     }
     let clip_calls = CLIP_CALLS.get();

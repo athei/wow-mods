@@ -2468,7 +2468,11 @@ pub fn map_chunk_vertex_world(vert: [f32; 3], origin: [f32; 3]) -> [f32; 3] {
 /// Returns true when the box `[lo_corner, hi_corner]` overlaps the view box
 /// `[view_lo, view_hi]`: every `lo_corner[i] <= view_hi[i]` and every
 /// `hi_corner[i] >= view_lo[i]`. NaN on any axis fails, matching the reference's
-/// ordered x87 compares.
+/// ordered x87 compares. The shipped body runs the 4-lane form below; this
+/// scalar transcription stays as its test oracle.
+// Kept as the oracle the 4-lane property test compares against, so outside
+// test builds it has no caller by design.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn map_chunk_box_overlaps_view(
     lo_corner: [f32; 3],
     hi_corner: [f32; 3],
@@ -2483,11 +2487,50 @@ pub fn map_chunk_box_overlaps_view(
         && hi_corner[2] >= view_lo[2]
 }
 
+/// 4-lane SSE form of [`map_chunk_box_overlaps_view`]; the fourth lane is ignored.
+///
+/// Callers may fill lane 3 with whatever dword happens to follow the 3-float
+/// value in memory. `cmpleps` is an ordered compare: a NaN lane yields false,
+/// exactly like the scalar `<=`/`>=`, and `view_lo <= hi_corner` is the same
+/// ordered predicate as `hi_corner >= view_lo`, so the boolean is identical to
+/// the scalar kernel's on every input (the property test pins this).
+pub fn map_chunk_box_overlaps_view4(
+    lo_corner: [f32; 4],
+    hi_corner: [f32; 4],
+    view_lo: [f32; 4],
+    view_hi: [f32; 4],
+) -> bool {
+    #[cfg(target_arch = "x86")]
+    use core::arch::x86::{_mm_and_ps, _mm_cmple_ps, _mm_loadu_ps, _mm_movemask_ps};
+    #[cfg(target_arch = "x86_64")]
+    use core::arch::x86_64::{_mm_and_ps, _mm_cmple_ps, _mm_loadu_ps, _mm_movemask_ps};
+    // Every intrinsic below is SSE1, available on every ISA baseline this
+    // crate builds for.
+    // SAFETY: the load covers the 16 in-bounds bytes of its `[f32; 4]` argument.
+    let lo = unsafe { _mm_loadu_ps(lo_corner.as_ptr()) };
+    // SAFETY: as above.
+    let hi = unsafe { _mm_loadu_ps(hi_corner.as_ptr()) };
+    // SAFETY: as above.
+    let vlo = unsafe { _mm_loadu_ps(view_lo.as_ptr()) };
+    // SAFETY: as above.
+    let vhi = unsafe { _mm_loadu_ps(view_hi.as_ptr()) };
+    // SAFETY: lane-wise ordered compare of two initialized vectors.
+    let below = unsafe { _mm_cmple_ps(lo, vhi) };
+    // SAFETY: lane-wise ordered compare of two initialized vectors.
+    let above = unsafe { _mm_cmple_ps(vlo, hi) };
+    // SAFETY: lane-wise AND of two compare masks.
+    let both = unsafe { _mm_and_ps(below, above) };
+    // SAFETY: sign-bit extraction from an initialized vector.
+    let mask = unsafe { _mm_movemask_ps(both) };
+    (mask & 0b111) == 0b111
+}
+
 #[cfg(test)]
 mod tests_c_map_chunk__update__6afad0 {
     use super::{
         c_map_chunk__update__6afad0 as screen_z, map_chunk_box_center as center,
-        map_chunk_box_overlaps_view as overlaps, map_chunk_vertex_world as vworld,
+        map_chunk_box_overlaps_view as overlaps, map_chunk_box_overlaps_view4 as overlaps4,
+        map_chunk_vertex_world as vworld,
     };
 
     #[test]
@@ -2561,6 +2604,43 @@ mod tests_c_map_chunk__update__6afad0 {
             [5.0, 5.0, 5.0],
             [20.0, 20.0, 20.0]
         ));
+    }
+
+    /// The 4-lane kernel must agree with the scalar one on every input class.
+    ///
+    /// Covers ordinary orderings, touching edges, negative zero, infinities,
+    /// and NaN across the significant lanes, with the ignored fourth lane set
+    /// to values chosen to produce a wrong answer if it ever leaked into the
+    /// mask.
+    #[test]
+    fn overlap4_matches_scalar_kernel() {
+        let vals = [
+            -1.0f32,
+            0.0,
+            -0.0,
+            1.0,
+            5.0,
+            20.0,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::NAN,
+        ];
+        let pad = |a: [f32; 3], junk: f32| [a[0], a[1], a[2], junk];
+        for &a in &vals {
+            for &b in &vals {
+                let lo = [a, 0.0, 0.0];
+                let hi = [b, 10.0, 10.0];
+                let vlo = [0.0f32, b, 5.0];
+                let vhi = [20.0f32, 20.0, a];
+                for &junk in &[f32::NAN, f32::NEG_INFINITY, 0.0] {
+                    assert_eq!(
+                        overlaps(lo, hi, vlo, vhi),
+                        overlaps4(pad(lo, junk), pad(hi, junk), pad(vlo, junk), pad(vhi, junk)),
+                        "lo={lo:?} hi={hi:?} vlo={vlo:?} vhi={vhi:?} junk={junk}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

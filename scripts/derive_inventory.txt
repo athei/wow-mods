@@ -31,6 +31,7 @@ windows/turbo/src/win/hooks.rs BdlOpaqueKey Clone,Copy
 windows/turbo/src/win/hooks.rs GcJob Clone,Copy
 windows/turbo/src/win/hooks.rs GcJobKind Clone,Copy
 windows/turbo/src/win/hooks.rs GxLightRec Clone,Copy
+windows/turbo/src/win/hooks.rs HbPlane Clone,Copy
 windows/turbo/src/win/objmgr.rs UnitRef Clone,Copy
 windows/turbo/src/win/unitxp/targeting.rs MobEntry Clone,Copy,Default
 windows/turbo/src/worldtext.rs CritFont Clone,Copy,PartialEq,Eq,Debug
