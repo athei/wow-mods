@@ -165,8 +165,11 @@ static PART_BUILD_TICKS_MAX: Accum = Accum::zero();
 
 static PART_PRE_PASSES: Counter = Counter::zero();
 static PART_PRE_GATED: Counter = Counter::zero();
+static PART_PRE_LATE_GATED: Counter = Counter::zero();
 static PART_PRE_EMITTERS: Accum = Accum::zero();
 static PART_PRE_PRESCAN_TICKS: Accum = Accum::zero();
+static PART_PRE_PUBLISH_TICKS: Accum = Accum::zero();
+static PART_PRE_SCAN_BEHIND: Counter = Counter::zero();
 static PART_PRE_HITS: Counter = Counter::zero();
 static PART_PRE_MISS_ABSENT: Counter = Counter::zero();
 static PART_PRE_MISS_VALIDATE: [Counter; 7] = [
@@ -802,17 +805,40 @@ pub fn pq_phys_param_drift() {
     PHYS_PARAM_DRIFT.bump(&armed);
 }
 
-/// One published particle pass job: its size and what the pre-scan cost.
-pub fn pq_pass(armed: &Armed, emitters: u32, prescan_ticks: u64) {
+/// One retired particle pass job: its size and what the scan cost.
+///
+/// `scan_ticks` is the scanner LANE's bracket (the scan runs off-thread);
+/// the game thread's own share of a pass is [`pq_publish`].
+pub fn pq_pass(armed: &Armed, emitters: u32, scan_ticks: u64) {
     PART_PRE_PASSES.bump(armed);
     PART_PRE_EMITTERS.add(armed, u64::from(emitters));
-    PART_PRE_PRESCAN_TICKS.add(armed, prescan_ticks);
+    PART_PRE_PRESCAN_TICKS.add(armed, scan_ticks);
 }
 
 /// One pass below the publish gate (portraits, single-model views).
 #[inline]
 pub fn pq_pass_gated() {
     super::tally::bump(&PART_PRE_GATED);
+}
+
+/// One published pass the scanner then found under the emitter gate.
+///
+/// The game-thread pre-gate counts qualifying emitters without capturing;
+/// a pass lands here when enough qualified but their captures failed. Its
+/// consumed entries are ordinary hits; the remainder are not misses.
+pub fn pq_pass_late_gated(armed: &Armed) {
+    PART_PRE_LATE_GATED.bump(armed);
+}
+
+/// The game thread's per-pass publish bracket (gate to job published).
+pub fn pq_publish(armed: &Armed, ticks: u64) {
+    PART_PRE_PUBLISH_TICKS.add(armed, ticks);
+}
+
+/// One consume that had to wait for the scanner to reach its draw.
+#[inline]
+pub fn pq_scan_behind() {
+    super::tally::bump(&PART_PRE_SCAN_BEHIND);
 }
 
 /// One prebuilt draw consumed, with how long the consume waited.
@@ -1076,9 +1102,11 @@ pub fn emit_cumulative() {
     if pre_passes != 0 || pre_gated != 0 {
         log::debug!(
             target: super::tally::TARGET,
-            "seam particles par: {pre_passes} passes ({pre_gated} gated), emitters {}, hits {}, \
-             miss absent {} validate {}/{}/{}/{}/{}/{}/{} timeout {} declined {}, \
-             unconsumed {}, wait us sum {} max {}, prescan us sum {}, worker us sum {}",
+            "seam particles par: {pre_passes} passes ({pre_gated} gated, {} late), emitters {}, \
+             hits {}, miss absent {} validate {}/{}/{}/{}/{}/{}/{} timeout {} declined {}, \
+             unconsumed {}, wait us sum {} max {} (scan-behind {}), publish us sum {}, \
+             scan us sum {}, worker us sum {}",
+            PART_PRE_LATE_GATED.get(),
             PART_PRE_EMITTERS.get(),
             PART_PRE_HITS.get(),
             PART_PRE_MISS_ABSENT.get(),
@@ -1094,6 +1122,8 @@ pub fn emit_cumulative() {
             PART_PRE_UNCONSUMED.get(),
             ticks_to_us(PART_PRE_WAIT_TICKS_SUM.get()),
             ticks_to_us(PART_PRE_WAIT_TICKS_MAX.get()),
+            PART_PRE_SCAN_BEHIND.get(),
+            ticks_to_us(PART_PRE_PUBLISH_TICKS.get()),
             ticks_to_us(PART_PRE_PRESCAN_TICKS.get()),
             ticks_to_us(PART_PRE_WORKER_TICKS.get()),
         );

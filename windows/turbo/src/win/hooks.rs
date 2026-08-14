@@ -22833,31 +22833,101 @@ const PQ_STATE_CONSUMED: u32 = 3;
 
 /// The published, pointer-only view of a pass job.
 ///
-/// The driver hook owns the backing [`PqJobTable`] on its stack for the
-/// whole pass and keeps this view alive until the join, so a worker that
-/// passed the epoch check with `active` held may dereference it freely.
+/// The driver hook keeps the backing [`PqTableStorage`] and this view alive
+/// until the join, so a worker that passed the epoch check with `active`
+/// held may dereference it freely. Unlike the original publish-whole shape,
+/// the entry array fills WHILE the job is live: the scanner lane walks the
+/// descriptor copy and Release-publishes one entry at a time through
+/// `ready`, and every other reader stays below that mark.
 struct PqJobView {
     /// The per-job constants.
     header: *const PqJobHeader,
-    /// The entry array base.
+    /// The entry array base (capacity-backed raw memory).
     entries: *mut PqEntry,
-    /// The entry count.
-    len: usize,
+    /// The entry array capacity (the scan's hard bound), NOT a live count.
+    ///
+    /// The live count is `ready` while the scan runs and `total` after.
+    cap: usize,
     /// The scratch arena base (capacity-backed raw memory).
     arena: *mut u8,
+    /// The pass descriptor array COPY the scanner walks (0x40-byte entries).
+    ///
+    /// Taken by the game thread before the stock walk starts, so the
+    /// scanner never races the walk over the descriptor memory itself.
+    descs: *const u8,
+    /// The pass index array copy paralleling `descs`.
+    indices: *const u32,
+    /// The pass index count.
+    count: u32,
+    /// The pass current matrix (game-thread captured, pre-walk).
+    cur: [f32; 16],
+    /// Entries the scanner has fully written (`Release`; readers `Acquire`).
+    ready: core::sync::atomic::AtomicUsize,
+    /// Final entry count; meaningful once `scan_done` is set.
+    total: core::sync::atomic::AtomicUsize,
+    /// The scanner finished (every exit path; `Release` after `total`).
+    scan_done: core::sync::atomic::AtomicBool,
+    /// Scanner-lane election flag (first participant to swap it scans).
+    scan_claimed: core::sync::atomic::AtomicBool,
+    /// The scan ended under [`PQ_MIN_EMITTERS`].
+    ///
+    /// Consume stands down without counting misses, and the retire line
+    /// counts the pass as late-gated instead (the game-thread pre-gate
+    /// admitted it on qualifying emitters whose captures then failed).
+    gated: core::sync::atomic::AtomicBool,
+    /// Scanner's scan bracket in rdtsc ticks (valid once `scan_done`).
+    scan_ticks: core::sync::atomic::AtomicU64,
 }
 
-/// The pass-owned storage behind a [`PqJobView`].
-struct PqJobTable {
-    /// The per-job constants.
+/// Session-persistent storage behind a [`PqJobView`] (game thread owned).
+///
+/// Taken from [`PQ_STORAGE`] at publish and put back at retire, so one
+/// full-cap reservation serves every pass: `entries` at the scan's own
+/// 4096-entry guard, `arena` at [`PQ_ARENA_MAX`], the descriptor/index
+/// copies at [`PQ_DESC_MAX`]. Nothing can reallocate while workers hold
+/// pointers, which is what makes the streaming fill sound. All four `Vec`s
+/// are capacity only (`len` stays 0, regions written raw through
+/// `as_mut_ptr`); `PqEntry` has no `Drop`, so reuse never runs destructors.
+struct PqTableStorage {
+    /// The per-job constants, rewritten per pass before publish.
     header: PqJobHeader,
-    /// One entry per emitter draw, in walk order.
+    /// One entry per emitter draw, in walk order, scanner-filled.
     entries: Vec<PqEntry>,
-    /// Scratch backing.
-    ///
-    /// Regions are carved by byte offset and written raw through
-    /// `as_mut_ptr` (the `Vec` is capacity only, `len` stays 0).
+    /// Scratch backing, carved by byte offset.
     arena: Vec<u8>,
+    /// Descriptor array copy backing (`0x40`-byte entries).
+    descs: Vec<u8>,
+    /// Index array copy backing.
+    indices: Vec<u32>,
+}
+
+impl PqTableStorage {
+    /// One full-cap reservation (~5.5 MB).
+    ///
+    /// Allocated on first publish and after a join-timeout leak; never
+    /// from `DllMain`.
+    fn new_boxed() -> Box<Self> {
+        Box::new(Self {
+            header: PqJobHeader {
+                fade_lod: [0.0; 128],
+                swap: false,
+                timed: false,
+            },
+            entries: Vec::with_capacity(PQ_ENTRIES_MAX),
+            arena: Vec::with_capacity(PQ_ARENA_MAX),
+            descs: Vec::with_capacity(PQ_DESC_MAX * 0x40),
+            indices: Vec::with_capacity(PQ_DESC_MAX),
+        })
+    }
+}
+
+thread_local! {
+    /// The reusable pass storage (the [`BDL_ANIM_ROOTS`] idiom).
+    ///
+    /// Empty while a pass is live or after a join-timeout leak; the next
+    /// publish allocates fresh in that case, so a leak self-heals.
+    static PQ_STORAGE: core::cell::Cell<Option<Box<PqTableStorage>>> =
+        const { core::cell::Cell::new(None) };
 }
 
 /// The live pass view for the consume path (game thread only; 0 = none).
@@ -23142,22 +23212,74 @@ const STATE_TABLE_PQ: *const u32 = (crate::win::EXPECTED_IMAGE_BASE + 0x40_97a8)
 const PQ_MIN_EMITTERS: usize = 4;
 /// Hard cap on a pass arena, in bytes; draws beyond it stay serial.
 const PQ_ARENA_MAX: usize = 4 << 20;
-
-/// Mirror the `CParticleEmitter2::Render` emitter+child walk for the pre-scan.
+/// Hard cap on the descriptor slots a pass may copy for the scan.
 ///
-/// Same gates as 0x7b4b40: a zero `+0x64` skips the subtree, a nonzero
-/// `+0x28` skips the self-draw, children recurse from the inline pointer
-/// array at `+0x80`. Guest reads only; anything odd just means no entry
-/// (the serial path serves that draw as stock).
-fn pq_prescan_emitter(
+/// A pass whose index array references a slot past it stays serial.
+const PQ_DESC_MAX: usize = 8192;
+/// Hard cap on entries a scan may produce (the storage reservation).
+const PQ_ENTRIES_MAX: usize = 4096;
+
+/// Count qualifying emitter draws under one subtree for the publish gate.
+///
+/// The integer-only prefix of the scan's own emitter walk: same recursion
+/// (`+0x7c`/`+0x80`, depth ≤ 8) and the same pre-capture gates (`+0x64`
+/// live, `+0x28` self-draw, `+0x1a0` texture), but no capture and no
+/// entry, and the caller early-exits at [`PQ_MIN_EMITTERS`]. Everything
+/// the scan would count, this counts (capture-time declines excepted, in
+/// the over-publish direction only), so a pass this gates out would have
+/// gated out under the old on-thread scan too.
+fn pq_gate_emitter(em: *const u8, found: &mut usize, depth: u32) {
+    if em.is_null() || depth > 8 || *found >= PQ_MIN_EMITTERS {
+        return;
+    }
+    // SAFETY: the subtree gate / live count at +0x64.
+    let live = unsafe { em.wrapping_add(0x64).cast::<u32>().read_unaligned() };
+    if live == 0 {
+        return;
+    }
+    // SAFETY: the self-draw gate at +0x28.
+    let gate = unsafe { em.wrapping_add(0x28).cast::<u32>().read_unaligned() };
+    // SAFETY: the texture owner handle at +0x1a0.
+    let tex_owner = unsafe { em.wrapping_add(0x1a0).cast::<u32>().read_unaligned() };
+    if gate == 0 && tex_owner != 0 {
+        *found += 1;
+        if *found >= PQ_MIN_EMITTERS {
+            return;
+        }
+    }
+    // SAFETY: the child count at +0x7c.
+    let nkids = unsafe { em.wrapping_add(0x7c).cast::<u32>().read_unaligned() };
+    for j in 0..nkids.min(64) {
+        // SAFETY: the inline child pointer array at +0x80.
+        let kid = unsafe {
+            em.wrapping_add(0x80 + j as usize * 4)
+                .cast::<u32>()
+                .read_unaligned()
+        };
+        pq_gate_emitter(kid as *const u8, found, depth + 1);
+    }
+}
+
+/// Mirror the scan's emitter+child walk, streaming entries to the workers.
+///
+/// Same shape as the old on-thread `pq_prescan_emitter`, now run on the
+/// scanner lane against the descriptor COPY, writing each entry raw into
+/// the reserved array and Release-publishing it through `ready` — builders
+/// and the consume path never look past that mark. Emitter/model fields
+/// are still live guest reads; the ordering argument (the scan stays ahead
+/// of the walk's consume of the same entry) plus [`pq_validate`] at
+/// consume make a stale read a counted miss, never a wrong build. Anything
+/// odd just means no entry (the serial path serves that draw as stock).
+fn pq_scan_emitter(
+    view: &PqJobView,
     em: *const u8,
     pm: *const f32,
-    cur: &[f32; 16],
-    entries: &mut Vec<PqEntry>,
+    produced: &mut usize,
     arena_len: &mut usize,
     depth: u32,
 ) {
-    if em.is_null() || depth > 8 || entries.len() >= 4096 {
+    use core::sync::atomic::Ordering;
+    if em.is_null() || depth > 8 || *produced >= view.cap {
         return;
     }
     // SAFETY: the subtree gate / live count at +0x64.
@@ -23173,7 +23295,7 @@ fn pq_prescan_emitter(
     // only avoids a wasted build (the entry would go unconsumed).
     if gate == 0
         && tex_owner != 0
-        && let Some(snapshot) = pq_capture(em, pm, cur)
+        && let Some(snapshot) = pq_capture(em, pm, &view.cur)
     {
         let vpp_eff = if snapshot.flags & 4 != 0 { 4u32 } else { 0 }
             + if snapshot.flags & 8 != 0 { 4 } else { 0 };
@@ -23184,17 +23306,25 @@ fn pq_prescan_emitter(
             let verts_max = snapshot.cap.saturating_mul(vpp_eff);
             let bytes = (verts_max as usize * decl as usize).next_multiple_of(16);
             if *arena_len + bytes <= PQ_ARENA_MAX {
-                entries.push(PqEntry {
-                    emitter: em as usize,
-                    snapshot,
-                    scratch_off: *arena_len,
-                    decl,
-                    verts_max,
-                    sink: [0; 3],
-                    emitted: 0,
-                    ticks: 0,
-                    state: core::sync::atomic::AtomicU32::new(PQ_STATE_PENDING),
-                });
+                let slot = view.entries.wrapping_add(*produced);
+                // SAFETY: `*produced < cap` and the slot is unpublished
+                // until the `ready` store below (a previous pass's bytes
+                // there are plain old data, freely overwritten).
+                unsafe {
+                    slot.write(PqEntry {
+                        emitter: em as usize,
+                        snapshot,
+                        scratch_off: *arena_len,
+                        decl,
+                        verts_max,
+                        sink: [0; 3],
+                        emitted: 0,
+                        ticks: 0,
+                        state: core::sync::atomic::AtomicU32::new(PQ_STATE_PENDING),
+                    });
+                }
+                *produced += 1;
+                view.ready.store(*produced, Ordering::Release);
                 *arena_len += bytes;
             }
         }
@@ -23208,7 +23338,7 @@ fn pq_prescan_emitter(
                 .cast::<u32>()
                 .read_unaligned()
         };
-        pq_prescan_emitter(kid as *const u8, pm, cur, entries, arena_len, depth + 1);
+        pq_scan_emitter(view, kid as *const u8, pm, produced, arena_len, depth + 1);
     }
 }
 
@@ -23237,24 +23367,17 @@ fn pq_walk_current_matrix(ctx: *const u8) -> Option<[f32; 16]> {
     Some(crate::math::particle::c_particle_emitter__draw_batch__70ca50(&m, &bv))
 }
 
-/// Pre-scan one pass's descriptor walk for emitter draws worth pre-building.
+/// Publish gate: does this pass hold [`PQ_MIN_EMITTERS`] qualifying draws?
 ///
-/// Mirrors the walk's dispatch geometry (0x40-byte entries through the
-/// sorted index array; opcode 4 is the batch+emitter case; opcode 2
-/// advances by its sub-batch count) without calling anything. Returns
-/// `None` when fewer than [`PQ_MIN_EMITTERS`] draws surface, so portraits
-/// and single-model passes cost one integer scan and nothing else. `timed`
-/// is the pass's arm, carried into the header for the workers.
-fn pq_prescan(
-    ctx: *const u8,
-    batches: *const u8,
-    indices: *const u32,
-    count: u32,
-    timed: bool,
-) -> Option<PqJobTable> {
-    let cur = pq_walk_current_matrix(ctx)?;
-    let mut entries: Vec<PqEntry> = Vec::new();
-    let mut arena_len = 0usize;
+/// The game-thread prefix of the scan: mirrors the walk's dispatch geometry
+/// (0x40-byte entries through the sorted index array; opcode 4 is the
+/// batch+emitter case; opcode 2 advances by its sub-batch count), counts
+/// via [`pq_gate_emitter`], and early-exits at the threshold. A published
+/// pass pays a prefix walk; a gated pass pays a full but capture-free walk,
+/// cheaper than the old gated on-thread scan (portraits and single-model
+/// passes still cost one integer scan and nothing else).
+fn pq_gate_scan(batches: *const u8, indices: *const u32, count: u32) -> bool {
+    let mut found = 0usize;
     let mut i = 0u32;
     while i < count {
         // SAFETY: `indices[i]` is within the pass index array (`i < count`).
@@ -23268,40 +23391,14 @@ fn pq_prescan(
                 let sub = unsafe { entry.wrapping_add(0x20).cast::<u32>().read_unaligned() };
                 // Stock advances the cursor by the sub-batch count; a zero
                 // count would not advance (and would hang stock too);
-                // clamp so the pre-scan always terminates.
+                // clamp so the gate walk always terminates.
                 i = i.wrapping_add(sub.max(1));
             }
             4 => {
-                // SAFETY: the model pointer at +0x4.
-                let model = unsafe { entry.wrapping_add(4).cast::<*const u8>().read_unaligned() };
-                if !model.is_null() {
-                    // SAFETY: the emitter array pointer at model+0x3d4.
-                    let arr = unsafe {
-                        model
-                            .wrapping_add(0x3d4)
-                            .cast::<*const u32>()
-                            .read_unaligned()
-                    };
-                    // SAFETY: the emitter index at entry+0x1c.
-                    let eidx = unsafe { entry.wrapping_add(0x1c).cast::<u32>().read_unaligned() };
-                    // SAFETY: the parent matrix pointer at model+0x17c.
-                    let pm = unsafe {
-                        model
-                            .wrapping_add(0x17c)
-                            .cast::<*const f32>()
-                            .read_unaligned()
-                    };
-                    if !arr.is_null() && eidx < 0x1000 {
-                        // SAFETY: element `eidx` of the emitter array.
-                        let em = unsafe { arr.wrapping_add(eidx as usize).read_unaligned() };
-                        pq_prescan_emitter(
-                            em as *const u8,
-                            pm,
-                            &cur,
-                            &mut entries,
-                            &mut arena_len,
-                            0,
-                        );
+                if let Some((em, _)) = pq_desc_emitter(entry) {
+                    pq_gate_emitter(em, &mut found, 0);
+                    if found >= PQ_MIN_EMITTERS {
+                        return true;
                     }
                 }
                 i += 1;
@@ -23309,21 +23406,115 @@ fn pq_prescan(
             _ => i += 1,
         }
     }
-    if entries.len() < PQ_MIN_EMITTERS {
+    false
+}
+
+/// Resolve an opcode-4 descriptor to its `(emitter, parent_matrix)` pair.
+///
+/// `emitter = *(*(model+0x3d4) + *(entry+0x1c)*4)`, `pm = *(model+0x17c)`;
+/// `None` on a null model/array or an out-of-range emitter index.
+fn pq_desc_emitter(entry: *const u8) -> Option<(*const u8, *const f32)> {
+    // SAFETY: the model pointer at +0x4.
+    let model = unsafe { entry.wrapping_add(4).cast::<*const u8>().read_unaligned() };
+    if model.is_null() {
         return None;
     }
-    // SAFETY: the 128-entry fade/LOD table global.
-    let fade_lod = unsafe { PQ_FADE_LOD.cast::<[f32; 128]>().read_unaligned() };
-    let header = PqJobHeader {
-        fade_lod,
-        swap: PqLiveEnv.swap(),
-        timed,
+    // SAFETY: the emitter array pointer at model+0x3d4.
+    let arr = unsafe {
+        model
+            .wrapping_add(0x3d4)
+            .cast::<*const u32>()
+            .read_unaligned()
     };
-    Some(PqJobTable {
-        header,
-        entries,
-        arena: Vec::with_capacity(arena_len),
-    })
+    // SAFETY: the emitter index at entry+0x1c.
+    let eidx = unsafe { entry.wrapping_add(0x1c).cast::<u32>().read_unaligned() };
+    // SAFETY: the parent matrix pointer at model+0x17c.
+    let pm = unsafe {
+        model
+            .wrapping_add(0x17c)
+            .cast::<*const f32>()
+            .read_unaligned()
+    };
+    if arr.is_null() || eidx >= 0x1000 {
+        return None;
+    }
+    // SAFETY: element `eidx` of the emitter array.
+    let em = unsafe { arr.wrapping_add(eidx as usize).read_unaligned() };
+    Some((em as *const u8, pm))
+}
+
+/// Publishes the scan's terminal state on every exit path of the scanner.
+///
+/// The join's drain condition needs `scan_done` unconditionally: a scanner
+/// exit that skipped it would spin the join to its deadline and leak the
+/// storage box on every similar pass, so the publication rides a drop
+/// guard rather than a tail call someone can refactor past.
+struct PqScanDone<'a> {
+    /// The live pass view.
+    view: &'a PqJobView,
+    /// Entries produced so far (the guard publishes it as `total`).
+    produced: usize,
+    /// Scan bracket in ticks (0 when unarmed).
+    ticks: u64,
+}
+
+impl Drop for PqScanDone<'_> {
+    fn drop(&mut self) {
+        use core::sync::atomic::Ordering;
+        self.view.total.store(self.produced, Ordering::Relaxed);
+        self.view
+            .gated
+            .store(self.produced < PQ_MIN_EMITTERS, Ordering::Relaxed);
+        self.view.scan_ticks.store(self.ticks, Ordering::Relaxed);
+        self.view.scan_done.store(true, Ordering::Release);
+    }
+}
+
+/// The streaming scan, run on the elected scanner lane.
+///
+/// Walks the descriptor/index COPIES in the view (never the live pass
+/// arrays) and streams entries out through `ready`; the drop guard
+/// publishes `total`/`gated`/`scan_done` on every exit. The emitter walk
+/// itself still reads live guest memory — see [`pq_scan_emitter`].
+fn pq_par_scan(view: &PqJobView) {
+    // SAFETY: the driver keeps the header alive until the join drains us.
+    let timed = unsafe { &*view.header }.timed;
+    let t0 = if timed { wow_shared::tsc::rdtsc() } else { 0 };
+    let mut done = PqScanDone {
+        view,
+        produced: 0,
+        ticks: 0,
+    };
+    let mut arena_len = 0usize;
+    let mut i = 0u32;
+    while i < view.count {
+        // SAFETY: `indices[i]` is within our index copy (`i < count`).
+        let idx = unsafe { view.indices.wrapping_add(i as usize).read() };
+        // Every index was bounded against the copied descriptor range by
+        // the publish (a pass referencing a slot past it stays serial).
+        let entry = view.descs.wrapping_add(idx as usize * 0x40);
+        // SAFETY: the descriptor opcode dword at +0x0 of our copy.
+        let opcode = unsafe { entry.cast::<u32>().read_unaligned() };
+        match opcode {
+            2 => {
+                // SAFETY: the sub-batch count dword at +0x20 of our copy.
+                let sub = unsafe { entry.wrapping_add(0x20).cast::<u32>().read_unaligned() };
+                // Same zero-advance clamp as the gate walk.
+                i = i.wrapping_add(sub.max(1));
+            }
+            4 => {
+                if let Some((em, pm)) = pq_desc_emitter(entry) {
+                    pq_scan_emitter(view, em, pm, &mut done.produced, &mut arena_len, 0);
+                }
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+    if timed {
+        done.ticks = wow_shared::tsc::rdtsc().wrapping_sub(t0);
+    }
+    // `done` drops here, publishing total/gated/scan_done.
 }
 
 /// Consume a pre-built entry for this emitter draw, if one exists and holds.
@@ -23343,20 +23534,51 @@ fn pq_try_consume(this: *mut u8, cursor: usize, ctx: &mut [u32; 9]) -> bool {
     // SAFETY: the driver hook keeps the view alive while `PQ_PASS_VIEW`
     // holds its address.
     let view = unsafe { &*(view_addr as *const PqJobView) };
-    let start = PQ_PASS_CURSOR.load(Ordering::Relaxed);
-    let mut found = usize::MAX;
-    for i in start..view.len {
-        let ep = view.entries.wrapping_add(i);
-        // SAFETY: `i < len`; the emitter field is immutable once published.
-        let em = unsafe { (*ep).emitter };
-        if em == this as usize {
-            found = i;
-            break;
-        }
-    }
-    if found == usize::MAX {
-        super::seam_probe::pq_miss_absent();
+    if view.gated.load(Ordering::Acquire) {
+        // The scan ended under the publish gate: stand down without a miss
+        // (the retire line counts the pass late-gated instead, so the miss
+        // counters keep their tripwire meaning).
         return false;
+    }
+    // ONE deadline anchor for both waits this draw can hit (scan-behind in
+    // the search loop, worker-PENDING below): the worst case stays one 2 ms
+    // window per draw, exactly as before the streaming scan.
+    let t0 = wow_shared::tsc::rdtsc();
+    let deadline = t0.wrapping_add(wow_shared::tsc::secs_to_cycles(1) / 500);
+    let start = PQ_PASS_CURSOR.load(Ordering::Relaxed);
+    let mut waited_on_scan = false;
+    let found = 'search: loop {
+        let ready = view.ready.load(Ordering::Acquire);
+        for i in start..ready {
+            let ep = view.entries.wrapping_add(i);
+            // SAFETY: `i < ready`; the entry is immutable once published.
+            let em = unsafe { (*ep).emitter };
+            if em == this as usize {
+                break 'search i;
+            }
+        }
+        if view.scan_done.load(Ordering::Acquire) {
+            // The scan may have finished between the `ready` load and the
+            // done check; one more pass over the final mark before missing.
+            if view.ready.load(Ordering::Relaxed) > ready {
+                continue;
+            }
+            if view.gated.load(Ordering::Relaxed) {
+                return false;
+            }
+            super::seam_probe::pq_miss_absent();
+            return false;
+        }
+        // The scan has not reached this draw yet: wait for it.
+        waited_on_scan = true;
+        if wow_shared::tsc::rdtsc() >= deadline {
+            super::seam_probe::pq_miss_timeout();
+            return false;
+        }
+        core::hint::spin_loop();
+    };
+    if waited_on_scan {
+        super::seam_probe::pq_scan_behind();
     }
     PQ_PASS_CURSOR.store(found + 1, Ordering::Relaxed);
     // One arm read for the draw: it gates the reached-entry tally here and
@@ -23365,7 +23587,7 @@ fn pq_try_consume(this: *mut u8, cursor: usize, ctx: &mut [u32; 9]) -> bool {
     if probe.is_some() {
         PQ_PASS_CONSUMED.fetch_add(1, Ordering::Relaxed);
     }
-    // SAFETY: `found < len`.
+    // SAFETY: `found < ready`.
     let e = unsafe { view.entries.add(found) };
     // SAFETY: the snapshot is immutable once published.
     let snap = unsafe { &(*e).snapshot };
@@ -23375,8 +23597,6 @@ fn pq_try_consume(this: *mut u8, cursor: usize, ctx: &mut [u32; 9]) -> bool {
     }
     // Wait for the worker. Workers start at the pass head, which is also
     // the consume order, so the common case is already DONE.
-    let t0 = wow_shared::tsc::rdtsc();
-    let deadline = t0.wrapping_add(wow_shared::tsc::secs_to_cycles(1) / 500);
     // SAFETY: the state field is the entry's publication flag.
     let state = unsafe { &(*e).state };
     let mut s = state.load(Ordering::Acquire);
@@ -23444,7 +23664,7 @@ fn pq_try_consume(this: *mut u8, cursor: usize, ctx: &mut [u32; 9]) -> bool {
     true
 }
 
-/// Particle-build pool participant: claim entry chunks, build each.
+/// Particle-build pool participant: elect a scanner, claim entry chunks.
 ///
 /// The claim discipline copies the sweep participant exactly: raise
 /// `active` first, revalidate the generation against
@@ -23452,6 +23672,15 @@ fn pq_try_consume(this: *mut u8, cursor: usize, ctx: &mut [u32; 9]) -> bool {
 /// participant that slept through a publication can never mix a stale view
 /// with a newer job's cursor, and the view pointers stay live while any
 /// participant is active.
+///
+/// The first participant to win `scan_claimed` runs the streaming scan
+/// (with `active` held, so the join waits for it) and then rejoins as a
+/// builder. Builders claim chunks as before but gate each index on the
+/// scanner's `ready` mark; a claimed index past the final count ends the
+/// job for that lane. The scan fills at ~0.33 us/entry, so a gated index
+/// is microseconds away; the deadline only covers a scanner lane dying
+/// mid-pass, and its fallout is entries left PENDING, which the consume
+/// path already degrades on (timeout, serial build).
 fn pq_par_build(shared: &GcParShared, job: &GcJob) {
     use core::sync::atomic::Ordering;
     // ~11 us of build work per claim against a sub-microsecond claim cost,
@@ -23464,19 +23693,49 @@ fn pq_par_build(shared: &GcParShared, job: &GcJob) {
             shared.active.fetch_sub(1, Ordering::SeqCst);
             break;
         }
+        // SAFETY: the epoch was validated with `active` held; the driver
+        // keeps the view alive until the join drains every participant.
+        let view = unsafe { &*(job.spans_ptr as *const PqJobView) };
+        if view
+            .scan_claimed
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
+            pq_par_scan(view);
+            shared.active.fetch_sub(1, Ordering::SeqCst);
+            continue;
+        }
         let start = shared.bucket_cursor.fetch_add(CHUNK, Ordering::SeqCst);
         if start >= job.spans_len {
             shared.active.fetch_sub(1, Ordering::SeqCst);
             break;
         }
-        // SAFETY: the epoch was validated with `active` held; the driver
-        // keeps the view alive until the join drains every participant.
-        let view = unsafe { &*(job.spans_ptr as *const PqJobView) };
+        let deadline =
+            wow_shared::tsc::rdtsc().wrapping_add(wow_shared::tsc::secs_to_cycles(1) / 200);
+        let mut exhausted = false;
         let end = (start + CHUNK).min(job.spans_len);
-        for i in start..end {
+        'chunk: for i in start..end {
+            loop {
+                if i < view.ready.load(Ordering::Acquire) {
+                    break;
+                }
+                if view.scan_done.load(Ordering::Acquire) && i >= view.total.load(Ordering::Relaxed)
+                {
+                    exhausted = true;
+                    break 'chunk;
+                }
+                if wow_shared::tsc::rdtsc() >= deadline {
+                    exhausted = true;
+                    break 'chunk;
+                }
+                core::hint::spin_loop();
+            }
             pq_build_entry(view, i);
         }
         shared.active.fetch_sub(1, Ordering::SeqCst);
+        if exhausted {
+            break;
+        }
     }
 }
 
@@ -23485,12 +23744,15 @@ fn pq_par_build(shared: &GcParShared, job: &GcJob) {
 /// `__thiscall(ecx = pass ctx, stack = (passIdx, batchArrayBase,
 /// sortedIndexArray, count))`. Prologue delegate around the batch-pass
 /// walk, the only route to `CParticleEmitter::Render` (0x70b371 is an
-/// interior label of this body; this is the real prologue). Pre-scans the descriptor array for
-/// emitter draws, publishes one pool job that builds them into private
-/// scratch, runs the stock walk (whose `Render` hook consumes each result
-/// at its turn), then joins and retires the job. With no job published the
-/// walk runs exactly as stock, which is also the `WOW_TURBO_SKIP` story:
-/// unpatching this one hook reverts every draw to the serial path.
+/// interior label of this body; this is the real prologue). Gates on a
+/// capture-free qualifying-emitter walk, snapshots the pass constants and
+/// the descriptor/index arrays, publishes one pool job — whose elected
+/// scanner lane then runs the scan the game thread used to run, streaming
+/// entries to the builder lanes through `ready` — runs the stock walk
+/// (whose `Render` hook consumes each result at its turn), then joins and
+/// retires the job. With no job published the walk runs exactly as stock,
+/// which is also the `WOW_TURBO_SKIP` story: unpatching this one hook
+/// reverts every draw to the serial path.
 pub fn cm2_scene__draw_batch_pass_entry__70b360(
     ctx: *mut core::ffi::c_void,
     pass_idx: u32,
@@ -23510,52 +23772,102 @@ pub fn cm2_scene__draw_batch_pass_entry__70b360(
         original(ctx, pass_idx, batches, indices, count);
         return;
     }
-    // One arm read for the whole pass: it gates the pre-scan bracket here,
-    // the per-entry bracket the workers keep, and the retire sum below.
+    // The publish gate, all game-thread and capture-free: the pass current
+    // matrix (a per-pass input the scan needs anyway), the copy-reservation
+    // bound, then the qualifying-emitter prefix walk.
+    let Some(cur) = pq_walk_current_matrix(ctx.cast::<u8>().cast_const()) else {
+        super::seam_probe::pq_pass_gated();
+        original(ctx, pass_idx, batches, indices, count);
+        return;
+    };
+    if count as usize > PQ_DESC_MAX || !pq_gate_scan(batches, indices, count) {
+        super::seam_probe::pq_pass_gated();
+        original(ctx, pass_idx, batches, indices, count);
+        return;
+    }
+    // One arm read for the whole pass: it gates the publish bracket here,
+    // the scanner's scan bracket, the per-entry bracket the workers keep,
+    // and the retire sums below.
     let probe = super::tally::arm();
     let t0 = if probe.is_some() {
         wow_shared::tsc::rdtsc()
     } else {
         0
     };
-    let Some(mut table) = pq_prescan(
-        ctx.cast::<u8>().cast_const(),
-        batches,
-        indices,
-        count,
-        probe.is_some(),
-    ) else {
+    let mut table = PQ_STORAGE.take().unwrap_or_else(PqTableStorage::new_boxed);
+    // Copy the index array, bounding the descriptor range it references.
+    let n = count as usize;
+    let ibase = table.indices.as_mut_ptr();
+    let mut max_idx = 0usize;
+    for i in 0..n {
+        // SAFETY: `indices[i]` is within the pass index array (`i < count`).
+        let idx = unsafe { indices.wrapping_add(i).read_unaligned() };
+        // SAFETY: `i < n <= PQ_DESC_MAX`, within the index reservation.
+        unsafe { ibase.wrapping_add(i).write(idx) };
+        max_idx = max_idx.max(idx as usize);
+    }
+    if max_idx >= PQ_DESC_MAX {
+        // The pass references a descriptor slot past the copy reservation:
+        // stay serial rather than scan a partial view of it.
+        PQ_STORAGE.set(Some(table));
         super::seam_probe::pq_pass_gated();
         original(ctx, pass_idx, batches, indices, count);
         return;
-    };
-    let len = table.entries.len();
-    if let Some(armed) = &probe {
-        super::seam_probe::pq_pass(armed, len as u32, wow_shared::tsc::rdtsc().wrapping_sub(t0));
     }
+    // Descriptor snapshot, coherent by construction (taken pre-walk, the
+    // same bytes the on-thread scan used to read), so the scanner never
+    // races the stock walk over the descriptor memory itself. `[0,
+    // max_idx]` is within the pass's dense descriptor allocation.
+    // SAFETY: source spans the referenced descriptor slots; destination is
+    // the descs reservation (`max_idx < PQ_DESC_MAX`).
+    unsafe {
+        core::ptr::copy_nonoverlapping(batches, table.descs.as_mut_ptr(), (max_idx + 1) * 0x40);
+    }
+    // Header, at the same pre-walk point in time as the old on-thread scan.
+    // SAFETY: the 128-entry fade/LOD table global.
+    table.header.fade_lod = unsafe { PQ_FADE_LOD.cast::<[f32; 128]>().read_unaligned() };
+    table.header.swap = PqLiveEnv.swap();
+    table.header.timed = probe.is_some();
     let view = Box::new(PqJobView {
         header: &table.header,
         entries: table.entries.as_mut_ptr(),
-        len,
+        cap: PQ_ENTRIES_MAX,
         arena: table.arena.as_mut_ptr(),
+        descs: table.descs.as_ptr(),
+        indices: table.indices.as_ptr(),
+        count,
+        cur,
+        ready: core::sync::atomic::AtomicUsize::new(0),
+        total: core::sync::atomic::AtomicUsize::new(0),
+        scan_done: core::sync::atomic::AtomicBool::new(false),
+        scan_claimed: core::sync::atomic::AtomicBool::new(false),
+        gated: core::sync::atomic::AtomicBool::new(false),
+        scan_ticks: core::sync::atomic::AtomicU64::new(0),
     });
     let view_addr = core::ptr::from_ref::<PqJobView>(&view) as usize;
     let shared = gc_pool();
     PQ_PASS_CURSOR.store(0, Ordering::Relaxed);
     PQ_PASS_CONSUMED.store(0, Ordering::Relaxed);
-    gc_par_begin(shared, GcJob::particles(view_addr, len));
+    gc_par_begin(shared, GcJob::particles(view_addr, PQ_ENTRIES_MAX));
     PQ_PASS_VIEW.store(view_addr, Ordering::Relaxed);
+    if let Some(armed) = &probe {
+        // The game thread's whole remaining share of the pre-build: copies,
+        // header, publish. The scan itself is priced on the scanner lane.
+        super::seam_probe::pq_publish(armed, wow_shared::tsc::rdtsc().wrapping_sub(t0));
+    }
 
     original(ctx, pass_idx, batches, indices, count);
 
     PQ_PASS_VIEW.store(0, Ordering::Relaxed);
-    // Join: a cursor past the end means no new claim can begin, and
-    // `active == 0` means none is in flight. Probe-style deadline so a
-    // stalled worker degrades to one leaked table and a warning, never a
-    // free under a live writer.
+    // Join: the scanner finished, a cursor past the final count means no
+    // new claim can begin, and `active == 0` means none is in flight.
+    // Probe-style deadline so a stalled worker degrades to one leaked
+    // storage box and a warning, never a free under a live writer (the
+    // thread_local is simply not restocked; the next publish reallocates).
     let deadline = wow_shared::tsc::rdtsc().wrapping_add(wow_shared::tsc::secs_to_cycles(1) / 20);
     loop {
-        let drained = shared.bucket_cursor.load(Ordering::SeqCst) >= len
+        let drained = view.scan_done.load(Ordering::Acquire)
+            && shared.bucket_cursor.load(Ordering::SeqCst) >= view.total.load(Ordering::Relaxed)
             && shared.active.load(Ordering::SeqCst) == 0;
         if drained {
             break;
@@ -23569,7 +23881,7 @@ pub fn cm2_scene__draw_batch_pass_entry__70b360(
             if n < 8 || n.is_multiple_of(64) {
                 log::warn!(
                     target: super::tally::TARGET,
-                    "particle pass join timed out (#{n}); leaking one {len}-entry pass table",
+                    "particle pass join timed out (#{n}); leaking one pass storage box",
                 );
             }
             shared.done.store(true, Ordering::SeqCst);
@@ -23580,17 +23892,34 @@ pub fn cm2_scene__draw_batch_pass_entry__70b360(
         std::thread::yield_now();
     }
     shared.done.store(true, Ordering::SeqCst);
+    let total = view.total.load(Ordering::Relaxed);
     if let Some(armed) = &probe {
-        let consumed = PQ_PASS_CONSUMED.load(Ordering::Relaxed).min(len);
-        let mut worker_ticks = 0u64;
-        for e in &table.entries {
-            let s = e.state.load(Ordering::Relaxed);
-            if s == PQ_STATE_DONE || s == PQ_STATE_CONSUMED {
-                worker_ticks = worker_ticks.wrapping_add(e.ticks);
+        if view.gated.load(Ordering::Relaxed) {
+            // The gate admitted qualifying emitters whose captures then
+            // failed; entries consumed before the scanner discovered it
+            // are valid hits, the rest are not misses.
+            super::seam_probe::pq_pass_late_gated(armed);
+        } else {
+            super::seam_probe::pq_pass(
+                armed,
+                total as u32,
+                view.scan_ticks.load(Ordering::Relaxed),
+            );
+            let consumed = PQ_PASS_CONSUMED.load(Ordering::Relaxed).min(total);
+            let mut worker_ticks = 0u64;
+            // SAFETY: `scan_done` was observed by the join, so
+            // `entries[..total]` are published and no worker writes them.
+            let entries = unsafe { core::slice::from_raw_parts(view.entries.cast_const(), total) };
+            for e in entries {
+                let s = e.state.load(Ordering::Relaxed);
+                if s == PQ_STATE_DONE || s == PQ_STATE_CONSUMED {
+                    worker_ticks = worker_ticks.wrapping_add(e.ticks);
+                }
             }
+            super::seam_probe::pq_retire(armed, (total - consumed) as u32, worker_ticks);
         }
-        super::seam_probe::pq_retire(armed, (len - consumed) as u32, worker_ticks);
     }
+    PQ_STORAGE.set(Some(table));
 }
 
 // Dense liquid-query driver: the per-face gather + kind-arm branches are a
