@@ -4,15 +4,18 @@
 //! `[functions.Name]` entry per function — `rva`, `sig`, `abi`, `ret`, `args`,
 //! `preserve` are all required (no half-specified entries).
 //!
-//! Per entry the reimpl is wired at compile time — the generated `extern "abi"`
-//! thunk `MinHook` installs calls straight through to its sibling
-//! `super::hooks::<snake>` adapter with only the host arguments. The unhooked
-//! original (the `MinHook` trampoline) is the only runtime state; it is published
-//! at install time and reached through a typed accessor, `originals::<snake>()`,
-//! which returns the matching `{Name}Fn` for a reimpl that must delegate (almost
-//! none do). The installer refuses to patch unless the bytes at the target match
-//! the entry's `sig`. Addresses + signatures are inlined into the installer, not
-//! exposed as constants. Never edit the generated file — edit the manifest.
+//! Per entry the reimpl is wired at compile time. An entry with nothing to do
+//! between the patched prologue and its reimplementation is patched straight
+//! over `super::hooks::<snake>`, which carries the entry's own `extern "abi"`;
+//! an entry that has to save a register, record a breadcrumb or dispatch to the
+//! differential harness gets a generated `extern "abi"` thunk in front of it,
+//! called with only the host arguments. The unhooked original (the `MinHook`
+//! trampoline) is the only runtime state; it is published at install time and
+//! reached through a typed accessor, `originals::<snake>()`, which returns the
+//! matching `{Name}Fn` for a reimpl that must delegate (almost none do). The
+//! installer refuses to patch unless the bytes at the target match the entry's
+//! `sig`. Addresses + signatures are inlined into the installer, not exposed as
+//! constants. Never edit the generated file — edit the manifest.
 
 // This script emits Rust source as string data; the brace-delimited fragments in
 // those literals are the *generated* code's format args, not this script's — so
@@ -360,7 +363,7 @@ fn main() {
     // const no-ops. Mirrors `windows/d3d9/build.rs`.
     println!("cargo::rustc-check-cfg=cfg(wow_crumb)");
     println!("cargo:rerun-if-env-changed=WOW_CRUMB");
-    if std::env::var("WOW_CRUMB").is_ok_and(|v| !v.is_empty() && v != "0") {
+    if crumb_build() {
         println!("cargo:rustc-cfg=wow_crumb");
     }
 
@@ -372,7 +375,7 @@ fn main() {
     // `diff` table emit identical thunks either way (zero cost in the shipped DLL).
     println!("cargo::rustc-check-cfg=cfg(wow_turbo_diff)");
     println!("cargo:rerun-if-env-changed=WOW_TURBO_DIFF");
-    if std::env::var("WOW_TURBO_DIFF").is_ok_and(|v| !v.is_empty() && v != "0") {
+    if diff_build() {
         println!("cargo:rustc-cfg=wow_turbo_diff");
     }
 
@@ -435,6 +438,48 @@ fn main() {
 /// A `preserve` entry may only name one of these.
 const VOL_ORDER: [&str; 3] = ["eax", "ecx", "edx"];
 
+/// Whether a manifest argument type is one the i386 conventions put in a register.
+///
+/// A float never is: it goes on the stack whichever convention is in force.
+/// Anything that is not a pointer or a machine word is left out because the
+/// mapping stops being obvious (a 64-bit scalar spans two slots, a sub-word
+/// integer is promoted). Used only to decide whether a register's incoming
+/// value is already in hand as a parameter, so a `false` here costs nothing but
+/// the capture that would otherwise be redundant.
+fn reg_sized_arg(ty: &str) -> bool {
+    ty.starts_with('*') || matches!(ty, "u32" | "i32" | "usize" | "isize")
+}
+
+/// Which argument, if any, each volatile register carries into an entry.
+///
+/// The mapping is by TYPE, not by position: `fastcall` takes the first two
+/// integer or pointer arguments into ECX and EDX and passes floats on the
+/// stack, so a leading `f32` consumes no register at all. That is why
+/// `Camera__OrganicSmooth`, three `f32`s under `fastcall`, has both registers
+/// free for a caller to keep a value in and must keep its capture. Scanning
+/// stops at the first argument whose register use is not obvious, so an
+/// unrecognised type only ever means "assume it carries nothing".
+fn reg_args(abi: &str, args: &[String]) -> Vec<(&'static str, usize)> {
+    let pool: &[&'static str] = match abi {
+        "thiscall" => &["ecx"],
+        "fastcall" => &["ecx", "edx"],
+        _ => &[],
+    };
+    let mut pool = pool.iter().copied();
+    let mut out = Vec::new();
+    for (i, ty) in args.iter().enumerate() {
+        if ty == "f32" || ty == "f64" {
+            continue;
+        }
+        if !reg_sized_arg(ty) {
+            break;
+        }
+        let Some(reg) = pool.next() else { break };
+        out.push((reg, i));
+    }
+    out
+}
+
 /// Whether this build carries the diagnostic layer (`WOW_TURBO_PERF=1`).
 ///
 /// Read twice: once in `main` to emit the `cfg`, and once in [`render`], which
@@ -446,8 +491,33 @@ fn perf_build() -> bool {
     env::var("WOW_TURBO_PERF").is_ok_and(|v| !v.is_empty() && v != "0")
 }
 
+/// Whether this build records a breadcrumb per hook (`WOW_CRUMB=1`).
+fn crumb_build() -> bool {
+    env::var("WOW_CRUMB").is_ok_and(|v| !v.is_empty() && v != "0")
+}
+
+/// Whether this build carries the differential harness (`WOW_TURBO_DIFF=1`).
+fn diff_build() -> bool {
+    env::var("WOW_TURBO_DIFF").is_ok_and(|v| !v.is_empty() && v != "0")
+}
+
+/// Whether this build needs a generated function in front of every adapter.
+///
+/// A breadcrumb build records which hook ran from inside the thunk body, and a
+/// differential build reads the entry's compare switch there, so both want an
+/// interposition point between the patched prologue and the reimplementation.
+/// Neither is a shipped build. Without them a `preserve = []` entry's thunk
+/// would forward its arguments and do nothing else, so the hook is installed
+/// over the adapter itself and the thunk is not emitted at all. The decision is
+/// made here rather than as a generated `#[cfg]` because it changes which
+/// symbol the install step names, not what that symbol does.
+fn interposed_thunks() -> bool {
+    crumb_build() || diff_build()
+}
+
 fn render(m: &Manifest) -> String {
     let perf = perf_build();
+    let interposed = interposed_thunks();
     let mut out = String::new();
     out.push_str("// @generated from symbols.toml by build.rs — do not edit.\n\n");
 
@@ -571,21 +641,25 @@ fn render(m: &Manifest) -> String {
         // it expected to survive `Determinant`. Our Rust reimpl uses the volatiles
         // as scratch, so for each register the original leaves intact (the
         // per-function `preserve` set, machine-checked against the binary) the
-        // thunk captures the incoming value, calls the reimpl, and restores it
-        // before returning. The capture `asm!` is the FIRST
-        // statement: the only code the compiler emits before it is the prologue
-        // (`push ebp; mov ebp, esp`), which never writes a volatile, so the captured
-        // value is the incoming one. Everything else — arg forwarding, the call, the
+        // thunk restores the incoming value before returning. Where that register
+        // is one the entry's own convention hands us as a parameter there is
+        // nothing to capture (the value is already in scope) and the restore
+        // feeds it back; where it is not, an empty-operand `asm!` reads it, and
+        // that capture is the FIRST statement, so the only code the compiler emits
+        // before it is the prologue (`push ebp; mov ebp, esp`), which never writes
+        // a volatile. Everything else — arg forwarding, the call, the
         // `abi`'s `ret` cleanup — is ordinary Rust the optimizer owns: it inlines the
         // reimpl into the thunk, so there is NO naked frame, NO manual arg re-push,
         // and NO extra call (unlike a naked shim, which forces a non-inlinable
         // `thunk -> inner -> reimpl` chain). `preserve` is independent of `abi`: it
         // can name EAX (the return register ONLY for int/ptr returns — for
         // `void`/float returns EAX is free, so a caller can keep a live value there
-        // too), ECX, and/or EDX, but never an arg-carrying register (ECX for
-        // thiscall, ECX/EDX for fastcall) nor the return register. EBX/ESI/EDI/EBP
-        // are callee-saved by the reimpl's own prologue, and XMM is untouched by the
-        // x87 originals. An empty `preserve` emits a plain thunk.
+        // too), ECX, and/or EDX. It may name an arg-carrying register (ECX for
+        // thiscall, ECX/EDX for fastcall), because the client does keep an argument
+        // live across such a call and read it back, but never the return register.
+        // EBX/ESI/EDI/EBP are callee-saved by the reimpl's own prologue, and XMM is
+        // untouched by the x87 originals. An empty `preserve` needs no thunk at all
+        // unless this build interposes on every hook (see `interposed_thunks`).
         assert!(
             f.preserve.iter().all(|p| VOL_ORDER.contains(&p.as_str())),
             "{name}: `preserve` may only list eax/ecx/edx, got {:?}",
@@ -595,67 +669,125 @@ fn render(m: &Manifest) -> String {
             .into_iter()
             .filter(|&r| f.preserve.iter().any(|p| p.as_str() == r))
             .collect();
-        let _ = writeln!(
-            out,
-            "extern \"{abi}\" fn {snake}_thunk({named_params}){ret_arrow} {{"
-        );
-        if saves.is_empty() {
-            out.push_str(&crumb);
-            let _ = writeln!(out, "    {dispatch_expr}");
+        // With nothing to save and nothing to interpose, the thunk would forward
+        // its arguments and return, so `MinHook` patches the adapter directly and
+        // the whole seam goes with it: a second frame, the arg re-push a
+        // caller-pop internal call needs, and a call/ret pair.
+        //
+        // The adapter then has to carry the entry's own convention, and nothing
+        // in the install path would notice if it did not, because a detour with
+        // the wrong stack cleanup just leaks the stack per call. So the pointer
+        // is taken THROUGH `{name}Fn`: casting a function item to a function
+        // pointer type is only legal when the signature and the ABI match
+        // exactly, which makes a manifest/adapter disagreement a build error.
+        let direct = saves.is_empty() && !interposed;
+        let detour = if direct {
+            format!("super::hooks::{snake} as {name}Fn")
         } else {
-            // Empty register-operand `asm!`s read the incoming value (capture) and
-            // write it back (restore). No `pure`: the value depends on register
-            // state, so the blocks must not be reordered or elided.
-            let cap = saves
-                .iter()
-                .map(|r| format!("out(\"{r}\") s_{r}"))
-                .collect::<Vec<_>>()
-                .join(", ");
-            let res = saves
-                .iter()
-                .map(|r| format!("in(\"{r}\") s_{r}"))
-                .collect::<Vec<_>>()
-                .join(", ");
-            for r in &saves {
-                let _ = writeln!(out, "    let s_{r}: u32;");
-            }
+            format!("{snake}_thunk")
+        };
+        if !direct {
             let _ = writeln!(
                 out,
-                "    // SAFETY: empty asm capturing the incoming caller-saved {saves:?} that the\n    \
-                 // 1.12 caller keeps live across this internal function (see module note)."
+                "extern \"{abi}\" fn {snake}_thunk({named_params}){ret_arrow} {{"
             );
-            let _ = writeln!(
-                out,
-                "    unsafe {{ ::core::arch::asm!(\"\", {cap}, options(nomem, nostack, preserves_flags)) }};"
-            );
-            out.push_str(&crumb);
-            if f.ret == "void" {
-                let _ = writeln!(out, "    {dispatch_expr};");
+            if saves.is_empty() {
+                out.push_str(&crumb);
+                let _ = writeln!(out, "    {dispatch_expr}");
             } else {
-                let _ = writeln!(out, "    let result = {dispatch_expr};");
+                // Which of the saved registers arrive holding a parameter, and so
+                // need no capture: the restore is fed the parameter itself, which
+                // is the same value and one copy instead of two.
+                let carried: BTreeMap<&str, usize> =
+                    reg_args(&f.abi, &f.args).into_iter().collect();
+                let captured: Vec<&str> = saves
+                    .iter()
+                    .copied()
+                    .filter(|r| !carried.contains_key(r))
+                    .collect();
+                // Empty register-operand `asm!`s read the incoming value (capture) and
+                // write it back (restore). No `pure`: the value depends on register
+                // state, so the blocks must not be reordered or elided.
+                let cap = captured
+                    .iter()
+                    .map(|r| format!("out(\"{r}\") s_{r}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let res = saves
+                    .iter()
+                    .map(|r| {
+                        carried.get(r).map_or_else(
+                            || format!("in(\"{r}\") s_{r}"),
+                            |&i| {
+                                // A pointer parameter is fed in as its address:
+                                // the register only ever carries the word, and an
+                                // `asm!` that takes a pointer while promising
+                                // `nomem` reads as one that might dereference it.
+                                let addr = if f.args[i].starts_with('*') {
+                                    " as usize"
+                                } else {
+                                    ""
+                                };
+                                format!("in(\"{r}\") arg{i}{addr}")
+                            },
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                for r in &captured {
+                    let _ = writeln!(out, "    let s_{r}: u32;");
+                }
+                if !captured.is_empty() {
+                    let _ = writeln!(
+                        out,
+                        "    // SAFETY: empty asm capturing the incoming caller-saved {captured:?} that the\n    \
+                         // 1.12 caller keeps live across this internal function (see module note)."
+                    );
+                    let _ = writeln!(
+                        out,
+                        "    unsafe {{ ::core::arch::asm!(\"\", {cap}, options(nomem, nostack, preserves_flags)) }};"
+                    );
+                }
+                out.push_str(&crumb);
+                if f.ret == "void" {
+                    let _ = writeln!(out, "    {dispatch_expr};");
+                } else {
+                    let _ = writeln!(out, "    let result = {dispatch_expr};");
+                }
+                let whence = if captured.is_empty() {
+                    "from the parameters that arrived in them".to_owned()
+                } else if captured.len() == saves.len() {
+                    "from the locals above".to_owned()
+                } else {
+                    format!(
+                        "{captured:?} from the locals above, the rest from the parameters that arrived in them"
+                    )
+                };
+                let _ = writeln!(
+                    out,
+                    "    // SAFETY: empty asm restoring the incoming {saves:?} before returning,\n    \
+                     // {whence}."
+                );
+                let _ = writeln!(
+                    out,
+                    "    unsafe {{ ::core::arch::asm!(\"\", {res}, options(nomem, nostack, preserves_flags)) }};"
+                );
+                if f.ret != "void" {
+                    let _ = writeln!(out, "    result");
+                }
             }
-            let _ = writeln!(
-                out,
-                "    // SAFETY: empty asm restoring the captured {saves:?} before returning."
-            );
-            let _ = writeln!(
-                out,
-                "    unsafe {{ ::core::arch::asm!(\"\", {res}, options(nomem, nostack, preserves_flags)) }};"
-            );
-            if f.ret != "void" {
-                let _ = writeln!(out, "    result");
-            }
+            // Both arms emit the thunk body up to its closing brace; close it here.
+            let _ = writeln!(out, "}}");
+            out.push('\n');
         }
-        // Both arms emit the thunk body up to its closing brace; close it here.
-        let _ = writeln!(out, "}}");
-        out.push('\n');
 
         // Differential-mode machinery for this hook (all `#[cfg(wow_turbo_diff)]`).
         emit_diff(&mut out, name, &snake, &screaming, f);
 
-        // Install step: verify the signature, create the hook over the thunk,
-        // store the original, queue the enable (applied in one batch at the end
-        // of `install_all`). Address + signature are inlined here.
+        // Install step: verify the signature, create the hook over the detour
+        // (the thunk, or the adapter itself where there is no thunk), store the
+        // original, queue the enable (applied in one batch at the end of
+        // `install_all`). Address + signature are inlined here.
         //
         // An `armed_only` entry puts that step behind the gauge's own arming
         // check, so an unarmed run never patches the address at all.
@@ -669,7 +801,7 @@ fn render(m: &Manifest) -> String {
         let _ = writeln!(install_body, "{ind}        {},", f.sig.literal());
         let _ = writeln!(
             install_body,
-            "{ind}        {snake}_thunk as *mut ::core::ffi::c_void,"
+            "{ind}        {detour} as *mut ::core::ffi::c_void,"
         );
         let _ = writeln!(install_body, "{ind}        {name:?},");
         let _ = writeln!(install_body, "{ind}        |trampoline| {{");
@@ -1135,10 +1267,10 @@ fn is_integer_ret(ret: &str) -> bool {
 /// The fixed `install_thunk` helper appended to the generated module.
 ///
 /// Refuse unless the bytes at the target match one of the recorded signatures,
-/// then create the hook over the generated thunk, let the caller publish the
-/// original (the `store` closure runs before enabling, so the lazy resolver can
-/// never see an empty slot), then queue the enable — `install_all` applies the
-/// whole queue in one thread-freeze at the end.
+/// then create the hook over the detour, let the caller publish the original
+/// (the `store` closure runs before enabling, so the lazy resolver can never
+/// see an empty slot), then queue the enable — `install_all` applies the whole
+/// queue in one thread-freeze at the end.
 const INSTALL_THUNK: &str = r#"
 /// Install one hook; returns whether it was queued for enabling.
 ///
@@ -1147,13 +1279,15 @@ const INSTALL_THUNK: &str = r#"
 /// skips. A hook must never crash the host, and must never patch an unverified
 /// address. Most entries list one pattern; an entry lists several when its
 /// reimplementation stands in for more than one known prologue at that address.
-/// The enable is only queued; `install_all`'s single `apply_queued` makes the
-/// batch live.
+/// `detour` is the generated thunk where the entry needs one and the adapter
+/// itself where it does not; either way it carries the entry's own `abi`. The
+/// enable is only queued; `install_all`'s single `apply_queued` makes the batch
+/// live.
 fn install_thunk(
     image_base: usize,
     rva: usize,
     sigs: &[&str],
-    thunk: *mut ::core::ffi::c_void,
+    detour: *mut ::core::ffi::c_void,
     label: &str,
     store: impl FnOnce(*mut ::core::ffi::c_void),
 ) -> bool {
@@ -1186,9 +1320,9 @@ fn install_thunk(
         );
         return false;
     }
-    // SAFETY: `va`'s prologue matched the recorded signature, and `thunk`'s
-    // generated `extern "abi"` matches the manifest ABI.
-    let Some(trampoline) = (unsafe { ::wow_hook::create_hook(va, thunk, label) }) else {
+    // SAFETY: `va`'s prologue matched the recorded signature, and `detour`'s
+    // `extern "abi"` matches the manifest ABI.
+    let Some(trampoline) = (unsafe { ::wow_hook::create_hook(va, detour, label) }) else {
         return false;
     };
     store(trampoline);

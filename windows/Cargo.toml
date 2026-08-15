@@ -101,8 +101,8 @@ undocumented_unsafe_blocks = "warn"
 items_after_statements = "allow"        # 849
 cast_ptr_alignment = "allow"            # 924 — reads are already `read_unaligned`
 unreadable_literal = "allow"            # 391 — addresses and bit masks, verbatim
-similar_names = "allow"                 # 225
-semicolon_if_nothing_returned = "allow" # 154
+similar_names = "allow"                 # 183
+semicolon_if_nothing_returned = "allow" # 52
 many_single_char_names = "allow"        # 42
 
 # Numeric conversions that must truncate, wrap and round exactly as the
