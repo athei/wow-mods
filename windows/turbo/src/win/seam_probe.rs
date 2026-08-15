@@ -25,10 +25,11 @@
 //! sampler's collision share when the callers above these entries carry no
 //! frame pointers.
 //!
-//! Counters ride the counter arm (`wow::perf` at debug), which is NOT the
-//! event gauge's: these cost nothing to keep, that one does not, so asking
-//! for these numbers must not buy it. Unarmed, every entry point here is a
-//! load and a branch. All writers are the
+//! Counters ride the diagnostic layer's gate ([`super::tally`]), so they exist
+//! only in a `PERF=1` build and report on its `wow::perf` target at `info`.
+//! Without that build every entry point here is an empty inline and the
+//! argument staging above it goes with them, which is why the entry points
+//! take whole snapshots rather than pre-formatted numbers. All writers are the
 //! game thread except the two bone-animation entry counters, which the
 //! client's own worker thread can also reach and which are therefore declared
 //! as the locked-add shape.
@@ -418,16 +419,16 @@ pub fn anim_par_gated() {
     super::tally::bump(&ANIM_PAR_GATED);
 }
 
-/// One clip call's counters, with the arm resolved once for the whole call.
+/// One clip call's counters, with the token taken once for the whole call.
 ///
 /// The clip counts twice per call — the call itself, then whichever of its
 /// three exits it takes — and it is the hottest function in the process, so
-/// reading the arm again at the exit would double the unarmed cost of the site
-/// for nothing. [`clip_call`] reads it once and this carries it. Zero-sized,
-/// so the `Option` a caller holds across the body is a byte on the stack.
+/// the exit reads the token the entry already took rather than taking its own.
+/// [`clip_call`] takes it once and this carries it. Zero-sized, so the `Option`
+/// a caller holds across the body is a byte on the stack.
 pub struct ClipCall(Armed);
 
-/// Count one polygon clip and hold the arm for its exit.
+/// Count one polygon clip and hold the token for its exit.
 ///
 /// The profiler put `collision_clip_polygon_by_plane` at 6.14% of the thread,
 /// the hottest function in the process, and a sampler cannot say whether that
@@ -906,7 +907,7 @@ pub fn emit_cumulative() {
     let passes = ANIM_PASSES.get();
     if passes != 0 {
         let calls = ANIM_CALLS.get();
-        log::debug!(
+        log::info!(
             target: super::tally::TARGET,
             "seam anim: {passes} passes ({} multi-root, {} worker-arm), roots sum {} max {}, \
              list sum {} max {}, root us sum {} max {}, repeat {}/{calls}",
@@ -924,7 +925,7 @@ pub fn emit_cumulative() {
     let par_passes = ANIM_PAR_PASSES.get();
     let par_gated = ANIM_PAR_GATED.get();
     if par_passes != 0 || par_gated != 0 {
-        log::debug!(
+        log::info!(
             target: super::tally::TARGET,
             "seam anim par: {par_passes} passes ({par_gated} gated multi-root), roots {}, \
              worker us sum {}, wait us sum {} max {}, fork us sum {}, stalls {}, helped {}",
@@ -939,7 +940,7 @@ pub fn emit_cumulative() {
     }
     let bdl_passes = BDL_PASSES.get();
     if bdl_passes != 0 {
-        log::debug!(
+        log::info!(
             target: super::tally::TARGET,
             "seam bdl: {bdl_passes} passes, total us {} max {}, us prologue {} collect {} \
              animate {} particles {} refresh {} spatial {} child {} finalize {}",
@@ -957,7 +958,7 @@ pub fn emit_cumulative() {
     }
     let fin_passes = FIN_PASSES.get();
     if fin_passes != 0 {
-        log::debug!(
+        log::info!(
             target: super::tally::TARGET,
             "seam finalize: {fin_passes} passes, b0 in sum {} max {} out {}, runs {}, spill {}, \
              probe steps {}, cmp calls {}, us dedup {} texsort {} merge {}",
@@ -972,7 +973,7 @@ pub fn emit_cumulative() {
             ticks_to_us(FIN_TEXSORT_TICKS.get()),
             ticks_to_us(FIN_MERGE_TICKS.get()),
         );
-        log::debug!(
+        log::info!(
             target: super::tally::TARGET,
             "seam finalize sorts: trans sum {} max {}, cmps {} (tag {}), us {}, \
              opaque sum {} max {}, cmps {}, us {}",
@@ -990,11 +991,11 @@ pub fn emit_cumulative() {
     let p = PARTICLE_LOCKS.get();
     let r = RAIN_LOCKS.get();
     if p != 0 || r != 0 {
-        log::debug!(target: super::tally::TARGET, "seam locks: particle {p}, rain {r}");
+        log::info!(target: super::tally::TARGET, "seam locks: particle {p}, rain {r}");
     }
     let mc_calls = MAPCHUNK_CALLS.get();
     if mc_calls != 0 {
-        log::debug!(
+        log::info!(
             target: super::tally::TARGET,
             "seam mapchunk: {mc_calls} calls, overlap {}, nodes {}, inserted {}, subs {}, \
              drift {}",
@@ -1007,7 +1008,7 @@ pub fn emit_cumulative() {
     }
     let clip_calls = CLIP_CALLS.get();
     if clip_calls != 0 {
-        log::debug!(
+        log::info!(
             target: super::tally::TARGET,
             "seam clip: {clip_calls} calls, verts {}, hist {}/{}/{}/{}, \
              kept {}, dropped {}, cut {}",
@@ -1023,7 +1024,7 @@ pub fn emit_cumulative() {
     }
     let face_passes = FACE_PASSES.get();
     if face_passes != 0 {
-        log::debug!(
+        log::info!(
             target: super::tally::TARGET,
             "seam faces: {face_passes} passes, visited {}, back {}, wiped {}, swept {}",
             FACE_VISITED.get(),
@@ -1041,7 +1042,7 @@ pub fn emit_cumulative() {
     let doodad = TRACE_DOODAD_QUERY.get();
     let grid = TRACE_GRID_BUILD.get();
     if ground | sweep | terrain | scene | geometry | wmo | doodad | grid != 0 {
-        log::debug!(
+        log::info!(
             target: super::tally::TARGET,
             "seam traces: ground {ground}, sweep {sweep}, terrain {terrain}, scene {scene}, \
              geom {geometry}, wmo {wmo}, doodad {doodad}, grid {grid}",
@@ -1049,7 +1050,7 @@ pub fn emit_cumulative() {
     }
     let tscene_calls = TSCENE_CALLS.get();
     if tscene_calls != 0 {
-        log::debug!(
+        log::info!(
             target: super::tally::TARGET,
             "seam trace scene: {tscene_calls} calls, us sum {} max {}, list sum {} max {}, \
              cands sum {} max {}, geom {}, two-pass {}, hits {}",
@@ -1066,7 +1067,7 @@ pub fn emit_cumulative() {
     }
     let draws = PART_DRAWS.get();
     if draws != 0 {
-        log::debug!(
+        log::info!(
             target: super::tally::TARGET,
             "seam particles: {draws} draws ({} clamped), count sum {} max {}, \
              hist {}/{}/{}/{}/{}, cap sum {}, emitted sum {}, build us sum {} max {}",
@@ -1086,7 +1087,7 @@ pub fn emit_cumulative() {
     }
     let phys_nodes = PHYS_NODES.get();
     if phys_nodes != 0 {
-        log::debug!(
+        log::info!(
             target: super::tally::TARGET,
             "seam particles phys: {phys_nodes} nodes, upac us {}, emitters {}, emit us {}, \
              steps {} max {}, particles {} (aligned {}), culled {}, child {}, drift {}",
@@ -1104,7 +1105,7 @@ pub fn emit_cumulative() {
     }
     let rotate_calls = ROTATE_CALLS.get();
     if rotate_calls != 0 {
-        log::debug!(
+        log::info!(
             target: super::tally::TARGET,
             "seam axisrot: {rotate_calls} calls, constant {}",
             ROTATE_CONSTANT.get(),
@@ -1113,7 +1114,7 @@ pub fn emit_cumulative() {
     let pre_passes = PART_PRE_PASSES.get();
     let pre_gated = PART_PRE_GATED.get();
     if pre_passes != 0 || pre_gated != 0 {
-        log::debug!(
+        log::info!(
             target: super::tally::TARGET,
             "seam particles par: {pre_passes} passes ({pre_gated} gated, {} late), emitters {}, \
              hits {}, miss absent {} validate {}/{}/{}/{}/{}/{}/{} timeout {} declined {}, \

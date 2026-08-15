@@ -59,7 +59,7 @@ pub fn emit_cumulative() {
     if pos | neg | misses | unserved == 0 {
         return;
     }
-    log::debug!(
+    log::info!(
         target: super::tally::TARGET,
         "filecache: {pos} pos hits, {neg} neg hits, {misses} misses, \
          {unserved} unserved, {} flushes",

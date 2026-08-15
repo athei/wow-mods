@@ -1,28 +1,37 @@
-//! Counter primitives for the armed instrumentation: one arm, two disciplines.
+//! Counter primitives for the diagnostic layer: one gate, two disciplines.
 //!
 //! Every diagnostic counter in the crate is written through this module and
-//! rides one arm, [`TARGET`] at debug, resolved once. An unarmed session
-//! therefore pays a cached load and a branch per counting site and touches no
-//! counter at all. The exception is a permanent tripwire that has to fire at
-//! the default filter, which counts on its cold branch only and says so where
-//! it does it.
+//! rides one gate, [`LIVE`], which is the build itself: `PERF=1` sets
+//! `cfg(wow_turbo_perf)` and the layer exists, and a default build has no
+//! layer at all. There is no runtime arm and nothing to switch on, so a
+//! shipped session does not pay a load, a branch or a cache line for a counter
+//! it was never going to read. [`arm`] answers `None` as a constant, every
+//! counting site folds away with it, and so does the work a site had staged to
+//! feed it.
 //!
-//! This arm is deliberately NOT the event gauge's. The gauge instruments the
-//! client's script dispatch and charges over a second of wall per minute for
-//! it; these counters cost nothing to keep. Sharing one switch meant asking
-//! for the cheap half bought the expensive half silently, so the two sit on
-//! separate targets and resolve separate arms, and this module owns the
-//! cadence that reports its own ([`heartbeat`]) rather than borrowing the
-//! gauge's.
+//! The corollary is that a `PERF=1` build is unconditionally instrumented: the
+//! counters are always live, and the cumulative lines below report at `info`,
+//! which the default filter shows. Compiling the layer in is the opt-in, so
+//! nothing else has to be remembered at launch. The tripwires move with it:
+//! the non-finite checks and the drift counters are part of this layer, not a
+//! permanent property of a shipped build.
+//!
+//! This gate is deliberately NOT the event gauge's, which is a separate topic
+//! ([`super::events`]) and instruments the client's script dispatch for over a
+//! second of wall per minute. Both are compiled in together, but the gauge
+//! keeps its own runtime arm on top, so a `PERF=1` session that only wants the
+//! cheap counters does not buy the expensive gauge with them, and this module
+//! owns the cadence that reports its own ([`heartbeat`]) rather than borrowing
+//! the gauge's.
 //!
 //! Two properties are carried separately, because they are independent of each
-//! other. Being armed is a value the caller holds: [`arm`] hands out the
-//! [`Armed`] token and a counter cannot be written without one, so no record
-//! can be reached from an unarmed path. Writer discipline belongs to the
-//! counter's declared type: [`Counter`] and [`Accum`] are load-add-store, which
-//! is exact where the game thread is the only writer and avoids the `lock`
-//! prefix a `fetch_add` carries on i686, while [`SharedCounter`] pays that
-//! prefix for the entries the client's own worker threads also reach. The
+//! other. Holding the layer open is a value the caller holds: [`arm`] hands out
+//! the [`Armed`] token and a counter cannot be written without one, so no
+//! record survives into a build that has no layer. Writer discipline belongs to
+//! the counter's declared type: [`Counter`] and [`Accum`] are load-add-store,
+//! which is exact where the game thread is the only writer and avoids the
+//! `lock` prefix a `fetch_add` carries on i686, while [`SharedCounter`] pays
+//! that prefix for the entries the client's own worker threads also reach. The
 //! method names are the same on both, so the declaration decides the machine
 //! code and a call site cannot pick the wrong one.
 //!
@@ -32,12 +41,23 @@
 
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
-/// Log target every cumulative counter line is written to, and its arm.
+/// Log target every cumulative counter line is written to.
 ///
 /// Grouped with the counter calibration the numbers are read through (the
 /// engine clock's rate and read cost), because that is the one figure needed
 /// to judge every span below it.
 pub const TARGET: &str = "wow::perf";
+
+/// Whether this build carries the diagnostic layer at all.
+///
+/// The one place the `cfg` is read. Every gate below is a branch on this
+/// constant rather than an attribute on an item, which is what lets the ~75
+/// counting sites across the crate, and the four modules of counters behind
+/// them, stay written exactly once: with it false [`arm`] is `None`, a `get`
+/// is `0`, so every reporting body and every argument the sites staged for one
+/// is unreachable and the optimizer deletes it along with the counters
+/// themselves.
+const LIVE: bool = cfg!(wow_turbo_perf);
 
 /// Milliseconds between cumulative reports.
 const CADENCE_MS: u64 = 60_000;
@@ -45,24 +65,18 @@ const CADENCE_MS: u64 = 60_000;
 /// Engine ticks at the last report, 0 until the first heartbeat.
 static LAST_REPORT: AtomicU64 = AtomicU64::new(0);
 
-/// Whether the counters are armed, resolved once on first use.
-///
-/// The logger is installed in `DllMain` before any hook can fire and the
-/// filter never changes mid-run, so one resolution stands for the session.
-static ARMED: std::sync::LazyLock<bool> =
-    std::sync::LazyLock::new(|| log::log_enabled!(target: TARGET, log::Level::Debug));
-
-/// Proof that the arm was read, without which no counter can be written.
+/// Proof that the layer is compiled in, without which no counter can be written.
 ///
 /// Zero-sized, so a `&Armed` parameter costs neither a register nor a stack
-/// slot: it exists to put the arm check in the type system rather than in a
+/// slot: it exists to put the gate in the type system rather than in a
 /// convention every new counting site has to remember.
 pub struct Armed;
 
-/// The token while the instrumentation is armed, `None` while it is not.
+/// The token in a build carrying the layer, `None` in one that does not.
 #[must_use]
-pub fn arm() -> Option<Armed> {
-    (*ARMED).then_some(Armed)
+#[inline]
+pub const fn arm() -> Option<Armed> {
+    if LIVE { Some(Armed) } else { None }
 }
 
 /// Report every family's counters once a cadence has elapsed.
@@ -71,6 +85,10 @@ pub fn arm() -> Option<Armed> {
 /// the report survives either being switched off; the elapsed check makes the
 /// extra call free. The first heartbeat only starts the clock, so the first
 /// report covers a full cadence rather than however long start-up took.
+///
+/// Without the layer the token is `None` here and the whole fan-out below is
+/// unreachable, which is what takes the reporting bodies, their format strings
+/// and the counters they read out of the build.
 pub fn heartbeat() {
     if arm().is_none() {
         return;
@@ -131,9 +149,17 @@ impl Counter {
     }
 
     /// The running value, for a report.
+    ///
+    /// Constant `0` without the layer, which is what folds each reporting
+    /// body's "did this family run" guard and deletes its line and its format
+    /// string with it.
     #[must_use]
     pub fn get(&self) -> u32 {
-        self.0.load(Ordering::Relaxed)
+        if LIVE {
+            self.0.load(Ordering::Relaxed)
+        } else {
+            0
+        }
     }
 }
 
@@ -167,10 +193,14 @@ impl Accum {
         }
     }
 
-    /// The running value, for a report.
+    /// The running value, for a report; constant `0` without the layer.
     #[must_use]
     pub fn get(&self) -> u64 {
-        self.0.load(Ordering::Relaxed)
+        if LIVE {
+            self.0.load(Ordering::Relaxed)
+        } else {
+            0
+        }
     }
 }
 
@@ -194,14 +224,18 @@ impl SharedCounter {
         self.0.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// The running value, for a report.
+    /// The running value, for a report; constant `0` without the layer.
     #[must_use]
     pub fn get(&self) -> u32 {
-        self.0.load(Ordering::Relaxed)
+        if LIVE {
+            self.0.load(Ordering::Relaxed)
+        } else {
+            0
+        }
     }
 }
 
-/// Count one on a single-writer counter, reading the arm here.
+/// Count one on a single-writer counter, taking the token here.
 ///
 /// The form for a site whose whole bookkeeping is the one bump. A caller with
 /// more to skip — an argument to compute, a clock to read — holds the token
@@ -213,7 +247,7 @@ pub fn bump(counter: &Counter) {
     }
 }
 
-/// Count one on a multi-writer counter, reading the arm here.
+/// Count one on a multi-writer counter, taking the token here.
 #[inline]
 pub fn bump_shared(counter: &SharedCounter) {
     if let Some(armed) = arm() {

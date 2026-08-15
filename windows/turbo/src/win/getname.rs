@@ -798,7 +798,7 @@ pub fn emit_cumulative() {
     if name_hits | name_misses | guid_hits | guid_misses | delegated == 0 {
         return;
     }
-    log::debug!(
+    log::info!(
         target: super::tally::TARGET,
         "getname: name {name_hits} hits / {name_misses} misses, \
          guid {guid_hits} / {guid_misses}, delegated {delegated}, evict {evictions}",

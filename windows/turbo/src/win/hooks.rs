@@ -25,12 +25,15 @@ const NORMALIZE_K: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x3f_f9d8) as
 /// Rate-limited tripwire that logs when an instrumented hook emits a non-finite output.
 ///
 /// Distinguishing a value manufactured here (all inputs finite) from one
-/// propagated from a non-finite input. Zero work when the output is finite (the
-/// universal case), so it is safe to leave on the hot path.
+/// propagated from a non-finite input. Part of the diagnostic layer, so it
+/// exists only in a `PERF=1` build; without one this is an empty inline, and
+/// several call sites that pre-scan their result for a non-finite value before
+/// building the dump go with it.
 ///
 /// On the first manufactured NaN it records a breadcrumb and dumps the recent
 /// hook trail (both no-ops unless the DLL is built with `WOW_CRUMB=1`), so the
 /// producing hook is named in the trail.
+#[cfg(wow_turbo_perf)]
 #[inline]
 fn trip_nonfinite(label: &str, inputs: &[f32], outputs: &[f32]) {
     if outputs.iter().all(|v| v.is_finite()) {
@@ -59,6 +62,15 @@ fn trip_nonfinite(label: &str, inputs: &[f32], outputs: &[f32]) {
         );
     }
 }
+
+/// The tripwire in a build without the diagnostic layer: nothing at all.
+///
+/// Kept so every call site reads the same in both builds. The slices the caller
+/// assembles are unused here, so the copies that fill them, and the finiteness
+/// scans several sites run to decide whether to build one, go with the call.
+#[cfg(not(wow_turbo_perf))]
+#[inline]
+const fn trip_nonfinite(_label: &str, _inputs: &[f32], _outputs: &[f32]) {}
 
 /// `C3Vector::Normalize` — `__fastcall(ecx = v)`, normalizes in place, void.
 pub fn c3_vector__normalize(v: *mut f32) {
@@ -43512,11 +43524,19 @@ pub fn c_gx_device__apply_texture_stage_state__5a29d0(
     }
 }
 
+// --- FrameScript event-dispatch gauge ---
+//
+// The adapters the gauge's `armed_only` manifest entries dispatch to. All six
+// exist only in a `PERF=1` build: without the diagnostic layer the gauge
+// module they call is not compiled and those entries are dropped from the
+// table, so nothing reaches them and there is nothing to install.
+
 /// `SignalEvent` — paramless event dispatch, `__fastcall(ecx = event id)`.
 ///
 /// Observation wrapper for the event gauge, installed only when the gauge is
 /// armed: the original always runs, and the whole dispatch (listener walk
 /// included) is timed and attributed to the event.
+#[cfg(wow_turbo_perf)]
 pub fn signal_event__703e50(event_id: i32) {
     crate::win::events::signal_event(event_id);
 }
@@ -43527,6 +43547,7 @@ pub fn signal_event__703e50(event_id: i32) {
 /// over the argument area (argument 0 = event id) and tail-jumps to the
 /// original, and this stores the current event for the per-listener
 /// attribution in [`frame_script_invoke_handler_formatted_v__702710`].
+#[cfg(wow_turbo_perf)]
 pub fn signal_event_param__703f50(args: *const u32) {
     crate::win::events::signal_event_param_tap(args);
 }
@@ -43538,6 +43559,7 @@ pub fn signal_event_param__703f50(args: *const u32) {
 /// only when the gauge is armed: the original always runs, and the call is
 /// timed and attributed to the frame's name and (under `SignalEvent`) to the
 /// current event.
+#[cfg(wow_turbo_perf)]
 pub fn frame_script_invoke_handler__702690(frame: *mut core::ffi::c_void, handler_slot: *mut u32) {
     crate::win::events::invoke_handler(frame, handler_slot);
 }
@@ -43548,6 +43570,7 @@ pub fn frame_script_invoke_handler__702690(frame: *mut core::ffi::c_void, handle
 /// armed: every handler reached from here is a UI invoke (`OnUpdate`,
 /// `OnClick`, ...), not an event dispatch, so the gauge clears the
 /// current-event slot.
+#[cfg(wow_turbo_perf)]
 pub fn frame_script_invoke_handler_formatted__7026f0(args: *const u32) {
     crate::win::events::invoke_formatted_tap(args);
 }
@@ -43559,6 +43582,7 @@ pub fn frame_script_invoke_handler_formatted__7026f0(args: *const u32) {
 /// wrapper). Observation wrapper for the event gauge, installed only when the
 /// gauge is armed: the original always runs, and the call is timed and
 /// attributed.
+#[cfg(wow_turbo_perf)]
 pub fn frame_script_invoke_handler_formatted_v__702710(
     frame: *mut core::ffi::c_void,
     handler_slot: *mut u32,
@@ -43575,6 +43599,7 @@ pub fn frame_script_invoke_handler_formatted_v__702710(
 /// closure (the client's own script API) is timed and billed to that function's
 /// entry address. A call that only prepares a Lua closure is left alone, so what
 /// the interpreter goes on to run stays on the VM side of the split.
+#[cfg(wow_turbo_perf)]
 pub fn lua_d_precall__6f6050(l: i32, func: i32) -> i32 {
     crate::win::events::precall(l, func)
 }
@@ -44315,7 +44340,7 @@ pub fn emit_cumulative() {
     let placements = LAYOUT_PLACEMENTS.get();
     if placements != 0 {
         let per = f64::from(placements);
-        log::debug!(
+        log::info!(
             target: crate::win::tally::TARGET,
             "plate placement: {placements} placed, {:.1} expansions/placement, \
              {:.1} obstacles/placement, \
@@ -44698,7 +44723,7 @@ fn emit_gxprim_cumulative() {
                 let _ = write!(fmts, "{id:x}:{n}");
             }
         }
-        log::debug!(
+        log::info!(
             target: crate::win::tally::TARGET,
             "seam gxprim: calls {calls}, verts {}, fmt [{fmts}], delegated {delegated}",
             GXPRIM_VERTICES.get(),

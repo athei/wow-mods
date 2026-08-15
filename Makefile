@@ -27,6 +27,11 @@ export WOW_TURBO_DIFF := 1
 $(info ==> DIFF=1: wow_turbo differential harness compiled in (arm at runtime via WOW_TURBO_DIFF_ARM=all|Name))
 endif
 
+ifeq ($(PERF),1)
+export WOW_TURBO_PERF := 1
+$(info ==> PERF=1: wow_turbo diagnostic layer compiled in: seam counters, tripwires and the script gauge, reporting at info)
+endif
+
 # WoW 1.12 is 32-bit only, so the PE side builds i686 exclusively (no x64).
 PE_i386     := i686-pc-windows-msvc
 # The unix `.so` must be x86_64 Mach-O (Wine's unix-call boundary), so shipped
@@ -287,7 +292,7 @@ fmt:
 # breadcrumb ring was written, because nothing ever compiled it. Splitting the
 # gate would recreate exactly that.
 #
-# It costs around forty seconds against warm target dirs. Most of that is the
+# It costs around fifty seconds against warm target dirs. Most of that is the
 # legs that cannot share a build cache — each `cfg` and the force-warn counts
 # compile under different flags, so cargo fingerprints them separately.
 #
@@ -307,12 +312,15 @@ check:
 	$(MAKE) audit
 	$(MAKE) doc
 	# The code behind a `cfg`: the breadcrumb ring (~455 lines of unsafe mmap and
-	# Win32 FFI) and the differential harness, including every generated `*_diff`
-	# capture function. A default build compiles neither.
+	# Win32 FFI), the differential harness including every generated `*_diff`
+	# capture function, and the diagnostic layer (the counters, the tripwires
+	# and the ~1700-line script gauge). A default build compiles none of them.
 	CRUMB=1 $(MAKE) clippy
 	CRUMB=1 $(MAKE) doc
 	DIFF=1 $(MAKE) clippy
 	DIFF=1 $(MAKE) doc
+	PERF=1 $(MAKE) clippy
+	PERF=1 $(MAKE) doc
 	$(MAKE) lint-counts
 	$(MAKE) test
 

@@ -532,7 +532,7 @@ pub fn emit_cumulative() {
     if seen == 0 {
         return;
     }
-    log::debug!(
+    log::info!(
         target: super::tally::TARGET,
         "transmog: {seen} visible writes, {swallowed} coalesced, \
          {flushed} applied late, {refreshed} refreshes, {deferred} item writes parked",

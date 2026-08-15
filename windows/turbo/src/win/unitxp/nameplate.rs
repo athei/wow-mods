@@ -209,7 +209,7 @@ pub fn should_veto_add(unit_raw: usize) -> bool {
 pub fn emit_cumulative() {
     let walked = WALKED.get();
     if walked != 0 {
-        log::debug!(
+        log::info!(
             target: tally::TARGET,
             "unitxp plates: {walked} walked, {} vetoed, {} removed",
             VETOED.get(),

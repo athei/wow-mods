@@ -19,6 +19,19 @@
 
 #[cfg(wow_turbo_diff)]
 mod diff;
+/// The script-dispatch gauge, or the inert twin a build without it uses.
+///
+/// The gauge is part of the diagnostic layer and is compiled only under
+/// `cfg(wow_turbo_perf)`. Every hook it is reached through is dropped from the
+/// symbol table in the builds that lack it, so all that has to survive is
+/// `time_body`, which one unconditionally installed reimplementation calls
+/// around the handler body it runs, hence a twin file rather than a `cfg` at
+/// that call site.
+///
+/// The override is spelled relative to this file's own directory rather than to
+/// the module directory the plain declaration would search, which is how
+/// `path` resolves from a non-`mod.rs` module file.
+#[cfg_attr(not(wow_turbo_perf), path = "win/events_inert.rs")]
 mod events;
 #[cfg(not(wow_turbo_diff))]
 mod filecache;

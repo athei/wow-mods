@@ -1761,7 +1761,7 @@ pub fn emit_cumulative() {
     let leaked = LEAKED_ON_DEVICE_SWAP.get();
     let capped = CAPPED.get();
     if floats | crits | uncovered | unready | failures | leaked | capped != 0 {
-        log::debug!(
+        log::info!(
             target: tally::TARGET,
             "unitxp worldtext: {floats} floats, {crits} crits, {uncovered} uncovered, \
              {unready} unready, {failures} tex failures, {leaked} leaked, {capped} capped",

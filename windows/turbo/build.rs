@@ -48,7 +48,10 @@ struct Function {
     /// trampoline on the unarmed path is a measurable tax — `luaD_precall` runs
     /// on every Lua-level call, not once per handler invoke. The logger is
     /// initialized before `install_all`, so the gate resolves at install time
-    /// and an unarmed run keeps the function fully stock.
+    /// and an unarmed run keeps the function fully stock. Such an entry is also
+    /// dropped from the table entirely in a build without the diagnostic layer
+    /// (see [`perf_build`]), which is the only build where its adapter and the
+    /// gauge behind it do not exist.
     #[serde(default)]
     armed_only: bool,
     /// Optional differential-mode annotation.
@@ -373,6 +376,19 @@ fn main() {
         println!("cargo:rustc-cfg=wow_turbo_diff");
     }
 
+    // The diagnostic layer is a COMPILE-TIME opt-in via `WOW_TURBO_PERF=1`
+    // (e.g. `PERF=1 make install`): the seam counters and their heartbeat, the
+    // non-finite tripwires, and the script gauge. Off by default → `tally::arm`
+    // folds to `None`, so every counting site and the argument staging feeding
+    // it is dead code the optimizer deletes, and the gauge's `armed_only`
+    // entries are not emitted here at all. On → the counters are always live
+    // and report at `info`, so the build itself is the opt-in.
+    println!("cargo::rustc-check-cfg=cfg(wow_turbo_perf)");
+    println!("cargo:rerun-if-env-changed=WOW_TURBO_PERF");
+    if perf_build() {
+        println!("cargo:rustc-cfg=wow_turbo_perf");
+    }
+
     // The `version coffTimeDateStamp` command answers with a build timestamp.
     // The linker's header field is a reproducibility hash, not a time, so the
     // real build time is baked here instead (fresh per release: the tag watch
@@ -419,7 +435,19 @@ fn main() {
 /// A `preserve` entry may only name one of these.
 const VOL_ORDER: [&str; 3] = ["eax", "ecx", "edx"];
 
+/// Whether this build carries the diagnostic layer (`WOW_TURBO_PERF=1`).
+///
+/// Read twice: once in `main` to emit the `cfg`, and once in [`render`], which
+/// drops the gauge's observation entries from the table when it is off. That
+/// decision has to be made here rather than as a generated `#[cfg]`, because
+/// with the layer off the module those entries call into is not compiled and a
+/// thunk naming their adapters would not resolve.
+fn perf_build() -> bool {
+    env::var("WOW_TURBO_PERF").is_ok_and(|v| !v.is_empty() && v != "0")
+}
+
 fn render(m: &Manifest) -> String {
+    let perf = perf_build();
     let mut out = String::new();
     out.push_str("// @generated from symbols.toml by build.rs — do not edit.\n\n");
 
@@ -440,6 +468,13 @@ fn render(m: &Manifest) -> String {
 
     for (name, f) in &m.functions {
         validate_diff(name, f);
+        // An observation entry exists to be measured, so a build without the
+        // diagnostic layer has nothing for it to call: its adapter and the
+        // gauge behind it are both gone. Drop it from the table rather than
+        // emitting a thunk into a module that no longer answers.
+        if f.armed_only && !perf {
+            continue;
+        }
         let snake = to_snake(name);
         let screaming = snake.to_uppercase();
         all_syms.push((name.clone(), snake.clone()));

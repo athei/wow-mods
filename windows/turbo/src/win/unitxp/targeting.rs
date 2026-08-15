@@ -449,7 +449,7 @@ fn select_adjacent_mark(current: u64, list: &mut [MobEntry], order: &[u32], forw
 pub fn emit_cumulative() {
     let sweeps = SWEEPS.get();
     if sweeps != 0 {
-        log::debug!(
+        log::info!(
             target: tally::TARGET,
             "unitxp target: {sweeps} sweeps, {} admitted, {} overflow",
             ADMITTED.get(),

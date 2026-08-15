@@ -598,7 +598,7 @@ pub fn emit_cumulative() {
     let handled = HANDLED.get();
     let delegated = DELEGATED.get();
     if handled | delegated != 0 {
-        log::debug!(
+        log::info!(
             target: super::tally::TARGET,
             "unitxp: {handled} handled, {delegated} delegated",
         );

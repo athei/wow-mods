@@ -199,19 +199,20 @@ targeted fixes:
   pacing policy is left untouched: an earlier release widened the growth
   threshold to collect less often, which let enough garbage accumulate on
   addon-heavy raid setups to cause multi-second freezes, and was reverted.
-- **Script-cost observability.** With `RUST_LOG=wow::script=debug` the client
-  reports, every second, what its interface actually spent: the cost of each
-  addon's scripts, of the client's own interface, and of the dispatch around
-  them, plus how that cost is distributed between many cheap handler calls and
-  a few expensive ones. Script time is billed to the addon folder that owns
-  the file, so a ranked table answers which addon to look at rather than which
-  frame happened to run. Loading screens and interface reloads are marked, so
-  one-time start-up work is not mistaken for what a session costs while
-  playing. The instrumentation measures its own overhead and reports it
-  separately, and is inert unless that filter is enabled. The mod's own
-  counters — the parallel-fork seams, the memo hit rates, the rest — are a
-  separate topic on `RUST_LOG=wow::perf=debug`, with their own arm, so
-  reading those costs nothing and does not switch this gauge on with them.
+- **Script-cost observability.** A build made with `PERF=1 make` reports, every
+  second and under `RUST_LOG=wow::script=debug`, what the interface actually
+  spent: the cost of each addon's scripts, of the client's own interface, and
+  of the dispatch around them, plus how that cost is distributed between many
+  cheap handler calls and a few expensive ones. Script time is billed to the
+  addon folder that owns the file, so a ranked table answers which addon to
+  look at rather than which frame happened to run. Loading screens and
+  interface reloads are marked, so one-time start-up work is not mistaken for
+  what a session costs while playing. The instrumentation measures its own
+  overhead and reports it separately. The mod's own counters (the
+  parallel-fork seams, the memo hit rates, the rest) ride the same `PERF=1`
+  build and report on `wow::perf` at `info`, so they need no filter of their
+  own and do not switch this gauge on with them. A release build carries
+  neither: the whole layer is compiled out, which is why it costs nothing.
 - **Hot VM leaves.** Table hashing and lookup, number↔string conversion and
   the constant-table path are ported to SSE.
 
@@ -385,11 +386,11 @@ Run **`make check`** before every commit. It is the whole gate and there is
 deliberately no lighter subset: `cargo fmt --check` (promoting rustfmt's silent
 `Unknown configuration option` warning to a failure), the clippy sweep with
 `nursery` and `pedantic` over every target *and* every `cfg` (`CRUMB=1`,
-`DIFF=1` — code behind a `cfg` was once linted by nothing), `make audit` (the
-rules clippy cannot express), `make doc` (rustdoc, so doc links have to
-resolve), `make lint-counts` (the annotated exemption counts), and `make test`
-(the unit tests, via `cargo-nextest`). The clippy and doc legs deny every
-warning via cargo's `build.warnings = "deny"`; normal builds and a plain
+`DIFF=1`, `PERF=1` — code behind a `cfg` was once linted by nothing), `make
+audit` (the rules clippy cannot express), `make doc` (rustdoc, so doc links
+have to resolve), `make lint-counts` (the annotated exemption counts), and
+`make test` (the unit tests, via `cargo-nextest`). The clippy and doc legs deny
+every warning via cargo's `build.warnings = "deny"`; normal builds and a plain
 `cargo clippy` only warn. Each audit finding names the section of
 `docs/CONVENTIONS.md` it comes from. There is no CI — pushing a `v*` tag only
 opens a draft release — so this is the only gate. **`make check` says nothing

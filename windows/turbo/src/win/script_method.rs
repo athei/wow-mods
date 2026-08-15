@@ -536,7 +536,7 @@ pub fn emit_cumulative() {
     if hits | nil_hits | misses | delegated == 0 {
         return;
     }
-    log::debug!(
+    log::info!(
         target: super::tally::TARGET,
         "index: {hits} hits + {nil_hits} nil hits / {misses} misses, \
          delegated {delegated}, evict {evictions}",

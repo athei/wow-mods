@@ -85,7 +85,7 @@ pub fn emit_cumulative() {
     let fabricated = FABRICATED.get();
     let degenerate = DEGENERATE.get();
     if fabricated | degenerate != 0 {
-        log::debug!(
+        log::info!(
             target: tally::TARGET,
             "unitxp trace: {fabricated} fabricated, {degenerate} degenerate",
         );
