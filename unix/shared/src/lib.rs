@@ -1,5 +1,6 @@
 use strum::{EnumCount, VariantArray};
 
+pub mod blit;
 pub mod crumb;
 pub mod ffi_boundary;
 pub mod ftol;
@@ -9,10 +10,12 @@ mod log_helpers;
 mod params;
 pub mod trig;
 pub mod tsc;
+pub mod view;
 
 pub use ffi_boundary::{InPtr, InPtrMut, OutPtr, ValueIn, VtableThis};
 pub use log_filter::init_logger;
 pub use params::{InitLoggerParams, TranslateParams, TranslateStatus};
+pub use view::F32s;
 
 /// Thunk discriminants shared by the PE side and the unix `.so`.
 ///
