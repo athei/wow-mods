@@ -4931,3 +4931,20 @@ abi  = "thiscall"
 ret  = "void"
 args = ["*mut u8"]
 preserve = ["edx"]
+
+# Immediate-mode vertex upload: derives a GxVertexFormat id 0..0xb from which
+# of the five component streams (pos/normal/color/tex0/tex1) are non-null,
+# reserves count*stride in dynamic-VB pool 0, locks it, interleaves the
+# streams per vertex (the original re-reads the device's loop-invariant color
+# byte-order flag through the format-desc accessor EVERY vertex), unlocks
+# with the byte count and binds the id's preset state batch. The degenerate
+# patterns (null pos; tex1 without tex0) delegate to the original.
+# Un-diffable: writes go into a device-locked GPU vertex buffer via
+# GxResizeBuffer.
+[functions.GxPrimVertices_InterleaveUpload__58a3d0]
+rva  = 0x18a3d0
+sig  = "55 8B EC 83 EC 50 85 D2 53 8B 5D 24 56 57 8B F9 BE 01 00 00 00 89 55 F4"
+abi  = "fastcall"
+ret  = "void"
+args = ["u32", "*const u8", "u32", "*const u8", "u32", "*const u8", "u32", "*const u8", "u32", "*const u8", "u32"]
+preserve = []

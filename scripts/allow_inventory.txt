@@ -18,6 +18,8 @@ windows/turbo/src/math/fmod_mp3.rs non_snake_case 1
 windows/turbo/src/math/frustum.rs clippy::excessive_precision 1
 windows/turbo/src/math/frustum.rs non_snake_case 1
 windows/turbo/src/math/gx.rs clippy::double_comparisons 1
+windows/turbo/src/math/gx.rs clippy::fn_params_excessive_bools 1
+windows/turbo/src/math/gx.rs clippy::multiple_unsafe_ops_per_block 1
 windows/turbo/src/math/gx.rs clippy::neg_cmp_op_on_partial_ord 2
 windows/turbo/src/math/gx.rs clippy::too_many_arguments 1
 windows/turbo/src/math/gx.rs non_snake_case 1
@@ -80,9 +82,9 @@ windows/turbo/src/transmog.rs dead_code 5
 windows/turbo/src/win/diff.rs dead_code 1
 windows/turbo/src/win/hooks.rs clippy::cognitive_complexity 4
 windows/turbo/src/win/hooks.rs clippy::manual_range_contains 2
-windows/turbo/src/win/hooks.rs clippy::multiple_unsafe_ops_per_block 12
+windows/turbo/src/win/hooks.rs clippy::multiple_unsafe_ops_per_block 13
 windows/turbo/src/win/hooks.rs clippy::neg_cmp_op_on_partial_ord 15
-windows/turbo/src/win/hooks.rs clippy::too_many_arguments 13
+windows/turbo/src/win/hooks.rs clippy::too_many_arguments 14
 windows/turbo/src/win/hooks.rs clippy::undocumented_unsafe_blocks 1
 windows/turbo/src/win/hooks.rs non_snake_case 1
 windows/turbo/src/win/symbols.rs clippy::too_many_arguments 1

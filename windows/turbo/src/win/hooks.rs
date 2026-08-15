@@ -44311,6 +44311,7 @@ static LAYOUT_CAP_HITS: crate::win::tally::Counter = crate::win::tally::Counter:
 /// against the crowd size says whether the cost is the scan or the frontier, and
 /// neither was measured before this counted them.
 pub fn emit_cumulative() {
+    emit_gxprim_cumulative();
     let placements = LAYOUT_PLACEMENTS.get();
     if placements != 0 {
         let per = f64::from(placements);
@@ -44659,3 +44660,193 @@ pub fn cg_unit_c__on_enter_world__5fb880(this: *mut u8, a: i32, b: i32, c: i32) 
 /// into code generated past the end of the image; with a patched prologue in
 /// the process that path has nothing useful to report, so it does not run.
 pub fn wow_client__integrity_scan__42a320(_this: *mut u8) {}
+
+/// Interleave uploads the format-id dispatch served, single-writer.
+///
+/// Every caller of the upload (UI batches, WMO group renderers, portal and
+/// glare passes, the minimap) sits on the game thread's render path, so the
+/// load-add-store shape is exact.
+static GXPRIM_CALLS: crate::win::tally::Counter = crate::win::tally::Counter::zero();
+
+/// Vertices interleaved, summed over every call.
+static GXPRIM_VERTICES: crate::win::tally::Accum = crate::win::tally::Accum::zero();
+
+/// Interleave-upload calls per format id.
+static GXPRIM_FMT: [crate::win::tally::Counter; 12] =
+    [const { crate::win::tally::Counter::zero() }; 12];
+
+/// Interleave-upload calls delegated on a degenerate stream pattern.
+///
+/// The tripwire that the specialized path covers the live population: no
+/// known caller passes a null pos or tex1 without tex0, so this stays 0.
+static GXPRIM_DELEGATED: crate::win::tally::Counter = crate::win::tally::Counter::zero();
+
+/// One cumulative line for the immediate-mode vertex upload.
+fn emit_gxprim_cumulative() {
+    use core::fmt::Write;
+    let calls = GXPRIM_CALLS.get();
+    let delegated = GXPRIM_DELEGATED.get();
+    if calls != 0 || delegated != 0 {
+        let mut fmts = String::new();
+        for (id, counter) in GXPRIM_FMT.iter().enumerate() {
+            let n = counter.get();
+            if n != 0 {
+                if !fmts.is_empty() {
+                    fmts.push(' ');
+                }
+                // Writing to a `String` cannot fail.
+                let _ = write!(fmts, "{id:x}:{n}");
+            }
+        }
+        log::debug!(
+            target: crate::win::tally::TARGET,
+            "seam gxprim: calls {calls}, verts {}, fmt [{fmts}], delegated {delegated}",
+            GXPRIM_VERTICES.get(),
+        );
+    }
+}
+
+/// The immediate-mode vertex upload, interleaving five streams into pool 0.
+///
+/// `fastcall(ecx = count, edx = posPtr)` plus nine stack arguments (the pos
+/// stride, then a pointer/stride pair for each of normal, color, tex0 and
+/// tex1), `RET 0x24`, void. Derives the `GxVertexFormat` id `0..0xb` from the
+/// streams' null pattern, reserves `count * stride` in dynamic-VB pool 0,
+/// locks it, interleaves per vertex, unlocks with the byte count and binds
+/// the id's preset state batch.
+///
+/// The color byte-order flag (`device+0x258`, the format-desc field the
+/// original re-reads through an accessor call EVERY vertex) is read once, and
+/// the copy loop is monomorphized per id: stock runs eleven unconditional
+/// dword copies plus that call per vertex regardless of id, and four
+/// invariant presence tests will not reliably unswitch sixteen ways on i686,
+/// so the dispatch below is what removes them.
+///
+/// Two degenerate stream patterns delegate to the original: a null `posPtr`
+/// (stock reads the null in its loop) and `tex1` without `tex0` (stock then
+/// resolves the present streams' component offsets to `0xffff_ffff` and
+/// stores through the byte before the locked base). No caller emits either;
+/// the `delegated` counter is the tripwire.
+// Each of the five streams takes its own stock pointer/stride argument
+// slots. That is the client's ABI.
+#[allow(clippy::too_many_arguments)]
+// The id dispatch is one act on one set of pointers; exactly one arm runs
+// per call, and a comment per arm would say the same thing twelve times.
+#[allow(clippy::multiple_unsafe_ops_per_block)]
+pub fn gx_prim_vertices_interleave_upload__58a3d0(
+    count: u32,
+    pos_ptr: *const u8,
+    pos_stride: u32,
+    normal_ptr: *const u8,
+    normal_stride: u32,
+    color_ptr: *const u8,
+    color_stride: u32,
+    tex0_ptr: *const u8,
+    tex0_stride: u32,
+    tex1_ptr: *const u8,
+    tex1_stride: u32,
+) {
+    let has_normal = !normal_ptr.is_null();
+    let has_color = !color_ptr.is_null();
+    let has_tex0 = !tex0_ptr.is_null();
+    let has_tex1 = !tex1_ptr.is_null();
+    if pos_ptr.is_null() || (has_tex1 && !has_tex0) {
+        crate::win::tally::bump(&GXPRIM_DELEGATED);
+        (crate::win::symbols::originals::gx_prim_vertices_interleave_upload__58a3d0())(
+            count,
+            pos_ptr,
+            pos_stride,
+            normal_ptr,
+            normal_stride,
+            color_ptr,
+            color_stride,
+            tex0_ptr,
+            tex0_stride,
+            tex1_ptr,
+            tex1_stride,
+        );
+        return;
+    }
+    let fmt = crate::math::gx::gx_vertex_format_id__58a3d0(
+        true, has_normal, has_color, has_tex0, has_tex1,
+    );
+
+    const BASE: usize = crate::win::EXPECTED_IMAGE_BASE;
+    // The vertex-stride table behind the bounds-checked 0x589a90 lookup,
+    // inlined: the check is unreachable at id <= 0xb.
+    const STRIDE_TABLE: *const u32 = (BASE + 0x45_a7a8) as *const u32;
+    // SAFETY: in-image `.data` table of 13 entries, indexed by an id derived
+    // above as <= 0xb.
+    let stride = unsafe { STRIDE_TABLE.add(fmt as usize).read() };
+
+    // 0x58a140 GxResizeBuffer: fastcall(pool, elemSize; count), RET 4,
+    // buffer in EAX.
+    const RESIZE_VA: usize = BASE + 0x18_a140;
+    // 0x58a080 lock: fastcall(buffer), locked base in EAX.
+    const LOCK_VA: usize = BASE + 0x18_a080;
+    // 0x58a0a0 unlock: fastcall(buffer, byte count), marks the buffer dirty.
+    const UNLOCK_VA: usize = BASE + 0x18_a0a0;
+    // 0x58a7c0 apply preset batch: fastcall(buffer, id).
+    const APPLY_PRESET_VA: usize = BASE + 0x18_a7c0;
+    let resize: extern "fastcall" fn(u32, u32, u32) -> *mut u8 =
+        // SAFETY: image base verified at load; signature matches the callee.
+        unsafe { core::mem::transmute(RESIZE_VA) };
+    let lock: extern "fastcall" fn(*mut u8) -> *mut u8 =
+        // SAFETY: as above.
+        unsafe { core::mem::transmute(LOCK_VA) };
+    let unlock: extern "fastcall" fn(*mut u8, u32) =
+        // SAFETY: as above.
+        unsafe { core::mem::transmute(UNLOCK_VA) };
+    let apply_preset: extern "fastcall" fn(*mut u8, u32) =
+        // SAFETY: as above.
+        unsafe { core::mem::transmute(APPLY_PRESET_VA) };
+
+    // Color byte-order swizzle flag, read once (the GetFormatDesc hoist): the
+    // descriptor's byte-order field at `device+0x258` is stable for the
+    // device lifetime, so the original's per-vertex read collapses to one.
+    const DEVICE_PP: *const *mut u8 = (BASE + 0x80_ed38) as *const *mut u8;
+    // SAFETY: `DEVICE_PP` is the in-image device-singleton pointer slot.
+    let device = unsafe { DEVICE_PP.read() };
+    // SAFETY: `device+0x258` is the color byte-order field; guarded non-null.
+    let swap = !device.is_null() && unsafe { anim_i32(device, 0x258) } == 1;
+
+    if let Some(armed) = crate::win::tally::arm() {
+        GXPRIM_CALLS.bump(&armed);
+        GXPRIM_VERTICES.add(&armed, u64::from(count));
+        GXPRIM_FMT[fmt as usize].bump(&armed);
+    }
+
+    let buf = resize(0, stride, count);
+    let base = lock(buf);
+    let srcs: [(*const u8, u32); 5] = [
+        (pos_ptr, pos_stride),
+        (normal_ptr, normal_stride),
+        (color_ptr, color_stride),
+        (tex0_ptr, tex0_stride),
+        (tex1_ptr, tex1_stride),
+    ];
+    use crate::math::gx::gx_interleave_vertices__58a3d0 as interleave;
+    // SAFETY: `base` is the freshly locked pool-0 reservation of
+    // `stride * count` bytes; every selected source is non-null (the id is
+    // derived from exactly that pattern) and per the stock contract valid for
+    // `count` reads at its stride; `stride` is the id's own table value.
+    unsafe {
+        match fmt {
+            0 => interleave::<false, false, false, false>(base, stride, count, &srcs, swap),
+            1 => interleave::<true, false, false, false>(base, stride, count, &srcs, swap),
+            2 => interleave::<true, true, false, false>(base, stride, count, &srcs, swap),
+            3 => interleave::<true, false, true, false>(base, stride, count, &srcs, swap),
+            4 => interleave::<true, true, true, false>(base, stride, count, &srcs, swap),
+            5 => interleave::<true, false, true, true>(base, stride, count, &srcs, swap),
+            6 => interleave::<true, true, true, true>(base, stride, count, &srcs, swap),
+            7 => interleave::<false, true, false, false>(base, stride, count, &srcs, swap),
+            8 => interleave::<false, true, true, false>(base, stride, count, &srcs, swap),
+            9 => interleave::<false, true, true, true>(base, stride, count, &srcs, swap),
+            0xa => interleave::<false, false, true, false>(base, stride, count, &srcs, swap),
+            // The id kernel yields nothing above 0xb; the last arm names it.
+            _ => interleave::<false, false, true, true>(base, stride, count, &srcs, swap),
+        }
+    }
+    unlock(buf, stride.wrapping_mul(count));
+    apply_preset(buf, fmt);
+}

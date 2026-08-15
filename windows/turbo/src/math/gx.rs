@@ -1576,3 +1576,423 @@ mod tests_quad_uv__6cd750 {
         );
     }
 }
+
+/// Format id for the immediate-mode vertex upload (`0x58a3d0`), from stream presence.
+///
+/// The upload derives a `GxVertexFormat` id from which of its five stream
+/// pointers are non-null through a nested null-test chain seeded with 1: pos
+/// alone is 0, and the twelve canonical patterns map to `0..0xb`. Two
+/// degenerate patterns assign nothing, so the seed stands and they resolve as
+/// 1: a null `pos` (the copy loop then reads the null), and `tex1` present
+/// without `tex0` (the id then omits the present streams, whose component
+/// offsets resolve to `0xffff_ffff` and whose stores land one byte before the
+/// locked buffer). A reimplementation of the upload must route both degenerate
+/// patterns to the original rather than reproduce those stores.
+// Each bool mirrors one of the five stream-pointer null tests the chain
+// runs; a struct would rename the machine fact without removing it.
+#[allow(clippy::fn_params_excessive_bools)]
+#[must_use]
+pub const fn gx_vertex_format_id__58a3d0(
+    pos: bool,
+    normal: bool,
+    color: bool,
+    tex0: bool,
+    tex1: bool,
+) -> u32 {
+    if !pos {
+        return 1;
+    }
+    match (normal, color, tex0, tex1) {
+        (false, false, false, false) => 0,
+        (true, true, false, false) => 2,
+        (true, false, true, false) => 3,
+        (true, true, true, false) => 4,
+        (true, false, true, true) => 5,
+        (true, true, true, true) => 6,
+        (false, true, false, false) => 7,
+        (false, true, true, false) => 8,
+        (false, true, true, true) => 9,
+        (false, false, true, false) => 0xa,
+        (false, false, true, true) => 0xb,
+        // pos+normal is assigned 1 explicitly; tex1 without tex0 reaches the
+        // end of the chain with nothing assigned and the seed stands.
+        (true, false, false, false) | (_, _, false, true) => 1,
+    }
+}
+
+#[cfg(test)]
+mod tests_gx_vertex_format_id__58a3d0 {
+    use super::gx_vertex_format_id__58a3d0 as fmt_id;
+
+    #[test]
+    fn canonical_patterns() {
+        // (normal, color, tex0, tex1) -> id, pos present.
+        let rows: [(bool, bool, bool, bool, u32); 12] = [
+            (false, false, false, false, 0),
+            (true, false, false, false, 1),
+            (true, true, false, false, 2),
+            (true, false, true, false, 3),
+            (true, true, true, false, 4),
+            (true, false, true, true, 5),
+            (true, true, true, true, 6),
+            (false, true, false, false, 7),
+            (false, true, true, false, 8),
+            (false, true, true, true, 9),
+            (false, false, true, false, 0xa),
+            (false, false, true, true, 0xb),
+        ];
+        for (n, c, t0, t1, want) in rows {
+            assert_eq!(fmt_id(true, n, c, t0, t1), want, "({n},{c},{t0},{t1})");
+        }
+    }
+
+    #[test]
+    fn tex1_without_tex0_keeps_the_seed() {
+        for n in [false, true] {
+            for c in [false, true] {
+                assert_eq!(fmt_id(true, n, c, false, true), 1, "({n},{c})");
+            }
+        }
+    }
+
+    #[test]
+    fn null_pos_keeps_the_seed() {
+        for i in 0..16u32 {
+            let b = |k: u32| i & (1 << k) != 0;
+            assert_eq!(fmt_id(false, b(0), b(1), b(2), b(3)), 1, "pattern {i}");
+        }
+    }
+}
+
+/// Interleave up to five vertex streams into one record array (`0x58a3d0`'s loop).
+///
+/// `N`/`C`/`T0`/`T1` select which components the format id places in the output
+/// record after the always-present position: pos (12 B) at 0, then normal
+/// (12 B), color (4 B), tex0 (8 B) and tex1 (8 B) packed in that order: the
+/// component-offset rows of the table at `0x8097a8` for ids `0..0xb`, derived
+/// here as prefix sums and pinned against the table rows by the tests. `srcs`
+/// holds the five `(pointer, byte stride)` source pairs in the same order; a
+/// pair whose component is not selected is never read. `swap` is the device's
+/// color byte-order flag (`device+0x258 == 1`), exchanging bytes 0 and 2 of
+/// the color dword; the original re-derived it EVERY vertex through
+/// `CGxDevice__GetFormatDesc`, and hoisting it to a parameter is what lets the
+/// loop run call-free.
+///
+/// # Safety
+///
+/// `dst` must be valid for `stride * count` bytes of writes. `srcs[0]` and
+/// every selected source must be non-null and valid for `count` reads of the
+/// component's width at the pair's stride. `stride` must be at least the sum
+/// of the selected component widths (the `0x85a7a8` table value for the id the
+/// flags encode), so every store stays inside the current vertex's record.
+pub unsafe fn gx_interleave_vertices__58a3d0<
+    const N: bool,
+    const C: bool,
+    const T0: bool,
+    const T1: bool,
+>(
+    dst: *mut u8,
+    stride: u32,
+    count: u32,
+    srcs: &[(*const u8, u32); 5],
+    swap: bool,
+) {
+    let off_c: usize = 12 + if N { 12 } else { 0 };
+    let off_t0: usize = off_c + if C { 4 } else { 0 };
+    let off_t1: usize = off_t0 + if T0 { 8 } else { 0 };
+
+    let rd32 = |p: *const u8| -> u32 {
+        // SAFETY: per the contract every selected source is valid for its
+        // component width at each vertex; this reproduces one such read.
+        unsafe { p.cast::<u32>().read_unaligned() }
+    };
+    let rd64 = |p: *const u8| -> u64 {
+        // SAFETY: as `rd32`, for the 8-byte head of a 12- or 8-byte component.
+        unsafe { p.cast::<u64>().read_unaligned() }
+    };
+    let wr32 = |p: *mut u8, v: u32| {
+        // SAFETY: per the contract `dst` is valid for `stride * count` bytes
+        // and every component offset stays inside the current record.
+        unsafe { p.cast::<u32>().write_unaligned(v) };
+    };
+    let wr64 = |p: *mut u8, v: u64| {
+        // SAFETY: as `wr32`.
+        unsafe { p.cast::<u64>().write_unaligned(v) };
+    };
+
+    let mut cur = [srcs[0].0, srcs[1].0, srcs[2].0, srcs[3].0, srcs[4].0];
+    let mut out = dst;
+    for _ in 0..count {
+        wr64(out, rd64(cur[0]));
+        wr32(out.wrapping_add(8), rd32(cur[0].wrapping_add(8)));
+        cur[0] = cur[0].wrapping_add(srcs[0].1 as usize);
+        if N {
+            wr64(out.wrapping_add(12), rd64(cur[1]));
+            wr32(out.wrapping_add(20), rd32(cur[1].wrapping_add(8)));
+            cur[1] = cur[1].wrapping_add(srcs[1].1 as usize);
+        }
+        if C {
+            let raw = rd32(cur[2]);
+            let v = if swap {
+                (raw & 0xff00_ff00) | ((raw >> 16) & 0xff) | ((raw & 0xff) << 16)
+            } else {
+                raw
+            };
+            wr32(out.wrapping_add(off_c), v);
+            cur[2] = cur[2].wrapping_add(srcs[2].1 as usize);
+        }
+        if T0 {
+            wr64(out.wrapping_add(off_t0), rd64(cur[3]));
+            cur[3] = cur[3].wrapping_add(srcs[3].1 as usize);
+        }
+        if T1 {
+            wr64(out.wrapping_add(off_t1), rd64(cur[4]));
+            cur[4] = cur[4].wrapping_add(srcs[4].1 as usize);
+        }
+        out = out.wrapping_add(stride as usize);
+    }
+}
+
+#[cfg(test)]
+mod tests_gx_interleave_vertices__58a3d0 {
+    use super::gx_interleave_vertices__58a3d0 as interleave;
+
+    /// Absent-component sentinel in the offset rows.
+    const M: u32 = u32::MAX;
+
+    /// The `0x8097a8` component-offset rows for ids `0..0xb`.
+    ///
+    /// Columns: pos, normal, color, tex0, tex1.
+    const OFFSET_ROWS: [[u32; 5]; 12] = [
+        [0, M, M, M, M],
+        [0, 12, M, M, M],
+        [0, 12, 24, M, M],
+        [0, 12, M, 24, M],
+        [0, 12, 24, 28, M],
+        [0, 12, M, 24, 32],
+        [0, 12, 24, 28, 36],
+        [0, M, 12, M, M],
+        [0, M, 12, 16, M],
+        [0, M, 12, 16, 24],
+        [0, M, M, 12, M],
+        [0, M, M, 12, 20],
+    ];
+
+    /// The `0x85a7a8` per-id vertex strides for ids `0..0xb`.
+    const STRIDES: [u32; 12] = [12, 24, 28, 32, 36, 40, 44, 16, 24, 32, 20, 28];
+
+    /// Component byte widths in row order.
+    const WIDTHS: [usize; 5] = [12, 12, 4, 8, 8];
+
+    /// Presence flags (normal, color, tex0, tex1) per id.
+    const FLAGS: [(bool, bool, bool, bool); 12] = [
+        (false, false, false, false),
+        (true, false, false, false),
+        (true, true, false, false),
+        (true, false, true, false),
+        (true, true, true, false),
+        (true, false, true, true),
+        (true, true, true, true),
+        (false, true, false, false),
+        (false, true, true, false),
+        (false, true, true, true),
+        (false, false, true, false),
+        (false, false, true, true),
+    ];
+
+    /// Scalar transcription of the stock copy loop, the byte-equality oracle.
+    ///
+    /// Dword-at-a-time through five cursors: an absent source is swapped for a
+    /// zeroed dummy with stride 0, its destination for a dummy sink with
+    /// advance 0, and the color dword goes through the byte-level swizzle when
+    /// `swap` is set, which is the original's exact structure.
+    fn stock_oracle(
+        dst: &mut [u8],
+        fmt: usize,
+        count: u32,
+        srcs: &[(*const u8, u32); 5],
+        swap: bool,
+    ) {
+        let stride = STRIDES[fmt] as usize;
+        let dummy = [0u8; 12];
+        let mut sink = [0u8; 12];
+        let base = dst.as_mut_ptr();
+        let mut src_cur: [*const u8; 5] = [core::ptr::null(); 5];
+        let mut src_adv = [0usize; 5];
+        let mut dst_cur: [*mut u8; 5] = [core::ptr::null_mut(); 5];
+        let mut dst_adv = [0usize; 5];
+        for comp in 0..5 {
+            let present = !srcs[comp].0.is_null();
+            src_cur[comp] = if present {
+                srcs[comp].0
+            } else {
+                dummy.as_ptr()
+            };
+            src_adv[comp] = if present { srcs[comp].1 as usize } else { 0 };
+            dst_cur[comp] = if present {
+                base.wrapping_add(OFFSET_ROWS[fmt][comp] as usize)
+            } else {
+                sink.as_mut_ptr()
+            };
+            dst_adv[comp] = if present { stride } else { 0 };
+        }
+        for _ in 0..count {
+            for comp in 0..5 {
+                for dword in 0..(WIDTHS[comp] / 4) {
+                    let s = src_cur[comp].wrapping_add(dword * 4);
+                    let d = dst_cur[comp].wrapping_add(dword * 4);
+                    if comp == 2 && swap {
+                        // SAFETY: test buffers cover every cursor position.
+                        let b = |k: usize| unsafe { s.wrapping_add(k).read() };
+                        let out = [b(2), b(1), b(0), b(3)];
+                        for (k, v) in out.iter().enumerate() {
+                            // SAFETY: as above.
+                            unsafe { d.wrapping_add(k).write(*v) };
+                        }
+                    } else {
+                        // SAFETY: as above.
+                        let v = unsafe { s.cast::<u32>().read_unaligned() };
+                        // SAFETY: as above.
+                        unsafe { d.cast::<u32>().write_unaligned(v) };
+                    }
+                }
+                src_cur[comp] = src_cur[comp].wrapping_add(src_adv[comp]);
+                dst_cur[comp] = dst_cur[comp].wrapping_add(dst_adv[comp]);
+            }
+        }
+        assert_eq!(dummy, [0u8; 12], "the zero source must never be written");
+    }
+
+    /// Deterministic non-repeating filler so every byte position is distinct.
+    fn fill(buf: &mut [u8], seed: u32) {
+        let mut x = seed;
+        for b in buf {
+            x = x.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            *b = (x >> 24) as u8;
+        }
+    }
+
+    // The id dispatch is one act; exactly one arm runs per call, and a
+    // comment per arm would say the same thing twelve times.
+    #[allow(clippy::multiple_unsafe_ops_per_block)]
+    fn run_kernel(fmt: usize, dst: *mut u8, count: u32, srcs: &[(*const u8, u32); 5], swap: bool) {
+        let stride = STRIDES[fmt];
+        // SAFETY: the test allocates every buffer to cover `stride * count`
+        // and each source to cover `count` reads at its stride.
+        unsafe {
+            match fmt {
+                0 => interleave::<false, false, false, false>(dst, stride, count, srcs, swap),
+                1 => interleave::<true, false, false, false>(dst, stride, count, srcs, swap),
+                2 => interleave::<true, true, false, false>(dst, stride, count, srcs, swap),
+                3 => interleave::<true, false, true, false>(dst, stride, count, srcs, swap),
+                4 => interleave::<true, true, true, false>(dst, stride, count, srcs, swap),
+                5 => interleave::<true, false, true, true>(dst, stride, count, srcs, swap),
+                6 => interleave::<true, true, true, true>(dst, stride, count, srcs, swap),
+                7 => interleave::<false, true, false, false>(dst, stride, count, srcs, swap),
+                8 => interleave::<false, true, true, false>(dst, stride, count, srcs, swap),
+                9 => interleave::<false, true, true, true>(dst, stride, count, srcs, swap),
+                0xa => interleave::<false, false, true, false>(dst, stride, count, srcs, swap),
+                0xb => interleave::<false, false, true, true>(dst, stride, count, srcs, swap),
+                _ => unreachable!("ids are 0..0xb"),
+            }
+        }
+    }
+
+    #[test]
+    fn strides_are_the_width_sums() {
+        for (fmt, (n, c, t0, t1)) in FLAGS.iter().enumerate() {
+            let sum = 12
+                + if *n { 12 } else { 0 }
+                + if *c { 4 } else { 0 }
+                + if *t0 { 8 } else { 0 }
+                + if *t1 { 8 } else { 0 };
+            assert_eq!(STRIDES[fmt], sum, "fmt {fmt}");
+        }
+    }
+
+    #[test]
+    fn offsets_are_the_prefix_sums() {
+        for (fmt, (n, c, t0, _)) in FLAGS.iter().enumerate() {
+            let row = OFFSET_ROWS[fmt];
+            if *n {
+                assert_eq!(row[1], 12, "fmt {fmt} normal");
+            }
+            let off_c = 12 + u32::from(*n) * 12;
+            if *c {
+                assert_eq!(row[2], off_c, "fmt {fmt} color");
+            }
+            let off_t0 = off_c + u32::from(*c) * 4;
+            if *t0 {
+                assert_eq!(row[3], off_t0, "fmt {fmt} tex0");
+            }
+            if row[4] != M {
+                assert_eq!(row[4], off_t0 + u32::from(*t0) * 8, "fmt {fmt} tex1");
+            }
+        }
+    }
+
+    #[test]
+    fn matches_the_stock_loop_byte_for_byte() {
+        for (fmt, &(n, c, t0, t1)) in FLAGS.iter().enumerate() {
+            let stride = STRIDES[fmt] as usize;
+            for extra in [0usize, 1, 5] {
+                for count in [0u32, 1, 2, 7] {
+                    for swap in [false, true] {
+                        // Sources sized for `count` reads at width + `extra`
+                        // stride slack, each with a distinct byte pattern.
+                        let bufs: [Vec<u8>; 5] = core::array::from_fn(|comp| {
+                            let s = WIDTHS[comp] + extra;
+                            let mut v = vec![0u8; s * count.max(1) as usize + 8];
+                            fill(&mut v, (fmt * 97 + comp * 13 + extra) as u32);
+                            v
+                        });
+                        let present = [true, n, c, t0, t1];
+                        let srcs: [(*const u8, u32); 5] = core::array::from_fn(|comp| {
+                            if present[comp] {
+                                (bufs[comp].as_ptr(), (WIDTHS[comp] + extra) as u32)
+                            } else {
+                                (core::ptr::null(), 0)
+                            }
+                        });
+                        let total = stride * count as usize;
+                        let mut got = vec![0xCDu8; total + 16];
+                        let mut want = vec![0xCDu8; total + 16];
+                        run_kernel(fmt, got.as_mut_ptr(), count, &srcs, swap);
+                        stock_oracle(&mut want, fmt, count, &srcs, swap);
+                        assert_eq!(
+                            got, want,
+                            "fmt {fmt} extra {extra} count {count} swap {swap}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn swizzle_exchanges_bytes_0_and_2() {
+        let pos = [0u8; 12];
+        let color = [0x11u8, 0x22, 0x33, 0x44];
+        let srcs: [(*const u8, u32); 5] = [
+            (pos.as_ptr(), 12),
+            (core::ptr::null(), 0),
+            (color.as_ptr(), 4),
+            (core::ptr::null(), 0),
+            (core::ptr::null(), 0),
+        ];
+        let mut out = [0u8; 16];
+        run_kernel(7, out.as_mut_ptr(), 1, &srcs, true);
+        assert_eq!(&out[12..16], &[0x33, 0x22, 0x11, 0x44]);
+        run_kernel(7, out.as_mut_ptr(), 1, &srcs, false);
+        assert_eq!(&out[12..16], &[0x11, 0x22, 0x33, 0x44]);
+    }
+
+    #[test]
+    fn zero_count_writes_nothing() {
+        let srcs: [(*const u8, u32); 5] = [(core::ptr::null(), 0); 5];
+        let mut out = [0xCDu8; 8];
+        // A zero count never dereferences any cursor, null pos included.
+        run_kernel(0, out.as_mut_ptr(), 0, &srcs, false);
+        assert_eq!(out, [0xCDu8; 8]);
+    }
+}
