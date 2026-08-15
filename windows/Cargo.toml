@@ -23,6 +23,7 @@ minhook = "0.9"
 rustc-hash = "2"
 jpeg-encoder = "0.6"
 serde = { version = "1", features = ["derive"] }
+snmalloc-rs = { version = "0.7", features = ["build_cc"] }
 toml = "1.1"
 
 [profile.dev]
@@ -41,6 +42,20 @@ debug = 1
 # `production` (PROD=1) overrides both back off below.
 debug-assertions = true
 overflow-checks = true
+
+# snmalloc-sys builds its C++ through `cc`, whose build script reads cargo's
+# `DEBUG` variable (set for every package whose profile carries debuginfo) and
+# switches the snmalloc build to its debug configuration, which links `msvcrtd`.
+# The cross-compile SDK ships only `msvcrt.lib`, and mixing the two CRTs in one
+# image is unsound anyway, so the workspace-wide `debug = 1` above has to be
+# taken back for that one package. Both profiles, because `dev` defaults to full
+# debuginfo; `production` picks it up through `inherits`, which merges
+# per-package overrides along the chain.
+[profile.release.package.snmalloc-sys]
+debug = 0
+
+[profile.dev.package.snmalloc-sys]
+debug = 0
 
 # Shipped builds — fat cross-crate LTO + a single codegen unit. Activated by
 # `PROD=1 make`.

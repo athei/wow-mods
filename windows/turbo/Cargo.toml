@@ -45,6 +45,11 @@ wow-shared = { workspace = true }
 # portable numeric kernels) compile the crate without it.
 [target.'cfg(target_arch = "x86")'.dependencies]
 wow-hook = { workspace = true }
+# This DLL's global allocator (`lib.rs`). Target-gated with the hook plumbing
+# rather than declared unconditionally: the host test build has no reason to
+# route its allocations anywhere but the system allocator, and building ~300 KB
+# of C++ would only lengthen the test cycle.
+snmalloc-rs = { workspace = true }
 
 [build-dependencies]
 serde = { workspace = true }

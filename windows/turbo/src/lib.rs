@@ -58,3 +58,23 @@ mod worldtext;
 
 #[cfg(target_arch = "x86")]
 mod win;
+
+/// Serves this DLL's own allocations, replacing the client heap the target defaults to.
+///
+/// Without a `#[global_allocator]` the `i686-pc-windows-msvc` target routes
+/// every allocation to `HeapAlloc`, which on this stack is the loader's
+/// `RtlAllocateHeap`: one heap lock shared by the game thread and both worker
+/// pools, and a separate virtual mapping per large block, all of it paid in
+/// emulated x86 crossing into the loader's unix side. snmalloc serves from
+/// per-thread slabs, takes address space from `VirtualAlloc` directly and never
+/// calls `HeapAlloc` at any size, so a per-frame allocation on the game thread
+/// no longer contends with a worker's.
+///
+/// The client's own allocator is untouched by this: it is reached through the
+/// client's own code, which this mod does not replace.
+///
+/// x86 only, with `win`: the host build exists to unit-test the portable
+/// kernels, and its allocation traffic is the test harness's.
+#[cfg(target_arch = "x86")]
+#[global_allocator]
+static ALLOCATOR: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;

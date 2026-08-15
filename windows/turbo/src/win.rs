@@ -47,12 +47,26 @@ mod tally;
 mod transmog;
 mod unitxp;
 
-use core::ffi::c_void;
+use core::{
+    ffi::c_void,
+    sync::atomic::{AtomicBool, Ordering},
+};
 
 use wow_shared::identity;
 
 const LOG_TARGET: &str = "wow";
 const DLL_PROCESS_ATTACH: u32 = 1;
+const DLL_PROCESS_DETACH: u32 = 0;
+
+/// Set once the client's prologues carry this image's detours.
+///
+/// After that the module cannot be unloaded and leave a working process behind:
+/// the patched prologues jump into this image, so a `FreeLibrary` would send the
+/// client into freed pages. A detach seen with this set is therefore the process
+/// exiting, which is the fact `dll_main` needs before it takes the exit below,
+/// and the loader gives it no other way: `_reserved` arrives null for a probe
+/// unload and for real exit alike, so the documented flag says nothing here.
+static PATCHED: AtomicBool = AtomicBool::new(false);
 
 /// ISA baseline this DLL was compiled for.
 ///
@@ -70,6 +84,8 @@ const ISA: &str = if cfg!(target_feature = "avx2") {
 unsafe extern "system" {
     fn GetModuleHandleA(module_name: *const u8) -> usize;
     fn GetProcAddress(module: usize, proc_name: *const u8) -> usize;
+    fn GetCurrentProcess() -> *mut c_void;
+    fn TerminateProcess(process: *mut c_void, exit_code: u32) -> i32;
 }
 
 /// `RTL_OSVERSIONINFOW`, the version record `ntdll` fills in.
@@ -234,8 +250,33 @@ const EXPECTED_IMAGE_BASE: usize = 0x0040_0000;
 pub extern "system" fn dll_main(instance: *mut c_void, reason: u32, _reserved: *mut c_void) -> i32 {
     if reason == DLL_PROCESS_ATTACH {
         attach_process(instance);
+    } else if reason == DLL_PROCESS_DETACH && PATCHED.load(Ordering::Relaxed) {
+        exit_without_teardown();
     }
     1
+}
+
+/// End the process here rather than let the rest of shutdown run.
+///
+/// The global allocator keeps its per-thread state in a C++ `thread_local`, and
+/// the runtime runs that destructor once this returns. It walks the thread's
+/// pools deeply enough to overrun the 1 MB stack the loader gives the main
+/// thread, and the loader then fails to dispatch the resulting exception, so the
+/// process never finishes exiting: the window is gone and the job stays.
+/// Terminating is the only exit that skips both the remaining detach callbacks
+/// and those destructors. `ExitProcess` runs them, and aborting fast-fails
+/// instead of exiting.
+///
+/// [`PATCHED`] is what makes this safe to do: it is only reached at process
+/// exit, by which point the client has run its own shutdown and written its
+/// configuration back out, so nothing with work left is being cut off. What is
+/// skipped is teardown the operating system does anyway when the process dies.
+fn exit_without_teardown() {
+    // SAFETY: the pseudo-handle this returns names the calling process, and
+    // passing it back is the documented form for terminating oneself.
+    let this = unsafe { GetCurrentProcess() };
+    // SAFETY: same pseudo-handle, leaving with the success code.
+    unsafe { TerminateProcess(this, 0) };
 }
 
 fn attach_process(instance: *mut c_void) {
@@ -273,6 +314,9 @@ fn attach_process(instance: *mut c_void) {
     // `install_all` can see — afterwards those bytes are our own detour.
     getname::detect_underlying(image_base);
     symbols::install_all(image_base);
+    // The client now jumps into this image, so it can no longer be unloaded
+    // without taking the process with it: from here a detach means exit.
+    PATCHED.store(true, Ordering::Relaxed);
     // Another module installs over this entry after world entry, which the
     // periodic prologue check is what notices; the policy for what to do about
     // it belongs to the entry, so register it now that the hook exists.
