@@ -472,13 +472,96 @@ mod tests_c_world_frustum__test_oriented_box__6869c0 {
 /// `planes` is 6 planes of 4 floats `[a, b, c, d]` (stride 4). `sphere` is
 /// `[x, y, z, radius]`. A plane rejects when the signed distance of the centre
 /// is below the negated radius (`a*x + b*y + c*z + d < -radius`).
+///
+/// Planes 0-3 are evaluated four lanes at a time. Their rows are transposed so
+/// lane `i` carries plane `i`'s coefficient, and three `mulps` followed by
+/// three `addps` fold `((a*x + b*y) + c*z) + d` in the same association the
+/// scalar tail below uses, so each lane rounds through the identical operand
+/// pairs. The reduction is per-lane, so no dot-product or horizontal-add
+/// instruction is involved. `cmpltps` is the ordered predicate `<` is (a NaN
+/// distance rejects under neither), and the four early exits collapse into one
+/// mask test because the answer is 3 or 0 and does not name the rejecting
+/// plane. All four rows are read even where plane 0 alone rejects: the function
+/// stores nothing and every row is inside `planes`. Planes 4-5 stay scalar.
 pub fn c_world_frustum__test_sphere__686b80(planes: &[f32; 24], sphere: &[f32; 4]) -> u32 {
+    #[cfg(target_arch = "x86")]
+    use core::arch::x86::{
+        _mm_add_ps, _mm_cmplt_ps, _mm_loadu_ps, _mm_movehl_ps, _mm_movelh_ps, _mm_movemask_ps,
+        _mm_mul_ps, _mm_set1_ps, _mm_unpackhi_ps, _mm_unpacklo_ps,
+    };
+    #[cfg(target_arch = "x86_64")]
+    use core::arch::x86_64::{
+        _mm_add_ps, _mm_cmplt_ps, _mm_loadu_ps, _mm_movehl_ps, _mm_movelh_ps, _mm_movemask_ps,
+        _mm_mul_ps, _mm_set1_ps, _mm_unpackhi_ps, _mm_unpacklo_ps,
+    };
+
     let x = sphere[0];
     let y = sphere[1];
     let z = sphere[2];
     let neg_r = -sphere[3];
 
-    for p in 0..6 {
+    // Every intrinsic below is SSE1, available on every ISA baseline this crate
+    // builds for. The loads are unaligned because the receiver arrives as a
+    // 4-byte-aligned copy of the client's plane block.
+    // SAFETY: the load covers the 16 in-bounds bytes of plane 0's row.
+    let row0 = unsafe { _mm_loadu_ps(planes.as_ptr()) };
+    // SAFETY: as above, for plane 1's row.
+    let row1 = unsafe { _mm_loadu_ps(planes[4..].as_ptr()) };
+    // SAFETY: as above, for plane 2's row.
+    let row2 = unsafe { _mm_loadu_ps(planes[8..].as_ptr()) };
+    // SAFETY: as above, for plane 3's row.
+    let row3 = unsafe { _mm_loadu_ps(planes[12..].as_ptr()) };
+
+    // Transpose: `ab01` holds plane 0 and 1's first two coefficients, `cd23`
+    // plane 2 and 3's last two, and the four half-selects below gather one
+    // coefficient of all four planes into one register.
+    // SAFETY: lane interleave of two initialized vectors.
+    let ab01 = unsafe { _mm_unpacklo_ps(row0, row1) };
+    // SAFETY: as above.
+    let cd01 = unsafe { _mm_unpackhi_ps(row0, row1) };
+    // SAFETY: as above.
+    let ab23 = unsafe { _mm_unpacklo_ps(row2, row3) };
+    // SAFETY: as above.
+    let cd23 = unsafe { _mm_unpackhi_ps(row2, row3) };
+    // SAFETY: 64-bit half select between two initialized vectors.
+    let a = unsafe { _mm_movelh_ps(ab01, ab23) };
+    // SAFETY: as above.
+    let b = unsafe { _mm_movehl_ps(ab23, ab01) };
+    // SAFETY: as above.
+    let c = unsafe { _mm_movelh_ps(cd01, cd23) };
+    // SAFETY: as above.
+    let d = unsafe { _mm_movehl_ps(cd23, cd01) };
+
+    // SAFETY: broadcast of an initialized scalar.
+    let xs = unsafe { _mm_set1_ps(x) };
+    // SAFETY: as above.
+    let ys = unsafe { _mm_set1_ps(y) };
+    // SAFETY: as above.
+    let zs = unsafe { _mm_set1_ps(z) };
+    // SAFETY: as above.
+    let neg_rs = unsafe { _mm_set1_ps(neg_r) };
+
+    // SAFETY: lane-wise multiply of two initialized vectors.
+    let ax = unsafe { _mm_mul_ps(a, xs) };
+    // SAFETY: as above.
+    let by = unsafe { _mm_mul_ps(b, ys) };
+    // SAFETY: as above.
+    let cz = unsafe { _mm_mul_ps(c, zs) };
+    // SAFETY: lane-wise add of two initialized vectors.
+    let ax_by = unsafe { _mm_add_ps(ax, by) };
+    // SAFETY: as above.
+    let ax_by_cz = unsafe { _mm_add_ps(ax_by, cz) };
+    // SAFETY: as above.
+    let dist03 = unsafe { _mm_add_ps(ax_by_cz, d) };
+    // SAFETY: lane-wise ordered compare of two initialized vectors.
+    let below = unsafe { _mm_cmplt_ps(dist03, neg_rs) };
+    // SAFETY: sign-bit extraction from an initialized vector.
+    let rejects = unsafe { _mm_movemask_ps(below) };
+    if rejects != 0 {
+        return 0;
+    }
+
+    for p in 4..6 {
         let base = p * 4;
         let dist =
             planes[base] * x + planes[base + 1] * y + planes[base + 2] * z + planes[base + 3];
@@ -492,6 +575,28 @@ pub fn c_world_frustum__test_sphere__686b80(planes: &[f32; 24], sphere: &[f32; 4
 #[cfg(test)]
 mod tests_c_world_frustum__test_sphere__686b80 {
     use super::c_world_frustum__test_sphere__686b80;
+
+    /// One-plane-at-a-time transcription, the oracle for the 4-lane pass.
+    ///
+    /// This is the shape the kernel had before planes 0-3 were folded into
+    /// lanes, and it stays here so the packed form has something to be compared
+    /// against on every input class.
+    fn test_sphere_scalar(planes: &[f32; 24], sphere: &[f32; 4]) -> u32 {
+        let x = sphere[0];
+        let y = sphere[1];
+        let z = sphere[2];
+        let neg_r = -sphere[3];
+
+        for p in 0..6 {
+            let base = p * 4;
+            let dist =
+                planes[base] * x + planes[base + 1] * y + planes[base + 2] * z + planes[base + 3];
+            if dist < neg_r {
+                return 0;
+            }
+        }
+        3
+    }
 
     fn box_frustum() -> [f32; 24] {
         [
@@ -544,6 +649,55 @@ mod tests_c_world_frustum__test_sphere__686b80 {
             c_world_frustum__test_sphere__686b80(&box_frustum(), &pos_big),
             3
         );
+    }
+
+    /// A NaN distance rejects under neither the packed nor the scalar compare.
+    ///
+    /// The poison sits in plane 1, inside the 4-lane pass, so the case pins
+    /// `cmpltps` answering false on an unordered pair exactly as `<` does: the
+    /// polarity that decides whether a NaN plane culls the sphere or ignores it.
+    #[test]
+    fn nan_plane_does_not_reject() {
+        let mut planes = box_frustum();
+        planes[4] = f32::NAN;
+        let sphere = [0.0f32, 0.0, 0.0, 1.0];
+        assert_eq!(c_world_frustum__test_sphere__686b80(&planes, &sphere), 3);
+        assert_eq!(test_sphere_scalar(&planes, &sphere), 3);
+    }
+
+    /// The 4-lane pass answers what the one-plane-at-a-time oracle answers.
+    ///
+    /// Sweeps seeded plane sets and spheres at game-scale magnitudes, poisoning
+    /// one coefficient every fourth case with a NaN, an infinity or a signed
+    /// zero so the ordered compare is exercised in both halves of the 4+2 split.
+    #[test]
+    fn packed_pass_matches_scalar_oracle() {
+        let mut state = 0x2545_f491_4f6c_dd1d_u64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let odd = [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -0.0f32, 0.0];
+        for case in 0..20_000u32 {
+            let mut planes = [0.0f32; 24];
+            for cell in &mut planes {
+                *cell = ((next() >> 11) as f32 / (1_u64 << 53) as f32 - 0.5) * 40.0;
+            }
+            let mut sphere = [0.0f32; 4];
+            for cell in &mut sphere {
+                *cell = ((next() >> 11) as f32 / (1_u64 << 53) as f32 - 0.5) * 40.0;
+            }
+            if case % 4 == 0 {
+                planes[(next() % 24) as usize] = odd[(next() % 5) as usize];
+            }
+            assert_eq!(
+                c_world_frustum__test_sphere__686b80(&planes, &sphere),
+                test_sphere_scalar(&planes, &sphere),
+                "case {case}"
+            );
+        }
     }
 }
 
