@@ -29447,8 +29447,6 @@ pub extern "thiscall" fn c_particle_emitter__apply_render_state__70c190(
     // SAFETY: 0x589e30 is `thiscall(index, value) -> void` (ECX index, stack
     // value, `ret 4`) at a fixed code VA.
     let set_vector: extern "thiscall" fn(u32, u32) = unsafe { core::mem::transmute(SET_VECTOR_VA) };
-    // SAFETY: fixed, initialized `.rdata` dword (0.0010000000474974513).
-    let epsilon = unsafe { EPSILON.read() };
 
     // Field readers over the emitter struct (all offsets verified against
     // 0x70c190; `base` is non-null).
@@ -29569,6 +29567,11 @@ pub extern "thiscall" fn c_particle_emitter__apply_render_state__70c190(
     // Only when this+0x32f0 == 0 and the emitter type [0x3308] != 2.
     let emitter_kind = rd_u32(0x3308);
     if rd_u32(0x32f0) == 0 && emitter_kind != 2 {
+        // Read here rather than at entry: this block holds the only consumer, and
+        // the six `GxApi` calls above it clobber every XMM, so a value live from
+        // entry costs a spill and a reload on every call that never gets here.
+        // SAFETY: fixed, initialized `.rdata` dword (0.0010000000474974513).
+        let epsilon = unsafe { EPSILON.read() };
         let row_state = if (emitter_kind as i32) < 3 {
             // type < 3: gate on *(short*)(this+0x3340 + 0xc) == 1; else state = 1.
             let p3340 = rd_ptr(0x3340);
@@ -29628,14 +29631,7 @@ pub extern "thiscall" fn c_particle_emitter__apply_render_state__70c190(
     if all_unchanged {
         // The six color floats at +0x1a0..+0x1b4 between cur (0x3310) and
         // prev (0x3314) all equal (NaN counts as differing) -> skip.
-        let mut color_same = true;
-        for off in [0x1a0usize, 0x1a4, 0x1a8, 0x1ac, 0x1b0, 0x1b4] {
-            if ptr_f32(p3310, off) != ptr_f32(p3314, off) {
-                color_same = false;
-                break;
-            }
-        }
-        if color_same {
+        if !color_block_differs(p3310, p3314) {
             return;
         }
     }
@@ -29739,6 +29735,53 @@ pub extern "thiscall" fn c_particle_emitter__apply_render_state__70c190(
     if rd_u32(0x32ec) < 0xa {
         write_u32(base, 0x32ec, 0xa);
     }
+}
+
+/// Lane-wise inequality of the six color floats at `+0x1a0`..`+0x1b4`.
+///
+/// The two snapshots `this+0x3310` and `this+0x3314` carry the same record
+/// shape, and the six floats the color diff tests (`+0x1a0`, `+0x1a4`, `+0x1a8`,
+/// `+0x1ac`, `+0x1b0`, `+0x1b4`) are adjacent, so a 16-byte load at `+0x1a0`
+/// plus an 8-byte load at `+0x1b0` covers `+0x1a0`..`+0x1b7`: exactly the bytes
+/// the six scalar loads read, and no more. `cmpneqps` is the unordered
+/// predicate, true when either lane is NaN, which is the exact negation of the
+/// ordered `==` the scalar chain tested, so NaN still counts as differing and
+/// `-0.0` still equals `0.0`. The tail load zeroes lanes 2 and 3 rather than
+/// reading `+0x1b8`, and the mask drops those lanes as well.
+#[inline]
+fn color_block_differs(lhs: *const u8, rhs: *const u8) -> bool {
+    // SAFETY: `lhs` is one of the emitter's snapshot pointers, whose color block
+    // runs `+0x1a0`..`+0x1b7`, so the offset stays inside that record.
+    let lhs_head = unsafe { lhs.add(0x1a0) }.cast::<f32>();
+    // SAFETY: as above, addressing the last two floats of that same block.
+    let lhs_tail = unsafe { lhs.add(0x1b0) }.cast::<f64>();
+    // SAFETY: `rhs` is the other snapshot pointer, of the same record shape.
+    let rhs_head = unsafe { rhs.add(0x1a0) }.cast::<f32>();
+    // SAFETY: as above, addressing its last two floats.
+    let rhs_tail = unsafe { rhs.add(0x1b0) }.cast::<f64>();
+    // SAFETY: an unaligned 16-byte load of the four in-bounds floats at `+0x1a0`.
+    let head_l = unsafe { core::arch::x86::_mm_loadu_ps(lhs_head) };
+    // SAFETY: as above, through the other snapshot pointer.
+    let head_r = unsafe { core::arch::x86::_mm_loadu_ps(rhs_head) };
+    // SAFETY: an unaligned 8-byte load of the two in-bounds floats at `+0x1b0`,
+    // reinterpreted lane-wise; the upper two lanes come out zeroed.
+    let tail_l = unsafe { core::arch::x86::_mm_load_sd(lhs_tail) };
+    // SAFETY: as above, through the other snapshot pointer.
+    let tail_r = unsafe { core::arch::x86::_mm_load_sd(rhs_tail) };
+    // SAFETY: lane-wise unordered compare of two initialized vectors.
+    let head_ne = unsafe { core::arch::x86::_mm_cmpneq_ps(head_l, head_r) };
+    // SAFETY: a type-level reinterpretation of an initialized vector, emitting
+    // nothing; the pair is compared as floats, never as a double.
+    let tail_l_ps = unsafe { core::arch::x86::_mm_castpd_ps(tail_l) };
+    // SAFETY: as above, for the other snapshot's pair.
+    let tail_r_ps = unsafe { core::arch::x86::_mm_castpd_ps(tail_r) };
+    // SAFETY: lane-wise unordered compare of two initialized vectors.
+    let tail_ne = unsafe { core::arch::x86::_mm_cmpneq_ps(tail_l_ps, tail_r_ps) };
+    // SAFETY: sign-bit extraction from an initialized compare mask.
+    let head_mask = unsafe { core::arch::x86::_mm_movemask_ps(head_ne) };
+    // SAFETY: as above, for the tail compare.
+    let tail_mask = unsafe { core::arch::x86::_mm_movemask_ps(tail_ne) };
+    (head_mask | (tail_mask & 0b11)) != 0
 }
 
 /// Reads a pointer field `*(p + off)` of an emitter sub-struct.
