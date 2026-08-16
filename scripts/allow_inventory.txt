@@ -1,5 +1,6 @@
 unix/shared/src/ftol.rs non_snake_case 1
 unix/shared/src/trig.rs clippy::excessive_precision 2
+unix/shared/src/trig.rs clippy::multiple_unsafe_ops_per_block 1
 windows/turbo/build.rs clippy::literal_string_with_formatting_args 1
 windows/turbo/build.rs clippy::struct_excessive_bools 1
 windows/turbo/src/math/aabb.rs clippy::neg_cmp_op_on_partial_ord 2

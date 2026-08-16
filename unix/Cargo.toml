@@ -73,8 +73,8 @@ suboptimal_flops = "allow"              # 23
 # `make lint-counts-update` rewrites them; they are not maintained by hand.
 # See docs/CONVENTIONS.md §"Warning suppressions".
 cast_precision_loss = "allow"           # 16
-cast_possible_truncation = "allow"      # 15
-must_use_candidate = "allow"            # 7
+cast_possible_truncation = "allow"      # 14
+must_use_candidate = "allow"            # 8
 cast_sign_loss = "allow"                # 2
 cast_possible_wrap = "allow"            # 3
 missing_const_for_fn = "allow"          # 1

@@ -98,7 +98,15 @@ pub fn sin_cos(x: f32) -> (f32, f32) {
     // `|x|` the fast `f32` Cody–Waite is exact and inlines; large `|x|` reduces in
     // `f64` via an out-of-line cold helper so the hot path stays lean.
     let (ju, xx) = if xa < FAST_F32_LIMIT {
-        let mut j = (xa * FOPI) as i32;
+        // SAFETY: an `as` cast here would emit a saturation clamp and a
+        // NaN-to-zero select that this arm can never reach — `xa` is
+        // `x.abs()` so it is non-negative, the `is_finite` return above has
+        // already sent NaN and the infinities away, and the arm is entered
+        // only for `xa < FAST_F32_LIMIT`, so the product is inside
+        // `[0, FAST_F32_LIMIT * FOPI)`, i.e. below 10432. That bound is what
+        // makes the conversion defined, so raising `FAST_F32_LIMIT` past
+        // `2^31 / FOPI` is not a widening of a clamp, it is undefined.
+        let mut j = unsafe { (xa * FOPI).to_int_unchecked::<i32>() };
         j = (j + 1) & !1;
         let y = j as f32;
         let mut xx = xa;
@@ -140,6 +148,133 @@ pub fn sin_cos(x: f32) -> (f32, f32) {
     let s = f32::from_bits(sin_u.to_bits() ^ (swap_sign_sin ^ sign_in));
     let c = f32::from_bits(cos_u.to_bits() ^ sign_cos);
     (s, c)
+}
+
+/// Sine and cosine of three angles (radians), one angle to a lane.
+///
+/// Bit-identical to three [`sin_cos`] calls, and that is a property of the
+/// transcription rather than a tolerance: each lane carries out the scalar
+/// kernel's operations in the scalar kernel's order, and an SSE lane rounds
+/// exactly as its scalar counterpart does. A triple where any angle leaves the
+/// fast `f32` reduction hands the whole call to the scalar kernel, so the `f64`
+/// fallback keeps one implementation. The fourth lane carries a zero angle and
+/// its result is dropped.
+///
+/// For a caller building a rotation from three Euler angles this is one
+/// reduction and one pair of polynomials instead of three of each.
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+// One block for the whole packed body: it is a lane-for-lane transcription of
+// `sin_cos`, every operation in it is a register-to-register SSE2 intrinsic
+// with no memory or aliasing precondition, and a comment per intrinsic would
+// say the same sentence forty times over a body meant to be read against the
+// scalar source next to it.
+#[allow(clippy::multiple_unsafe_ops_per_block)]
+pub fn sin_cos3(x: [f32; 3]) -> ([f32; 3], [f32; 3]) {
+    #[cfg(target_arch = "x86")]
+    use core::arch::x86::{
+        _mm_add_epi32, _mm_add_ps, _mm_and_si128, _mm_andnot_ps, _mm_andnot_si128,
+        _mm_castps_si128, _mm_castsi128_ps, _mm_cmpeq_epi32, _mm_cmplt_ps, _mm_cvtepi32_ps,
+        _mm_cvttps_epi32, _mm_movemask_ps, _mm_mul_ps, _mm_or_si128, _mm_set_ps, _mm_set1_epi32,
+        _mm_set1_ps, _mm_setzero_si128, _mm_slli_epi32, _mm_storeu_ps, _mm_sub_epi32, _mm_sub_ps,
+        _mm_xor_si128,
+    };
+    #[cfg(target_arch = "x86_64")]
+    use core::arch::x86_64::{
+        _mm_add_epi32, _mm_add_ps, _mm_and_si128, _mm_andnot_ps, _mm_andnot_si128,
+        _mm_castps_si128, _mm_castsi128_ps, _mm_cmpeq_epi32, _mm_cmplt_ps, _mm_cvtepi32_ps,
+        _mm_cvttps_epi32, _mm_movemask_ps, _mm_mul_ps, _mm_or_si128, _mm_set_ps, _mm_set1_epi32,
+        _mm_set1_ps, _mm_setzero_si128, _mm_slli_epi32, _mm_storeu_ps, _mm_sub_epi32, _mm_sub_ps,
+        _mm_xor_si128,
+    };
+
+    // SAFETY: every intrinsic below is SSE2, present on every ISA baseline this
+    // crate builds for, and each is a register operation with no memory or
+    // aliasing precondition. The one store writes 16 bytes into a local
+    // `[f32; 4]`, which is exactly its size.
+    unsafe {
+        let sign_mask = _mm_set1_epi32(SIGN.cast_signed());
+        let ang = _mm_set_ps(0.0, x[2], x[1], x[0]);
+        let sign_in = _mm_and_si128(_mm_castps_si128(ang), sign_mask);
+        let xa = _mm_andnot_ps(_mm_castsi128_ps(sign_mask), ang);
+
+        // The scalar guard is two ordered tests, `is_finite` then
+        // `< FAST_F32_LIMIT`; one ordered lane compare is both, because NaN and
+        // the infinities fail it too. Lane 3 holds zero and always passes, so
+        // the mask is read three lanes wide.
+        if _mm_movemask_ps(_mm_cmplt_ps(xa, _mm_set1_ps(FAST_F32_LIMIT))) & 0b111 != 0b111 {
+            let (s0, c0) = sin_cos(x[0]);
+            let (s1, c1) = sin_cos(x[1]);
+            let (s2, c2) = sin_cos(x[2]);
+            return ([s0, s1, s2], [c0, c1, c2]);
+        }
+
+        // From here the body is `sin_cos` line for line, spelled wide: `oct` is
+        // its `j`, `oct_f` its `y`, `zsq` its `z`. Nothing is reassociated and
+        // no operand pair is commuted, which is what makes each lane's result
+        // the scalar result rather than an approximation of it.
+        let mut oct = _mm_cvttps_epi32(_mm_mul_ps(xa, _mm_set1_ps(FOPI)));
+        oct = _mm_and_si128(_mm_add_epi32(oct, _mm_set1_epi32(1)), _mm_set1_epi32(!1));
+        let oct_f = _mm_cvtepi32_ps(oct);
+        let mut xx = xa;
+        xx = _mm_sub_ps(xx, _mm_mul_ps(oct_f, _mm_set1_ps(DP1)));
+        xx = _mm_sub_ps(xx, _mm_mul_ps(oct_f, _mm_set1_ps(DP2)));
+        xx = _mm_sub_ps(xx, _mm_mul_ps(oct_f, _mm_set1_ps(DP3)));
+
+        let four = _mm_set1_epi32(4);
+        let swap_sign_sin = _mm_slli_epi32::<29>(_mm_and_si128(oct, four));
+        let sign_cos = _mm_slli_epi32::<29>(_mm_andnot_si128(
+            _mm_sub_epi32(oct, _mm_set1_epi32(2)),
+            four,
+        ));
+        let poly_mask = _mm_cmpeq_epi32(_mm_and_si128(oct, _mm_set1_epi32(2)), _mm_setzero_si128());
+
+        let zsq = _mm_mul_ps(xx, xx);
+
+        let mut yc = _mm_set1_ps(COSCOF0);
+        yc = _mm_add_ps(_mm_mul_ps(yc, zsq), _mm_set1_ps(COSCOF1));
+        yc = _mm_add_ps(_mm_mul_ps(yc, zsq), _mm_set1_ps(COSCOF2));
+        yc = _mm_mul_ps(_mm_mul_ps(yc, zsq), zsq);
+        yc = _mm_add_ps(
+            _mm_sub_ps(yc, _mm_mul_ps(_mm_set1_ps(0.5), zsq)),
+            _mm_set1_ps(1.0),
+        );
+
+        let mut ys = _mm_set1_ps(SINCOF0);
+        ys = _mm_add_ps(_mm_mul_ps(ys, zsq), _mm_set1_ps(SINCOF1));
+        ys = _mm_add_ps(_mm_mul_ps(ys, zsq), _mm_set1_ps(SINCOF2));
+        ys = _mm_add_ps(_mm_mul_ps(_mm_mul_ps(ys, zsq), xx), xx);
+
+        let (ysb, ycb) = (_mm_castps_si128(ys), _mm_castps_si128(yc));
+        let sin_u = _mm_or_si128(
+            _mm_and_si128(ysb, poly_mask),
+            _mm_andnot_si128(poly_mask, ycb),
+        );
+        let cos_u = _mm_or_si128(
+            _mm_and_si128(ycb, poly_mask),
+            _mm_andnot_si128(poly_mask, ysb),
+        );
+
+        let sin_b = _mm_xor_si128(sin_u, _mm_xor_si128(swap_sign_sin, sign_in));
+        let cos_b = _mm_xor_si128(cos_u, sign_cos);
+
+        let mut sv = [0.0_f32; 4];
+        let mut cv = [0.0_f32; 4];
+        _mm_storeu_ps(sv.as_mut_ptr(), _mm_castsi128_ps(sin_b));
+        _mm_storeu_ps(cv.as_mut_ptr(), _mm_castsi128_ps(cos_b));
+        ([sv[0], sv[1], sv[2]], [cv[0], cv[1], cv[2]])
+    }
+}
+
+/// Sine and cosine of three angles (radians), one angle to a lane.
+///
+/// Portable arm: no vector unit to pack into, so the three scalar calls the
+/// packed form stands in for are the implementation.
+#[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+pub fn sin_cos3(x: [f32; 3]) -> ([f32; 3], [f32; 3]) {
+    let (s0, c0) = sin_cos(x[0]);
+    let (s1, c1) = sin_cos(x[1]);
+    let (s2, c2) = sin_cos(x[2]);
+    ([s0, s1, s2], [c0, c1, c2])
 }
 
 /// Cold-path range reduction for `|x| >= FAST_F32_LIMIT`.

@@ -634,9 +634,7 @@ mod tests_c33_matrix__scale_rows__7be6d0 {
 /// client emits (two 3x3 multiplies then a column-major copy). The first stack
 /// arg drives the Z rotation, the third drives X.
 pub fn c33_matrix__from_euler_angles__7bf4b0(angle_z: f32, angle_y: f32, angle_x: f32) -> [f32; 9] {
-    let (sz, cz) = crate::math::trig::sin_cos(angle_z);
-    let (sy, cy) = crate::math::trig::sin_cos(angle_y);
-    let (sx, cx) = crate::math::trig::sin_cos(angle_x);
+    let ([sz, sy, sx], [cz, cy, cx]) = crate::math::trig::sin_cos3([angle_z, angle_y, angle_x]);
     let mz = [cz, -sz, 0.0, sz, cz, 0.0, 0.0, 0.0, 1.0];
     let my = [cy, 0.0, sy, 0.0, 1.0, 0.0, -sy, 0.0, cy];
     let mx = [1.0, 0.0, 0.0, 0.0, cx, -sx, 0.0, sx, cx];
@@ -702,9 +700,7 @@ mod tests_c33_matrix__from_euler_angles__7bf4b0 {
 
 /// 3x3 rotation matrix from Euler angles, intrinsic axis order XYZ (row-major 9 floats).
 pub fn c33_matrix__from_euler_xyz__7bed30(angle_x: f32, angle_y: f32, angle_z: f32) -> [f32; 9] {
-    let (sx, cx) = crate::math::trig::sin_cos(angle_x);
-    let (sy, cy) = crate::math::trig::sin_cos(angle_y);
-    let (sz, cz) = crate::math::trig::sin_cos(angle_z);
+    let ([sx, sy, sz], [cx, cy, cz]) = crate::math::trig::sin_cos3([angle_x, angle_y, angle_z]);
     [
         cy * cz,
         -cx * sz - sx * sy * cz,
@@ -804,9 +800,7 @@ mod tests_c33_matrix__from_euler_xyz__7bed30 {
 
 /// 3x3 rotation matrix from Euler angles, intrinsic axis order XZY (row-major 9 floats).
 pub fn c33_matrix__from_euler_xzy__7beeb0(angle_x: f32, angle_y: f32, angle_z: f32) -> [f32; 9] {
-    let (sx, cx) = crate::math::trig::sin_cos(angle_x);
-    let (sy, cy) = crate::math::trig::sin_cos(angle_y);
-    let (sz, cz) = crate::math::trig::sin_cos(angle_z);
+    let ([sx, sy, sz], [cx, cy, cz]) = crate::math::trig::sin_cos3([angle_x, angle_y, angle_z]);
     [
         cy * cz,
         cx * sy * cz - sx * sz,
@@ -905,9 +899,7 @@ mod tests_c33_matrix__from_euler_xzy__7beeb0 {
 
 /// `C33Matrix::from_euler_yxz` — Euler order YXZ: stores `transpose(Rz · Rx · Ry)`.
 pub fn c33_matrix__from_euler_yxz__7bf030(angle_x: f32, angle_y: f32, angle_z: f32) -> [f32; 9] {
-    let (sx, cx) = crate::math::trig::sin_cos(angle_x);
-    let (sy, cy) = crate::math::trig::sin_cos(angle_y);
-    let (sz, cz) = crate::math::trig::sin_cos(angle_z);
+    let ([sx, sy, sz], [cx, cy, cz]) = crate::math::trig::sin_cos3([angle_x, angle_y, angle_z]);
     let rx = rx3(cx, sx);
     let ry = ry3(cy, sy);
     let rz = rz3(cz, sz);
@@ -961,9 +953,7 @@ mod tests_c33_matrix__from_euler_yxz__7bf030 {
 
 /// `C33Matrix::from_euler_yzx` — Euler order YZX: stores `transpose(Rx · Rz · Ry)`.
 pub fn c33_matrix__from_euler_yzx__7bf1b0(angle_x: f32, angle_y: f32, angle_z: f32) -> [f32; 9] {
-    let (sx, cx) = crate::math::trig::sin_cos(angle_x);
-    let (sy, cy) = crate::math::trig::sin_cos(angle_y);
-    let (sz, cz) = crate::math::trig::sin_cos(angle_z);
+    let ([sx, sy, sz], [cx, cy, cz]) = crate::math::trig::sin_cos3([angle_x, angle_y, angle_z]);
     let rx = rx3(cx, sx);
     let ry = ry3(cy, sy);
     let rz = rz3(cz, sz);
@@ -1017,9 +1007,7 @@ mod tests_c33_matrix__from_euler_yzx__7bf1b0 {
 
 /// `C33Matrix::from_euler_zxy` — Euler order ZXY: stores `transpose(Ry · Rx · Rz)`.
 pub fn c33_matrix__from_euler_zxy__7bf330(angle_x: f32, angle_y: f32, angle_z: f32) -> [f32; 9] {
-    let (sx, cx) = crate::math::trig::sin_cos(angle_x);
-    let (sy, cy) = crate::math::trig::sin_cos(angle_y);
-    let (sz, cz) = crate::math::trig::sin_cos(angle_z);
+    let ([sx, sy, sz], [cx, cy, cz]) = crate::math::trig::sin_cos3([angle_x, angle_y, angle_z]);
     let rx = rx3(cx, sx);
     let ry = ry3(cy, sy);
     let rz = rz3(cz, sz);
