@@ -24984,9 +24984,13 @@ pub extern "thiscall" fn c_particle_emitter__update__7b5a10(
 
     // Walk shape for `seam particles phys`; counted, never timed (this loop runs
     // ~1M particles/s at raid grain, where a bracket costs more than the body).
+    // Culls are not counted: every iteration takes exactly one of the two exits,
+    // `i` advances only on the survivor exit, and `n_particles` counts both, so
+    // the cull total is their difference and the walk carries one fewer value
+    // through its loop. The subtraction is modular, which is the arithmetic the
+    // counters themselves are already doing.
     let mut n_particles: u32 = 0;
     let mut n_aligned: u32 = 0;
-    let mut n_culled: u32 = 0;
     let mut n_child: u32 = 0;
 
     // Per-particle loop over the live-index array at this+0x5c, count this+0x64.
@@ -25124,8 +25128,6 @@ pub extern "thiscall" fn c_particle_emitter__update__7b5a10(
             continue;
         }
 
-        n_culled = n_culled.wrapping_add(1);
-
         // Cull path: slot-3 virtual (particle recycle) then swap-remove.
         //
         // SAFETY: the first dword of the emitter instance is its vtable pointer,
@@ -25210,6 +25212,7 @@ pub extern "thiscall" fn c_particle_emitter__update__7b5a10(
     }
 
     if let Some(armed) = crate::win::tally::arm() {
+        let n_culled = n_particles.wrapping_sub(i);
         crate::win::seam_probe::pq_particle_walk(&armed, n_particles, n_aligned, n_culled, n_child);
         // Tripwire on the hoist: the parameters are re-read once here, at walk
         // end, and compared against what the walk actually used. Once per

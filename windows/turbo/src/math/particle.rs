@@ -231,7 +231,10 @@ pub struct PhysConst {
     /// The timestep. Still per-particle work: it scales the velocity into `vdt`.
     dt: f32,
     /// `dt·acceleration`, added to the velocity while the particle is young.
-    dt_accel: [f32; 3],
+    ///
+    /// Held in the four-lane shape the packed velocity add consumes, so the
+    /// hoisted copy feeds it with one load; lane 3 is zero and never stored.
+    dt_accel: [f32; 4],
     /// `dt·gravity_z`, which the z velocity loses.
     dt_grav: f32,
     /// `dt·gravity_z·dt·half` — the ½·g·dt² term the z position loses.
@@ -239,7 +242,9 @@ pub struct PhysConst {
     /// The lifespan the particle's age is tested against before accelerating.
     lifespan: f32,
     /// The spawn-velocity bonus added on the first frame the bit is observed.
-    spawn_bonus: [f32; 3],
+    ///
+    /// Carried in the same four-lane shape as `dt_accel`; lane 3 is zero.
+    spawn_bonus: [f32; 4],
     /// Emitter flag `0x40000`: whether that bonus arm runs at all.
     spawn_bonus_on: bool,
     /// The drag dword read as the original's integer "enabled" flag.
@@ -285,12 +290,17 @@ impl PhysConst {
         }
         Self {
             dt,
-            dt_accel: [dt * accel[0], dt * accel[1], dt * accel[2]],
+            dt_accel: [dt * accel[0], dt * accel[1], dt * accel[2], 0.0],
             dt_grav: dt * grav_z,
             // Left-associative, matching the original's `dt·g·dt·half` chain.
             grav_pos_term: dt * grav_z * dt * half,
             lifespan,
-            spawn_bonus: spawn_vel_bonus,
+            spawn_bonus: [
+                spawn_vel_bonus[0],
+                spawn_vel_bonus[1],
+                spawn_vel_bonus[2],
+                0.0,
+            ],
             spawn_bonus_on: flags & 0x4_0000 != 0,
             drag_enabled,
             drag,
@@ -341,6 +351,13 @@ impl PhysConst {
 /// `½·g·dt²` kinematic correction. The alive/cull test multiplies the pre-drag
 /// velocity (scaled by `dt`) against the updated position; a strictly-positive
 /// dot retires the particle.
+///
+/// The velocity rides through the body as one four-lane vector. Every stage it
+/// passes through — the acceleration add, the drag shrink and both deadbands —
+/// is elementwise with the same operand pair in each lane, so packing them
+/// changes granularity and not a single result bit. The two z-only steps stay
+/// scalar: `v.z -= dt·g` and the `dt·v.z` the cull dot needs read one lane, and
+/// folding them in would cost an extract and a re-insert to get back out.
 #[inline]
 pub fn step_particle__7b2680(
     k: &PhysConst,
@@ -350,19 +367,17 @@ pub fn step_particle__7b2680(
     age: f32,
 ) -> ([f32; 3], [f32; 3], bool, bool) {
     let mut p = pos;
-    let mut v = vel;
+    // Lane 3 is a zero the caller never stores: the velocity slot is 12 bytes,
+    // so nothing computed there can reach the particle record.
+    let mut v = [vel[0], vel[1], vel[2], 0.0];
     let mut ff = first_frame;
 
     // Acceleration while the particle is younger than its lifespan
     // (`age < lifespan`, NaN excluded), then snap each component to zero inside
     // the deadband.
     if age < k.lifespan {
-        v = [
-            k.dt_accel[0] + v[0],
-            k.dt_accel[1] + v[1],
-            k.dt_accel[2] + v[2],
-        ];
-        v = snap_deadband(v, k.vel_eps);
+        v = accel_lanes4(k.dt_accel, v);
+        v = snap_deadband4(v, k.vel_eps);
     }
 
     // Spawn-velocity bonus on the first frame the bit is observed (flag 0x40000);
@@ -393,14 +408,10 @@ pub fn step_particle__7b2680(
     // Drag (only when the integer "enabled" field is non-zero), applied as
     // `v -= drag·v` with the factor already clamped by `PhysConst::new`.
     if k.drag_enabled {
-        v = [
-            v[0] - k.drag * v[0],
-            v[1] - k.drag * v[1],
-            v[2] - k.drag * v[2],
-        ];
+        v = drag_lanes4(v, k.drag);
     }
 
-    v = snap_deadband(v, k.vel_eps);
+    v = snap_deadband4(v, k.vel_eps);
 
     // Cull test (flag 0x800): the dot of the pre-drag, dt-scaled velocity with
     // the updated position; strictly positive => the particle moves away and
@@ -415,20 +426,121 @@ pub fn step_particle__7b2680(
         }
     }
 
-    (p, v, ff, alive)
+    (p, [v[0], v[1], v[2]], ff, alive)
 }
 
-/// Snap each component to exactly `0.0` when it is non-zero and its magnitude is below `eps`.
+/// Lane-wise `dt_accel + v`, the acceleration stage of the velocity pipeline.
 ///
-/// (A deadband around zero.) A component already equal to `0.0` is left
-/// untouched, matching the original's `value != 0.0` guard.
-fn snap_deadband(v: [f32; 3], eps: f32) -> [f32; 3] {
-    v.map(|c| if c != 0.0 && c.abs() < eps { 0.0 } else { c })
+/// Written in the original's operand order. The add is elementwise with the
+/// same operand pair in every lane, so packing the three components is a change
+/// of granularity and not of any result bit.
+fn accel_lanes4(dt_accel: [f32; 4], v: [f32; 4]) -> [f32; 4] {
+    #[cfg(target_arch = "x86")]
+    use core::arch::x86::{_mm_add_ps, _mm_loadu_ps, _mm_storeu_ps};
+    #[cfg(target_arch = "x86_64")]
+    use core::arch::x86_64::{_mm_add_ps, _mm_loadu_ps, _mm_storeu_ps};
+    // Every intrinsic below is SSE1, available on every ISA baseline this
+    // crate builds for.
+    // SAFETY: the load covers the 16 in-bounds bytes of its `[f32; 4]` argument.
+    let a = unsafe { _mm_loadu_ps(dt_accel.as_ptr()) };
+    // SAFETY: as above.
+    let b = unsafe { _mm_loadu_ps(v.as_ptr()) };
+    // SAFETY: lane-wise add of two initialized vectors.
+    let sum = unsafe { _mm_add_ps(a, b) };
+    let mut out = [0.0f32; 4];
+    // SAFETY: the store covers the 16 in-bounds bytes of `out`.
+    unsafe { _mm_storeu_ps(out.as_mut_ptr(), sum) };
+    out
+}
+
+/// Lane-wise `v − drag·v`, the drag stage of the velocity pipeline.
+///
+/// Two operations rather than one `v·(1 − drag)`: the original multiplies and
+/// then subtracts, and folding them would round once instead of twice. The
+/// subtraction's operand order is load-bearing and is the original's; `drag` is
+/// already clamped by [`PhysConst::new`], which is where the ceiling's NaN
+/// polarity lives.
+fn drag_lanes4(v: [f32; 4], drag: f32) -> [f32; 4] {
+    #[cfg(target_arch = "x86")]
+    use core::arch::x86::{_mm_loadu_ps, _mm_mul_ps, _mm_set1_ps, _mm_storeu_ps, _mm_sub_ps};
+    #[cfg(target_arch = "x86_64")]
+    use core::arch::x86_64::{_mm_loadu_ps, _mm_mul_ps, _mm_set1_ps, _mm_storeu_ps, _mm_sub_ps};
+    // Every intrinsic below is SSE1, available on every ISA baseline this
+    // crate builds for.
+    // SAFETY: the load covers the 16 in-bounds bytes of its `[f32; 4]` argument.
+    let c = unsafe { _mm_loadu_ps(v.as_ptr()) };
+    // SAFETY: broadcast of an initialized scalar; no memory is touched.
+    let k = unsafe { _mm_set1_ps(drag) };
+    // SAFETY: lane-wise multiply of two initialized vectors.
+    let loss = unsafe { _mm_mul_ps(k, c) };
+    // SAFETY: lane-wise subtract of two initialized vectors.
+    let kept = unsafe { _mm_sub_ps(c, loss) };
+    let mut out = [0.0f32; 4];
+    // SAFETY: the store covers the 16 in-bounds bytes of `out`.
+    unsafe { _mm_storeu_ps(out.as_mut_ptr(), kept) };
+    out
+}
+
+/// Snap each lane to `0.0` when it is non-zero and its magnitude is below `eps`.
+///
+/// (A deadband around zero.) A lane already equal to `0.0` is left untouched,
+/// matching the original's `value != 0.0` guard, and so is `-0.0`, which
+/// compares equal to zero. The select is a mask and not a `min`/`max`: `cmpltps`
+/// is the ordered compare the original's `ucomiss`/`ja` pair makes, so a NaN
+/// lane or a NaN `eps` falls through and keeps the lane's bits exactly,
+/// signalling payloads included, while `andnot` supplies the same `+0.0` the
+/// original's zeroed register does.
+fn snap_deadband4(v: [f32; 4], eps: f32) -> [f32; 4] {
+    #[cfg(target_arch = "x86")]
+    use core::arch::x86::{
+        _mm_and_ps, _mm_andnot_ps, _mm_cmplt_ps, _mm_cmpneq_ps, _mm_loadu_ps, _mm_set1_ps,
+        _mm_setzero_ps, _mm_storeu_ps,
+    };
+    #[cfg(target_arch = "x86_64")]
+    use core::arch::x86_64::{
+        _mm_and_ps, _mm_andnot_ps, _mm_cmplt_ps, _mm_cmpneq_ps, _mm_loadu_ps, _mm_set1_ps,
+        _mm_setzero_ps, _mm_storeu_ps,
+    };
+    // Every intrinsic below is SSE1, available on every ISA baseline this
+    // crate builds for.
+    // SAFETY: the load covers the 16 in-bounds bytes of its `[f32; 4]` argument.
+    let c = unsafe { _mm_loadu_ps(v.as_ptr()) };
+    // SAFETY: broadcast of an initialized scalar; no memory is touched.
+    let band = unsafe { _mm_set1_ps(eps) };
+    // SAFETY: broadcast of a constant; no memory is touched.
+    let sign = unsafe { _mm_set1_ps(-0.0) };
+    // SAFETY: lane-wise clear of the sign bit, which is an exact magnitude.
+    let abs = unsafe { _mm_andnot_ps(sign, c) };
+    // SAFETY: lane-wise ordered compare of two initialized vectors.
+    let inside = unsafe { _mm_cmplt_ps(abs, band) };
+    // SAFETY: a zeroed vector; no memory is touched.
+    let zero = unsafe { _mm_setzero_ps() };
+    // SAFETY: lane-wise unordered not-equal compare of two initialized vectors,
+    // the same predicate Rust's `!=` means on floats.
+    let nonzero = unsafe { _mm_cmpneq_ps(c, zero) };
+    // SAFETY: lane-wise AND of two compare masks.
+    let snap = unsafe { _mm_and_ps(inside, nonzero) };
+    // SAFETY: lane-wise select over two initialized vectors: a set mask yields
+    // `+0.0`, a clear one the lane's own bits.
+    let kept = unsafe { _mm_andnot_ps(snap, c) };
+    let mut out = [0.0f32; 4];
+    // SAFETY: the store covers the 16 in-bounds bytes of `out`.
+    unsafe { _mm_storeu_ps(out.as_mut_ptr(), kept) };
+    out
 }
 
 #[cfg(test)]
 mod tests_c_particle_emitter__update_particle_physics__7b2680 {
-    use super::{PhysConst, snap_deadband, step_particle__7b2680};
+    use super::{PhysConst, snap_deadband4, step_particle__7b2680};
+
+    /// The deadband as a short-circuiting scalar, the oracle for `snap_deadband4`.
+    ///
+    /// The shipped kernel is a lane-wise mask select; this is the branchy form
+    /// it replaced, kept so the sweep below compares bits against the predicate
+    /// the original wrote rather than against a restatement of the new one.
+    fn snap_deadband(v: [f32; 3], eps: f32) -> [f32; 3] {
+        v.map(|c| if c != 0.0 && c.abs() < eps { 0.0 } else { c })
+    }
 
     // The original's single-shot shape: rebuild the emitter constants, take one
     // step. The cases below predate the split and are unchanged by it, which is
@@ -570,7 +682,46 @@ mod tests_c_particle_emitter__update_particle_physics__7b2680 {
 
     #[test]
     fn deadband_helper_leaves_zero_and_large() {
-        assert_eq!(snap_deadband([0.0, 2.0, 1e-9], 1e-3), [0.0, 2.0, 0.0]);
+        let snapped = snap_deadband4([0.0, 2.0, 1e-9, 0.0], 1e-3);
+        assert_eq!(snapped, [0.0, 2.0, 0.0, 0.0]);
+    }
+
+    /// The 4-lane deadband must agree with the scalar one bit for bit.
+    ///
+    /// Covers the values that decide the two comparisons rather than the
+    /// arithmetic: both zeros, subnormals either side of the band, infinities,
+    /// NaN in the lane and NaN as the band itself, with the ignored fourth lane
+    /// carrying junk chosen to show up if it ever leaked into a live lane.
+    #[test]
+    fn deadband4_matches_scalar_kernel() {
+        const VALS: [f32; 11] = [
+            0.0,
+            -0.0,
+            1e-45,
+            -1e-45,
+            5e-4,
+            -5e-4,
+            2.0,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::NAN,
+            -f32::NAN,
+        ];
+        const EPSES: [f32; 5] = [0.0, -0.0, 1e-3, f32::INFINITY, f32::NAN];
+        const JUNK: [f32; 4] = [f32::NAN, f32::NEG_INFINITY, -0.0, 5e-4];
+        for (i, &a) in VALS.iter().enumerate() {
+            for (j, &b) in VALS.iter().enumerate() {
+                let lanes = [a, b, VALS[(i + j + 3) % VALS.len()]];
+                for &eps in &EPSES {
+                    let want = snap_deadband(lanes, eps).map(f32::to_bits);
+                    for &junk in &JUNK {
+                        let got = snap_deadband4([lanes[0], lanes[1], lanes[2], junk], eps);
+                        let got = [got[0], got[1], got[2]].map(f32::to_bits);
+                        assert_eq!(want, got, "lanes={lanes:?} eps={eps} junk={junk}");
+                    }
+                }
+            }
+        }
     }
 
     fn consts(grav_z: f32, flags: u32) -> PhysConst {
