@@ -3372,14 +3372,14 @@ pub enum BspTraceStep {
     HighOnly,
     /// Both endpoints are below the band: descend only the low child.
     LowOnly,
-    /// The segment straddles the plane entering from the high side.
+    /// The segment crosses the plane at `mid`, entering from the side `fa` names.
     ///
-    /// The high child takes `[p0, mid]`, then the low child takes `[mid, p1]`.
-    SplitHighFirst { mid: [f32; 3] },
-    /// The segment straddles the plane entering from the low side.
-    ///
-    /// The low child takes `[p0, mid]`, then the high child takes `[mid, p1]`.
-    SplitLowFirst { mid: [f32; 3] },
+    /// `fa` is the start endpoint's signed distance to the plane. The caller
+    /// gates it against the client's front-side constant: ordered-greater
+    /// enters from the high side, so the high child takes `[p0, mid]` and the
+    /// low child `[mid, p1]`; anything else (a NaN `fa` included) enters from
+    /// the low side and the two swap.
+    Straddle { mid: [f32; 3], fa: f32 },
 }
 
 /// Classifies a traced segment against one BSP split plane.
@@ -3387,12 +3387,14 @@ pub enum BspTraceStep {
 /// `seg` packs the segment start in `[0..3]` and end in `[3..6]`; `clip` is
 /// the node's clip slab as `[min_x, min_y, min_z, max_x, max_y, max_z]`;
 /// `axis` (0..3) and `split` come from the node. `band_lo`/`band_hi` bound
-/// the on-plane tolerance band for `p - split`, and `front_gate` decides
-/// which side a straddling segment enters from. Every compare keeps the
+/// the on-plane tolerance band for `p - split`. Every compare keeps the
 /// reference's exact NaN routing: the slab rejects only on two ordered
 /// less-than results, the band/above/below classifications are ordered (a
 /// NaN distance falls through to the straddle path), and the straddle
 /// midpoint is the per-component f32 lerp `p0 + (p1 - p0) * fa / (fa - fb)`.
+/// The front-side gate is not taken here: `Straddle` hands `fa` back and the
+/// caller runs that one compare, so the constant is read only when it decides
+/// something.
 pub fn collide_bsp_node_trace_segment__6bc370(
     seg: &[f32; 6],
     clip: &[f32; 6],
@@ -3400,7 +3402,6 @@ pub fn collide_bsp_node_trace_segment__6bc370(
     split: f32,
     band_lo: f32,
     band_hi: f32,
-    front_gate: f32,
 ) -> BspTraceStep {
     use BspTraceStep as Step;
     let a = axis;
@@ -3435,11 +3436,7 @@ pub fn collide_bsp_node_trace_segment__6bc370(
         seg[1] + (seg[4] - seg[1]) * t,
         seg[2] + (seg[5] - seg[2]) * t,
     ];
-    if fa > front_gate {
-        Step::SplitHighFirst { mid }
-    } else {
-        Step::SplitLowFirst { mid }
-    }
+    Step::Straddle { mid, fa }
 }
 
 #[cfg(test)]
@@ -3459,63 +3456,67 @@ mod tests_collide_bsp_node_trace_segment__6bc370 {
     fn rejects_segment_outside_slab() {
         // Both endpoints far below the slab minimum on x.
         let s = seg([-20.0, 0.0, 0.0], [-15.0, 0.0, 0.0]);
-        assert_eq!(step(&s, &CLIP, 0, 0.0, E_LO, E_HI, GATE), Step::Reject);
+        assert_eq!(step(&s, &CLIP, 0, 0.0, E_LO, E_HI), Step::Reject);
         // Both endpoints far above the slab maximum on x.
         let s = seg([20.0, 0.0, 0.0], [15.0, 0.0, 0.0]);
-        assert_eq!(step(&s, &CLIP, 0, 0.0, E_LO, E_HI, GATE), Step::Reject);
+        assert_eq!(step(&s, &CLIP, 0, 0.0, E_LO, E_HI), Step::Reject);
     }
 
     #[test]
     fn one_endpoint_in_slab_passes() {
         let s = seg([-20.0, 0.0, 0.0], [0.0, 0.0, 0.0]);
-        assert_ne!(step(&s, &CLIP, 0, 5.0, E_LO, E_HI, GATE), Step::Reject);
+        assert_ne!(step(&s, &CLIP, 0, 5.0, E_LO, E_HI), Step::Reject);
     }
 
     #[test]
     fn both_above_visits_high_only() {
         let s = seg([3.0, 0.0, 0.0], [5.0, 0.0, 0.0]);
-        assert_eq!(step(&s, &CLIP, 0, 1.0, E_LO, E_HI, GATE), Step::HighOnly);
+        assert_eq!(step(&s, &CLIP, 0, 1.0, E_LO, E_HI), Step::HighOnly);
     }
 
     #[test]
     fn both_below_visits_low_only() {
         let s = seg([-3.0, 0.0, 0.0], [-5.0, 0.0, 0.0]);
-        assert_eq!(step(&s, &CLIP, 0, 1.0, E_LO, E_HI, GATE), Step::LowOnly);
+        assert_eq!(step(&s, &CLIP, 0, 1.0, E_LO, E_HI), Step::LowOnly);
     }
 
     #[test]
     fn endpoint_on_plane_takes_band() {
         let s = seg([1.0, 0.0, 0.0], [5.0, 0.0, 0.0]);
-        assert_eq!(step(&s, &CLIP, 0, 1.0, E_LO, E_HI, GATE), Step::Band);
+        assert_eq!(step(&s, &CLIP, 0, 1.0, E_LO, E_HI), Step::Band);
         // Band edges are inclusive (`>=`/`<=`).
         let s = seg([1.0 + E_HI, 0.0, 0.0], [5.0, 0.0, 0.0]);
-        assert_eq!(step(&s, &CLIP, 0, 1.0, E_LO, E_HI, GATE), Step::Band);
+        assert_eq!(step(&s, &CLIP, 0, 1.0, E_LO, E_HI), Step::Band);
     }
 
     #[test]
-    fn straddle_from_high_side_splits_high_first() {
+    fn straddle_from_high_side_gates_high_first() {
         let s = seg([4.0, 1.0, 2.0], [-2.0, 7.0, 8.0]);
-        match step(&s, &CLIP, 0, 1.0, E_LO, E_HI, GATE) {
-            Step::SplitHighFirst { mid } => {
+        match step(&s, &CLIP, 0, 1.0, E_LO, E_HI) {
+            Step::Straddle { mid, fa } => {
                 // The crossing lies on the plane and on the segment.
                 assert!((mid[0] - 1.0).abs() < 1e-5, "mid = {mid:?}");
                 // t = fa / (fa - fb) = 3 / 6 = 0.5 on the other axes.
                 assert!((mid[1] - 4.0).abs() < 1e-5, "mid = {mid:?}");
                 assert!((mid[2] - 5.0).abs() < 1e-5, "mid = {mid:?}");
+                // The caller's gate: ordered-greater sends the high child first.
+                assert!(fa > GATE, "fa = {fa}");
             }
-            other => panic!("expected SplitHighFirst, got {other:?}"),
+            other => panic!("expected Straddle, got {other:?}"),
         }
     }
 
     #[test]
-    fn straddle_from_low_side_splits_low_first() {
+    fn straddle_from_low_side_gates_low_first() {
         let s = seg([-2.0, 0.0, 0.0], [4.0, 6.0, 0.0]);
-        match step(&s, &CLIP, 0, 1.0, E_LO, E_HI, GATE) {
-            Step::SplitLowFirst { mid } => {
+        match step(&s, &CLIP, 0, 1.0, E_LO, E_HI) {
+            Step::Straddle { mid, fa } => {
                 assert!((mid[0] - 1.0).abs() < 1e-5, "mid = {mid:?}");
                 assert!((mid[1] - 3.0).abs() < 1e-5, "mid = {mid:?}");
+                // Below the caller's gate, so the low child goes first.
+                assert!(fa < GATE, "fa = {fa}");
             }
-            other => panic!("expected SplitLowFirst, got {other:?}"),
+            other => panic!("expected Straddle, got {other:?}"),
         }
     }
 
@@ -3524,27 +3525,29 @@ mod tests_collide_bsp_node_trace_segment__6bc370 {
         // Same geometry, classified on y instead of x.
         let s = seg([0.0, 4.0, 0.0], [0.0, -2.0, 0.0]);
         assert!(matches!(
-            step(&s, &CLIP, 1, 1.0, E_LO, E_HI, GATE),
-            Step::SplitHighFirst { .. }
+            step(&s, &CLIP, 1, 1.0, E_LO, E_HI),
+            Step::Straddle { .. }
         ));
-        assert_eq!(step(&s, &CLIP, 2, 1.0, E_LO, E_HI, GATE), Step::LowOnly);
+        assert_eq!(step(&s, &CLIP, 2, 1.0, E_LO, E_HI), Step::LowOnly);
     }
 
     #[test]
     fn nan_distance_falls_through_to_straddle() {
         // A NaN start coordinate is unordered in every band/side compare and
-        // must reach the straddle path (taking the low-first branch).
+        // must reach the straddle path.
         let s = seg([f32::NAN, 0.0, 0.0], [4.0, 0.0, 0.0]);
-        assert!(matches!(
-            step(&s, &CLIP, 0, 1.0, E_LO, E_HI, GATE),
-            Step::SplitLowFirst { .. }
-        ));
+        match step(&s, &CLIP, 0, 1.0, E_LO, E_HI) {
+            // A NaN `fa` leaves the caller's `fa > gate` unordered, so it is
+            // the low child that goes first.
+            Step::Straddle { fa, .. } => assert!(fa.is_nan(), "fa = {fa}"),
+            other => panic!("expected Straddle, got {other:?}"),
+        }
     }
 
     #[test]
     fn nan_does_not_reject_slab() {
         let s = seg([f32::NAN, 0.0, 0.0], [f32::NAN, 0.0, 0.0]);
-        assert_ne!(step(&s, &CLIP, 0, 1.0, E_LO, E_HI, GATE), Step::Reject);
+        assert_ne!(step(&s, &CLIP, 0, 1.0, E_LO, E_HI), Step::Reject);
     }
 }
 

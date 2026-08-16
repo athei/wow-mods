@@ -14983,15 +14983,78 @@ pub extern "fastcall" fn cloud_shade_layer__6cfb00(layer: *mut core::ffi::c_void
     }
 }
 
+/// Walks a leaf node's triangle list when the leaf mesh collider declined it.
+///
+/// `node+0x6` is the triangle count and `node+0x8` the start index into the
+/// index pool at `geometry+0x8`; each `u16` id goes to `0x6bc700`. Measured on
+/// a busy scene the collider reports the leaf block handled on every call, so
+/// this fallback is kept out of line and out of the leaf dispatch's cache
+/// footprint.
+#[cold]
+#[inline(never)]
+fn trace_bsp_leaf_triangles(state: *mut u8, geometry: *mut u8, node: *mut u8) {
+    // SAFETY: `node+0x8` is the node's triangle-list start index.
+    let list_slot = unsafe { node.add(0x8) };
+    // SAFETY: `list_slot` is the initialized list start.
+    let list_off = unsafe { list_slot.cast::<u32>().read() };
+    // SAFETY: `geometry+0x8` is the triangle-index pool slot.
+    let pool_slot = unsafe { geometry.add(0x8) };
+    // SAFETY: `pool_slot` holds the initialized pool base.
+    let pool = unsafe { pool_slot.cast::<*const u8>().read() };
+    // SAFETY: `node+0x6` is the node's triangle-count word.
+    let count_ptr = unsafe { node.add(0x6) };
+    // SAFETY: `count_ptr` is the initialized count.
+    let count = unsafe { count_ptr.cast::<u16>().read() };
+    if pool.is_null() {
+        return;
+    }
+    const TRI_COLLIDE_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x2b_c700;
+    // SAFETY: fixed `.text` entry in the live host image; the transmuted
+    // signature matches the declared prototype — `__thiscall(state,
+    // triangle_id)`, callee cleans its one stack arg (`ret 0x4`).
+    let tri_collide: extern "thiscall" fn(*mut u8, u32) =
+        unsafe { core::mem::transmute(TRI_COLLIDE_VA) };
+    for i in 0..usize::from(count) {
+        // SAFETY: list entries `list_off .. list_off+count` are u16 ids
+        // within the live pool per the node contract.
+        let id_ptr = unsafe { pool.add((list_off as usize + i) * 2) };
+        // SAFETY: `id_ptr` is an initialized pool entry.
+        let id = unsafe { id_ptr.cast::<u16>().read() };
+        tri_collide(state, u32::from(id));
+    }
+}
+
+/// Descends one BSP child with the clip slab clamped at the split plane.
+///
+/// `slot` is the slab element the plane replaces: `axis` for the high child,
+/// whose minimum rises to the split, `axis + 3` for the low child, whose
+/// maximum drops to it. The old value goes back on return, so the caller's
+/// slab survives the descent and a second child still classifies against the
+/// parent's snapshot. The reference built a fresh 24-byte slab per child.
+#[inline]
+fn trace_bsp_child(
+    this: *mut u8,
+    child: u16,
+    seg: &[f32; 6],
+    clip: &mut [f32; 6],
+    slot: usize,
+    split: f32,
+) {
+    let saved = clip[slot];
+    clip[slot] = split;
+    trace_bsp_segment(this, u32::from(child), seg, clip);
+    clip[slot] = saved;
+}
+
 /// Recursive worker for `collide_bsp_node_trace_segment__6bc370`.
 ///
-/// Takes the segment by reference to a per-level copy, mirroring the
-/// reference's per-frame stack rebuilds of the clipped records. The clip slab
-/// travels as a bare pointer instead: at the top level it addresses the group's
-/// own slab in client memory (`group+0x90`), so a live shared reference held
-/// across a recursion that re-enters client code would be a stronger claim than
-/// the walk can back, and the entry would have to snapshot it to form one.
-fn trace_bsp_segment(this: *mut u8, node_index: u32, seg: &[f32; 6], clip: *const f32) {
+/// The segment comes in by reference to a per-level copy; the clip slab is
+/// mutated in place around each descent and restored by `trace_bsp_child`, so
+/// this leaves `*clip` exactly as it found it on every path. The slab it clamps
+/// is always the entry's own snapshot, never the group's slab in client memory
+/// at `group+0x90`, so the client code a descent re-enters can never observe a
+/// clamped element.
+fn trace_bsp_segment(this: *mut u8, node_index: u32, seg: &[f32; 6], clip: &mut [f32; 6]) {
     // SAFETY: `this+0x0` is the in-bounds, aligned geometry-tables slot.
     let geometry = unsafe { this.cast::<*mut u8>().read() };
     if geometry.is_null() {
@@ -15020,35 +15083,7 @@ fn trace_bsp_segment(this: *mut u8, node_index: u32, seg: &[f32; 6], clip: *cons
         if collide_leaf_ray_triangle_mesh__6b88e0(state, geometry, node) & 0xff != 0 {
             return;
         }
-        // SAFETY: `node+0x8` is the node's triangle-list start index.
-        let list_slot = unsafe { node.add(0x8) };
-        // SAFETY: `list_slot` is the initialized list start.
-        let list_off = unsafe { list_slot.cast::<u32>().read() };
-        // SAFETY: `geometry+0x8` is the triangle-index pool slot.
-        let pool_slot = unsafe { geometry.add(0x8) };
-        // SAFETY: `pool_slot` holds the initialized pool base.
-        let pool = unsafe { pool_slot.cast::<*const u8>().read() };
-        // SAFETY: `node+0x6` is the node's triangle-count word.
-        let count_ptr = unsafe { node.add(0x6) };
-        // SAFETY: `count_ptr` is the initialized count.
-        let count = unsafe { count_ptr.cast::<u16>().read() };
-        if pool.is_null() {
-            return;
-        }
-        const TRI_COLLIDE_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x2b_c700;
-        // SAFETY: fixed `.text` entry in the live host image; the transmuted
-        // signature matches the declared prototype — `__thiscall(state,
-        // triangle_id)`, callee cleans its one stack arg (`ret 0x4`).
-        let tri_collide: extern "thiscall" fn(*mut u8, u32) =
-            unsafe { core::mem::transmute(TRI_COLLIDE_VA) };
-        for i in 0..usize::from(count) {
-            // SAFETY: list entries `list_off .. list_off+count` are u16 ids
-            // within the live pool per the node contract.
-            let id_ptr = unsafe { pool.add((list_off as usize + i) * 2) };
-            // SAFETY: `id_ptr` is an initialized pool entry.
-            let id = unsafe { id_ptr.cast::<u16>().read() };
-            tri_collide(state, u32::from(id));
-        }
+        trace_bsp_leaf_triangles(state, geometry, node);
         return;
     }
 
@@ -15074,67 +15109,54 @@ fn trace_bsp_segment(this: *mut u8, node_index: u32, seg: &[f32; 6], clip: *cons
     let band_lo = unsafe { BAND_LO.read() };
     // SAFETY: fixed, initialized `.rdata` float in the live host image.
     let band_hi = unsafe { BAND_HI.read() };
-    // SAFETY: fixed, initialized `.rdata` float in the live host image.
-    let front_gate = unsafe { FRONT_GATE.read() };
-
-    // SAFETY: `clip` addresses 6 contiguous f32 (slab min, then max): the
-    // group's slab at the top level, the caller's own child slab below it. The
-    // read runs ahead of the classify kernel and of both child slabs, so it is
-    // ahead of every recursion, and no client code can have written it since
-    // the caller formed the pointer.
-    let clip6 = unsafe { clip.cast::<[f32; 6]>().read_unaligned() };
 
     let step = crate::math::collision::collide_bsp_node_trace_segment__6bc370(
-        seg, &clip6, axis, split, band_lo, band_hi, front_gate,
+        seg, clip, axis, split, band_lo, band_hi,
     );
 
     use crate::math::collision::BspTraceStep as Step;
-    // High child: slab minimum raised to the split; low child: maximum lowered.
-    // Both are built here rather than inside the arms that use them: the second
-    // arm of a straddle runs after the first child's whole subtree, which has
-    // re-entered the client's triangle collider by then.
-    let mut clip_high = clip6;
-    clip_high[axis] = split;
-    let mut clip_low = clip6;
-    clip_low[axis + 3] = split;
+    // The slab element each child clamps: the high child's minimum, the low
+    // child's maximum. `trace_bsp_child` puts the old value back on return, so
+    // the second arm of a straddle still classifies against this level's
+    // untouched slab even though the first child's subtree ran in between.
+    let (high_slot, low_slot) = (axis, axis + 3);
     match step {
         Step::Reject => {}
         Step::Band => {
             if child_high != 0xffff {
-                trace_bsp_segment(this, u32::from(child_high), seg, clip_high.as_ptr());
+                trace_bsp_child(this, child_high, seg, clip, high_slot, split);
             }
             if child_low != 0xffff {
-                trace_bsp_segment(this, u32::from(child_low), seg, clip_low.as_ptr());
+                trace_bsp_child(this, child_low, seg, clip, low_slot, split);
             }
         }
         Step::HighOnly => {
             if child_high != 0xffff {
-                trace_bsp_segment(this, u32::from(child_high), seg, clip_high.as_ptr());
+                trace_bsp_child(this, child_high, seg, clip, high_slot, split);
             }
         }
         Step::LowOnly => {
             if child_low != 0xffff {
-                trace_bsp_segment(this, u32::from(child_low), seg, clip_low.as_ptr());
+                trace_bsp_child(this, child_low, seg, clip, low_slot, split);
             }
         }
-        Step::SplitHighFirst { mid } => {
-            if child_high != 0xffff {
+        Step::Straddle { mid, fa } => {
+            // Only the straddle needs the front-side constant, so it is read
+            // here rather than on every interior node.
+            // SAFETY: fixed, initialized `.rdata` float in the live host image.
+            let front_gate = unsafe { FRONT_GATE.read() };
+            let (near, near_slot, far, far_slot) = if fa > front_gate {
+                (child_high, high_slot, child_low, low_slot)
+            } else {
+                (child_low, low_slot, child_high, high_slot)
+            };
+            if near != 0xffff {
                 let first = [seg[0], seg[1], seg[2], mid[0], mid[1], mid[2]];
-                trace_bsp_segment(this, u32::from(child_high), &first, clip_high.as_ptr());
+                trace_bsp_child(this, near, &first, clip, near_slot, split);
             }
-            if child_low != 0xffff {
+            if far != 0xffff {
                 let second = [mid[0], mid[1], mid[2], seg[3], seg[4], seg[5]];
-                trace_bsp_segment(this, u32::from(child_low), &second, clip_low.as_ptr());
-            }
-        }
-        Step::SplitLowFirst { mid } => {
-            if child_low != 0xffff {
-                let first = [seg[0], seg[1], seg[2], mid[0], mid[1], mid[2]];
-                trace_bsp_segment(this, u32::from(child_low), &first, clip_low.as_ptr());
-            }
-            if child_high != 0xffff {
-                let second = [mid[0], mid[1], mid[2], seg[3], seg[4], seg[5]];
-                trace_bsp_segment(this, u32::from(child_high), &second, clip_high.as_ptr());
+                trace_bsp_child(this, far, &second, clip, far_slot, split);
             }
         }
     }
@@ -15160,13 +15182,18 @@ pub extern "thiscall" fn collide_bsp_node_trace_segment__6bc370(
     if this.is_null() || segment.is_null() || clip.is_null() {
         return;
     }
-    // The segment is snapshotted, the clip slab is not. A straddle re-reads
-    // `seg[3..6]` after a subtree has run, and this is a public entry other
-    // callers reach with client pointers, so the copy is what makes those reads
-    // pre-call values; the clip's three consumers all run before any recursion.
+    // Both records are snapshotted, and this is a public entry other callers
+    // reach with client pointers. A straddle re-reads `seg[3..6]` after a
+    // subtree has run, so the segment copy is what makes those reads pre-call
+    // values. The slab is copied because the walk clamps and restores it in
+    // place: the caller's pointer is the group's own slab at `group+0x90`, and
+    // a descent that re-enters the client's leaf and triangle colliders must
+    // not be able to show them a clamped element.
     // SAFETY: `segment` addresses 6 contiguous f32 (start, then end).
     let seg = unsafe { *segment.cast::<[f32; 6]>() };
-    trace_bsp_segment(this, node_index, &seg, clip);
+    // SAFETY: `clip` addresses 6 contiguous f32 (slab min, then max).
+    let mut clip6 = unsafe { *clip.cast::<[f32; 6]>() };
+    trace_bsp_segment(this, node_index, &seg, &mut clip6);
 }
 
 /// `CWorld::IntersectMapObjSegment`.
@@ -45312,6 +45339,46 @@ fn gx_apply_stage_wrap_states(device: *mut u8, stage: u32, wrap_mode: u32) {
     gx_set_device_state_checked(device, stage.wrapping_add(0x4a), lut(0x0080_a274));
 }
 
+/// Unbinds a texture stage: backend `SetTexture(stage, 0)`, then the disable edge.
+///
+/// The disable edge clears the enabled byte at `device+0x3bfc+stage` and forces
+/// the sampler wrap pair (`stage+0x42`, `stage+0x4a`) to 1. Out of line because
+/// a live texture is the overwhelmingly common argument, so this arm sits off
+/// the hot body between the stage dispatch and its epilogue.
+#[cold]
+#[inline(never)]
+fn apply_stage_null_texture(device: *mut u8, stage: u32, enabled_ptr: *mut u8) {
+    const SET_TEXTURE: usize = 0x104;
+    gx_backend_call_u32x2(device, SET_TEXTURE, stage, 0);
+    // SAFETY: readable per-stage enabled byte.
+    if unsafe { enabled_ptr.read() } != 0 {
+        // SAFETY: writable per-stage enabled byte.
+        unsafe { enabled_ptr.write(0) };
+        gx_set_device_state_checked(device, stage.wrapping_add(0x42), 1);
+        gx_set_device_state_checked(device, stage.wrapping_add(0x4a), 1);
+    }
+}
+
+/// The disabled to enabled edge of a texture stage, after the enabled byte is set.
+///
+/// Reads the device state block at `device+0x2824`, pushes the stage's wrap
+/// mode from `state+(stage*3+0x5d)*8` and clears the dirty slot at
+/// `state+0x2fc+stage*0x18`. Out of line because a stage that is already
+/// enabled is the usual case and takes none of this.
+#[cold]
+#[inline(never)]
+fn apply_stage_enable_edge(device: *mut u8, stage: u32) {
+    // SAFETY: `device+0x2824` is the device state-block pointer slot.
+    let dev_state = unsafe { device.wrapping_add(0x2824).cast::<usize>().read_unaligned() };
+    let mode_addr = dev_state.wrapping_add((stage as usize * 3 + 0x5d) * 8);
+    // SAFETY: the stage's wrap-mode dword in the state block, as stock.
+    let wrap_mode = unsafe { (mode_addr as *const u32).read_unaligned() };
+    gx_apply_stage_wrap_states(device, stage, wrap_mode);
+    let dirty_addr = dev_state.wrapping_add(0x2fc + stage as usize * 0x18);
+    // SAFETY: the stage's dirty-slot dword in the state block, as stock.
+    unsafe { (dirty_addr as *mut u32).write_unaligned(0) };
+}
+
 /// `CGxDevice::ApplyTextureStageState`.
 ///
 /// `__thiscall(ecx = device, stack = stage, texture)`, `ret 8`. Applies one
@@ -45350,14 +45417,7 @@ pub extern "thiscall" fn c_gx_device__apply_texture_stage_state__5a29d0(
     let enabled_ptr = device.wrapping_add(0x3bfc + stage as usize);
 
     if texture.is_null() {
-        gx_backend_call_u32x2(device, SET_TEXTURE, stage, 0);
-        // SAFETY: readable per-stage enabled byte.
-        if unsafe { enabled_ptr.read() } != 0 {
-            // SAFETY: writable per-stage enabled byte.
-            unsafe { enabled_ptr.write(0) };
-            gx_set_device_state_checked(device, stage.wrapping_add(0x42), 1);
-            gx_set_device_state_checked(device, stage.wrapping_add(0x4a), 1);
-        }
+        apply_stage_null_texture(device, stage, enabled_ptr);
         return;
     }
 
@@ -45411,15 +45471,7 @@ pub extern "thiscall" fn c_gx_device__apply_texture_stage_state__5a29d0(
     if unsafe { enabled_ptr.read() } == 0 {
         // SAFETY: writable per-stage enabled byte.
         unsafe { enabled_ptr.write(1) };
-        // SAFETY: `device+0x2824` is the device state-block pointer slot.
-        let dev_state = unsafe { device.wrapping_add(0x2824).cast::<usize>().read_unaligned() };
-        let mode_addr = dev_state.wrapping_add((stage as usize * 3 + 0x5d) * 8);
-        // SAFETY: the stage's wrap-mode dword in the state block, as stock.
-        let wrap_mode = unsafe { (mode_addr as *const u32).read_unaligned() };
-        gx_apply_stage_wrap_states(device, stage, wrap_mode);
-        let dirty_addr = dev_state.wrapping_add(0x2fc + stage as usize * 0x18);
-        // SAFETY: the stage's dirty-slot dword in the state block, as stock.
-        unsafe { (dirty_addr as *mut u32).write_unaligned(0) };
+        apply_stage_enable_edge(device, stage);
     }
 }
 
