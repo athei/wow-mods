@@ -82,6 +82,17 @@ mod tests_c_particle_emitter__set_alpha__7b7b10 {
 /// `(alpha << 24) | (c0 << 16) | (c1 << 8) | c2`, with `cvttss2si` truncation
 /// and that byte placement. The 255.0 scale lives at host global 0x7ffe58 and
 /// the 0.5 round bias at 0x7ffa24.
+///
+/// The three channel quantizes stay scalar on purpose. Binding them into an
+/// array and mapping over it emits the same three `mulss`/`addss`/`cvttss2si`
+/// chains, each with its own saturating-cast fixup, because the aggregate is
+/// scalarized before any vectorizer sees it. A packed form has to be written by
+/// hand, and `cvttps2dq` answers `INT_MIN` where the `as i32` saturation answers
+/// `INT_MAX`, so every lane needs a compare and a blend to stay bit-exact. It
+/// would also need a four-wide load of the channel triple, which this entry
+/// cannot offer: `preserve = []` makes the adapter the installed detour target,
+/// so the channels arrive as three stack arguments, not as a guest record. The
+/// call runs once per emitter system per frame, not once per particle.
 pub fn c_particle_emitter__set_color__7b7a80(alpha_byte: u8, c0: f32, c1: f32, c2: f32) -> u32 {
     // alpha: requantize the stored byte through *255*255, keep low 8 bits.
     let a = ((f32::from(alpha_byte) * 255.0 * 255.0 + 0.5) as i32 & 0xff) as u32;
