@@ -113,7 +113,7 @@ undocumented_unsafe_blocks = "warn"
 # masks as literals grouped the way the source grouped them. Rewriting any of
 # it to suit a lint makes the reimplementation harder to check against the
 # behaviour it has to match.
-items_after_statements = "allow"        # 852
+items_after_statements = "allow"        # 849
 cast_ptr_alignment = "allow"            # 930 — reads are already `read_unaligned`
 unreadable_literal = "allow"            # 391 — addresses and bit masks, verbatim
 similar_names = "allow"                 # 185
@@ -157,7 +157,7 @@ suspicious_operation_groupings = "allow" # 12
 option_if_let_else = "allow"            # 3
 # Each site destructures a fixed-size array just read out of the client's memory,
 # and the index literals are that record's field map.
-tuple_array_conversions = "allow"       # 4
+tuple_array_conversions = "allow"       # 5
 # The duplicated statement is a raw field read whose branch condition calls into
 # the client's own input controller; hoisting it would reorder the two.
 branches_sharing_code = "allow"         # 3

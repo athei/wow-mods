@@ -14822,6 +14822,12 @@ pub extern "fastcall" fn cloud_shade_layer__6cfb00(layer: *mut core::ffi::c_void
     let mut texel = [0.0f32; 2];
     project(dome.as_mut_ptr(), dir.as_mut_ptr(), world.as_mut_ptr());
     to_texel(layer, world.as_mut_ptr(), texel.as_mut_ptr());
+    // The texel pair is final once the conversion has returned; nothing below
+    // writes it. Taking it into locals here is what lets the shading loops
+    // hold it in registers: the array's address escapes into the call above,
+    // so every later `texel[..]` would reload across the output-cell stores,
+    // which go through the layer's own heap buffers and so cannot alias it.
+    let (tx, ty) = (texel[0], texel[1]);
 
     // SAFETY: fixed, initialized `.data` constant in the live host image.
     let one = unsafe { ONE.read() };
@@ -14829,9 +14835,9 @@ pub extern "fastcall" fn cloud_shade_layer__6cfb00(layer: *mut core::ffi::c_void
     let zero = unsafe { ZERO.read() };
     let inv_width = f64::from(one) / f64::from(width);
     // SAFETY: fixed, writable `.data` scroll global.
-    unsafe { SCROLL_U.write((f64::from(texel[0]) * inv_width) as f32) };
+    unsafe { SCROLL_U.write((f64::from(tx) * inv_width) as f32) };
     // SAFETY: fixed, writable `.data` scroll global.
-    unsafe { SCROLL_V.write((inv_width * f64::from(texel[1])) as f32) };
+    unsafe { SCROLL_V.write((inv_width * f64::from(ty)) as f32) };
 
     // SAFETY: fixed, initialized `.data` constant in the live host image.
     let inv255 = unsafe { INV_255.read() };
@@ -14875,6 +14881,10 @@ pub extern "fastcall" fn cloud_shade_layer__6cfb00(layer: *mut core::ffi::c_void
     let mut index = row.wrapping_shl(shift) as usize;
     for y in 0..height {
         let world_y = f64::from(row.wrapping_add(y)) as f32;
+        // Invariant in x: the original recomputed it per occupied cell. Rows
+        // whose cells are all empty now evaluate the subtract they used to
+        // skip, which stores nothing and only touches masked flags.
+        let dy = (f64::from(ty) - f64::from(world_y)) as f32;
         for x in 0..width {
             // SAFETY: cell `index` stays within the layer's density grid
             // (`(row << shift) + height * width` cells, as the original walks).
@@ -14897,8 +14907,7 @@ pub extern "fastcall" fn cloud_shade_layer__6cfb00(layer: *mut core::ffi::c_void
                 let grad_ptr = unsafe { grad_base.add(index * 2) };
                 // SAFETY: `grad_ptr` addresses the cell's 2 contiguous f32.
                 let grad = unsafe { grad_ptr.cast::<[f32; 2]>().read_unaligned() };
-                let dx = (f64::from(texel[0]) - f64::from(x)) as f32;
-                let dy = (f64::from(texel[1]) - f64::from(world_y)) as f32;
+                let dx = (f64::from(tx) - f64::from(x)) as f32;
                 let cell = crate::math::weather::cloud_shade_layer__6cfb00(
                     density,
                     grad,
@@ -22400,6 +22409,13 @@ fn gc_chunk_index_refresh(g: usize, idx: &mut GcChunkIndex) -> bool {
         return false;
     }
     let mut counts = [0u32; 6];
+    // The change test is folded into the read loop. Comparing the staged
+    // array wholesale afterwards made the six dword stores feed a pair of
+    // 16-byte reloads that cannot store-forward; per lane there is nothing to
+    // forward from. `changed` accumulates without short-circuiting so the
+    // test stays branch-free, and the loop never writes `idx.counts`, so each
+    // lane still sees the pre-update value the wholesale compare saw.
+    let mut changed = idx.spans.is_empty();
     for (i, c) in counts.iter_mut().enumerate() {
         // SAFETY: the pools table is six pool pointers.
         let pool = unsafe { *((pools + i * 4) as *const usize) };
@@ -22407,9 +22423,11 @@ fn gc_chunk_index_refresh(g: usize, idx: &mut GcChunkIndex) -> bool {
         // SAFETY: pool element size at `+0x10` (immutable after init).
         idx.elem_sizes[i] = unsafe { *((pool + 0x10) as *const u32) };
         // SAFETY: pool chunk count at `+0x4`.
-        *c = unsafe { *((pool + 0x4) as *const u32) };
+        let n = unsafe { *((pool + 0x4) as *const u32) };
+        *c = n;
+        changed |= n != idx.counts[i];
     }
-    if counts == idx.counts && !idx.spans.is_empty() {
+    if !changed {
         return true;
     }
     idx.spans.clear();
@@ -35793,17 +35811,24 @@ pub fn geometry__reduce_planar_points_to_representative__636610(
     let n = count as usize;
     // `pts` is non-null and addresses `count` (1..=4) contiguous C3Vectors at
     // stride 0x10 (four f32 each). `read_unaligned` handles 2-byte-aligned game
-    // storage; only the first `n` slots are read.
-    let mut buf = [[0.0f32; 4]; 4];
+    // storage; only the first `n` slots are read. The buffer starts
+    // uninitialized rather than zeroed because a zero-fill would be entirely
+    // dead: the loop overwrites all sixteen bytes of every slot below `n`, and
+    // no arm of the kernel reads a slot at or beyond `n` (`count == 1` reads
+    // slot0 alone, and each further slot sits behind its own count test).
+    let mut buf = [core::mem::MaybeUninit::<[f32; 4]>::uninit(); 4];
     for (i, slot) in buf[..n].iter_mut().enumerate() {
         // SAFETY: the i-th point starts at `pts + i*4` f32 (stride 0x10); i < n <= 4.
         let point = unsafe { pts.add(i * 4) };
         // SAFETY: four contiguous f32 for this point; read unaligned.
-        *slot = unsafe { point.cast::<[f32; 4]>().read_unaligned() };
+        slot.write(unsafe { point.cast::<[f32; 4]>().read_unaligned() });
     }
+    // SAFETY: the loop wrote every slot below `n` and `n <= 4`;
+    // `MaybeUninit<[f32; 4]>` shares the layout of `[f32; 4]`, so the first
+    // `n` slots are a live, initialized `[[f32; 4]]`.
+    let points = unsafe { core::slice::from_raw_parts(buf.as_ptr().cast::<[f32; 4]>(), n) };
     match crate::math::plane::geometry__reduce_planar_points_to_representative__636610(
-        &buf[..n],
-        count,
+        points, count,
     ) {
         Some(v) => {
             // SAFETY: `out` is non-null (checked) and addresses three writable
@@ -43218,16 +43243,81 @@ pub extern "thiscall" fn cg_player_c__on_frame_update__607ed0(this: *mut u8, par
     refresh_anim(this, -1);
 }
 
+/// Active-player arm of [`cg_unit_c__update_facing_interpolation__600cd0`].
+///
+/// Snaps the orientation at `+0xc98` to the target field at `+0x9c4` as a raw
+/// dword (bit-preserving where the stock `FLD`/`FSTP` would quietize an `SNaN`),
+/// then syncs the two turn bits in `+0xd58` from `CGInputControl` state
+/// (`GetActive`/`CanPitch`/`IsCompletedTap` delegates); the turn timestamp
+/// `+0xcb0` takes the LOW dword of our [`os_get_time_ms__42b790`] hook (stock
+/// goes through the 0x42c010 JMP thunk).
+///
+/// Outlined and `#[cold]` because it runs for exactly one unit per frame while
+/// the remote arm runs for every other one, and inline it sat between the
+/// caller's guid test and its float tail. Nothing float-typed crosses the
+/// boundary: the `+0x9c4` read here is the raw `u32` the stock stored.
+#[cold]
+#[inline(never)]
+fn update_facing_active_player(base: *mut u8) {
+    const BASE: usize = crate::win::EXPECTED_IMAGE_BASE;
+    const INPUT_GET_ACTIVE_VA: usize = BASE + 0x11_43e0;
+    const INPUT_CAN_PITCH_VA: usize = BASE + 0x11_51b0;
+    const INPUT_TAP_DONE_VA: usize = BASE + 0x11_4b40;
+
+    // SAFETY: the target-facing dword at +0x9c4.
+    let raw = unsafe { base.wrapping_add(0x9c4).cast::<u32>().read_unaligned() };
+    // SAFETY: the orientation dword at +0xc98.
+    unsafe { base.wrapping_add(0xc98).cast::<u32>().write_unaligned(raw) };
+    // SAFETY: the input-mode byte at +0x9e8.
+    let mode = unsafe { base.wrapping_add(0x9e8).read() };
+    // SAFETY: image base verified at load; `() -> ctrl*` (cdecl, no
+    // args) per the 0x600d0f call site.
+    let get_active: extern "C" fn() -> *mut core::ffi::c_void =
+        unsafe { core::mem::transmute(INPUT_GET_ACTIVE_VA) };
+    // SAFETY: `__thiscall(ctrl) -> u32` per the 0x600d16 call site.
+    let can_pitch: extern "thiscall" fn(*mut core::ffi::c_void) -> u32 =
+        unsafe { core::mem::transmute(INPUT_CAN_PITCH_VA) };
+    // SAFETY: `__thiscall(ctrl) -> u32` per the 0x600d49 call site.
+    let tap_done: extern "thiscall" fn(*mut core::ffi::c_void) -> u32 =
+        unsafe { core::mem::transmute(INPUT_TAP_DONE_VA) };
+    let flags_ptr = base.wrapping_add(0xd58).cast::<u32>();
+    if mode & 0x30 == 0 && can_pitch(get_active()) == 0 {
+        // SAFETY: the turn-flag dword at +0xd58.
+        let f = unsafe { flags_ptr.read_unaligned() };
+        // SAFETY: as above.
+        unsafe { flags_ptr.write_unaligned(f & !1) };
+        // Our OsGetTimeMs hook (0x42c010 is a JMP thunk onto it); the
+        // stock store keeps only the LOW dword.
+        let now = os_get_time_ms__42b790() as u32;
+        // SAFETY: the turn timestamp dword at +0xcb0.
+        unsafe { base.wrapping_add(0xcb0).cast::<u32>().write_unaligned(now) };
+    } else {
+        // SAFETY: the turn-flag dword at +0xd58.
+        let f = unsafe { flags_ptr.read_unaligned() };
+        // SAFETY: as above.
+        unsafe { flags_ptr.write_unaligned(f | 1) };
+    }
+    // SAFETY: the input-mode byte, re-read as stock (0x600d3a).
+    let mode = unsafe { base.wrapping_add(0x9e8).read() };
+    if mode & 0x30 == 0 && tap_done(get_active()) == 0 {
+        // SAFETY: the turn-flag dword at +0xd58.
+        let f = unsafe { flags_ptr.read_unaligned() };
+        // SAFETY: as above.
+        unsafe { flags_ptr.write_unaligned(f & !2) };
+    } else {
+        // SAFETY: the turn-flag dword at +0xd58.
+        let f = unsafe { flags_ptr.read_unaligned() };
+        // SAFETY: as above.
+        unsafe { flags_ptr.write_unaligned(f | 2) };
+    }
+}
+
 /// `CGUnit_C::UpdateFacingInterpolation` — `__fastcall(ecx = unit)`, plain `RET`, void.
 ///
 /// Per-frame facing interpolation for units.
 ///
-/// Active-player arm (descriptor guid == `0xc4da98/9c`): snaps the
-/// orientation to the target field and syncs the two turn bits in
-/// `+0xd58` from `CGInputControl` state (GetActive/CanPitch/IsCompletedTap
-/// delegates); the turn timestamp `+0xcb0` takes the LOW dword of our
-/// [`os_get_time_ms__42b790`] hook (stock goes through the 0x42c010 JMP
-/// thunk).
+/// Active-player arm (descriptor guid == `0xc4da98/9c`) is outlined into
+/// [`update_facing_active_player`].
 ///
 /// Remote arm derives the target heading, statement-faithful to
 /// 0x600d6c–0x600e9e: movement keys (`*(+0x118)+0x40 & 0xf`), the LIVE
@@ -43271,10 +43361,8 @@ pub extern "fastcall" fn cg_unit_c__update_facing_interpolation__600cd0(
     const ZERO: *const f32 = (BASE + 0x3f_fd74) as *const f32;
     const QUARTER: *const f32 = (BASE + 0x40_29b0) as *const f32;
     const HALF: *const f32 = (BASE + 0x3f_fa24) as *const f32;
-    // Stock delegates.
-    const INPUT_GET_ACTIVE_VA: usize = BASE + 0x11_43e0;
-    const INPUT_CAN_PITCH_VA: usize = BASE + 0x11_51b0;
-    const INPUT_TAP_DONE_VA: usize = BASE + 0x11_4b40;
+    // Stock delegates (the three `CGInputControl` ones live with the
+    // outlined active-player arm).
     const GET_CTM_GUID_VA: usize = BASE + 0x21_26f0;
     const ACTIVE_PLAYER_VA: usize = BASE + 0x06_8550;
     const OBJ_PTR_VA: usize = BASE + 0x06_8460;
@@ -43296,54 +43384,7 @@ pub extern "fastcall" fn cg_unit_c__update_facing_interpolation__600cd0(
     let act_hi = unsafe { ACTIVE_HI.read() };
 
     if guid_lo == act_lo && guid_hi == act_hi {
-        // Active player: snap orientation to the target field (raw dword —
-        // bit-preserving where the stock FLD/FSTP would quietize an SNaN).
-        // SAFETY: the target-facing dword at +0x9c4.
-        let raw = unsafe { base.wrapping_add(0x9c4).cast::<u32>().read_unaligned() };
-        // SAFETY: the orientation dword at +0xc98.
-        unsafe { base.wrapping_add(0xc98).cast::<u32>().write_unaligned(raw) };
-        // SAFETY: the input-mode byte at +0x9e8.
-        let mode = unsafe { base.wrapping_add(0x9e8).read() };
-        // SAFETY: image base verified at load; `() -> ctrl*` (cdecl, no
-        // args) per the 0x600d0f call site.
-        let get_active: extern "C" fn() -> *mut core::ffi::c_void =
-            unsafe { core::mem::transmute(INPUT_GET_ACTIVE_VA) };
-        // SAFETY: `__thiscall(ctrl) -> u32` per the 0x600d16 call site.
-        let can_pitch: extern "thiscall" fn(*mut core::ffi::c_void) -> u32 =
-            unsafe { core::mem::transmute(INPUT_CAN_PITCH_VA) };
-        // SAFETY: `__thiscall(ctrl) -> u32` per the 0x600d49 call site.
-        let tap_done: extern "thiscall" fn(*mut core::ffi::c_void) -> u32 =
-            unsafe { core::mem::transmute(INPUT_TAP_DONE_VA) };
-        let flags_ptr = base.wrapping_add(0xd58).cast::<u32>();
-        if mode & 0x30 == 0 && can_pitch(get_active()) == 0 {
-            // SAFETY: the turn-flag dword at +0xd58.
-            let f = unsafe { flags_ptr.read_unaligned() };
-            // SAFETY: as above.
-            unsafe { flags_ptr.write_unaligned(f & !1) };
-            // Our OsGetTimeMs hook (0x42c010 is a JMP thunk onto it); the
-            // stock store keeps only the LOW dword.
-            let now = os_get_time_ms__42b790() as u32;
-            // SAFETY: the turn timestamp dword at +0xcb0.
-            unsafe { base.wrapping_add(0xcb0).cast::<u32>().write_unaligned(now) };
-        } else {
-            // SAFETY: the turn-flag dword at +0xd58.
-            let f = unsafe { flags_ptr.read_unaligned() };
-            // SAFETY: as above.
-            unsafe { flags_ptr.write_unaligned(f | 1) };
-        }
-        // SAFETY: the input-mode byte, re-read as stock (0x600d3a).
-        let mode = unsafe { base.wrapping_add(0x9e8).read() };
-        if mode & 0x30 == 0 && tap_done(get_active()) == 0 {
-            // SAFETY: the turn-flag dword at +0xd58.
-            let f = unsafe { flags_ptr.read_unaligned() };
-            // SAFETY: as above.
-            unsafe { flags_ptr.write_unaligned(f & !2) };
-        } else {
-            // SAFETY: the turn-flag dword at +0xd58.
-            let f = unsafe { flags_ptr.read_unaligned() };
-            // SAFETY: as above.
-            unsafe { flags_ptr.write_unaligned(f | 2) };
-        }
+        update_facing_active_player(base);
         return;
     }
 
@@ -43503,6 +43544,13 @@ pub extern "fastcall" fn cg_unit_c__update_facing_interpolation__600cd0(
         unsafe { hist0_ptr.cast::<[f32; 4]>().write_unaligned([d; 4]) };
         d
     } else {
+        // The two samples the shift is about to move up, taken before it
+        // runs: nothing between the reset above and the copy stores into the
+        // block, so these are the same dwords the post-shift slots hold.
+        // SAFETY: the second history float at +0xca0.
+        let h1 = unsafe { hist0_ptr.wrapping_add(1).read_unaligned() };
+        // SAFETY: the third history float at +0xca4.
+        let h2 = unsafe { hist0_ptr.wrapping_add(2).read_unaligned() };
         // Shift the first three samples up (stock CRT MEMMOVE — the
         // overlapping backward path), then write the new head.
         // SAFETY: 12-byte overlapping shift +0xc9c -> +0xca0 inside the
@@ -43512,8 +43560,7 @@ pub extern "fastcall" fn cg_unit_c__update_facing_interpolation__600cd0(
         }
         // SAFETY: the history head float at +0xc9c.
         unsafe { hist0_ptr.write_unaligned(d) };
-        // SAFETY: the four history floats, re-read for the average.
-        let hist = unsafe { hist0_ptr.cast::<[f32; 4]>().read_unaligned() };
+        let hist = [d, h0, h1, h2];
         // SAFETY: fixed engine f32 global; read by value.
         let quarter = unsafe { QUARTER.read() };
         crate::math::object::facing_smooth__600cd0(d, hist, quarter, zero)
