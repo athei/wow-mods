@@ -14098,14 +14098,29 @@ pub extern "thiscall" fn c_world_bsp__collect_leaf_triangles_in_box__6b8c60(
     if vert_count > 512 {
         return 1;
     }
-    let mut outcodes = [0u8; 512];
+    // The scratch is covered in two disjoint pieces instead of being zeroed
+    // whole: the classifier writes `[0, vert_count)` and the fill below writes
+    // `[vert_count, 512)`. Stock zeroes all 512 bytes before the classifier
+    // runs, so it pays for the head twice. The tail still has to be zeroed
+    // because the triangle loop indexes this array by leaf vertex ids, which
+    // are bounded by 512 and not by `vert_count`.
+    let mut outcodes = [core::mem::MaybeUninit::<u8>::uninit(); 512];
     for (i, oc) in outcodes.iter_mut().take(vert_count).enumerate() {
         // SAFETY: `leaf+8 + i*0xc` is the in-bounds i-th vertex (i < vert_count).
         let v_slot = unsafe { leaf.add(8 + i * 0xc) };
         // SAFETY: `v_slot` addresses 3 contiguous vertex floats.
         let v = &unsafe { v_slot.cast::<[f32; 3]>().read_unaligned() };
-        *oc = crate::math::world::c_world_bsp__collect_leaf_triangles_in_box__6b8c60(v, box6);
+        oc.write(crate::math::world::c_world_bsp__collect_leaf_triangles_in_box__6b8c60(v, box6));
     }
+    // SAFETY: `vert_count > 512` returned above, so the tail begins inside the
+    // 512-byte scratch (or one past its end at `vert_count == 512`).
+    let tail = unsafe { outcodes.as_mut_ptr().add(vert_count) };
+    // SAFETY: `512 - vert_count` bytes remain in the scratch from `tail`, and
+    // zero is the byte stock's up-front fill leaves there.
+    unsafe { tail.cast::<u8>().write_bytes(0, 512 - vert_count) };
+    // SAFETY: every byte is written above (`[0, vert_count)` by the classifier
+    // loop, `[vert_count, 512)` by the fill), so the array is initialized.
+    let outcodes = unsafe { &*outcodes.as_ptr().cast::<[u8; 512]>() };
 
     // SAFETY: `leaf+0x18a4` is the in-bounds leaf triangle count.
     let tc_slot = unsafe { leaf.add(0x18a4) };
@@ -14124,6 +14139,21 @@ pub extern "thiscall" fn c_world_bsp__collect_leaf_triangles_in_box__6b8c60(
     const STACK_COUNT: *mut u32 = (crate::win::EXPECTED_IMAGE_BASE + 0x8e_26e0) as *mut u32;
     const VIS: *mut u16 = (crate::win::EXPECTED_IMAGE_BASE + 0x8d_e648) as *mut u16;
     const VIS_COUNT: *mut u32 = (crate::win::EXPECTED_IMAGE_BASE + 0x8e_66fc) as *mut u32;
+
+    // Both counters ride in locals across the loop and are written back once
+    // after it. Stock reloads each from `.data` on every surviving triangle
+    // because the stores in the body might alias them; they cannot. The vertex
+    // stack ends at `0xce26e8 + 0x2000*2 == 0xce66e8`, below `0xce66fc`, and
+    // starts above `0xce26e0`; a visible id is only ever pushed alongside a
+    // stack id, so the visible ring is walked no further than the stack guard
+    // allows and stays under `0xce26e0` too. The per-triangle flag array at
+    // `ctx+4` is the caller's own, and stock reloading a counter it had just
+    // clobbered through that array would make the query nondeterministic. The
+    // loop calls nothing, so no callee can read an intermediate value either.
+    // SAFETY: fixed `.data` scratch vertex-stack count in the live host image.
+    let mut count = unsafe { STACK_COUNT.read() };
+    // SAFETY: fixed `.data` visible-triangle count in the live host image.
+    let mut vis = unsafe { VIS_COUNT.read() };
 
     for t in 0..tri_count {
         // SAFETY: `leaf+0x2206 + t*2` is the in-bounds t-th triangle id.
@@ -14144,8 +14174,6 @@ pub extern "thiscall" fn c_world_bsp__collect_leaf_triangles_in_box__6b8c60(
         if vflag & cull_mask as u8 != 0 {
             continue;
         }
-        // SAFETY: fixed `.data` scratch vertex-stack count in the live host image.
-        let count = unsafe { STACK_COUNT.read() };
         if count >= 0x2000 {
             if !abort_ptr.is_null() {
                 // SAFETY: `abort_ptr` is the live overflow flag dword.
@@ -14159,29 +14187,37 @@ pub extern "thiscall" fn c_world_bsp__collect_leaf_triangles_in_box__6b8c60(
         let stack_slot = unsafe { STACK.add(count as usize) };
         // SAFETY: `stack_slot` is a writable scratch slot.
         unsafe { stack_slot.write(tri_id) };
-        // SAFETY: fixed `.data` scratch vertex-stack count, writable.
-        unsafe { STACK_COUNT.write(count + 1) };
+        count += 1;
         // SAFETY: `vflag_ptr` is writable.
         unsafe { vflag_ptr.write(vflag | 0x80) };
         // SAFETY: `leaf+0x18a6 + t*6` addresses the triangle's 3 vertex indices.
         let idx_slot = unsafe { leaf.add(0x18a6 + t * 6) };
         // SAFETY: `idx_slot` addresses 3 contiguous u16 vertex indices.
         let idx = unsafe { &*idx_slot.cast::<[u16; 3]>() };
-        let reject = outcodes[idx[0] as usize]
-            & outcodes[idx[1] as usize]
-            & outcodes[idx[2] as usize]
+        // The leaf supplies these indices, so nothing here bounds them by
+        // `vert_count`. Masking to 0..=511 is what stock does implicitly: it
+        // reads past its own 512-entry scratch and takes whatever is there,
+        // whereas an unmasked index would abort the process on leaf data the
+        // client itself tolerates. On valid data (index < vert_count <= 512)
+        // the two read the same byte, and the mask is what folds the bound
+        // check away.
+        let reject = outcodes[usize::from(idx[0]) & 0x1ff]
+            & outcodes[usize::from(idx[1]) & 0x1ff]
+            & outcodes[usize::from(idx[2]) & 0x1ff]
             & 0x3f;
         if reject == 0 {
-            // SAFETY: fixed `.data` visible-triangle count in the live host image.
-            let vis = unsafe { VIS_COUNT.read() };
             // SAFETY: `VIS + vis` is in bounds (vis bounded by the stack guard).
             let vis_slot = unsafe { VIS.add(vis as usize) };
             // SAFETY: `vis_slot` is a writable scratch slot.
             unsafe { vis_slot.write(tri_id) };
-            // SAFETY: fixed `.data` visible-triangle count, writable.
-            unsafe { VIS_COUNT.write(vis + 1) };
+            vis += 1;
         }
     }
+    // Both loop exits, the fall-through and the overflow `break`, land here.
+    // SAFETY: fixed `.data` scratch vertex-stack count, writable.
+    unsafe { STACK_COUNT.write(count) };
+    // SAFETY: fixed `.data` visible-triangle count, writable.
+    unsafe { VIS_COUNT.write(vis) };
     1
 }
 
