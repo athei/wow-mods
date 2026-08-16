@@ -2958,16 +2958,17 @@ pub fn c3_vector__max__6992c0(result: *mut f32, a: *const f32, b: *const f32) ->
     result
 }
 
-/// `CGxDevice::CopyCurrentMatrix` — `__thiscall(ecx = this, stack = dst)`.
+/// Read a `CGxDevice`'s current (top-of-stack) 4×4 matrix.
 ///
-/// Copies the current (top-of-stack) 4×4 matrix into `dst[16]`. The matrix
-/// stack base is at `this+0x1ac8` with a `0x40`-byte stride; the live top index
-/// is the dword at `this+0x1ac0`, so the source slot is
-/// `this + 0x1ac8 + top * 0x40`.
-pub extern "thiscall" fn c_gx_device__copy_current_matrix__592730(this: *mut u8, dst: *mut f32) {
-    if this.is_null() || dst.is_null() {
-        return;
-    }
+/// The matrix stack base is at `this+0x1ac8` with a `0x40`-byte stride; the live
+/// top index is the dword at `this+0x1ac0`, so the source slot is
+/// `this + 0x1ac8 + top * 0x40`. Returning the matrix rather than filling a
+/// caller's buffer is what lets a caller that only needs it on one arm keep the
+/// stores off the other.
+///
+/// # Safety
+/// `this` must be a live, non-null `CGxDevice`.
+unsafe fn gx_device_current_matrix(this: *const u8) -> [f32; 16] {
     // SAFETY: `this+0x1ac0` is the in-bounds, 4-byte-aligned top-index dword.
     let top_ptr = unsafe { this.add(0x1ac0) };
     // SAFETY: `top_ptr` is the initialized stack-top index of the live object.
@@ -2976,7 +2977,19 @@ pub extern "thiscall" fn c_gx_device__copy_current_matrix__592730(this: *mut u8,
     // (stack base `0x1ac8`, `0x40`-byte stride), 4-byte-aligned in the live object.
     let src_ptr = unsafe { this.add(0x1ac8 + top * 0x40) };
     // SAFETY: `src_ptr` addresses 16 contiguous, aligned f32 (the current matrix).
-    let src = &unsafe { src_ptr.cast::<[f32; 16]>().read_unaligned() };
+    unsafe { src_ptr.cast::<[f32; 16]>().read_unaligned() }
+}
+
+/// `CGxDevice::CopyCurrentMatrix` — `__thiscall(ecx = this, stack = dst)`.
+///
+/// Copies the current (top-of-stack) 4×4 matrix into `dst[16]`, read as
+/// [`gx_device_current_matrix`] describes.
+pub extern "thiscall" fn c_gx_device__copy_current_matrix__592730(this: *mut u8, dst: *mut f32) {
+    if this.is_null() || dst.is_null() {
+        return;
+    }
+    // SAFETY: `this` is the live device object, checked non-null above.
+    let src = &unsafe { gx_device_current_matrix(this) };
     let out = crate::math::gx::c_gx_device__copy_current_matrix__592730(src);
     // SAFETY: `dst` addresses 16 writable, contiguous f32 (the copy destination).
     unsafe { dst.cast::<[f32; 16]>().write_unaligned(out) };
@@ -3774,6 +3787,118 @@ unsafe fn write_sprite_vertex(out: *mut u8, lanes: [u32; 6]) {
     unsafe { out.cast::<[u32; 6]>().write(lanes) };
 }
 
+/// `FillSpriteQuads` pass 2 over the world matrix, specialised on its color mode.
+///
+/// `ATLAS` reads `colors` per vertex and advances it one dword; otherwise the
+/// whole range shares `broadcast`, which the caller has already swizzled, and
+/// `colors` is unused. `SWAP` applies the device's byte-order permute, which only
+/// the atlas arm still pays per vertex. Both are const parameters because one
+/// loop covering every mode pays them per vertex instead: a color pointer
+/// advanced by a zero stride, and a byte-order flag that is loop-invariant but
+/// sits in a body too large for LLVM to unswitch it on.
+///
+/// `mat` is the combined matrix already widened to `f64`. It cannot be widened in
+/// the loop: the `f32` matrix's address escapes into the stock in-place multiply,
+/// so the per-vertex stores through `out_verts` may alias it as far as the
+/// compiler can tell and every element is re-loaded and re-widened.
+///
+/// # Safety
+/// `out_verts` must address `cnt` writable six-dword vertices, `src_base` `cnt`
+/// readable five-dword source elements (stride `0x14`), and under `ATLAS`
+/// `colors` must address `cnt` readable dwords.
+unsafe fn fill_sprite_pass2_world<const ATLAS: bool, const SWAP: bool>(
+    out_verts: *mut u8,
+    src_base: *const u8,
+    cnt: i32,
+    colors: *const u32,
+    broadcast: u32,
+    mat: &[f64; 16],
+) {
+    let mut out_p = out_verts;
+    let mut src = src_base;
+    let mut cp = colors;
+    for _ in 0..cnt {
+        // SAFETY: `src` addresses a full five-dword source element.
+        let e = unsafe { src.cast::<[u32; 5]>().read() };
+        // The first three lanes are the source point, the same three floats the
+        // stock per-vertex `TransformPoint` re-read from the element.
+        let p = [
+            f32::from_bits(e[0]),
+            f32::from_bits(e[1]),
+            f32::from_bits(e[2]),
+        ];
+        let t = crate::math::matrix44::c44_matrix__transform_point__7bca80_pre(&p, mat);
+        let color = if ATLAS {
+            // SAFETY: `cp` addresses this element's color dword.
+            let c = unsafe { cp.read() };
+            // SAFETY: advance to the next element's color dword.
+            cp = unsafe { cp.add(1) };
+            if SWAP { fill_sprite_swizzle(c) } else { c }
+        } else {
+            broadcast
+        };
+        let lanes = [
+            t[0].to_bits(),
+            t[1].to_bits(),
+            t[2].to_bits(),
+            color,
+            e[3],
+            e[4],
+        ];
+        // SAFETY: `out_p` addresses a writable six-dword vertex.
+        unsafe { write_sprite_vertex(out_p, lanes) };
+        // SAFETY: advance to the next source element.
+        src = unsafe { src.add(0x14) };
+        // SAFETY: advance to the next output vertex.
+        out_p = unsafe { out_p.add(0x18) };
+    }
+}
+
+/// `FillSpriteQuads` pass 2 over the offset add, specialised on its color mode.
+///
+/// The sibling of [`fill_sprite_pass2_world`] taken when the world-transform flag
+/// at `0xc2b9dc` is clear: the point is `pos_offset` added to the source element's
+/// x and y, and z passes through as a raw lane. `ATLAS`, `SWAP`, `colors` and
+/// `broadcast` mean what they mean there.
+///
+/// # Safety
+/// `out_verts` must address `cnt` writable six-dword vertices, `src_base` `cnt`
+/// readable five-dword source elements (stride `0x14`), and under `ATLAS`
+/// `colors` must address `cnt` readable dwords.
+unsafe fn fill_sprite_pass2_plain<const ATLAS: bool, const SWAP: bool>(
+    out_verts: *mut u8,
+    src_base: *const u8,
+    cnt: i32,
+    colors: *const u32,
+    broadcast: u32,
+    po: [f32; 2],
+) {
+    let mut out_p = out_verts;
+    let mut src = src_base;
+    let mut cp = colors;
+    for _ in 0..cnt {
+        // SAFETY: `src` addresses a full five-dword source element.
+        let e = unsafe { src.cast::<[u32; 5]>().read() };
+        let x = (f32::from_bits(e[0]) + po[0]).to_bits();
+        let y = (f32::from_bits(e[1]) + po[1]).to_bits();
+        let color = if ATLAS {
+            // SAFETY: `cp` addresses this element's color dword.
+            let c = unsafe { cp.read() };
+            // SAFETY: advance to the next element's color dword.
+            cp = unsafe { cp.add(1) };
+            if SWAP { fill_sprite_swizzle(c) } else { c }
+        } else {
+            broadcast
+        };
+        // SAFETY: `out_p` addresses a writable six-dword vertex.
+        unsafe { write_sprite_vertex(out_p, [x, y, e[2], color, e[3], e[4]]) };
+        // SAFETY: advance to the next source element.
+        src = unsafe { src.add(0x14) };
+        // SAFETY: advance to the next output vertex.
+        out_p = unsafe { out_p.add(0x18) };
+    }
+}
+
 /// `CGxBatch::FillSpriteQuads` — `__thiscall`.
 ///
 /// Builds device output vertices
@@ -3787,10 +3912,12 @@ unsafe fn write_sprite_vertex(out: *mut u8, lanes: [u32; 6]) {
 /// (with an optional per-vertex-alpha modulation in the snapped pass) and is
 /// byte-swizzled when the device's vertex-color byte order selects it.
 ///
-/// The per-vertex transform calls the already-hooked `TransformPoint` by name so
-/// LLVM inlines its SSE body in place of the stock per-vertex x87 call, and the
-/// color byte-order flag (`device+0x258`, the `GetFormatDesc` result the original
-/// re-reads every vertex) is read once before the loops.
+/// The per-vertex transform calls the already-hooked `TransformPoint`'s kernel by
+/// name, over a matrix widened to `f64` once before the loop, so LLVM inlines its
+/// SSE body in place of the stock per-vertex x87 call. The color byte-order flag
+/// (`device+0x258`, the `GetFormatDesc` result the original re-reads every vertex)
+/// is read once before the loops, and pass 2 runs a body specialised on the world,
+/// atlas and byte-order modes rather than re-testing them per vertex.
 // The two color arrays, the scale/offset pair, the two mode bytes and the index
 // range each take their own stock argument slot. That is the client's ABI.
 #[allow(clippy::too_many_arguments)]
@@ -3924,8 +4051,14 @@ pub extern "thiscall" fn c_gx_batch__fill_sprite_quads__5c8710(
         return;
     }
     let cnt = core::cmp::min(count, n - start);
-    let adv: isize = if tc_atlas != 0 { 1 } else { 0 };
-    let mut color_ptr = if tc_atlas != 0 {
+    // The stock loop is `jle`-guarded, so an empty range writes no vertex and
+    // reads no color. Taking that exit here is what lets the broadcast arms below
+    // read their one color dword above the loop instead of inside it.
+    if cnt <= 0 {
+        return;
+    }
+    let atlas = tc_atlas != 0;
+    let color_ptr = if atlas {
         // SAFETY: the atlas color array, indexed by the start element.
         unsafe { atlas_color_base.cast::<u32>().offset(start as isize) }
     } else {
@@ -3937,19 +4070,42 @@ pub extern "thiscall" fn c_gx_batch__fill_sprite_quads__5c8710(
     // SAFETY: `pos_offset` addresses two readable f32 (x, y).
     let po = unsafe { pos_offset.cast::<[f32; 2]>().read_unaligned() };
 
-    // World-transform combined matrix (only when the flag is set):
-    //   mat = translate(currentMatrix * pos_offset) * inverse(currentMatrix).
     const WORLD_XF: *const u8 = (crate::win::EXPECTED_IMAGE_BASE + 0x82_b9dc) as *const u8;
     // SAFETY: fixed world-transform flag byte in the live host image.
     let world = unsafe { WORLD_XF.read() } != 0;
-    let mut mat = [
-        1.0f32, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
-    ];
+
+    // SAFETY: the source element for `start` (stride 0x14).
+    let src = unsafe { src_base.offset(start as isize * 0x14) };
+
+    // Without the atlas array the color is one broadcast dword for the whole
+    // range: read it and swizzle it once here, and the loop carries neither the
+    // color pointer nor the byte-order test.
+    let broadcast = if atlas {
+        0
+    } else {
+        // SAFETY: `color_ptr` addresses at least one readable color dword.
+        let c = unsafe { color_ptr.read() };
+        if swap { fill_sprite_swizzle(c) } else { c }
+    };
+
     if world {
-        let mut cur = [
+        // World-transform combined matrix:
+        //   mat = translate(currentMatrix * pos_offset) * inverse(currentMatrix).
+        // Both matrices are built on this arm only; the offset-add sibling below
+        // reads neither, so their identity fills stay off it.
+        let cur = if device.is_null() {
+            // What the stock CopyCurrentMatrix leaves in the destination when it
+            // early-returns on a null device.
+            [
+                1.0f32, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+            ]
+        } else {
+            // SAFETY: the device singleton, checked non-null above.
+            unsafe { gx_device_current_matrix(device) }
+        };
+        let mut mat = [
             1.0f32, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
         ];
-        c_gx_device__copy_current_matrix__592730(device, cur.as_mut_ptr());
         let mut t = [0.0f32; 3];
         c44_matrix__transform_point__7bca80(t.as_mut_ptr(), pos_offset, cur.as_ptr());
         c44_matrix__translate__7bdc40(mat.as_mut_ptr(), t.as_ptr());
@@ -3968,37 +4124,47 @@ pub extern "thiscall" fn c_gx_batch__fill_sprite_quads__5c8710(
         let d = c44_matrix__determinant__7bcf90(cur.as_ptr()) as f32;
         c44_matrix__inverse_scaled_by_det__7bd6c0(cur.as_ptr(), inv.as_mut_ptr(), d);
         multiply(mat.as_mut_ptr(), inv.as_ptr());
-    }
-
-    // SAFETY: the source element for `start` (stride 0x14).
-    let mut src = unsafe { src_base.offset(start as isize * 0x14) };
-    for _ in 0..cnt {
-        // SAFETY: `src` addresses a full five-dword source element.
-        let e = unsafe { src.cast::<[u32; 5]>().read() };
-        let (xb, yb, zb) = if world {
-            let mut t = [0.0f32; 3];
-            c44_matrix__transform_point__7bca80(t.as_mut_ptr(), src.cast::<f32>(), mat.as_ptr());
-            (t[0].to_bits(), t[1].to_bits(), t[2].to_bits())
+        // Widened once, after the multiply has finished writing it.
+        let matd = mat.map(f64::from);
+        if atlas && swap {
+            // SAFETY: `cnt` writable vertices, `cnt` source elements from `start`,
+            // and `cnt` atlas color dwords from the same element.
+            unsafe {
+                fill_sprite_pass2_world::<true, true>(out_p, src, cnt, color_ptr, broadcast, &matd);
+            }
+        } else if atlas {
+            // SAFETY: as the swizzling arm above; only the permute differs.
+            unsafe {
+                fill_sprite_pass2_world::<true, false>(
+                    out_p, src, cnt, color_ptr, broadcast, &matd,
+                );
+            }
         } else {
-            (
-                (f32::from_bits(e[0]) + po[0]).to_bits(),
-                (f32::from_bits(e[1]) + po[1]).to_bits(),
-                e[2],
-            )
-        };
-        // SAFETY: `color_ptr` addresses a readable color dword.
-        let mut color = unsafe { color_ptr.read() };
-        // SAFETY: advance by `adv` dwords (0 keeps the broadcast color).
-        color_ptr = unsafe { color_ptr.offset(adv) };
-        if swap {
-            color = fill_sprite_swizzle(color);
+            // SAFETY: `cnt` writable vertices and `cnt` source elements; this arm
+            // reads no color array.
+            unsafe {
+                fill_sprite_pass2_world::<false, false>(
+                    out_p, src, cnt, color_ptr, broadcast, &matd,
+                );
+            }
         }
-        // SAFETY: `out_p` addresses a writable six-dword vertex.
-        unsafe { write_sprite_vertex(out_p, [xb, yb, zb, color, e[3], e[4]]) };
-        // SAFETY: advance to the next source element.
-        src = unsafe { src.add(0x14) };
-        // SAFETY: advance to the next output vertex.
-        out_p = unsafe { out_p.add(0x18) };
+    } else if atlas && swap {
+        // SAFETY: `cnt` writable vertices, `cnt` source elements from `start`, and
+        // `cnt` atlas color dwords from the same element.
+        unsafe {
+            fill_sprite_pass2_plain::<true, true>(out_p, src, cnt, color_ptr, broadcast, po);
+        }
+    } else if atlas {
+        // SAFETY: as the swizzling arm above; only the permute differs.
+        unsafe {
+            fill_sprite_pass2_plain::<true, false>(out_p, src, cnt, color_ptr, broadcast, po);
+        }
+    } else {
+        // SAFETY: `cnt` writable vertices and `cnt` source elements; this arm reads
+        // no color array.
+        unsafe {
+            fill_sprite_pass2_plain::<false, false>(out_p, src, cnt, color_ptr, broadcast, po);
+        }
     }
 }
 

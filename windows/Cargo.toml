@@ -148,7 +148,7 @@ imprecise_flops = "allow"               # 8
 # Style preferences that fight the transcription: restructuring control flow to
 # satisfy them moves code away from the shape being reproduced, for no change
 # in what the function does.
-missing_const_for_fn = "allow"          # 113
+missing_const_for_fn = "allow"          # 114
 useless_let_if_seq = "allow"            # 23
 if_not_else = "allow"                   # 12
 suspicious_operation_groupings = "allow" # 12
@@ -163,7 +163,7 @@ tuple_array_conversions = "allow"       # 4
 branches_sharing_code = "allow"         # 3
 # `if cond { 1 } else { 0 }` transcribes a stock branch/`setcc` that stores an
 # int, not an idiom anyone reached for.
-bool_to_int_with_if = "allow"           # 3
+bool_to_int_with_if = "allow"           # 2
 # `flags & 3` is the original's flag test, and the mask is the function's
 # vocabulary — `& 0x200f`, `& 0x200000` and `& 0x200` follow in the same body.
 verbose_bit_mask = "allow"              # 1

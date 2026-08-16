@@ -1648,13 +1648,27 @@ mod tests_c44_matrix__rotate_axis_angle__7bdd60 {
 /// Nothing is stored until the three trailing `FSTP m32` at `0x7bcad1`, so each
 /// component carries an `f64` significand through its three multiplies, two adds
 /// and the translation add, and narrows once.
+///
+/// A caller holding one matrix over a run of points widens it once and calls
+/// [`c44_matrix__transform_point__7bca80_pre`] instead.
 pub fn c44_matrix__transform_point__7bca80(input: &[f32; 3], mat: &[f32; 16]) -> [f32; 3] {
+    c44_matrix__transform_point__7bca80_pre(input, &mat.map(f64::from))
+}
+
+/// `C44Matrix::TransformPoint` over a matrix already widened to `f64`.
+///
+/// The body of [`c44_matrix__transform_point__7bca80`] with the twelve
+/// `f64::from(mat[i])` widenings lifted out of it. `f32 → f64` is exact, so a
+/// caller transforming a run of points against one matrix widens once and gets
+/// the same operands, the same per-component order and the same single
+/// narrowing. Elements 3, 7, 11 and 15 are never read.
+pub fn c44_matrix__transform_point__7bca80_pre(input: &[f32; 3], mat: &[f64; 16]) -> [f32; 3] {
     let (ix, iy, iz) = (
         f64::from(input[0]),
         f64::from(input[1]),
         f64::from(input[2]),
     );
-    let elem = |i: usize| f64::from(mat[i]);
+    let elem = |i: usize| mat[i];
 
     let x = ((iz * elem(8) + iy * elem(4)) + ix * elem(0)) + elem(12);
     let y = ((iz * elem(9) + ix * elem(1)) + iy * elem(5)) + elem(13);
