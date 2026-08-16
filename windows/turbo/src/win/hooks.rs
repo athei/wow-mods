@@ -2411,25 +2411,40 @@ pub extern "fastcall" fn collision_build_quad_face_clip_planes__632f80(
     }
     // SAFETY: `idx4` is a non-null caller-owned array of 4 vertex indices.
     let indices = unsafe { &*idx4.cast::<[u8; 4]>() };
-    let mut quad = [[0.0f32; 3]; 4];
+    // A 16-byte slot per vertex, not the 12 the source array uses: the kernel
+    // reads two of the three lanes at once, and at a 12-byte stride that read
+    // straddles the pair of stores this loop made. The fourth lane is ours, so it
+    // is filled here rather than by widening the read of the caller's array, which
+    // would run four bytes past the last vertex.
+    let mut quad = [[0.0f32; 4]; 4];
     for (slot, &ix) in quad.iter_mut().zip(indices.iter()) {
         // SAFETY: each `idx4` entry selects a 3-f32 vertex within the caller's
         // contiguous vertex array; the foreign caller guarantees it is in range.
         let p = unsafe { verts.add(usize::from(ix) * 3) };
         // SAFETY: `p` points at a 3-f32 vertex within the caller's array.
-        let v = &unsafe { p.cast::<[f32; 3]>().read_unaligned() };
-        *slot = *v;
+        let v = unsafe { p.cast::<[f32; 3]>().read_unaligned() };
+        *slot = [v[0], v[1], v[2], 0.0];
     }
     // SAFETY: `cap_normal` is a non-null caller-owned vector of 3 contiguous f32.
     let cap = &unsafe { cap_normal.cast::<[f32; 3]>().read_unaligned() };
     // SAFETY: `face_offset` is a non-null caller-owned vector of 3 contiguous f32.
     let off = &unsafe { face_offset.cast::<[f32; 3]>().read_unaligned() };
 
-    let (planes, written) =
-        crate::math::collision::collision_build_quad_face_clip_planes__632f80(&quad, cap, off);
+    // The kernel fills this array in place. Returning it by value put the planes
+    // through a second stack buffer and straight back again before this copy ever
+    // read them.
+    let mut planes = [[0.0f32; 4]; 5];
+    let written = crate::math::collision::collision_build_quad_face_clip_planes_into__632f80(
+        &mut planes,
+        &quad,
+        cap,
+        off,
+    );
     // Only the prefix the original had finished: it writes each side plane through
     // this pointer during that edge's own iteration, so a degenerate edge leaves
-    // the earlier ones behind rather than nothing at all.
+    // the earlier ones behind rather than nothing at all. Past that prefix the
+    // kernel writes nothing, so widening this copy to a fixed five would publish
+    // the local's own initial value instead of a plane.
     let slots = out_planes.cast::<[f32; 4]>();
     for (i, plane) in planes.iter().take(written).enumerate() {
         // SAFETY: `out_planes` is non-null and addresses 20 writable contiguous f32
@@ -38989,7 +39004,10 @@ pub extern "thiscall" fn sky_dome__compute_vertex_colors__6d0f50(dome: *mut core
     const SET_RGB_KEEP_ALPHA_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x29_eb70;
 
     use crate::math::{
-        light::{sky_flash_alpha__6d0f50, sky_lerp_channel__6d0f50, sky_pack_channels__6d0f50},
+        light::{
+            sky_flash_alpha__6d0f50, sky_lerp_apply__6d0f50, sky_lerp_channel__6d0f50,
+            sky_lerp_prep__6d0f50, sky_pack_channels__6d0f50,
+        },
         misc::cloud_gradient_sample__6cf6c0 as grad,
     };
 
@@ -39107,6 +39125,26 @@ pub extern "thiscall" fn sky_dome__compute_vertex_colors__6d0f50(dome: *mut core
         let step = (f64::from(numer) / f64::from(ring_n as f32)) as f32;
         let cache_bytes = cache[band_idx].to_le_bytes();
         let band_bytes = bands[1 + band_idx].to_le_bytes();
+        // Both channel triples lerp between per-band endpoints, so the arm compare
+        // and the taken arm's subtraction belong here rather than per vertex; only
+        // the weight moves inside the ring. The sun-side glow target is invariant
+        // for the same reason: its own weight is glow, not the azimuth sample.
+        let t2 = (f64::from(glow) * f64::from(t2c)) as f32;
+        let glow_target = [
+            sky_lerp_channel__6d0f50(cache_bytes[0], zen_bytes[0], t2, bias),
+            sky_lerp_channel__6d0f50(cache_bytes[1], zen_bytes[1], t2, bias),
+            sky_lerp_channel__6d0f50(cache_bytes[2], zen_bytes[2], t2, bias),
+        ];
+        let sun_prep = [
+            sky_lerp_prep__6d0f50(cache_bytes[0], glow_target[0]),
+            sky_lerp_prep__6d0f50(cache_bytes[1], glow_target[1]),
+            sky_lerp_prep__6d0f50(cache_bytes[2], glow_target[2]),
+        ];
+        let lit_prep = [
+            sky_lerp_prep__6d0f50(band_bytes[0], cache_bytes[0]),
+            sky_lerp_prep__6d0f50(band_bytes[1], cache_bytes[1]),
+            sky_lerp_prep__6d0f50(band_bytes[2], cache_bytes[2]),
+        ];
         let mut v = 0i32;
         while v < ring_count() {
             if az < zero {
@@ -39116,19 +39154,15 @@ pub extern "thiscall" fn sky_dome__compute_vertex_colors__6d0f50(dome: *mut core
             // Sun-side on g < 0 OR NaN (stock TEST AH,1: C0 covers both).
             let mut color = if !(g >= zero) {
                 let neg = (-f64::from(g) * f64::from(glow)) as f32;
-                let t2 = (f64::from(glow) * f64::from(t2c)) as f32;
-                let g0 = sky_lerp_channel__6d0f50(cache_bytes[0], zen_bytes[0], t2, bias);
-                let g1 = sky_lerp_channel__6d0f50(cache_bytes[1], zen_bytes[1], t2, bias);
-                let g2 = sky_lerp_channel__6d0f50(cache_bytes[2], zen_bytes[2], t2, bias);
-                let f0 = sky_lerp_channel__6d0f50(cache_bytes[0], g0, neg, bias);
-                let f1 = sky_lerp_channel__6d0f50(cache_bytes[1], g1, neg, bias);
-                let f2 = sky_lerp_channel__6d0f50(cache_bytes[2], g2, neg, bias);
+                let f0 = sky_lerp_apply__6d0f50(sun_prep[0], neg, bias);
+                let f1 = sky_lerp_apply__6d0f50(sun_prep[1], neg, bias);
+                let f2 = sky_lerp_apply__6d0f50(sun_prep[2], neg, bias);
                 sky_pack_channels__6d0f50(f0, f1, f2)
             } else {
                 let t = ((1.0 - f64::from(g)) * f64::from(glow)) as f32;
-                let f0 = sky_lerp_channel__6d0f50(band_bytes[0], cache_bytes[0], t, bias);
-                let f1 = sky_lerp_channel__6d0f50(band_bytes[1], cache_bytes[1], t, bias);
-                let f2 = sky_lerp_channel__6d0f50(band_bytes[2], cache_bytes[2], t, bias);
+                let f0 = sky_lerp_apply__6d0f50(lit_prep[0], t, bias);
+                let f1 = sky_lerp_apply__6d0f50(lit_prep[1], t, bias);
+                let f2 = sky_lerp_apply__6d0f50(lit_prep[2], t, bias);
                 sky_pack_channels__6d0f50(f0, f1, f2)
             };
             if ov_alpha != 0 {

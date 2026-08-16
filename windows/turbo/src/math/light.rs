@@ -1205,6 +1205,40 @@ pub fn sky_lerp_channel__6d0f50(a: u8, b: u8, t: f32, bias: f32) -> u8 {
     sky_round_channel__6d0f50(v, bias)
 }
 
+/// Endpoint half of the byte-lerp, for a loop whose endpoints do not move.
+///
+/// `Math_LerpFloat` @0x6d15f0 picks its arm from `a <= b`, and on the dome's ring
+/// loop both endpoints are per-band constants while only the weight varies. This
+/// runs the compare and the taken arm's own subtraction once, returning
+/// `(a, |b - a|, a <= b)`; the difference keeps that arm's operand order so
+/// `sky_lerp_apply__6d0f50` can reproduce the arm rather than reconstruct it.
+pub fn sky_lerp_prep__6d0f50(a: u8, b: u8) -> (f32, f32, bool) {
+    let (a, b) = (f32::from(a), f32::from(b));
+    if a <= b {
+        (a, b - a, true)
+    } else {
+        (a, a - b, false)
+    }
+}
+
+/// Weight half of the byte-lerp, evaluating only the arm the prep selected.
+///
+/// `(b - a) * t + a` when the prep took `a <= b`, `a - (a - b) * t` otherwise:
+/// the two operand orderings the original branches to keep apart, so the rounding
+/// at the endpoints matches in both directions. The arms stay separate even where
+/// the two differences are exact negations of each other, because the multiply
+/// carries `t` through unchanged in one and negated in the other, and an
+/// unordered `t` can see that.
+pub fn sky_lerp_apply__6d0f50(prep: (f32, f32, bool), t: f32, bias: f32) -> u8 {
+    let (a, diff, ascending) = prep;
+    let v = if ascending {
+        diff * t + a
+    } else {
+        a - diff * t
+    };
+    sky_round_channel__6d0f50(v, bias)
+}
+
 /// Pack three channel bytes with a forced 0xFF alpha.
 ///
 /// Memory order `[c0, c1, c2, a]` (`CImVector__SetPackedBGRA(0xff, c2, c1, c0)`
@@ -1226,8 +1260,8 @@ pub fn sky_flash_alpha__6d0f50(flash: f32, k: f32, magic: f32) -> u8 {
 #[cfg(test)]
 mod tests_sky_dome__6d0f50 {
     use super::{
-        sky_flash_alpha__6d0f50, sky_lerp_channel__6d0f50, sky_pack_channels__6d0f50,
-        sky_round_channel__6d0f50,
+        sky_flash_alpha__6d0f50, sky_lerp_apply__6d0f50, sky_lerp_channel__6d0f50,
+        sky_lerp_prep__6d0f50, sky_pack_channels__6d0f50, sky_round_channel__6d0f50,
     };
 
     /// Round-to-nearest-even after the bias subtract, truncated to a byte.
@@ -1249,6 +1283,42 @@ mod tests_sky_dome__6d0f50 {
         assert_eq!(sky_lerp_channel__6d0f50(10, 200, 0.0, 0.0), 10);
         assert_eq!(sky_lerp_channel__6d0f50(10, 200, 1.0, 0.0), 200);
         assert_eq!(sky_lerp_channel__6d0f50(10, 20, 0.5, 0.0), 15);
+    }
+
+    /// The hoisted split answers exactly what the one-shot channel lerp answers.
+    ///
+    /// `sky_lerp_channel__6d0f50` is the oracle: it still runs the whole chain
+    /// through `Math_LerpFloat`, so any drift in the prep/apply pair shows up as a
+    /// byte difference here. The weights include both infinities and a NaN, since
+    /// the arm the prep froze has to carry an unordered `t` the same way the
+    /// unsplit form does.
+    #[test]
+    fn split_lerp_matches_the_unsplit_channel() {
+        let weights = [
+            -1.0f32,
+            0.0,
+            0.25,
+            0.5,
+            1.0,
+            2.0,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::NAN,
+        ];
+        for a in [0u8, 1, 17, 128, 200, 254, 255] {
+            for b in [0u8, 1, 17, 128, 200, 254, 255] {
+                let prep = sky_lerp_prep__6d0f50(a, b);
+                for &t in &weights {
+                    for &bias in &[0.0f32, -0.5, 0.5] {
+                        assert_eq!(
+                            sky_lerp_apply__6d0f50(prep, t, bias),
+                            sky_lerp_channel__6d0f50(a, b, t, bias),
+                            "a={a} b={b} t={t} bias={bias}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     /// Pack layout: bytes [c0, c1, c2, 0xFF] in memory order.

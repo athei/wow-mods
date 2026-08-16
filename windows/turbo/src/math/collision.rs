@@ -1164,23 +1164,26 @@ mod tests_collision_build_prism_planes__631440 {
     }
 }
 
-/// Builds the 5 clip planes (4 swept-edge side planes + 1 cap plane).
+/// Builds the 5 clip planes (4 swept-edge side planes + 1 cap plane) into `planes`.
 ///
 /// The face is a quad swept along `face_offset`.
 ///
-/// `verts` are the quad's 4 corner positions in ring order. For each ring edge
-/// `i` the swept side plane is the triangle plane through `A`, `B`, `A+offset`
-/// (A = verts[i], B = verts[(i+1)%4]), oriented so the opposite (previous-ring)
-/// vertex lies on the negative side. The cap plane uses `cap_normal` and passes
-/// through `verts[0]+face_offset`. Each plane is `[Nx,Ny,Nz,D]` with unit normal
-/// and `D = -dot(N,point)`.
+/// `verts` are the quad's 4 corner positions in ring order, one per 16-byte slot:
+/// the caller stages them at that stride so a two-lane read of any vertex falls
+/// inside a single store instead of straddling two, and the fourth lane is padding
+/// this body never reads. For each ring edge `i` the swept side plane is the
+/// triangle plane through `A`, `B`, `A+offset` (A = verts[i], B = verts[(i+1)%4]),
+/// oriented so the opposite (previous-ring) vertex lies on the negative side. The
+/// cap plane uses `cap_normal` and passes through `verts[0]+face_offset`. Each
+/// plane is `[Nx,Ny,Nz,D]` with unit normal and `D = -dot(N,point)`.
 ///
-/// Returns the planes and how many leading entries the original had written when
-/// it returned: 5 on success, and on a degenerate edge (swept area below `2^-20`)
+/// Returns how many leading entries of `planes` the original had written when it
+/// returned: 5 on success, and on a degenerate edge (swept area below `2^-20`)
 /// the number of side planes already finished. The original writes each side plane
 /// straight through its out pointer during that edge's iteration (`ECX = ESI`,
 /// `ESI += 0x10`), so the ones before the bail are left behind and only the cap is
-/// skipped.
+/// skipped. Entries past the returned count are left exactly as the caller had
+/// them, which is why the caller must read only that prefix.
 ///
 /// Widths and orders, off the bytes rather than the algebra. The two edge vectors
 /// and the three cross components each go through an `f32` stack slot on their way
@@ -1190,11 +1193,12 @@ mod tests_collision_build_prism_planes__631440 {
 /// orientation dot runs `(z + x) + y` wide with no store, and the cap plane's
 /// point is never stored at all — `0x6331a1`..`0x6331b1` leaves all three sums on
 /// the stack and its `D` is built from them wide, dotted `(z + y) + x`.
-pub fn collision_build_quad_face_clip_planes__632f80(
-    verts: &[[f32; 3]; 4],
+pub fn collision_build_quad_face_clip_planes_into__632f80(
+    planes: &mut [[f32; 4]; 5],
+    verts: &[[f32; 4]; 4],
     cap_normal: &[f32; 3],
     face_offset: &[f32; 3],
-) -> ([[f32; 4]; 5], usize) {
+) -> usize {
     // Degenerate-area epsilon at `0x8026bc` (2^-20) and orientation threshold
     // at `0x7ffd74` (0.0), folded in as binary-exact literals.
     // The digit string is what makes the literal land on `0x35800000`; a shorter
@@ -1203,12 +1207,14 @@ pub fn collision_build_quad_face_clip_planes__632f80(
     const AREA_EPS: f32 = 9.536_743_16e-7; // 0x35800000
     const FLIP_THRESH: f32 = 0.0;
 
-    let mut planes = [[0.0f32; 4]; 5];
+    // The padding lane stops here: everything below it works on the three
+    // components, in the widths and the order the original used.
+    let xyz = |v: &[f32; 4]| [v[0], v[1], v[2]];
 
     for i in 0..4 {
-        let a = verts[i];
-        let b = verts[(i + 1) & 3];
-        let p = verts[(i + 3) & 3]; // (i - 1) mod 4 = previous ring vertex
+        let a = xyz(&verts[i]);
+        let b = xyz(&verts[(i + 1) & 3]);
+        let p = &verts[(i + 3) & 3]; // (i - 1) mod 4 = previous ring vertex
         let asw = [
             a[0] + face_offset[0],
             a[1] + face_offset[1],
@@ -1227,7 +1233,7 @@ pub fn collision_build_quad_face_clip_planes__632f80(
         let sq = |v: f32| f64::from(v) * f64::from(v);
         let area_sq = (sq(cy) + sq(cz)) + sq(cx);
         if area_sq.abs() < f64::from(AREA_EPS) {
-            return (planes, i);
+            return i;
         }
 
         // Plane from triangle (A, B, Asw), the original's own `0x637480` call.
@@ -1244,7 +1250,7 @@ pub fn collision_build_quad_face_clip_planes__632f80(
     }
 
     // Cap plane: cap_normal through verts[0] + face_offset, that point kept wide.
-    let v0 = verts[0];
+    let v0 = &verts[0];
     let cp = [
         f64::from(v0[0]) + f64::from(face_offset[0]),
         f64::from(v0[1]) + f64::from(face_offset[1]),
@@ -1254,7 +1260,33 @@ pub fn collision_build_quad_face_clip_planes__632f80(
     let d = super::f64_to_f32(-((term(2) + term(1)) + term(0)));
     planes[4] = [cap_normal[0], cap_normal[1], cap_normal[2], d];
 
-    (planes, 5)
+    5
+}
+
+/// The value form of the quad clip planes, over a 3-f32 quad.
+///
+/// Stages the quad at the 16-byte stride the kernel reads and zeroes the plane
+/// array first, so the entries past the returned count read as `+0.0` rather than
+/// as whatever the caller had there. The hook path needs neither: it stages the
+/// quad as it gathers it, and copies only the written prefix back out.
+#[cfg(test)]
+fn collision_build_quad_face_clip_planes__632f80(
+    verts: &[[f32; 3]; 4],
+    cap_normal: &[f32; 3],
+    face_offset: &[f32; 3],
+) -> ([[f32; 4]; 5], usize) {
+    let mut quad = [[0.0f32; 4]; 4];
+    for (slot, v) in quad.iter_mut().zip(verts.iter()) {
+        *slot = [v[0], v[1], v[2], 0.0];
+    }
+    let mut planes = [[0.0f32; 4]; 5];
+    let written = collision_build_quad_face_clip_planes_into__632f80(
+        &mut planes,
+        &quad,
+        cap_normal,
+        face_offset,
+    );
+    (planes, written)
 }
 
 #[cfg(test)]
