@@ -958,11 +958,21 @@ pub extern "thiscall" fn c44_matrix__rotate_axis_angle__7bdd60(
     if this.is_null() || axis.is_null() {
         return;
     }
-    // SAFETY: the receiver `this` addresses a `C44Matrix` — 16 contiguous, aligned
-    // `f32`; non-null checked above. Read before the product overwrites it.
-    let m = &unsafe { this.cast::<[f32; 16]>().read_unaligned() };
-    // SAFETY: `axis` addresses three contiguous, possibly-unaligned `f32` (a
-    // `C3Vector`); non-null checked above, read-only.
+    // The receiver is borrowed where it lies rather than copied to the frame.
+    // The kernel returns its product by value and writes nothing through the
+    // reference, and `this` is not stored to until the write-back at the end of
+    // the body, which is after both readers (the kernel call and the cold
+    // non-finite dump) have finished. So reading in place yields the same
+    // sixteen floats a snapshot taken here would have held.
+    // SAFETY: the receiver `this` addresses a `C44Matrix`, 16 contiguous `f32`,
+    // 4-byte aligned by the `*mut f32` the convention passes it as; non-null
+    // checked above.
+    let m = unsafe { &*this.cast::<[f32; 16]>() };
+    // `axis` is three `f32` but the caller's `C3Vector` can sit at a 2-byte
+    // aligned offset in a packed game struct (stock reads it unaligned), so it
+    // keeps its copy where the receiver does not.
+    // SAFETY: `axis` addresses three contiguous, possibly-unaligned `f32`;
+    // non-null checked above, read-only.
     let a = &unsafe { axis.cast::<[f32; 3]>().read_unaligned() };
 
     super::seam_probe::axis_rotate(crate::math::matrix44::is_z_quarter_turn(a, angle));
@@ -1784,10 +1794,26 @@ pub extern "thiscall" fn c_gx_light__update_from_source__593040(
     ] {
         let scale = f32::from_bits(s[scale_i]);
         let rgba = crate::math::light::unpack_bgra_scaled(s[colour_i], scale);
-        let changed = read_f32(dst) != rgba[0]
-            || read_f32(dst + 4) != rgba[1]
-            || read_f32(dst + 8) != rgba[2]
-            || read_f32(dst + 12) != rgba[3];
+        // One 16-byte load and one lane-wise compare in place of the four
+        // `ucomiss` + `jne`/`jp` pairs. `cmpneqps` is the unordered not-equal
+        // predicate, the exact negation of ordered-equal, so a lane is set when
+        // the two differ *or* either is NaN, which is the condition the
+        // `jne`/`jp` ladder took its changed exit on, and signed zero agrees in
+        // both forms. The four stores below stay `movss`: widening them would
+        // change store widths against live receiver memory.
+        // SAFETY: `dst` (0x10 / 0x20 / 0x30) opens four contiguous in-bounds
+        // receiver floats; the receiver runs past its dirty byte at +0x52, so
+        // the 16 bytes at `dst` are inside the object.
+        let live = unsafe { base.add(dst) };
+        // SAFETY: `live` addresses those 16 in-bounds bytes; the unaligned load
+        // makes the receiver's alignment no precondition of its own.
+        let have = unsafe { core::arch::x86::_mm_loadu_ps(live.cast::<f32>()) };
+        // SAFETY: the load covers the 16 bytes of the local `[f32; 4]`.
+        let want = unsafe { core::arch::x86::_mm_loadu_ps(rgba.as_ptr()) };
+        // SAFETY: lane-wise unordered-not-equal compare of two initialized vectors.
+        let differs = unsafe { core::arch::x86::_mm_cmpneq_ps(have, want) };
+        // SAFETY: sign-bit extraction from an initialized vector.
+        let changed = unsafe { core::arch::x86::_mm_movemask_ps(differs) } != 0;
         if changed {
             d50 |= bit;
             write_f32(dst, rgba[0]);

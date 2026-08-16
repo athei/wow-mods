@@ -114,7 +114,7 @@ undocumented_unsafe_blocks = "warn"
 # it to suit a lint makes the reimplementation harder to check against the
 # behaviour it has to match.
 items_after_statements = "allow"        # 855
-cast_ptr_alignment = "allow"            # 926 — reads are already `read_unaligned`
+cast_ptr_alignment = "allow"            # 927 — reads are already `read_unaligned`
 unreadable_literal = "allow"            # 391 — addresses and bit masks, verbatim
 similar_names = "allow"                 # 184
 semicolon_if_nothing_returned = "allow" # 51
@@ -130,7 +130,7 @@ cast_sign_loss = "allow"                # 240
 cast_possible_wrap = "allow"            # 102
 cast_precision_loss = "allow"           # 122
 cast_lossless = "allow"                 # 60
-float_cmp = "allow"                     # 48
+float_cmp = "allow"                     # 44
 
 # Pointer casts in the transcription — these convert no numbers, so the
 # narrowing/rounding argument above does not reach them. The client's records

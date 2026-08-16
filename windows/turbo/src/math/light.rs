@@ -9,23 +9,129 @@ const INV_255: f32 = 1.0 / 255.0;
 
 /// Unpacks a packed `BGRA` colour word into `[R, G, B, A]`, each byte scaled by `scale / 255`.
 ///
-/// Mirrors the reference's per-channel `movzx`/`mulps`: the low byte is blue,
-/// then green, red, with the high byte alpha. Every channel is multiplied by
-/// `scale` (the per-light intensity) and the fixed `1/255` normaliser, and
-/// returned in destination order `[R, G, B, A]` so the caller writes four
-/// contiguous floats.
+/// The low byte is blue, then green, red, with the high byte alpha. Every
+/// channel is multiplied by `scale` (the per-light intensity) and the fixed
+/// `1/255` normaliser, and returned in destination order `[R, G, B, A]` so the
+/// caller writes four contiguous floats.
+///
+/// The four channels run as one vector rather than the reference's four
+/// `movzx` / `cvtsi2ss` / `mulss` triples. `pmovzxbd` zero-extends the word's
+/// bytes into lane order `(B, G, R, A)`; the `0xc6` dword shuffle reorders them
+/// to `(R, G, B, A)`; one `mulps` against a broadcast of `k` presents every
+/// lane the same operand pair the scalar multiplies did, `k` being the single
+/// `scale * 1/255` product the reference also folds once before its four
+/// multiplies. The byte operands are 0..255 and so exactly representable, which
+/// is what makes `cvtdq2ps` and the per-channel `cvtsi2ss` agree bit for bit.
+/// The extend and the shuffle are one permutation of a dword, so the backend is
+/// free to emit them as a single `pshufb` against a constant mask, and does.
 pub fn unpack_bgra_scaled(packed: u32, scale: f32) -> [f32; 4] {
+    #[cfg(target_arch = "x86")]
+    use core::arch::x86::{
+        _mm_cvtepi32_ps, _mm_cvtepu8_epi32, _mm_cvtsi32_si128, _mm_mul_ps, _mm_set1_ps,
+        _mm_shuffle_epi32, _mm_storeu_ps,
+    };
+    #[cfg(target_arch = "x86_64")]
+    use core::arch::x86_64::{
+        _mm_cvtepi32_ps, _mm_cvtepu8_epi32, _mm_cvtsi32_si128, _mm_mul_ps, _mm_set1_ps,
+        _mm_shuffle_epi32, _mm_storeu_ps,
+    };
+
     let k = scale * INV_255;
-    let r = ((packed >> 0x10) & 0xff) as f32;
-    let g = ((packed >> 0x08) & 0xff) as f32;
-    let b = (packed & 0xff) as f32;
-    let a = ((packed >> 0x18) & 0xff) as f32;
-    [r * k, g * k, b * k, a * k]
+    // SAFETY: moves a general register into the low dword of a vector; the
+    // intrinsic reads no memory and has no operand precondition.
+    let word = unsafe { _mm_cvtsi32_si128(packed.cast_signed()) };
+    // SAFETY: byte-to-dword zero-extend of an initialized vector. SSE4.1 is in
+    // both baselines this crate builds for: nehalem on the client target,
+    // penryn on the host target the kernels are tested under.
+    let bgra = unsafe { _mm_cvtepu8_epi32(word) };
+    // SAFETY: dword shuffle of an initialized vector. `0xc6` is `11 00 01 10`,
+    // which selects source lanes 2, 1, 0, 3, taking `(B, G, R, A)` to
+    // `(R, G, B, A)`.
+    let rgba = unsafe { _mm_shuffle_epi32::<0xc6>(bgra) };
+    // SAFETY: lane-wise signed-int-to-float convert of an initialized vector.
+    let floats = unsafe { _mm_cvtepi32_ps(rgba) };
+    // SAFETY: broadcasts a scalar across four lanes; reads no memory.
+    let kv = unsafe { _mm_set1_ps(k) };
+    // SAFETY: lane-wise multiply of two initialized vectors.
+    let scaled = unsafe { _mm_mul_ps(floats, kv) };
+    let mut out = [0.0_f32; 4];
+    // SAFETY: the store covers the 16 in-bounds bytes of the local `[f32; 4]`,
+    // and is the unaligned form, so `out`'s own alignment is not a precondition.
+    unsafe { _mm_storeu_ps(out.as_mut_ptr(), scaled) };
+    out
 }
 
 #[cfg(test)]
 mod tests_unpack_bgra_scaled {
-    use super::unpack_bgra_scaled;
+    use super::{INV_255, unpack_bgra_scaled};
+
+    /// Per-channel oracle for the packed kernel, one lane at a time.
+    ///
+    /// The shape the kernel replaced: one `k`, four byte extracts, four
+    /// multiplies, assembled in destination order.
+    fn ref_unpack(packed: u32, scale: f32) -> [f32; 4] {
+        let k = scale * INV_255;
+        let r = ((packed >> 0x10) & 0xff) as f32;
+        let g = ((packed >> 0x08) & 0xff) as f32;
+        let b = (packed & 0xff) as f32;
+        let a = ((packed >> 0x18) & 0xff) as f32;
+        [r * k, g * k, b * k, a * k]
+    }
+
+    #[test]
+    fn bit_exact_against_scalar_oracle() {
+        let words = [
+            0x0000_0000u32,
+            0xffff_ffff,
+            0x0012_3456,
+            0x00ab_cdef,
+            0x8040_2010,
+            0x7f3f_1f0f,
+            0xdead_beef,
+            0x0000_00ff,
+            0x00ff_0000,
+            0xff00_0000,
+        ];
+        // Deliberately all finite: `0 * inf` is an invalid operation whose
+        // default `QNaN` the host hardware and a constant-folding compiler
+        // spell with opposite sign bits, so it is not a bit-comparable input.
+        let scales = [0.0f32, 1.0, -1.0, 0.5, 255.0, 3.7, 1e-30, 1e30];
+        for &w in &words {
+            for &s in &scales {
+                let got = unpack_bgra_scaled(w, s);
+                let want = ref_unpack(w, s);
+                for i in 0..4 {
+                    assert_eq!(
+                        got[i].to_bits(),
+                        want[i].to_bits(),
+                        "w={w:#010x} s={s} lane {i}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A non-finite scale reaches every lane the same way in both forms.
+    ///
+    /// Compared as classes rather than bits: the invalid `0 * inf` lanes carry
+    /// a `QNaN` whose sign a constant-folded oracle need not agree on.
+    #[test]
+    fn non_finite_scale_matches_scalar_oracle() {
+        for scale in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let got = unpack_bgra_scaled(0x00ff_0000, scale);
+            let want = ref_unpack(0x00ff_0000, scale);
+            for i in 0..4 {
+                assert_eq!(got[i].is_nan(), want[i].is_nan(), "scale {scale} lane {i}");
+                if !got[i].is_nan() {
+                    assert_eq!(
+                        got[i].to_bits(),
+                        want[i].to_bits(),
+                        "scale {scale} lane {i}"
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn known_white_unit_scale() {
