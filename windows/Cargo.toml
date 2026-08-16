@@ -75,7 +75,7 @@ pedantic = { level = "warn", priority = -1 }
 # Length is a poor proxy for complexity; allow long procedural functions
 # (per-opcode dispatchers, codegen templates) where the structural alternative
 # is fragmented helpers threading the same state.
-too_many_lines = "allow"                # 68
+too_many_lines = "allow"                # 69
 # A separate multiply and add is what the originals compiled to, and the
 # differential harness compares against that — fusing them changes the rounding
 # and the comparison fails. It is also faster on the default baseline: nehalem
@@ -148,7 +148,7 @@ imprecise_flops = "allow"               # 8
 # Style preferences that fight the transcription: restructuring control flow to
 # satisfy them moves code away from the shape being reproduced, for no change
 # in what the function does.
-missing_const_for_fn = "allow"          # 117
+missing_const_for_fn = "allow"          # 118
 useless_let_if_seq = "allow"            # 22
 if_not_else = "allow"                   # 13
 suspicious_operation_groupings = "allow" # 12

@@ -6133,8 +6133,9 @@ pub fn bounds_fit__add_object__71bf90(this: *mut u8, object: *mut u8) {
 /// recomputes the plane offset `fit+0x1ac = -dot(dir, reference_point_world)`.
 /// The reference point is `-old_offset * old_dir` transformed by the same 4x4.
 /// The done-bit (bit0 of `fit+0x14`) short-circuits a repeat call. The point
-/// transform is the stock, already-hooked `C44Matrix::TransformPoint`
-/// (`__fastcall`, returns `out` in EAX), called by absolute VA; the direction
+/// transform is `C44Matrix::TransformPoint` (`0x7bca80`, `__fastcall`, returns
+/// `out` in EAX): the plane loop runs its kernel over one hoisted copy of the
+/// matrix, the reference point goes through the pointer form; the direction
 /// rotation + normalize is the pure kernel.
 pub extern "fastcall" fn bounds_fit__finalize_planes__71c160(fit: *mut i32) {
     if fit.is_null() {
@@ -6159,6 +6160,18 @@ pub extern "fastcall" fn bounds_fit__finalize_planes__71c160(fit: *mut i32) {
     let mat_ptr = unsafe { owner.add(0x9c).cast::<[f32; 16]>() };
 
     // Plane loop: transform each accumulated plane point into world space.
+    //
+    // The matrix is read once for the whole loop and the kernel is called
+    // directly, so its twelve f32 elements are widened to f64 once instead of
+    // per entry. That is legal because the loop's only stores are the world
+    // points at `*entry+0x18` and the plane entries are separate objects from
+    // the owner that holds the matrix at `owner+0x9c..0xdc`: no entry's output
+    // triple lies inside the matrix, so no iteration can change what a later
+    // one transforms by. The kernel reads elements 0,1,2,4,5,6,8,9,10,12,13,14
+    // only, so reading all sixteen rather than the wrapper's fifteen-plus-pad
+    // copy cannot change a bit either.
+    // SAFETY: `mat_ptr` addresses the live 16-float matrix (see above).
+    let plane_mat = unsafe { mat_ptr.read() };
     // SAFETY: `fit+0x180` is the in-bounds, aligned plane-count slot.
     let count_ptr = unsafe { base.add(0x180) };
     // SAFETY: `count_ptr` addresses the initialized plane-count dword.
@@ -6175,10 +6188,14 @@ pub extern "fastcall" fn bounds_fit__finalize_planes__71c160(fit: *mut i32) {
         }
         // SAFETY: `entry+0xc` is the local point (3 f32 in), `entry+0x18` the
         // world point (3 f32 out); both in-bounds and aligned.
-        let local_pt = unsafe { entry.add(0xc).cast::<f32>() };
+        let local_pt = unsafe { entry.add(0xc).cast::<[f32; 3]>() };
         // SAFETY: as above — the output slot.
-        let world_pt = unsafe { entry.add(0x18).cast::<f32>() };
-        c44_matrix__transform_point__7bca80(world_pt, local_pt.cast_const(), mat_ptr.cast::<f32>());
+        let world_pt = unsafe { entry.add(0x18).cast::<[f32; 3]>() };
+        // SAFETY: `local_pt` is the entry's live local point (3 f32).
+        let local = unsafe { local_pt.read_unaligned() };
+        let world = crate::math::matrix44::c44_matrix__transform_point__7bca80(&local, &plane_mat);
+        // SAFETY: `world_pt` addresses 3 writable contiguous f32.
+        unsafe { world_pt.write_unaligned(world) };
     }
 
     // Direction finalize, gated by the direction-valid flag at `fit+0x19c`.
@@ -21645,7 +21662,10 @@ fn gc_traverse_proto(s: &mut GcParSink, p: usize) {
 
 /// Stock `valismarked`.
 ///
-/// Strings are marked as a side effect; only the reachable bit decides.
+/// A string is marked as a side effect and answered marked without a re-test,
+/// the way stock reports 1 for one: the referent is the pointer whose bit was
+/// just set, so the test can only agree. For every other collectible the
+/// reachable bit decides.
 fn gc_val_is_marked(tv: usize) -> bool {
     // SAFETY: `tv` is a live TObject; tag at `+0x0`, referent at `+0x8`.
     let tt = unsafe { *(tv as *const i32) };
@@ -21653,6 +21673,7 @@ fn gc_val_is_marked(tv: usize) -> bool {
         // SAFETY: see above.
         let s = unsafe { *((tv + 0x8) as *const usize) };
         gc_set_marked(s, gc_marked(s) | 1);
+        return true;
     }
     if tt < 4 {
         return true;
@@ -38587,13 +38608,20 @@ pub extern "thiscall" fn c_gx_string__emit_line_quads__5ccbe0(
                             let rounded = color_round(chdr as *mut u8, cnew, gran);
                             color_grow(chdr as *mut u8, rounded);
                         }
+                        // Stock re-reads count and data for every slot (0x5ccf53
+                        // / 0x5ccf56); one read serves all four. The four stores
+                        // land in the element storage the data pointer
+                        // addresses, which is the array's own block and never
+                        // the four-dword header it hangs off, so no slot's store
+                        // can move a later slot's address. The guard stays per
+                        // slot, on the computed address, where stock has it.
+                        // SAFETY: live colour-array header (+4 count).
+                        let ccnt = unsafe { elq_rd_u32(chdr + 4) };
+                        // SAFETY: live colour-array header (+8 data pointer).
+                        let cdata = unsafe { elq_rd_u32(chdr + 8) };
                         for i in 0..4u32 {
-                            // SAFETY: count re-read per slot, like stock (0x5ccf53).
-                            let cnt = unsafe { elq_rd_u32(chdr + 4) };
-                            // SAFETY: data pointer re-read per slot (0x5ccf56).
-                            let data = unsafe { elq_rd_u32(chdr + 8) };
-                            let addr = data.wrapping_add(cnt.wrapping_add(i).wrapping_mul(4));
-                            // Stock guards the COMPUTED element address, not `data`.
+                            let addr = cdata.wrapping_add(ccnt.wrapping_add(i).wrapping_mul(4));
+                            // Stock guards the COMPUTED element address, not `cdata`.
                             if addr != 0 {
                                 // SAFETY: `inout_color` re-read per slot (0x5ccf65).
                                 let c = unsafe { elq_rd_u32(inout_color as usize) };
@@ -38621,8 +38649,13 @@ pub extern "thiscall" fn c_gx_string__emit_line_quads__5ccbe0(
                                 if gran == 0 {
                                     gran = hit_gran(hhdr as *mut u8, hnew);
                                 }
-                                // Inline round-up (0x5ccfe6-0x5ccff9); `gran` is
-                                // never 0 here (the helper returns >= 1).
+                                // Inline round-up (0x5ccfe6-0x5ccff9). `gran` is
+                                // never 0 here (the helper returns >= 1), and
+                                // the clamp says so structurally: it folds to a
+                                // cmov and takes the division-by-zero abort edge
+                                // out of the text emitter. Stock would fault on
+                                // that input, so no run reaches both forms.
+                                let gran = gran.max(1);
                                 let rem = hnew % gran;
                                 let rounded = if rem != 0 {
                                     gran.wrapping_sub(rem).wrapping_add(hnew)
@@ -38634,12 +38667,17 @@ pub extern "thiscall" fn c_gx_string__emit_line_quads__5ccbe0(
                             // Pair scratch: stock writes only the page BYTE of each
                             // first dword (garbage neighbours); we use zeros.
                             let page_byte = page & 0xff;
+                            // One read of count and data for the four pairs;
+                            // stock reloads both per slot (0x5cd010 / 0x5cd013).
+                            // Same argument as the colour append: the pair
+                            // stores go to the storage block, not to the header
+                            // they are addressed from.
+                            // SAFETY: live hit-test header (+4 count).
+                            let hcnt = unsafe { elq_rd_u32(hhdr + 4) };
+                            // SAFETY: live hit-test header (+8 data pointer).
+                            let hdata = unsafe { elq_rd_u32(hhdr + 8) };
                             for i in 0..4u32 {
-                                // SAFETY: count re-read per slot (0x5cd010).
-                                let cnt = unsafe { elq_rd_u32(hhdr + 4) };
-                                // SAFETY: data pointer re-read per slot (0x5cd013).
-                                let data = unsafe { elq_rd_u32(hhdr + 8) };
-                                let addr = data.wrapping_add(cnt.wrapping_add(i).wrapping_mul(8));
+                                let addr = hdata.wrapping_add(hcnt.wrapping_add(i).wrapping_mul(8));
                                 // Stock guards the COMPUTED pair address (0x5cd01b).
                                 if addr != 0 {
                                     // SAFETY: pair dword 0 = page byte (upper
@@ -38779,12 +38817,16 @@ pub extern "thiscall" fn c_gx_string__emit_line_quads__5ccbe0(
                         world_q,
                         inset,
                     );
+                    // One read of count and data for the four vertices; stock
+                    // reloads both per slot (0x5cd164 / 0x5cd16c). Same argument
+                    // as the colour append: the vertex stores go to the storage
+                    // block, not to the header they are addressed from.
+                    // SAFETY: live vertex-array header (+4 count).
+                    let vcnt_base = unsafe { elq_rd_u32(vhdr + 4) };
+                    // SAFETY: live vertex-array header (+8 data pointer).
+                    let vdata = unsafe { elq_rd_u32(vhdr + 8) };
                     for i in 0..4u32 {
-                        // SAFETY: count re-read per slot, like stock (0x5cd164).
-                        let cnt = unsafe { elq_rd_u32(vhdr + 4) };
-                        // SAFETY: data pointer re-read per slot (0x5cd16c).
-                        let data = unsafe { elq_rd_u32(vhdr + 8) };
-                        let addr = data.wrapping_add(cnt.wrapping_add(i).wrapping_mul(0x14));
+                        let addr = vdata.wrapping_add(vcnt_base.wrapping_add(i).wrapping_mul(0x14));
                         // Stock guards the COMPUTED vertex address (0x5cd172).
                         if addr != 0 {
                             // SAFETY: 5-f32 vertex slot (or the stock fault).

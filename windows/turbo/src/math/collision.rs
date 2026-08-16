@@ -4020,22 +4020,31 @@ pub struct PolyClipScratch {
 
 /// Raw 3-dword vertex copy between the packed (stride-0xc) polygon buffers.
 ///
-/// Per-component interleaved read-then-write dword copies in stock's exact
-/// order, bit-exact (NaN payloads preserved).
+/// Stock interleaves the three dword reads with their writes; all three are
+/// read first here, which is what lets the store-merging pass emit the
+/// adjacent pair as one 8-byte move. The two orders copy the same bytes: the
+/// buffers are the two different ping-pong regions, 0xc0 apart, and both index
+/// as `base + 12*slot + 4*k`, so a `dst` component-`k` address can only ever
+/// coincide with a `src` component-`k` address — each component is read once,
+/// before its own store, either way. Bit-exact (NaN payloads preserved).
 ///
 /// # Safety
 /// `src` slot `i` must be readable and `dst` slot `j` writable.
 unsafe fn poly_clip_copy_vertex(src: *const f32, i: usize, dst: *mut f32, j: usize) {
-    for k in 0..3 {
-        // SAFETY: caller contract — slot `i` component `k` is readable.
-        let bits = unsafe { src.wrapping_add(i * 3 + k).cast::<u32>().read_unaligned() };
-        // SAFETY: caller contract — slot `j` component `k` is writable.
-        unsafe {
-            dst.wrapping_add(j * 3 + k)
-                .cast::<u32>()
-                .write_unaligned(bits);
-        }
-    }
+    let sp = src.wrapping_add(i * 3).cast::<u32>();
+    let dp = dst.wrapping_add(j * 3).cast::<u32>();
+    // SAFETY: caller contract — slot `i` component 0 is readable.
+    let b0 = unsafe { sp.read_unaligned() };
+    // SAFETY: caller contract — slot `i` component 1 is readable.
+    let b1 = unsafe { sp.wrapping_add(1).read_unaligned() };
+    // SAFETY: caller contract — slot `i` component 2 is readable.
+    let b2 = unsafe { sp.wrapping_add(2).read_unaligned() };
+    // SAFETY: caller contract — slot `j` component 0 is writable.
+    unsafe { dp.write_unaligned(b0) };
+    // SAFETY: caller contract — slot `j` component 1 is writable.
+    unsafe { dp.wrapping_add(1).write_unaligned(b1) };
+    // SAFETY: caller contract — slot `j` component 2 is writable.
+    unsafe { dp.wrapping_add(2).write_unaligned(b2) };
 }
 
 /// `PolyClip::ClipToScreenRect` (0x6b4a80) Sutherland–Hodgman driver.
@@ -4162,10 +4171,25 @@ pub unsafe fn poly_clip_to_screen_rect__6b4a80(
 
         // Emit pass: class-0/1 vertices verbatim; crossings only from a
         // non-zero class into a different non-zero class.
+        //
+        // The class value rotates rather than being re-read at the head of
+        // every pass: slot `i + 1` is read once and carried into the next
+        // iteration as `ci`. The compiler cannot do that itself because the
+        // emit stores go through the raw `dst` pointer, which it cannot prove
+        // disjoint from `scratch.class`. It is: both polygon buffers start
+        // above the class array's top (0xcbe138 and 0xcbe1f8 against 0xcbe0b0,
+        // with the distance array between), the unguarded overrun only ever
+        // walks forward, and this pass calls nothing that could write the
+        // array behind it. Reading slot `i + 1` on the class-0 passes too
+        // touches no new address: the highest slot read is the sentinel at
+        // `[src_count]`, which the classify pass wrote above.
         let mut emit = 0_usize;
+        // SAFETY: class slot 0 was written by the classify pass above
+        // (`src_count >= 1` here — the zero case broke out).
+        let mut ci = unsafe { scratch.class.read_unaligned() };
         for i in 0..src_count {
-            // SAFETY: class slot `i` was written by the classify pass above.
-            let ci = unsafe { scratch.class.wrapping_add(i).read_unaligned() };
+            // SAFETY: class slot `i + 1` (at most the sentinel) was written above.
+            let cn = unsafe { scratch.class.wrapping_add(i + 1).read_unaligned() };
             if ci == 0 {
                 // SAFETY: vertex `i` readable, dst slot `emit` writable
                 // (caller contract, unguarded like stock).
@@ -4178,9 +4202,6 @@ pub unsafe fn poly_clip_to_screen_rect__6b4a80(
                     unsafe { poly_clip_copy_vertex(src, i, dst, emit) };
                     emit += 1;
                 }
-                // SAFETY: class slot `i + 1` (at most the sentinel) was
-                // written above.
-                let cn = unsafe { scratch.class.wrapping_add(i + 1).read_unaligned() };
                 if cn != 0 && cn != ci {
                     let next = (i + 1) % src_count;
                     // SAFETY: dist slot `i` was written above.
@@ -4188,24 +4209,51 @@ pub unsafe fn poly_clip_to_screen_rect__6b4a80(
                     // SAFETY: dist slot `next` (< src_count) was written above.
                     let d_next = unsafe { scratch.dist.wrapping_add(next).read_unaligned() };
                     let t = poly_clip_crossing_t__6b4a80(d_i, d_next);
-                    // Per-component read-then-write in stock's order (the x87
-                    // chain reads v[next][k] then v[i][k], stores dst[k], then
-                    // moves to the next component).
-                    for k in 0..3 {
-                        // SAFETY: vertex `next` component `k` is readable
-                        // (caller contract, unguarded).
-                        let v_next = unsafe { src.wrapping_add(next * 3 + k).read_unaligned() };
-                        // SAFETY: vertex `i` component `k` is readable
-                        // (caller contract, unguarded).
-                        let v_i = unsafe { src.wrapping_add(i * 3 + k).read_unaligned() };
-                        let mixed = poly_clip_lerp_component__6b4a80(v_i, v_next, t);
-                        // SAFETY: dst slot `emit` component `k` is writable
-                        // (caller contract, unguarded).
-                        unsafe { dst.wrapping_add(emit * 3 + k).write_unaligned(mixed) };
-                    }
+                    // Stock walks the components one at a time (the x87 chain
+                    // reads v[next][k] then v[i][k], stores dst[k], then moves
+                    // on). All six inputs are read before the three stores
+                    // instead, which leaves components 0 and 1 an independent
+                    // adjacent pair for the vectorizer; each component keeps
+                    // its own operand pair, its own f64 chain and its single
+                    // narrowing, so no bit moves. The reorder is safe under
+                    // any aliasing the kernel can reach: `src` and `dst` are
+                    // always the two different ping-pong buffers, whose bases
+                    // are 0xc0 bytes = 16 slots apart, and both index as
+                    // base + 12*slot + 4*k, so a `dst` component-k address can
+                    // only ever coincide with a `src` component-k address
+                    // (12*d + 4*(k - k') = 0 forces k == k' for |k - k'| <= 2).
+                    // Every source component is therefore read once, before
+                    // its own component's store, in either order — including
+                    // in the deliberately unguarded regime where an oversized
+                    // polygon walks one buffer into the other.
+                    let vp_next = src.wrapping_add(next * 3);
+                    let vp_i = src.wrapping_add(i * 3);
+                    // SAFETY: vertex `next` x is readable (contract, unguarded).
+                    let next_x = unsafe { vp_next.read_unaligned() };
+                    // SAFETY: vertex `next` y is readable (contract, unguarded).
+                    let next_y = unsafe { vp_next.wrapping_add(1).read_unaligned() };
+                    // SAFETY: vertex `next` w is readable (contract, unguarded).
+                    let next_w = unsafe { vp_next.wrapping_add(2).read_unaligned() };
+                    // SAFETY: vertex `i` x is readable (contract, unguarded).
+                    let cur_x = unsafe { vp_i.read_unaligned() };
+                    // SAFETY: vertex `i` y is readable (contract, unguarded).
+                    let cur_y = unsafe { vp_i.wrapping_add(1).read_unaligned() };
+                    // SAFETY: vertex `i` w is readable (contract, unguarded).
+                    let cur_w = unsafe { vp_i.wrapping_add(2).read_unaligned() };
+                    let mix_x = poly_clip_lerp_component__6b4a80(cur_x, next_x, t);
+                    let mix_y = poly_clip_lerp_component__6b4a80(cur_y, next_y, t);
+                    let mix_w = poly_clip_lerp_component__6b4a80(cur_w, next_w, t);
+                    let out = dst.wrapping_add(emit * 3);
+                    // SAFETY: dst slot `emit` x is writable (contract, unguarded).
+                    unsafe { out.write_unaligned(mix_x) };
+                    // SAFETY: dst slot `emit` y is writable (contract, unguarded).
+                    unsafe { out.wrapping_add(1).write_unaligned(mix_y) };
+                    // SAFETY: dst slot `emit` w is writable (contract, unguarded).
+                    unsafe { out.wrapping_add(2).write_unaligned(mix_w) };
                     emit += 1;
                 }
             }
+            ci = cn;
         }
         if emit == 0 {
             break;
