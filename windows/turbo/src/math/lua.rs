@@ -747,13 +747,23 @@ pub fn lua_s_newlstr_hash_stock__6f9d00(bytes: &[u8]) -> u32 {
     let len = bytes.len() as u32;
     let step = (len >> 5) + 1;
     let mut hash = len;
-    let mut l1 = len;
-    while step <= l1 {
-        let term = u32::from(bytes[(l1 - 1) as usize])
-            .wrapping_add(hash << 5)
-            .wrapping_add(hash >> 2);
+    // Driven by an iterator rather than the recurrence's own `while step <= l1`
+    // walk indexing `bytes[(l1 - 1) as usize]`, which costs a bounds check and an
+    // out-of-line panic block because nothing proves `l1 - 1 < len`. The sequence
+    // is unchanged: `l1` takes `len - k * step` and the guard admits exactly
+    // `floor(len / step)` of them, so the sampled indices are `len - 1 - k * step`
+    // walking back from the tail, and at `len == 0` the count is 0 and neither
+    // form folds a byte. `take` is what makes the count exact: a bare `step_by`
+    // yields the `ceil` and would fold one byte too many whenever `step` does
+    // not divide `len`. Its quotient is the one division in this family.
+    for &b in bytes
+        .iter()
+        .rev()
+        .step_by(step as usize)
+        .take((len / step) as usize)
+    {
+        let term = u32::from(b).wrapping_add(hash << 5).wrapping_add(hash >> 2);
         hash ^= term;
-        l1 -= step;
     }
     hash
 }
