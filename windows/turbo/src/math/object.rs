@@ -833,19 +833,51 @@ mod tests_object_pick_child_at_point__6a4e00 {
     }
 }
 
+/// Ordered `<=` across the first three lanes of two 4-lane groups.
+///
+/// `cmpleps` is an ordered compare, so a `NaN` in either operand clears its
+/// lane and the reduce is false exactly where a scalar `<=` chain is. Lane 3
+/// is dropped from the mask, which is what lets a caller fill it with whatever
+/// dword neighbours the three floats in memory.
+fn lanes3_le(lhs: [f32; 4], rhs: [f32; 4]) -> bool {
+    #[cfg(target_arch = "x86")]
+    use core::arch::x86::{_mm_cmple_ps, _mm_loadu_ps, _mm_movemask_ps};
+    #[cfg(target_arch = "x86_64")]
+    use core::arch::x86_64::{_mm_cmple_ps, _mm_loadu_ps, _mm_movemask_ps};
+    // Every intrinsic below is SSE1, available on every ISA baseline this
+    // crate builds for.
+    // SAFETY: the load covers the 16 in-bounds bytes of its `[f32; 4]` argument.
+    let a = unsafe { _mm_loadu_ps(lhs.as_ptr()) };
+    // SAFETY: as above.
+    let b = unsafe { _mm_loadu_ps(rhs.as_ptr()) };
+    // SAFETY: lane-wise ordered compare of two initialized vectors.
+    let le = unsafe { _mm_cmple_ps(a, b) };
+    // SAFETY: sign-bit extraction from an initialized vector.
+    let mask = unsafe { _mm_movemask_ps(le) };
+    (mask & 0b111) == 0b111
+}
+
 /// Inclusive AABB overlap test between a stored record box and a query box.
 ///
-/// `rec` and `query` are `[min_x, min_y, min_z, max_x, max_y, max_z]`.
-/// Overlap requires `rec.min <= query.max` and `rec.max >= query.min` on
-/// every axis (the original's `fcomp` chain accepts equality on both
-/// sides); any `NaN` lane fails the test.
-pub fn object_query_overlapping_boxes__6a3b10(rec: &[f32; 6], query: &[f32; 6]) -> bool {
-    rec[0] <= query[3]
-        && rec[1] <= query[4]
-        && rec[2] <= query[5]
-        && rec[3] >= query[0]
-        && rec[4] >= query[1]
-        && rec[5] >= query[2]
+/// Both boxes are `[min_x, min_y, min_z, max_x, max_y, max_z]`, delivered as
+/// two overlapping 4-lane groups so that each half is one 16-byte load: `_lo`
+/// is elements `0..4` of its box, `_hi` is elements `3..6` plus whatever dword
+/// follows them (in a stored record, the field at `+0x1c`). Lane 3 of either
+/// group never reaches the answer.
+///
+/// Overlap requires `rec.min <= query.max` and `rec.max >= query.min` on every
+/// axis (the original's `fcomp` chain accepts equality on both sides), which is
+/// three lanes of `rec_lo <= query_hi` and three of `query_lo <= rec_hi`. The
+/// two groups are separate reduces so a record failing the first never pays for
+/// the second, and `query.min <= rec.max` is the same ordered predicate as
+/// `rec.max >= query.min`, so any `NaN` lane still fails the test.
+pub fn object_query_overlapping_boxes__6a3b10(
+    rec_lo: [f32; 4],
+    rec_hi: [f32; 4],
+    query_lo: [f32; 4],
+    query_hi: [f32; 4],
+) -> bool {
+    lanes3_le(rec_lo, query_hi) && lanes3_le(query_lo, rec_hi)
 }
 
 /// Collector field mask derived from the query flag bits.
@@ -870,9 +902,36 @@ pub fn object_query_overlapping_boxes_field_mask__6a3b10(flags: u32) -> u32 {
 #[cfg(test)]
 mod tests_object_query_overlapping_boxes__6a3b10 {
     use super::{
-        object_query_overlapping_boxes__6a3b10 as overlap,
+        object_query_overlapping_boxes__6a3b10 as overlap4,
         object_query_overlapping_boxes_field_mask__6a3b10 as field_mask,
     };
+
+    // Independent oracle: the six-term ordered chain the two 4-lane groups
+    // stand in for. Every term is false on a NaN operand, in either grouping.
+    fn oracle(rec: &[f32; 6], query: &[f32; 6]) -> bool {
+        rec[0] <= query[3]
+            && rec[1] <= query[4]
+            && rec[2] <= query[5]
+            && rec[3] >= query[0]
+            && rec[4] >= query[1]
+            && rec[5] >= query[2]
+    }
+
+    // Feeds the kernel the way the hook does: two overlapping 4-lane groups per
+    // box, with `junk` standing in for the dword that neighbours a box in
+    // memory and must not reach the answer.
+    fn overlap_junk(rec: &[f32; 6], query: &[f32; 6], junk: f32) -> bool {
+        overlap4(
+            [rec[0], rec[1], rec[2], rec[3]],
+            [rec[3], rec[4], rec[5], junk],
+            [query[0], query[1], query[2], query[3]],
+            [query[3], query[4], query[5], junk],
+        )
+    }
+
+    fn overlap(rec: &[f32; 6], query: &[f32; 6]) -> bool {
+        overlap_junk(rec, query, 0.0)
+    }
 
     #[test]
     fn identical_boxes_overlap() {
@@ -921,6 +980,44 @@ mod tests_object_query_overlapping_boxes__6a3b10 {
         let c = [10.0f32, 0.0, 0.0, 11.0, 1.0, 1.0];
         assert_eq!(overlap(&a, &b), overlap(&b, &a));
         assert_eq!(overlap(&a, &c), overlap(&c, &a));
+    }
+
+    /// The grouped kernel must answer what the six-term chain answers.
+    ///
+    /// Sweeps one min and one max lane of each box through ordinary orderings,
+    /// touching faces, negative zero, the infinities and NaN, with the ignored
+    /// fourth lane set to values that would flip the answer if the mask ever
+    /// let them through.
+    #[test]
+    fn grouped_matches_scalar_chain() {
+        let vals = [
+            -1.0f32,
+            0.0,
+            -0.0,
+            1.0,
+            2.0,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::NAN,
+        ];
+        for &a in &vals {
+            for &b in &vals {
+                let rec = [a, 0.0, 0.0, 1.0, 1.0, b];
+                let query = [0.0f32, b, -1.0, 1.0, a, 1.0];
+                for &junk in &[f32::NAN, f32::NEG_INFINITY, f32::INFINITY, 0.0] {
+                    assert_eq!(
+                        oracle(&rec, &query),
+                        overlap_junk(&rec, &query, junk),
+                        "rec={rec:?} query={query:?} junk={junk}"
+                    );
+                    assert_eq!(
+                        oracle(&query, &rec),
+                        overlap_junk(&query, &rec, junk),
+                        "rec={query:?} query={rec:?} junk={junk}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

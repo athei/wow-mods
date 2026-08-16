@@ -16882,7 +16882,12 @@ pub extern "thiscall" fn object_query_overlapping_boxes__6a3b10(
     let field_mask = crate::math::object::object_query_overlapping_boxes_field_mask__6a3b10(flags);
 
     // SAFETY: `query_box` addresses the caller's 6 contiguous min/max floats.
-    let query = &unsafe { query_box.cast::<[f32; 6]>().read_unaligned() };
+    let query = unsafe { query_box.cast::<[f32; 6]>().read_unaligned() };
+    // The query is loop-invariant, so its two 4-lane groups are built once. The
+    // fourth lane of each is a don't-care the kernel masks off; only the record
+    // side changes per iteration.
+    let query_lo = [query[0], query[1], query[2], query[3]];
+    let query_hi = [query[3], query[4], query[5], query[5]];
     // SAFETY: `this+0x130` is the in-bounds, aligned record-array base slot.
     let recs_slot = unsafe { this.add(0x130) };
     // SAFETY: `recs_slot` holds the record-array base pointer.
@@ -16912,9 +16917,18 @@ pub extern "thiscall" fn object_query_overlapping_boxes__6a3b10(
         // SAFETY: `i < count`, so `recs + i*0x20 + 4` addresses record `i`'s
         // 6-float min/max box (0x20-byte stride, box at +4).
         let box_p = unsafe { recs.add(i as usize * 0x20 + 4) };
-        // SAFETY: `box_p` addresses 6 contiguous, aligned live floats.
-        let rec = &unsafe { box_p.cast::<[f32; 6]>().read_unaligned() };
-        if crate::math::object::object_query_overlapping_boxes__6a3b10(rec, query) {
+        // SAFETY: `box_p` addresses the box's min corner plus `max.x`, which is
+        // record bytes 4..0x14 of a 0x20-byte record.
+        let rec_lo = unsafe { box_p.cast::<[f32; 4]>().read_unaligned() };
+        // SAFETY: `box_p+0xc` is record byte 0x10, in bounds by the same stride.
+        let hi_p = unsafe { box_p.add(0xc) };
+        // SAFETY: `hi_p` addresses the box's max corner plus the record's
+        // trailing dword at `+0x1c`, ending exactly at the record's end; the
+        // kernel drops that fourth lane.
+        let rec_hi = unsafe { hi_p.cast::<[f32; 4]>().read_unaligned() };
+        if crate::math::object::object_query_overlapping_boxes__6a3b10(
+            rec_lo, rec_hi, query_lo, query_hi,
+        ) {
             // SAFETY: `this+0x1d4` is the child-table enable byte (re-read per
             // hit, like the folded stock accessor).
             let enable_p = unsafe { this.add(0x1d4) };
