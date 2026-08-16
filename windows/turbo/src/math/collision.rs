@@ -1523,25 +1523,50 @@ mod tests_collision_build_quad_face_clip_planes__632f80 {
 
 /// Parametric ray-vs-plane intersection time `t`.
 ///
-/// `plane = [nx, ny, nz, d]`, `motion` = ray direction (with `motion[3]` an
-/// extra additive bias on the numerator), `point` = ray origin. Computes
-/// `num = dot(n, motion) + motion[3]` and `den = dot(n, point)`, returning
-/// `num / den` (the `t` where the ray crosses the plane), or just `num` when
-/// `|den|` is below the parallel-ray epsilon. The original accumulates on the
-/// x87 stack and returns a `double`, so the ratio is formed in `f64`.
+/// `plane` supplies the normal (`ecx+0`, `+4`, `+8`; its fourth lane is never
+/// read), `motion` is the shared vector both dot products multiply against and
+/// also carries the numerator's additive bias at `edx+0xc`, `point` is the ray
+/// origin. Computes `num = dot(plane, motion) + motion[3]` and
+/// `den = dot(point, motion)`, returning `num / den`, or just `num` when
+/// `|den|` is below the parallel-ray epsilon.
+///
+/// Both folds are register-resident in the original: there is no `FST`/`FSTP
+/// m32` anywhere between the first `FMUL` at `0x6329e9` and the `FDIVP` at
+/// `0x632a28`, so nothing narrows to `f32` on the way and the value reaches the
+/// caller in `ST(0)`. At the client's 53-bit precision control that register
+/// carries an `f64` significand, and a product of two `f32` needs 48 bits and is
+/// therefore exact, which leaves the adds and the divide as the whole of the
+/// rounding. The `FADDP` pairs at `0x6329f2`/`0x6329f8` and
+/// `0x632a09`/`0x632a0f` fix both folds as `(z + y) + x`, the z term first: a
+/// third association, matching neither frustum cull nor the box clearance test.
+/// The bias lands after the fold, at the `FADD` on `0x6329fa`.
+///
+/// The width is not latent. `Collision::RayPolygonSweepDistance` `0x632830`
+/// `FCOM`s the wide return against its running best and against two thresholds
+/// before anything narrows it, and the one `FST dword` at `0x632895` is the
+/// only narrowing in either call site, so both a boolean the caller acts on and
+/// the `f32` it keeps depend on the accumulation width.
 pub fn collision_ray_plane_intersect_time__6329e0(
     plane: &[f32; 4],
     motion: &[f32; 4],
     point: &[f32; 3],
 ) -> f64 {
-    // 0x008029d4 — parallel-ray guard (2^-22).
+    // The parallel-ray guard the original reads at 0x008029d4: 2^-22. `FABS`
+    // then `FCOMP` with `TEST AH,5` / `JP` divides on greater, on equal and on
+    // unordered, so only a strictly smaller magnitude returns the bare
+    // numerator, which is what `<` does on a NaN.
     const EPS: f64 = 2.384_185_791_015_625e-7;
 
-    let numerator = plane[0] * motion[0] + plane[1] * motion[1] + plane[2] * motion[2] + motion[3];
-    let denominator = motion[0] * point[0] + point[1] * motion[1] + point[2] * motion[2];
+    let mx = f64::from(motion[0]);
+    let my = f64::from(motion[1]);
+    let mz = f64::from(motion[2]);
 
-    let num = f64::from(numerator);
-    let den = f64::from(denominator);
+    let num = ((f64::from(plane[2]) * mz + f64::from(plane[1]) * my) + f64::from(plane[0]) * mx)
+        + f64::from(motion[3]);
+    // The x term is the one place the original loads the motion vector first
+    // (`FLD [edx]`, `FMUL [eax]`); the other five load the other operand first.
+    let den = (f64::from(point[2]) * mz + f64::from(point[1]) * my) + mx * f64::from(point[0]);
+
     if den.abs() < EPS { num } else { num / den }
 }
 
@@ -1603,6 +1628,371 @@ mod tests_collision_ray_plane_intersect_time__6329e0 {
         let t2 = f(&plane, &[1.0, 0.0, 0.0, 0.0], &p2);
         // den doubled ⇒ t halved.
         assert!((t1 - 2.0 * t2).abs() < 1e-12, "{t1} {t2}");
+    }
+
+    /// The parallel-ray guard the client holds at `0x8029d4`.
+    ///
+    /// `2^-22`. Every fixture below is judged against the real constant rather
+    /// than a convenient one, because the caller has no other.
+    const EPS: f64 = 2.384_185_791_015_625e-7;
+
+    /// The far `all_outside` threshold the first sweep pass compares `t` against.
+    ///
+    /// `-2^-20`, read from `0x80dff4`. The compare at `0x6328a1` is an `FCOMP`
+    /// against the wide return, so it is a boolean the caller acts on that
+    /// depends on the accumulation width.
+    const SEP_FAR: f32 = -9.536_743e-7;
+
+    /// The near `all_outside` threshold the re-clip pass compares `t` against.
+    ///
+    /// `-1/36`, read from `0x7ff9c8`, and likewise compared wide at `0x632910`.
+    const SEP_NEAR: f32 = -0.027_777_778;
+
+    /// Bit-exact equality, which is the comparison the differential harness makes.
+    ///
+    /// It also separates the two zeros, and both the divide and the guard's
+    /// bare-numerator return carry a sign onto a zero result.
+    fn same(a: f64, b: f64) -> bool {
+        a.to_bits() == b.to_bits()
+    }
+
+    /// The shipped shape: both folds per-step `f32`, in textual x, y, z order.
+    ///
+    /// Not an oracle. This is the shape the kernel must NOT have, kept so the
+    /// fixtures can witness that the width is observable rather than assert it
+    /// in prose.
+    fn narrow(plane: &[f32; 4], motion: &[f32; 4], point: &[f32; 3]) -> f64 {
+        let numerator =
+            plane[0] * motion[0] + plane[1] * motion[1] + plane[2] * motion[2] + motion[3];
+        let denominator = motion[0] * point[0] + point[1] * motion[1] + point[2] * motion[2];
+        let num = f64::from(numerator);
+        let den = f64::from(denominator);
+        if den.abs() < EPS { num } else { num / den }
+    }
+
+    /// The original's width with the wrong association: `(x + y) + z`.
+    ///
+    /// Also not an oracle. It isolates the fold order from the width, so a
+    /// fixture can pin one of the two mistakes without the other.
+    fn wide_wrong_order(plane: &[f32; 4], motion: &[f32; 4], point: &[f32; 3]) -> f64 {
+        let num = (f64::from(plane[0]) * f64::from(motion[0])
+            + f64::from(plane[1]) * f64::from(motion[1])
+            + f64::from(plane[2]) * f64::from(motion[2]))
+            + f64::from(motion[3]);
+        let den = f64::from(motion[0]) * f64::from(point[0])
+            + f64::from(point[1]) * f64::from(motion[1])
+            + f64::from(point[2]) * f64::from(motion[2]);
+        if den.abs() < EPS { num } else { num / den }
+    }
+
+    /// A wide model whose fold order comes from an index table, not an expression.
+    ///
+    /// The kernel writes each fold as one nested expression, which is exactly
+    /// the shape a transposed index would survive. This reads the `2, 1, 0`
+    /// order off the `FADDP` pairs once and drives both folds through it, so the
+    /// sweep's agreement leg checks the transcription and not just the
+    /// arithmetic.
+    fn wide_model(plane: &[f32; 4], motion: &[f32; 4], point: &[f32; 3]) -> f64 {
+        const ORDER: [usize; 3] = [2, 1, 0];
+        fn fold(a: &[f32], b: &[f32]) -> f64 {
+            let mut acc = f64::from(a[ORDER[0]]) * f64::from(b[ORDER[0]]);
+            for &k in &ORDER[1..] {
+                acc += f64::from(a[k]) * f64::from(b[k]);
+            }
+            acc
+        }
+        let num = fold(plane, motion) + f64::from(motion[3]);
+        let den = fold(point, motion);
+        if den.abs() < EPS { num } else { num / den }
+    }
+
+    /// The width alone decides which side of the parallel guard the ray is on.
+    ///
+    /// The denominator's terms are `2^-21`, `2^24` and `-2^24`. Folded
+    /// `(z + y) + x` the two large terms cancel first and the `2^-21` survives,
+    /// which is above the `2^-22` guard, so the original divides. Accumulated
+    /// per-step in `f32` from the left the `2^-21` is lost under the `2^24`
+    /// before the cancel and the denominator is exactly zero, so the shipped
+    /// shape returned the bare numerator: `1` where the original answers `2^21`.
+    /// The fold order does not carry this one, and the wide chain in the wrong
+    /// order lands on the kernel's answer to say so.
+    #[test]
+    fn width_alone_crosses_the_parallel_guard() {
+        let plane = [1.0_f32, 0.0, 0.0, 0.0];
+        let motion = [1.0_f32, 1.0, 1.0, 0.0];
+        let point = [
+            f32::from_bits(0x3500_0000), // 2^-21
+            f32::from_bits(0x4b80_0000), // 2^24
+            f32::from_bits(0xcb80_0000), // -2^24
+        ];
+        assert!(same(f(&plane, &motion, &point), 2_097_152.0));
+        assert!(
+            same(narrow(&plane, &motion, &point), 1.0),
+            "fixture must separate the width"
+        );
+        assert!(same(wide_wrong_order(&plane, &motion, &point), 2_097_152.0));
+    }
+
+    /// The numerator's fold order reaches the caller undiluted.
+    ///
+    /// Its terms are `z = 1`, `y = -2^60` and `x = +2^60`. Folded `(z + y) + x`
+    /// the `1` is lost under the `2^60` before the cancel and the numerator is
+    /// `0`; folded from the left the two large terms cancel first and the `1`
+    /// survives. The denominator is `1` either way, so the whole difference is
+    /// the answer.
+    #[test]
+    fn numerator_fold_order_is_observable() {
+        let two30 = f32::from_bits(0x4e80_0000);
+        let plane = [two30, -two30, 1.0, 0.0];
+        let motion = [two30, two30, 1.0, 0.0];
+        let point = [0.0_f32, 0.0, 1.0];
+        assert!(same(f(&plane, &motion, &point), 0.0));
+        assert!(
+            same(wide_wrong_order(&plane, &motion, &point), 1.0),
+            "fixture must separate the association"
+        );
+        assert!(
+            same(narrow(&plane, &motion, &point), 1.0),
+            "fixture must separate"
+        );
+    }
+
+    /// The denominator's fold order decides the parallel guard on its own.
+    ///
+    /// Its terms are `z = 2`, `y = -2^60` and `x = +2^60`. Folded `(z + y) + x`
+    /// the `2` is lost and the denominator is exactly zero, so the original
+    /// returns the bare numerator `2^30`; folded from the left the denominator
+    /// is `2` and the answer is `2^29`. The width does not carry this one: the
+    /// `f32` chain lands on the wrongly-associated wide answer.
+    #[test]
+    fn denominator_fold_order_crosses_the_parallel_guard() {
+        let two30 = f32::from_bits(0x4e80_0000);
+        let plane = [1.0_f32, 0.0, 0.0, 0.0];
+        let motion = [two30, two30, 1.0, 0.0];
+        let point = [two30, -two30, 2.0];
+        assert!(same(f(&plane, &motion, &point), 1_073_741_824.0));
+        assert!(
+            same(wide_wrong_order(&plane, &motion, &point), 536_870_912.0),
+            "fixture must separate the association"
+        );
+        assert!(
+            same(narrow(&plane, &motion, &point), 536_870_912.0),
+            "fixture must separate"
+        );
+    }
+
+    /// The guard divides at the epsilon, not only above it.
+    ///
+    /// `TEST AH,5` with `JP` takes the divide on greater, on equal and on
+    /// unordered, so only a strictly smaller `|den|` returns the bare numerator.
+    /// A denominator of exactly `2^-22` divides; one `f32` ulp below it does
+    /// not. `FABS` strips the sign before the compare, so a negative zero is
+    /// below the epsilon.
+    #[test]
+    fn guard_divides_at_the_epsilon() {
+        let plane = [1.0_f32, 0.0, 0.0, 0.0];
+        let motion = [1.0_f32, 0.0, 0.0, 0.0];
+        let at = f32::from_bits(0x3480_0000);
+        assert!(same(f(&plane, &motion, &[at, 0.0, 0.0]), 4_194_304.0));
+        let below = f32::from_bits(0x3480_0000 - 1);
+        assert!(same(f(&plane, &motion, &[below, 0.0, 0.0]), 1.0));
+        assert!(same(f(&plane, &motion, &[-0.0, 0.0, 0.0]), 1.0));
+    }
+
+    /// The plane's fourth lane is never read.
+    ///
+    /// The original loads `ecx+0`, `+4` and `+8` only; the additive bias comes
+    /// from the motion vector at `edx+0xc`. Poisoning the plane's fourth lane
+    /// must not move the answer, which also pins which of the two 4-vectors the
+    /// bias is read from.
+    #[test]
+    fn plane_fourth_lane_is_never_read() {
+        let motion = [1.0_f32, 0.0, 0.0, 3.0];
+        let point = [2.0_f32, 0.0, 0.0];
+        let base = f(&[1.0, 0.0, 0.0, 0.0], &motion, &point);
+        assert!(same(base, 2.0));
+        for poison in [7.0_f32, -1.0e30, f32::NAN, f32::INFINITY] {
+            assert!(
+                same(f(&[1.0, 0.0, 0.0, poison], &motion, &point), base),
+                "poison={poison}"
+            );
+        }
+    }
+
+    /// Unordered and infinite operands follow the guard rather than a special case.
+    ///
+    /// `FCOMP` sets `C0`, `C2` and `C3` together on an unordered pair, which
+    /// passes the parity test and takes the divide, so a NaN denominator divides
+    /// and yields a NaN instead of returning the bare numerator. An infinite
+    /// denominator is above the epsilon and divides to a signed zero; two
+    /// infinities divide to a NaN. Both the divide and the guard's bare return
+    /// carry the sign onto a zero result, so those are compared bit for bit.
+    #[test]
+    fn unordered_and_infinite_operands() {
+        let nan = f32::NAN;
+        let inf = f32::INFINITY;
+        // A NaN anywhere in either fold, including one the fold manufactures
+        // from `inf + -inf` rather than receives.
+        for (plane, motion, point) in [
+            (
+                [1.0_f32, 0.0, 0.0, 0.0],
+                [1.0_f32, 0.0, 0.0, 0.0],
+                [nan, 0.0, 0.0],
+            ),
+            ([nan, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0], [2.0, 0.0, 0.0]),
+            ([1.0, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, nan], [2.0, 0.0, 0.0]),
+            ([1.0, 0.0, 0.0, 0.0], [1.0, 1.0, 0.0, 0.0], [inf, -inf, 0.0]),
+            ([inf, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0], [inf, 0.0, 0.0]),
+        ] {
+            let t = f(&plane, &motion, &point);
+            assert!(
+                t.is_nan(),
+                "plane={plane:?} motion={motion:?} point={point:?}"
+            );
+        }
+
+        let unit = [1.0_f32, 0.0, 0.0, 0.0];
+        assert!(same(f(&unit, &unit, &[inf, 0.0, 0.0]), 0.0));
+        assert!(same(f(&unit, &unit, &[-inf, 0.0, 0.0]), -0.0));
+
+        // A negative zero numerator keeps its sign through the divide, and
+        // through the guard's bare return.
+        let neg = [-0.0_f32, -0.0, -0.0, 0.0];
+        let ones = [1.0_f32, 1.0, 1.0, -0.0];
+        assert!(same(f(&neg, &ones, &[2.0, 0.0, 0.0]), -0.0));
+        assert!(same(f(&neg, &ones, &[0.0, 0.0, 0.0]), -0.0));
+        // And a positive zero numerator over a negative denominator is negative.
+        assert!(same(
+            f(
+                &[-1.0, 0.0, 0.0, 0.0],
+                &[1.0, 0.0, 0.0, 1.0],
+                &[-2.0, 0.0, 0.0]
+            ),
+            -0.0
+        ));
+    }
+
+    /// Seeded sweep over grazing and ordinary rays at world scale.
+    ///
+    /// Regime 0 walks the ray origin in single `f32` ulps across the point where
+    /// the denominator meets the parallel guard, which is where a sweep spends
+    /// its time; regime 1 draws ordinary origins. The kernel must agree bit for
+    /// bit with the index-driven wide model on every case, and must differ from
+    /// the shipped narrow shape on the measured shares recorded below. The
+    /// counts are pinned exactly rather than as floors, because the sweep is
+    /// deterministic and a drift either way means one of the chains changed
+    /// shape.
+    #[test]
+    fn differential_sweep_separates_the_width_at_the_callers_store() {
+        let mut state = 0x243f_6a88_85a3_08d3_u64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state >> 11) as f32 / (1_u64 << 53) as f32
+        };
+        // Per regime: cases, then the four ways the two shapes can be told
+        // apart, in the order they reach the caller.
+        let mut cases = [0_u32; 2];
+        let mut store_sep = [0_u32; 2];
+        let mut far_sep = [0_u32; 2];
+        let mut branch_sep = [0_u32; 2];
+        let mut order_sep = [0_u32; 2];
+
+        for _ in 0..40_000_u32 {
+            let (a, b, c) = (next() - 0.5, next() - 0.5, next() - 0.5);
+            let len = (a * a + b * b + c * c).sqrt().max(1e-3);
+            let plane = [a / len, b / len, c / len, next() - 0.5];
+            let motion = [
+                (next() - 0.5) * 2.0,
+                (next() - 0.5) * 2.0,
+                (next() - 0.5) * 2.0,
+                next() - 0.5,
+            ];
+            let py = (next() - 0.5) * 2000.0;
+            let pz = (next() - 0.5) * 400.0;
+            if motion[0] == 0.0 {
+                continue;
+            }
+            // The origin's leading component that puts the wide denominator on
+            // zero; the walk straddles it.
+            let rest = f64::from(pz) * f64::from(motion[2]) + f64::from(py) * f64::from(motion[1]);
+            let px0 = (-rest / f64::from(motion[0])) as f32;
+            if !px0.is_finite() || px0.abs() > 1.0e9 {
+                continue;
+            }
+            for step in 0..=12_u32 {
+                for regime in 0..2_usize {
+                    let px = if regime == 0 {
+                        f32::from_bits(px0.to_bits().wrapping_add(step).wrapping_sub(6))
+                    } else {
+                        (next() - 0.5) * 2000.0
+                    };
+                    let point = [px, py, pz];
+                    let kernel = f(&plane, &motion, &point);
+                    let shipped = narrow(&plane, &motion, &point);
+                    if !kernel.is_finite() {
+                        continue;
+                    }
+                    cases[regime] += 1;
+                    assert!(
+                        same(kernel, wide_model(&plane, &motion, &point)),
+                        "plane={plane:?} motion={motion:?} point={point:?}"
+                    );
+                    // What the first pass stores back at `0x632895`.
+                    if (kernel as f32).to_bits() != (shipped as f32).to_bits() {
+                        store_sep[regime] += 1;
+                    }
+                    // The two `all_outside` booleans, compared wide by both
+                    // call sites before anything narrows.
+                    if (kernel > f64::from(SEP_FAR)) != (shipped > f64::from(SEP_FAR))
+                        || (kernel > f64::from(SEP_NEAR)) != (shipped > f64::from(SEP_NEAR))
+                    {
+                        far_sep[regime] += 1;
+                    }
+                    // The guard itself: the two shapes take different arms.
+                    let den_wide = (f64::from(point[2]) * f64::from(motion[2])
+                        + f64::from(point[1]) * f64::from(motion[1]))
+                        + f64::from(motion[0]) * f64::from(point[0]);
+                    let den_narrow = f64::from(
+                        motion[0] * point[0] + point[1] * motion[1] + point[2] * motion[2],
+                    );
+                    if (den_wide.abs() < EPS) != (den_narrow.abs() < EPS) {
+                        branch_sep[regime] += 1;
+                    }
+                    if (kernel as f32).to_bits()
+                        != (wide_wrong_order(&plane, &motion, &point) as f32).to_bits()
+                    {
+                        order_sep[regime] += 1;
+                    }
+                }
+            }
+        }
+
+        let measured = [
+            [
+                cases[0],
+                store_sep[0],
+                far_sep[0],
+                branch_sep[0],
+                order_sep[0],
+            ],
+            [
+                cases[1],
+                store_sep[1],
+                far_sep[1],
+                branch_sep[1],
+                order_sep[1],
+            ],
+        ];
+        assert_eq!(
+            measured,
+            [
+                [520_000, 518_178, 21_923, 25_329, 26],
+                [520_000, 336_111, 0, 0, 0],
+            ],
+            "the sweep no longer separates the two shapes the way it did"
+        );
     }
 }
 
