@@ -1381,6 +1381,21 @@ pub extern "fastcall" fn c_aa_box__from_points__7c1450(
     out_box
 }
 
+/// The miss a null argument answers, kept off the adapter's hot path.
+///
+/// The guards it serves are a house convention across these adapters, not
+/// transcribed behaviour, so only their lowering is at stake. Spelled as a
+/// single `||` chain the three tests flatten into `sete`/`or` flag material
+/// with two writes to a high-byte subregister, and the hot path becomes the
+/// taken edge. A `#[cold]` callee on each arm keeps them three ordinary
+/// predicted-not-taken branches, and it lifts the ECX and EDX tests above the
+/// prologue, so a null in either returns without saving a register.
+#[cold]
+#[inline(never)]
+fn aa_box_null_arg() -> i32 {
+    0
+}
+
 /// `CAaBox::IntersectSegment` — `__fastcall(ecx = box, edx = segStart, stack = segEnd)`.
 ///
 /// Slab-method segment-vs-AABB test; returns 1 on hit, 0 on miss.
@@ -1389,15 +1404,29 @@ pub extern "fastcall" fn c_aa_box__intersect_segment__6dc5a0(
     seg_start: *const f32,
     seg_end: *const f32,
 ) -> i32 {
-    if box6.is_null() || seg_start.is_null() || seg_end.is_null() {
-        return 0;
+    if box6.is_null() {
+        return aa_box_null_arg();
     }
-    // SAFETY: `box6` is a non-null caller-owned AABB of 6 contiguous f32.
-    let b = &unsafe { box6.cast::<[f32; 6]>().read_unaligned() };
-    // SAFETY: `seg_start` is a non-null caller-owned `C3Vector` of 3 contiguous f32.
-    let s = &unsafe { seg_start.cast::<[f32; 3]>().read_unaligned() };
-    // SAFETY: `seg_end` is a non-null caller-owned `C3Vector` of 3 contiguous f32.
-    let e = &unsafe { seg_end.cast::<[f32; 3]>().read_unaligned() };
+    if seg_start.is_null() {
+        return aa_box_null_arg();
+    }
+    if seg_end.is_null() {
+        return aa_box_null_arg();
+    }
+    // The kernel is a pure leaf: it stores nothing, calls nothing, and reads
+    // each lane where it uses it, so handing it the addresses rather than three
+    // whole-block copies cannot see a different value than a snapshot would,
+    // and an early reject stops paying for lanes it never reaches.
+    //
+    // SAFETY: `box6` is a non-null caller-owned AABB of 6 contiguous f32, live
+    // for the call, and nothing on this thread writes it while the kernel runs.
+    let b: wow_shared::F32s<'_, 6> = unsafe { wow_shared::F32s::new(box6) };
+    // SAFETY: `seg_start` is a non-null caller-owned `C3Vector` of 3 contiguous
+    // f32, live for the call and unwritten while the kernel runs.
+    let s: wow_shared::F32s<'_, 3> = unsafe { wow_shared::F32s::new(seg_start) };
+    // SAFETY: `seg_end` is a non-null caller-owned `C3Vector` of 3 contiguous
+    // f32, live for the call and unwritten while the kernel runs.
+    let e: wow_shared::F32s<'_, 3> = unsafe { wow_shared::F32s::new(seg_end) };
 
     crate::math::aabb::c_aa_box__intersect_segment__6dc5a0(b, s, e)
 }

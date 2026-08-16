@@ -2,6 +2,8 @@
 // standing in for the `::`, so the whole module is non-snake-case by construction.
 #![allow(non_snake_case)]
 
+use wow_shared::F32s;
+
 /// AABB overlap half-test.
 ///
 /// Returns `true` iff `box_min` is less than *or equal to* `query_max` on all
@@ -183,45 +185,58 @@ mod tests_c_aa_box__from_points__7c1450 {
 /// clip branches imply `end` and `start` are strictly ordered, and the f32
 /// difference of distinct values is never zero), so the divide is
 /// unconditional here.
+///
+/// The three operand blocks arrive as views, not copies, so each lane is read
+/// where it is used: an axis whose start is already inside its slab never
+/// loads that axis' `end`, and a reject on axis 0 loads nothing from axes 1
+/// and 2.
 // The slab test is written `!(mx < s)` so an unordered compare counts as inside,
 // which is the sense the original clips with; the structural rewrite `mx >= s`
 // is false on NaN and would change which axes get clipped.
 #[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn c_aa_box__intersect_segment__6dc5a0(
-    box6: &[f32; 6],
-    seg_start: &[f32; 3],
-    seg_end: &[f32; 3],
+    box6: F32s<'_, 6>,
+    seg_start: F32s<'_, 3>,
+    seg_end: F32s<'_, 3>,
 ) -> i32 {
     const EPS: f32 = 1e-5;
 
     // t[a] = entry parameter on axis a; -1 means "start inside slab on a".
     let mut t = [-1.0f32; 3];
-    let mut clipped = false;
+    // The clip decides reject / inside / plane only; the entry parameters are
+    // divided out at the single join below, so an axis-0 clip followed by an
+    // axis-1 reject runs no divide at all. `plane[a]` is read only where
+    // `clipped[a]` is set, so its filler never reaches `t`: an unclipped axis
+    // has to keep exactly -1.0, and a computed 0.0 or NaN in its place could
+    // beat a clipped axis in the best-`t` select and move the hit point.
+    let mut plane = [0.0f32; 3];
+    let mut clipped = [false; 3];
+    let mut any_clipped = false;
 
     macro_rules! clip {
         ($a:literal) => {
             'axis: {
-                let mn = box6[$a];
-                let s = seg_start[$a];
-                let e = seg_end[$a];
-                let plane = if s < mn {
-                    if e < mn {
+                let mn = box6.at::<$a>();
+                let s = seg_start.at::<$a>();
+                let near = if s < mn {
+                    if seg_end.at::<$a>() < mn {
                         return 0;
                     }
                     mn
                 } else {
-                    let mx = box6[$a + 3];
+                    let mx = box6.at::<{ $a + 3 }>();
                     // inside on `mx >= s` or unordered — NaN counts as inside
                     if !(mx < s) {
                         break 'axis;
                     }
-                    if mx < e {
+                    if mx < seg_end.at::<$a>() {
                         return 0;
                     }
                     mx
                 };
-                clipped = true;
-                t[$a] = (plane - s) / (e - s);
+                any_clipped = true;
+                clipped[$a] = true;
+                plane[$a] = near;
             }
         };
     }
@@ -229,9 +244,21 @@ pub fn c_aa_box__intersect_segment__6dc5a0(
     clip!(1);
     clip!(2);
 
-    if !clipped {
+    if !any_clipped {
         return 1;
     }
+
+    macro_rules! entry_t {
+        ($a:literal) => {
+            if clipped[$a] {
+                let s = seg_start.at::<$a>();
+                t[$a] = (plane[$a] - s) / (seg_end.at::<$a>() - s);
+            }
+        };
+    }
+    entry_t!(0);
+    entry_t!(1);
+    entry_t!(2);
 
     // axis with the largest entry-t defines the hit point; ties and unordered
     // comparisons keep the lower axis index
@@ -252,12 +279,12 @@ pub fn c_aa_box__intersect_segment__6dc5a0(
     macro_rules! validate {
         ($a:literal) => {{
             if best != $a {
-                let s = seg_start[$a];
-                let hit = (seg_end[$a] - s) * tb + s;
-                if hit < box6[$a] - EPS {
+                let s = seg_start.at::<$a>();
+                let hit = (seg_end.at::<$a>() - s) * tb + s;
+                if hit < box6.at::<$a>() - EPS {
                     return 0;
                 }
-                if box6[$a + 3] + EPS < hit {
+                if box6.at::<{ $a + 3 }>() + EPS < hit {
                     return 0;
                 }
             }
@@ -272,9 +299,12 @@ pub fn c_aa_box__intersect_segment__6dc5a0(
 
 #[cfg(test)]
 mod tests_c_aa_box__intersect_segment__6dc5a0 {
-    use super::c_aa_box__intersect_segment__6dc5a0 as hit;
-
     const UNIT: [f32; 6] = [-1.0, -1.0, -1.0, 1.0, 1.0, 1.0];
+
+    /// Runs the kernel over views borrowed from three owned blocks.
+    fn hit(box6: &[f32; 6], seg_start: &[f32; 3], seg_end: &[f32; 3]) -> i32 {
+        super::c_aa_box__intersect_segment__6dc5a0(box6.into(), seg_start.into(), seg_end.into())
+    }
 
     #[test]
     fn start_inside_is_hit() {
