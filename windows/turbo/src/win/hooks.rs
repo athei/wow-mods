@@ -318,11 +318,22 @@ pub fn c33_matrix__from_axis_angle__7be490(
     // checked above.
     let ax = &unsafe { axis.cast::<[f32; 3]>().read_unaligned() };
 
-    let m =
-        crate::math::matrix33::c33_matrix__from_axis_angle__7be490(ax, angle, skip_normalize == 0);
-
-    // SAFETY: `out` addresses 9 contiguous, aligned `f32`.
-    unsafe { out.cast::<[f32; 9]>().write_unaligned(m) };
+    // The kernel writes the nine floats into the client's matrix itself. Taking
+    // its 36-byte return by value instead would land them in a stack temp and
+    // then copy them here, and that copy reloaded 16 bytes across three narrower
+    // stores the kernel had just made.
+    //
+    // SAFETY: the hooked original is `__fastcall(out, ...)` where `out` addresses
+    // 9 contiguous, 4-byte-aligned `f32` (a 3x3 matrix); non-null checked above,
+    // and the kernel's only other pointer is the stack copy of the axis, so this
+    // borrow is exclusive for its whole duration.
+    let m = unsafe { &mut *out.cast::<core::mem::MaybeUninit<[f32; 9]>>() };
+    crate::math::matrix33::c33_matrix__from_axis_angle__7be490_into(
+        m,
+        ax,
+        angle,
+        skip_normalize == 0,
+    );
     out
 }
 

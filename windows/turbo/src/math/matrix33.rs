@@ -89,10 +89,35 @@ mod tests_c33_matrix__determinant__7bc040 {
     }
 }
 
+/// The by-value form of `c33_matrix__from_axis_angle__7be490_into`.
+///
+/// For the callers that place the nine floats somewhere other than a bare 3x3:
+/// `0x7bb860`, `0x7bdb00` and `0x7c5490`'s turn-toward-target forward. It holds no
+/// arithmetic of its own, and the return slot the caller supplied is what the
+/// kernel writes into, so the by-value shape costs no copy.
+pub fn c33_matrix__from_axis_angle__7be490(
+    axis: &[f32; 3],
+    angle: f32,
+    normalize: bool,
+) -> [f32; 9] {
+    let mut m = core::mem::MaybeUninit::<[f32; 9]>::uninit();
+    c33_matrix__from_axis_angle__7be490_into(&mut m, axis, angle, normalize);
+    // SAFETY: `_into` writes all nine floats through `out` on every path: its one
+    // store is unconditional and covers the whole array.
+    unsafe { m.assume_init() }
+}
+
 /// Builds a 3x3 rotation matrix (Rodrigues) of `angle` radians about `axis`.
 ///
 /// When `normalize` is true the axis is normalized first (the original's flag runs
-/// the other way: a non-zero byte *skips* it). Returns row-major 9 floats.
+/// the other way: a non-zero byte *skips* it). Writes row-major 9 floats.
+///
+/// The nine floats land in a caller-supplied slot rather than being returned: a
+/// 36-byte return travels by hidden pointer, so the installed adapter at `0x7be490`
+/// would have to copy them out of the callee's temp into the client's matrix,
+/// six instructions whose 16-byte reload straddles three narrower stores this body
+/// just made. Nothing elides that copy for it, because the adapter's destination is
+/// a raw guest pointer nothing can prove writable ahead of the call.
 ///
 /// This is also the arithmetic behind `0x7bb860` and `0x7bdb00`, which are the
 /// same routine emitted against wider destination layouts. All three bodies carry
@@ -117,11 +142,12 @@ mod tests_c33_matrix__determinant__7bc040 {
 /// `sin_cos` here is the shared polynomial and the original is the hardware
 /// `FSINCOS`, so the two can never agree to the last bit; that residual is a
 /// bounded deviation, separate from the shape facts above.
-pub fn c33_matrix__from_axis_angle__7be490(
+pub fn c33_matrix__from_axis_angle__7be490_into(
+    out: &mut core::mem::MaybeUninit<[f32; 9]>,
     axis: &[f32; 3],
     angle: f32,
     normalize: bool,
-) -> [f32; 9] {
+) {
     let mut x = axis[0];
     let mut y = axis[1];
     let mut z = axis[2];
@@ -164,7 +190,7 @@ pub fn c33_matrix__from_axis_angle__7be490(
 
     let diagonal = |v: f32| super::f64_to_f32(f64::from(v) * f64::from(v) * t + f64::from(c));
 
-    [
+    out.write([
         diagonal(x),
         super::f64_to_f32(t_yx + zs),
         super::f64_to_f32(t_zx - f64::from(ys)),
@@ -174,7 +200,7 @@ pub fn c33_matrix__from_axis_angle__7be490(
         super::f64_to_f32(f64::from(t_zx_narrowed) + f64::from(ys)),
         super::f64_to_f32(t_zy - f64::from(xs)),
         diagonal(z),
-    ]
+    ]);
 }
 
 /// Axis/angle pairs carrying full mantissas, so a reassociation lands apart.
