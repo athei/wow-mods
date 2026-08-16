@@ -2942,7 +2942,10 @@ mod tests_c_world_bsp__collect_leaf_triangles_in_box__6b8c60 {
 ///
 /// Each box is `[min_x, min_y, min_z, max_x, max_y, max_z]`. Overlap requires the
 /// group minimum to be `<=` the query maximum and the group maximum to be `>=`
-/// the query minimum on every axis (boundary contact counts as overlap).
+/// the query minimum on every axis (boundary contact counts as overlap). The
+/// group walk at `0x6abc40` runs the predicate as [`map_chunk_box_overlaps_view4`]
+/// over the lanes [`map_chunk_box_lanes`] builds; this scalar form stays the
+/// oracle its property test compares against.
 pub fn map_chunk__query_wmo_groups__6abc40(group: &[f32; 6], query: &[f32; 6]) -> bool {
     group[0] <= query[3]
         && group[1] <= query[4]
@@ -2952,9 +2955,26 @@ pub fn map_chunk__query_wmo_groups__6abc40(group: &[f32; 6], query: &[f32; 6]) -
         && group[5] >= query[2]
 }
 
+/// Splits a `[min_xyz, max_xyz]` box into the two 4-lane vectors the SSE overlap test takes.
+///
+/// [`map_chunk_box_overlaps_view4`] masks lane 3 away, so it is a don't-care in
+/// both vectors: the minimum vector carries `bounds[3]` there because that is the
+/// dword following the minimum triple, and the maximum vector pads with zero.
+/// Splitting by copy rather than by a 16-byte load keeps the read inside the six
+/// declared floats. A caller whose box is loop-invariant builds it once.
+pub fn map_chunk_box_lanes(bounds: &[f32; 6]) -> ([f32; 4], [f32; 4]) {
+    (
+        [bounds[0], bounds[1], bounds[2], bounds[3]],
+        [bounds[3], bounds[4], bounds[5], 0.0],
+    )
+}
+
 #[cfg(test)]
 mod tests_map_chunk__query_wmo_groups__6abc40 {
-    use super::map_chunk__query_wmo_groups__6abc40 as overlap;
+    use super::{
+        map_chunk__query_wmo_groups__6abc40 as overlap, map_chunk_box_lanes as lanes,
+        map_chunk_box_overlaps_view4 as overlaps4,
+    };
 
     #[test]
     fn concentric_overlaps() {
@@ -2982,6 +3002,38 @@ mod tests_map_chunk__query_wmo_groups__6abc40 {
         let g = [0.0_f32, 10.0, 0.0, 1.0, 12.0, 1.0];
         let q = [0.0_f32, 0.0, 0.0, 1.0, 1.0, 1.0];
         assert!(!overlap(&g, &q));
+    }
+
+    /// The split boxes fed to the 4-lane kernel must answer as this kernel does.
+    ///
+    /// Sweeps ordinary orderings, touching faces, negative zero, both infinities
+    /// and NaN through a minimum and a maximum lane of each box. The fourth lane
+    /// is a don't-care, so a disagreement here is it leaking into the mask.
+    #[test]
+    fn lane_split_matches_scalar_kernel() {
+        let vals = [
+            -1.0f32,
+            0.0,
+            -0.0,
+            1.0,
+            5.0,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::NAN,
+        ];
+        for &a in &vals {
+            for &b in &vals {
+                let g = [a, -1.0, -1.0, b, 1.0, 1.0];
+                let q = [-2.0, b, -2.0, 2.0, a, 2.0];
+                let (gmin4, gmax4) = lanes(&g);
+                let (qmin4, qmax4) = lanes(&q);
+                assert_eq!(
+                    overlap(&g, &q),
+                    overlaps4(gmin4, gmax4, qmin4, qmax4),
+                    "g={g:?} q={q:?}"
+                );
+            }
+        }
     }
 }
 

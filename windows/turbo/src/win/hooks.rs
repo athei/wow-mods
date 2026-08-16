@@ -15596,6 +15596,12 @@ pub extern "fastcall" fn map_chunk__query_wmo_groups__6abc40(
     if query_flags & 0x00f0_000f == 0 {
         return 1;
     }
+    // Query-flags half of the per-group bucket select, which is `lo_set` when a
+    // group's `+0x180`/`+0x184` pair is zero and `hi_set` otherwise. The gate
+    // above proves at least one of the two is set; when both are, the select
+    // cannot answer zero for any group and the pair is never read.
+    let lo_set = query_flags & 0xf != 0;
+    let hi_set = query_flags & 0x00f0_0000 != 0;
     // SAFETY: `group_list+2` (index 2 == +8 bytes) is the in-bounds list head slot.
     let head_slot = unsafe { group_list.add(2) };
     // SAFETY: `head_slot` holds the encoded head node (low bit = sentinel).
@@ -15606,7 +15612,10 @@ pub extern "fastcall" fn map_chunk__query_wmo_groups__6abc40(
         node = 0;
     }
     // SAFETY: `query_box` addresses the 6 contiguous box floats.
-    let query = &unsafe { query_box.cast::<[f32; 6]>().read_unaligned() };
+    let query = unsafe { query_box.cast::<[f32; 6]>().read_unaligned() };
+    // Every group tests against the same query box, so its 4-lane split is built
+    // once here instead of being respliced into the compare vectors per group.
+    let (qmin4, qmax4) = crate::math::world::map_chunk_box_lanes(&query);
 
     const EPOCH: *const u32 = (crate::win::EXPECTED_IMAGE_BASE + 0x88_9f20) as *const u32;
     // SAFETY: fixed `.data` visited-epoch counter in the live host image.
@@ -15631,28 +15640,34 @@ pub extern "fastcall" fn map_chunk__query_wmo_groups__6abc40(
             // SAFETY: `active_slot` is an initialized dword.
             let active = unsafe { active_slot.cast::<u32>().read() };
             if flags16 & 0x100 == 0 && visited != epoch && active != 0 {
-                // SAFETY: `group+0x180` is the in-bounds indoor-bucket field.
-                let m180_slot = unsafe { group.add(0x180) };
-                // SAFETY: `m180_slot` is an initialized dword.
-                let m180 = unsafe { m180_slot.cast::<u32>().read() };
-                // SAFETY: `group+0x184` is the in-bounds indoor-bucket field.
-                let m184_slot = unsafe { group.add(0x184) };
-                // SAFETY: `m184_slot` is an initialized dword.
-                let m184 = unsafe { m184_slot.cast::<u32>().read() };
-                let bucket = if m180 == 0 && m184 == 0 {
-                    query_flags & 0xf
+                let bucket_set = if lo_set && hi_set {
+                    true
                 } else {
-                    query_flags & 0x00f0_0000
+                    // SAFETY: `group+0x180` is the in-bounds indoor-bucket field.
+                    let m180_slot = unsafe { group.add(0x180) };
+                    // SAFETY: `m180_slot` is an initialized dword.
+                    let m180 = unsafe { m180_slot.cast::<u32>().read() };
+                    // SAFETY: `group+0x184` is the in-bounds indoor-bucket field.
+                    let m184_slot = unsafe { group.add(0x184) };
+                    // SAFETY: `m184_slot` is an initialized dword.
+                    let m184 = unsafe { m184_slot.cast::<u32>().read() };
+                    if m180 == 0 && m184 == 0 {
+                        lo_set
+                    } else {
+                        hi_set
+                    }
                 };
-                if bucket != 0 {
+                if bucket_set {
                     if flags16 as u8 & 0x80 == 0 {
                         return 0;
                     }
                     // SAFETY: `group+0x14c` addresses the group's 6 box floats.
                     let gbox_slot = unsafe { group.add(0x14c) };
                     // SAFETY: `gbox_slot` addresses 6 contiguous box floats.
-                    let gbox = &unsafe { gbox_slot.cast::<[f32; 6]>().read_unaligned() };
-                    if crate::math::world::map_chunk__query_wmo_groups__6abc40(gbox, query) {
+                    let gbox = unsafe { gbox_slot.cast::<[f32; 6]>().read_unaligned() };
+                    let (gmin4, gmax4) = crate::math::world::map_chunk_box_lanes(&gbox);
+                    if crate::math::world::map_chunk_box_overlaps_view4(gmin4, gmax4, qmin4, qmax4)
+                    {
                         const APPEND_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x2a_bd90;
                         // SAFETY: a fixed `.text` entry in the live host image (base
                         // verified at load); the transmuted signature matches the
