@@ -1661,7 +1661,11 @@ pub struct TrailAdvance {
 
 /// Spawn interpolation frame derived from the current / previous emitter samples.
 ///
-/// (Object `+0xac..+0xf0`.) Refreshed once per spawning advance.
+/// (Object `+0xac..+0xf4`, 18 floats.) Refreshed once per spawning advance.
+/// `repr(C)` because the adapter writes the whole record over those 72 bytes in
+/// one store: the six fields are declared in object order, and the layout has to
+/// be that order rather than happen to be it.
+#[repr(C)]
 pub struct TrailFrame {
     /// Drift offset blended toward the current end (`+0xac`).
     pub drift_cur: [f32; 3],
@@ -1699,6 +1703,22 @@ fn ring_step(index: u32, step: u32, capacity: u32) -> u32 {
         next.wrapping_sub(capacity)
     } else {
         next
+    }
+}
+
+/// The ring's live slots as its (at most two) contiguous runs.
+///
+/// `head..tail` when the ring does not wrap, else `head..capacity` followed by
+/// `0..tail`. Those are the same slots the `cursor = ring_step(cursor, 1,
+/// capacity)` walks visit, in the same order, so a walk over the runs can index
+/// both arrays as slices instead of paying a range check per slot. An empty
+/// ring (`head == tail`) yields two empty runs.
+fn live_runs(head: u32, tail: u32, capacity: u32) -> [core::ops::Range<usize>; 2] {
+    let (head, tail, capacity) = (head as usize, tail as usize, capacity as usize);
+    if head <= tail {
+        [head..tail, 0..0]
+    } else {
+        [head..capacity, 0..tail]
     }
 }
 
@@ -1798,10 +1818,22 @@ pub fn c_particle_emitter__advance_trail__7b7e60(
 
     // Retire slots from the head whose advanced age leaves the arc span
     // (ordered strict `>`; a NaN sum exits, matching the original's C0|C3
-    // status test).
-    while st.head != st.tail && dist + ages[st.head as usize] > st.max_arc {
-        st.head = ring_step(st.head, 1, st.capacity);
+    // status test). Walking the live runs rather than the ring index costs one
+    // range check per run instead of one per slot; retiring every live slot
+    // lands the head on the tail, which is where the `head != tail` test left
+    // it.
+    let mut retired_to = st.tail;
+    'retire: for run in live_runs(st.head, st.tail, st.capacity) {
+        let start = run.start;
+        for (offset, &age) in ages[run].iter().enumerate() {
+            if dist + age > st.max_arc {
+                continue;
+            }
+            retired_to = (start + offset) as u32;
+            break 'retire;
+        }
     }
+    st.head = retired_to;
 
     let mut frame_out = None;
     if spawn_gate.to_bits() == 0 && st.flags & 4 != 0 && st.flags & 1 != 0 {
@@ -1834,21 +1866,25 @@ pub fn c_particle_emitter__advance_trail__7b7e60(
     }
 
     // Age every live slot: parabolic z sag on both edge vertices, age bump,
-    // refreshed texture u/v.
-    let mut cursor = st.head;
-    while cursor != st.tail {
-        let i = cursor as usize;
-        let sag = (ages[i] + ages[i] + dist) * dist * st.sag_rate;
-        let slot = &mut verts[i * TRAIL_VERT_FLOATS..][..TRAIL_VERT_FLOATS];
-        slot[2] += sag;
-        slot[7] += sag;
-        ages[i] += dist;
-        let u = ages[i] * st.u_scale_a * st.u_scale_b + st.u_origin;
-        slot[3] = u;
-        slot[4] = st.v_lo;
-        slot[8] = u;
-        slot[9] = st.v_hi;
-        cursor = ring_step(cursor, 1, st.capacity);
+    // refreshed texture u/v. Same slots in the same order as the ring walk,
+    // reached as the two runs zipped over the age array and the vertex ring's
+    // fixed-size slot view, which is what takes the per-slot index, its `i*10`
+    // scaling and their range checks out of the body.
+    let (slots, _) = verts.as_chunks_mut::<TRAIL_VERT_FLOATS>();
+    for run in live_runs(st.head, st.tail, st.capacity) {
+        let ages_run = &mut ages[run.clone()];
+        let slots_run = &mut slots[run];
+        for (age, slot) in ages_run.iter_mut().zip(slots_run.iter_mut()) {
+            let sag = (*age + *age + dist) * dist * st.sag_rate;
+            slot[2] += sag;
+            slot[7] += sag;
+            *age += dist;
+            let u = *age * st.u_scale_a * st.u_scale_b + st.u_origin;
+            slot[3] = u;
+            slot[4] = st.v_lo;
+            slot[8] = u;
+            slot[9] = st.v_hi;
+        }
     }
 
     st.flags = (st.flags & !0x10) | 8;
@@ -2134,6 +2170,34 @@ mod tests_c_particle_emitter__advance_trail__7b7e60 {
         assert_eq!(ages[3].to_bits(), 0.0f32.to_bits());
         assert_eq!(verts[3 * N + 3].to_bits(), 0.0f32.to_bits());
     }
+
+    #[test]
+    fn aging_walks_a_wrapped_ring() {
+        let mut st = state(4);
+        st.head = 3;
+        st.tail = 1;
+        st.sag_rate = 0.5;
+        st.u_scale_a = 2.0;
+        st.u_scale_b = 4.0;
+        st.u_origin = 10.0;
+        st.max_arc = 100.0;
+        let mut ages = [1.0f32, 0.0, 0.0, 3.0];
+        let mut verts = [0.0f32; 4 * N];
+        f(&mut st, &mut ages, &mut verts, 2.0, 1.0, 1.0, 0.0, 1.0);
+        // Slot 3: sag = (3+3+2)·2·0.5 = 8; age 5; u = 5·2·4 + 10 = 50.
+        assert_eq!(ages[3].to_bits(), 5.0f32.to_bits());
+        assert_eq!(verts[3 * N + 2].to_bits(), 8.0f32.to_bits());
+        assert_eq!(verts[3 * N + 7].to_bits(), 8.0f32.to_bits());
+        assert_eq!(verts[3 * N + 3].to_bits(), 50.0f32.to_bits());
+        // Slot 0, the run after the wrap: sag = (1+1+2)·2·0.5 = 4; age 3;
+        // u = 3·2·4 + 10 = 34.
+        assert_eq!(ages[0].to_bits(), 3.0f32.to_bits());
+        assert_eq!(verts[2].to_bits(), 4.0f32.to_bits());
+        assert_eq!(verts[3].to_bits(), 34.0f32.to_bits());
+        // Slots 1 and 2 sit outside head..tail.
+        assert_eq!(ages[1].to_bits(), 0.0f32.to_bits());
+        assert_eq!(ages[2].to_bits(), 0.0f32.to_bits());
+    }
 }
 
 /// Offsets a row-major 4x4 transform's translation row by a billboard vector.
@@ -2143,11 +2207,68 @@ mod tests_c_particle_emitter__advance_trail__7b7e60 {
 ///
 /// Returns a copy of `m` whose translation row (`m[12..15]`) is advanced by the
 /// billboard offset; the rest of the matrix is unchanged.
+///
+/// Rows 0..2 move as whole 16-byte lanes and the translation row is the single
+/// packed chain `((r0*bv.xxxx + r1*bv.yyyy) + r2*bv.zzzz) + r3`, which is the
+/// operand pairing and the left-to-right association of the three scalar
+/// expressions it replaces, so every lane keeps the bits those produced. Lane 3
+/// of that chain is a value no scalar expression computes (`m[3]`, `m[7]`,
+/// `m[11]` against the billboard, plus `m[15]`), and it must not reach the
+/// store: the blend puts `m[15]` back first, which is what keeps `out[15]`
+/// still on a matrix with a non-zero fourth column, on an infinite or NaN
+/// billboard against a zero one, and on `m[15] == -0.0`.
+///
+/// `bv` is loaded one float at a time: the caller only guarantees three.
 pub fn c_particle_emitter__draw_batch__70ca50(m: &[f32; 16], bv: &[f32; 3]) -> [f32; 16] {
-    let mut out = *m;
-    out[12] = m[0] * bv[0] + m[4] * bv[1] + m[8] * bv[2] + m[12];
-    out[13] = m[1] * bv[0] + m[5] * bv[1] + m[9] * bv[2] + m[13];
-    out[14] = m[2] * bv[0] + m[6] * bv[1] + m[10] * bv[2] + m[14];
+    #[cfg(target_arch = "x86")]
+    use core::arch::x86::{
+        _mm_add_ps, _mm_blend_ps, _mm_load1_ps, _mm_loadu_ps, _mm_mul_ps, _mm_storeu_ps,
+    };
+    #[cfg(target_arch = "x86_64")]
+    use core::arch::x86_64::{
+        _mm_add_ps, _mm_blend_ps, _mm_load1_ps, _mm_loadu_ps, _mm_mul_ps, _mm_storeu_ps,
+    };
+
+    // SAFETY: the load covers 16 in-bounds bytes of the `[f32; 16]` argument.
+    let r0 = unsafe { _mm_loadu_ps(m.as_ptr()) };
+    // SAFETY: as above, `m[4..8]`.
+    let r1 = unsafe { _mm_loadu_ps(m[4..].as_ptr()) };
+    // SAFETY: as above, `m[8..12]`.
+    let r2 = unsafe { _mm_loadu_ps(m[8..].as_ptr()) };
+    // SAFETY: as above, `m[12..16]`.
+    let r3 = unsafe { _mm_loadu_ps(m[12..].as_ptr()) };
+
+    // SAFETY: a broadcast load reads the 4 in-bounds bytes of `bv[0]` only.
+    let bx = unsafe { _mm_load1_ps(bv.as_ptr()) };
+    // SAFETY: as above, `bv[1]`.
+    let by = unsafe { _mm_load1_ps(bv[1..].as_ptr()) };
+    // SAFETY: as above, `bv[2]`.
+    let bz = unsafe { _mm_load1_ps(bv[2..].as_ptr()) };
+
+    // SAFETY: lane-wise multiply of two initialized vectors.
+    let px = unsafe { _mm_mul_ps(r0, bx) };
+    // SAFETY: as above.
+    let py = unsafe { _mm_mul_ps(r1, by) };
+    // SAFETY: as above.
+    let pz = unsafe { _mm_mul_ps(r2, bz) };
+    // SAFETY: lane-wise add of two initialized vectors.
+    let sum = unsafe { _mm_add_ps(px, py) };
+    // SAFETY: as above.
+    let sum = unsafe { _mm_add_ps(sum, pz) };
+    // SAFETY: as above.
+    let sum = unsafe { _mm_add_ps(sum, r3) };
+    // SAFETY: lane select between two initialized vectors; lane 3 from `r3`.
+    let row3 = unsafe { _mm_blend_ps::<0b1000>(sum, r3) };
+
+    let mut out = [0.0f32; 16];
+    // SAFETY: the store covers 16 in-bounds bytes of the `[f32; 16]` local.
+    unsafe { _mm_storeu_ps(out.as_mut_ptr(), r0) };
+    // SAFETY: as above, `out[4..8]`.
+    unsafe { _mm_storeu_ps(out[4..].as_mut_ptr(), r1) };
+    // SAFETY: as above, `out[8..12]`.
+    unsafe { _mm_storeu_ps(out[8..].as_mut_ptr(), r2) };
+    // SAFETY: as above, `out[12..16]`.
+    unsafe { _mm_storeu_ps(out[12..].as_mut_ptr(), row3) };
     out
 }
 
@@ -2211,6 +2332,74 @@ mod draw_batch_tests {
         let osum = draw_batch(&m, &sum);
         for k in 12..15 {
             approx(osum[k], oa[k] + ob[k] - m[k]);
+        }
+    }
+
+    /// The scalar form the packed body replaces, kept as its bit-exact oracle.
+    fn scalar(m: &[f32; 16], bv: &[f32; 3]) -> [f32; 16] {
+        let mut out = *m;
+        out[12] = m[0] * bv[0] + m[4] * bv[1] + m[8] * bv[2] + m[12];
+        out[13] = m[1] * bv[0] + m[5] * bv[1] + m[9] * bv[2] + m[13];
+        out[14] = m[2] * bv[0] + m[6] * bv[1] + m[10] * bv[2] + m[14];
+        out
+    }
+
+    #[test]
+    fn packed_rows_match_the_scalar_oracle_bit_for_bit() {
+        // A non-zero fourth column, a -0.0 in `m[15]` and an infinite or NaN
+        // billboard are the inputs on which the packed chain's lane 3 differs
+        // from the value that has to be stored.
+        let mats: [[f32; 16]; 3] = [
+            [
+                0.3, 1.1, -0.7, 2.5, 0.9, -0.2, 0.4, -3.5, -1.3, 0.6, 0.8, 7.25, 5.0, -5.0, 2.0,
+                1.0,
+            ],
+            [
+                1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 10.0, 20.0, 30.0, -0.0,
+            ],
+            [
+                -2.0,
+                3.5,
+                0.125,
+                f32::INFINITY,
+                11.0,
+                -13.0,
+                17.0,
+                0.0,
+                23.0,
+                29.0,
+                -31.0,
+                0.0,
+                41.0,
+                -0.0,
+                47.0,
+                f32::NAN,
+            ],
+        ];
+        let bvs: [[f32; 3]; 5] = [
+            [0.0, 0.0, 0.0],
+            [0.5, -1.5, 2.25],
+            [f32::INFINITY, 0.0, -0.0],
+            [f32::NAN, 1.0, -1.0],
+            [-0.0, -0.0, -0.0],
+        ];
+        for m in &mats {
+            for bv in &bvs {
+                // Opaque to the optimiser on both sides: a folded `inf * 0`
+                // takes the compiler's quiet NaN, the executed one takes the
+                // hardware's, and the two disagree in the sign bit.
+                let m = core::hint::black_box(m);
+                let bv = core::hint::black_box(bv);
+                let packed = draw_batch(m, bv);
+                let want = scalar(m, bv);
+                for i in 0..16 {
+                    assert_eq!(
+                        packed[i].to_bits(),
+                        want[i].to_bits(),
+                        "lane {i} of {m:?} x {bv:?}"
+                    );
+                }
+            }
         }
     }
 }

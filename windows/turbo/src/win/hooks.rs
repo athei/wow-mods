@@ -11717,20 +11717,27 @@ pub extern "thiscall" fn c_cubic_spline__eval_frame_at_distance__454580(
     // Cubic mode prefers the analytic tangent: its fixed degree-2 derivative
     // basis is 12 baked floats in a host `.data` global, expanded to the
     // 16-slot stride-4 matrix the shared evaluator indexes (column 3 padded;
-    // never read by the evaluator).
-    let mut basis = [0.0f32; 16];
-    if mode != 0 {
+    // never read by the evaluator). The whole 64-byte buffer is built inside
+    // the gate: on the linear path the kernel is handed `None` and nothing
+    // reads the slot, so the zero-fill would be four dead stores per call. The
+    // 16-byte alignment makes the stores that survive on the cubic path aligned
+    // moves, the stack slot being 16-aligned already.
+    #[repr(align(16))]
+    struct DerivBasis([f32; 16]);
+    let basis = (mode != 0).then(|| {
         const BASIS_BAKED: *const [f32; 12] =
             (crate::win::EXPECTED_IMAGE_BASE + 0x70_5dd8) as *const [f32; 12];
         // SAFETY: `BASIS_BAKED` addresses 12 contiguous, 4-byte-aligned,
         // runtime-initialized `.data` floats in the live host image (base
         // verified at load).
         let baked = unsafe { BASIS_BAKED.read() };
-        for (row, src) in basis.chunks_exact_mut(4).zip(baked.chunks_exact(3)) {
+        let mut expanded = DerivBasis([0.0f32; 16]);
+        for (row, src) in expanded.0.chunks_exact_mut(4).zip(baked.chunks_exact(3)) {
             row[..3].copy_from_slice(src);
         }
-        basis[15] = 1.0;
-    }
+        expanded.0[15] = 1.0;
+        expanded
+    });
 
     // The degenerate-tangent path keeps the caller's existing forward row, so
     // the kernel receives it.
@@ -11740,7 +11747,7 @@ pub extern "thiscall" fn c_cubic_spline__eval_frame_at_distance__454580(
 
     let (fwd, right, up) = crate::math::spline::c_cubic_spline__eval_frame_at_distance__454580(
         cp,
-        if mode != 0 { Some(&basis) } else { None },
+        basis.as_ref().map(|b| &b.0),
         local_t,
         &prev_fwd,
     );
@@ -12136,7 +12143,7 @@ pub extern "fastcall" fn c_map_chunk__rasterize_chunk_triangles__6ad7e0(
 /// `this+0x148` are set and the gate word is bit-pattern zero, ages every live
 /// slot, and rewrites the flag word. All ring/scalar state is injected into the
 /// pure kernel; the spawn interpolation frame the kernel refreshes on a spawn
-/// pass is written back to `this+0xac..0xf0`. The original's nested helpers
+/// pass is written back to `this+0xac..0xf4`. The original's nested helpers
 /// (ring-index advance, frame refresh, slot spawn, vector set/add, CRT floor)
 /// are pure math folded into the kernel. A full reimpl ignores `_original`.
 pub extern "thiscall" fn c_particle_emitter__advance_trail__7b7e60(
@@ -12289,19 +12296,18 @@ pub extern "thiscall" fn c_particle_emitter__advance_trail__7b7e60(
     // SAFETY: `flags_ptr` is the writable flag dword.
     unsafe { flags_ptr.cast::<u32>().write(st.flags) };
     if let Some(frame) = frame {
-        let packed = [
-            frame.drift_cur,
-            frame.drift_prev,
-            frame.edge_lo_cur,
-            frame.edge_lo_prev,
-            frame.edge_hi_cur,
-            frame.edge_hi_prev,
-        ];
         // SAFETY: `this+0xac` starts the six contiguous, aligned in-bounds
-        // frame vectors (18 floats through `this+0xf0`) a spawn pass refreshes.
+        // frame vectors (18 floats through `this+0xf4`) a spawn pass refreshes.
         let frame_ptr = unsafe { this.add(0xac) };
-        // SAFETY: `frame_ptr` addresses those 18 writable floats.
-        unsafe { frame_ptr.cast::<[[f32; 3]; 6]>().write(packed) };
+        // SAFETY: `frame_ptr` addresses those 18 writable floats, and
+        // `TrailFrame` is `#[repr(C)]` over exactly those six `[f32; 3]` in
+        // object order, so the record goes over them as it stands instead of
+        // being repacked field by field first.
+        unsafe {
+            frame_ptr
+                .cast::<crate::math::particle::TrailFrame>()
+                .write(frame);
+        }
     }
 }
 

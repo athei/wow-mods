@@ -600,21 +600,19 @@ pub fn c4_quaternion__from_matrix33__7c0190(m: &[f32; 9]) -> [f32; 4] {
     // x87 accumulation order: FLD m11; FADD m00; FADD m22, all in-register, so
     // the compare below sees the wide sum.
     let trace = f64::from(m[4]) + f64::from(m[0]) + f64::from(m[8]);
-    let mut q = [0.0f32; 4];
     if trace > 0.0 {
         // Ordered `trace > 0`: quaternion dominated by the scalar (w) part.
         let s = (trace + 1.0).sqrt();
-        q[3] = super::f64_to_f32(0.5 * s); // w = 0.5 * sqrt(trace + 1)
+        let w = super::f64_to_f32(0.5 * s); // w = 0.5 * sqrt(trace + 1)
         let t = 0.5 / s;
         // (m21 - m12) * t
-        q[0] = super::f64_to_f32((f64::from(m[7]) - f64::from(m[5])) * t);
+        let x = super::f64_to_f32((f64::from(m[7]) - f64::from(m[5])) * t);
         // (m02 - m20) * t
-        q[1] = super::f64_to_f32((f64::from(m[2]) - f64::from(m[6])) * t);
+        let y = super::f64_to_f32((f64::from(m[2]) - f64::from(m[6])) * t);
         // (m10 - m01) * t
-        q[2] = super::f64_to_f32((f64::from(m[3]) - f64::from(m[1])) * t);
+        let z = super::f64_to_f32((f64::from(m[3]) - f64::from(m[1])) * t);
+        [x, y, z, w]
     } else {
-        // NEXT[i] cycle used by the largest-diagonal branch.
-        const NEXT: [usize; 3] = [1, 2, 0];
         // Pick the largest diagonal element; strict `>` so ties/NaN keep i. Both
         // compares are `f32` against `f32` with nothing accumulated, so their
         // width is not in question.
@@ -625,18 +623,48 @@ pub fn c4_quaternion__from_matrix33__7c0190(m: &[f32; 9]) -> [f32; 4] {
         if m[8] > m[i * 4] {
             i = 2;
         }
-        let j = NEXT[i];
-        let k = NEXT[j];
-        // s = sqrt(m[i][i] - m[j][j] - m[k][k] + 1), all four steps in-register.
-        let s = (f64::from(m[i * 4]) - f64::from(m[j * 4]) - f64::from(m[k * 4]) + 1.0).sqrt();
-        q[i] = super::f64_to_f32(0.5 * s);
-        let t = 0.5 / s;
-        // w
-        q[3] = super::f64_to_f32((f64::from(m[k * 3 + j]) - f64::from(m[j * 3 + k])) * t);
-        q[j] = super::f64_to_f32((f64::from(m[i * 3 + j]) + f64::from(m[j * 3 + i])) * t);
-        q[k] = super::f64_to_f32((f64::from(m[i * 3 + k]) + f64::from(m[k * 3 + i])) * t);
+        // The `NEXT` cycle spelled as its three triples: `j = NEXT[i]`,
+        // `k = NEXT[j]`. The wildcard arm is i == 2 and belongs to the pick
+        // above, which produces nothing else.
+        match i {
+            0 => {
+                let (qi, qw, qj, qk) = largest_diagonal::<0, 1, 2>(m);
+                [qi, qj, qk, qw]
+            }
+            1 => {
+                let (qi, qw, qj, qk) = largest_diagonal::<1, 2, 0>(m);
+                [qk, qi, qj, qw]
+            }
+            _ => {
+                let (qi, qw, qj, qk) = largest_diagonal::<2, 0, 1>(m);
+                [qj, qk, qi, qw]
+            }
+        }
     }
-    q
+}
+
+/// One literal `(i, j, k)` triple of the largest-diagonal branch.
+///
+/// Returns `(q[i], q[3], q[j], q[k])` in the order the original stores them
+/// (`0x7c025d`..`0x7c02a7`). Carrying the triple as const parameters is what
+/// makes every index a literal: the nine reads are `m[i*4]`, `m[j*4]`, `m[k*4]`,
+/// `m[k*3+j]`, `m[j*3+k]`, `m[i*3+j]`, `m[j*3+i]`, `m[i*3+k]` and `m[k*3+i]`,
+/// whose largest value over the three triples is 8 against the `[f32; 9]`, so
+/// the range check on each of them is decided at compile time. The caller places
+/// the four returned components in lane order.
+#[inline]
+fn largest_diagonal<const I: usize, const J: usize, const K: usize>(
+    m: &[f32; 9],
+) -> (f32, f32, f32, f32) {
+    // s = sqrt(m[i][i] - m[j][j] - m[k][k] + 1), all four steps in-register.
+    let s = (f64::from(m[I * 4]) - f64::from(m[J * 4]) - f64::from(m[K * 4]) + 1.0).sqrt();
+    let qi = super::f64_to_f32(0.5 * s);
+    let t = 0.5 / s;
+    // w
+    let qw = super::f64_to_f32((f64::from(m[K * 3 + J]) - f64::from(m[J * 3 + K])) * t);
+    let qj = super::f64_to_f32((f64::from(m[I * 3 + J]) + f64::from(m[J * 3 + I])) * t);
+    let qk = super::f64_to_f32((f64::from(m[I * 3 + K]) + f64::from(m[K * 3 + I])) * t);
+    (qi, qw, qj, qk)
 }
 
 #[cfg(test)]

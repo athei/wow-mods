@@ -10,31 +10,53 @@
 /// yielding the segment index and the fractional distance into that segment
 /// (`local_t`, in arc-length units, not normalised). With a single segment the
 /// scaled distance passes straight through as `local_t`.
+///
+/// The walk visits every segment but the last, which is what the original's
+/// `idx >= seg_count - 1` latch amounts to, so it is written as the slice
+/// `seg_lengths[..seg_count - 1]` and takes two segments per trip with the two
+/// running sums named apart: the accumulator is then never copied, only
+/// renamed. Both exits carry their divisor out with them instead of
+/// re-indexing after the loop. The ordered break divides by the length it just
+/// loaded, the exhausted walk by the last segment's, which is where it leaves
+/// `idx`, and every add keeps its operands, its order, and its `target < next`
+/// test, so both exits produce the same bits as the one-at-a-time walk.
 pub fn c_cubic_spline__arc_length_to_segment__453840(
     dist: f32,
     scale: f32,
     seg_lengths: &[f32],
 ) -> (u32, f32) {
     let seg_count = seg_lengths.len();
-    if seg_count == 1 {
+    // A table with nothing to walk resolves to segment 0 with the scaled
+    // distance straight through; the callers gate on a positive count, so the
+    // empty case cannot arrive.
+    if seg_count <= 1 {
         return (0, dist);
     }
     let target = scale * dist;
+    let land = |idx: usize, acc: f32, divisor: f32| (idx as u32, (target - acc) / divisor);
+    let head = &seg_lengths[..seg_count - 1];
+    let pairs = head.chunks_exact(2);
+    let odd = pairs.remainder();
     let mut acc = 0.0f32;
-    let mut idx: u32 = 0;
-    while (idx as usize) < seg_count {
-        let next = seg_lengths[idx as usize] + acc;
-        if target < next {
-            break;
+    for (pair_idx, pair) in pairs.enumerate() {
+        let first = pair[0] + acc;
+        if target < first {
+            return land(2 * pair_idx, acc, pair[0]);
         }
-        idx += 1;
-        acc = next;
-        if idx >= (seg_count as u32 - 1) {
-            break;
+        let second = pair[1] + first;
+        if target < second {
+            return land(2 * pair_idx + 1, first, pair[1]);
         }
+        acc = second;
     }
-    let local_t = (target - acc) / seg_lengths[idx as usize];
-    (idx, local_t)
+    if let &[len] = odd {
+        let last = len + acc;
+        if target < last {
+            return land(head.len() - 1, acc, len);
+        }
+        acc = last;
+    }
+    land(seg_count - 1, acc, seg_lengths[seg_count - 1])
 }
 
 #[cfg(test)]
@@ -80,6 +102,61 @@ mod tests_c_cubic_spline__arc_length_to_segment__453840 {
         let (idx, t) = a2s(30.0, 0.5, &[10.0, 10.0, 10.0]);
         assert_eq!(idx, 1);
         assert!((t - 0.5).abs() <= 1e-6);
+    }
+
+    /// The one-at-a-time walk the paired body replaces, kept as its oracle.
+    fn oracle(dist: f32, scale: f32, seg_lengths: &[f32]) -> (u32, f32) {
+        let seg_count = seg_lengths.len();
+        if seg_count == 1 {
+            return (0, dist);
+        }
+        let target = scale * dist;
+        let mut acc = 0.0f32;
+        let mut idx: u32 = 0;
+        while (idx as usize) < seg_count {
+            let next = seg_lengths[idx as usize] + acc;
+            if target < next {
+                break;
+            }
+            idx += 1;
+            acc = next;
+            if idx >= (seg_count as u32 - 1) {
+                break;
+            }
+        }
+        (idx, (target - acc) / seg_lengths[idx as usize])
+    }
+
+    #[test]
+    fn paired_walk_matches_the_one_at_a_time_oracle() {
+        // Odd and even segment counts either side of the pair step, a table
+        // whose partial sums are not representable, and the four distances
+        // whose `target < next` answer is the NaN/infinity one.
+        let tables: [&[f32]; 5] = [
+            &[10.0, 10.0],
+            &[10.0, 10.0, 10.0],
+            &[3.0, 1.0, 4.0, 1.0],
+            &[0.1, 0.2, 0.3, 0.7, 1.9],
+            &[1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+        ];
+        let scales = [1.0f32, 0.5, 2.0, -1.0];
+        for table in tables {
+            for scale in scales {
+                for step in -12..160 {
+                    let dist = step as f32 * 0.25;
+                    let got = a2s(dist, scale, table);
+                    let want = oracle(dist, scale, table);
+                    assert_eq!(got.0, want.0, "index for {dist} x {scale} over {table:?}");
+                    assert_eq!(got.1.to_bits(), want.1.to_bits(), "local_t for {dist}");
+                }
+                for dist in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -0.0] {
+                    let got = a2s(dist, scale, table);
+                    let want = oracle(dist, scale, table);
+                    assert_eq!(got.0, want.0, "index for {dist} x {scale}");
+                    assert_eq!(got.1.to_bits(), want.1.to_bits(), "local_t for {dist}");
+                }
+            }
+        }
     }
 
     #[test]
