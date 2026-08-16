@@ -4450,11 +4450,10 @@ const TILE_OUTCODE_BIAS__6aadc0: f32 = f32::from_bits(0x3c9f_49f4);
 /// The query AABB is `tile_collect_translate_aabb__6aadc0`'s output.
 ///
 /// Mirrors the inner ladder at 0x6aaf60..0x6ab00e. Each of the six plane tests
-/// forms a biased difference, reinterprets its IEEE-754 bits, and extracts the
-/// sign bit via a right shift — the proven magic-bias floor trick, NOT an
-/// `as u32` cast. The bit is set iff the biased difference is negative (sign
-/// bit == 1), i.e. the vertex is outside that plane. Bit layout (matching the
-/// stock `and`/`or` masks):
+/// forms a biased difference and takes its IEEE-754 sign bit — the proven
+/// magic-bias floor trick, NOT an `as u32` cast. The bit is set iff the biased
+/// difference is negative (sign bit == 1), i.e. the vertex is outside that
+/// plane. Bit layout (matching the stock `and`/`or` masks):
 /// - `bit 0`: `(v.x - aabb.min_x) + bias < 0`  (shr 0x1f)
 /// - `bit 1`: `(v.y - aabb.min_y) + bias < 0`  (shr 0x1e, mask 2)
 /// - `bit 2`: `(v.z - aabb.min_z) + bias < 0`  (shr 0x1d, mask 4)
@@ -4462,19 +4461,47 @@ const TILE_OUTCODE_BIAS__6aadc0: f32 = f32::from_bits(0x3c9f_49f4);
 /// - `bit 4`: `(aabb.max_y - v.y) + bias < 0`  (shr 0x1b, mask 0x10)
 /// - `bit 5`: `(aabb.max_z - v.z) + bias < 0`  (shr 0x1a, mask 0x20)
 ///
+/// The six differences are three low lanes plus three high lanes, so they run as
+/// two packed vectors: `movmskps` puts the low trio straight into bits 0-2 and
+/// the high trio into bits 0-2 of its own mask, which the shift lifts to 3-5.
+/// Each lane keeps the operand pair, the rounding and the `f32` width its own
+/// `subss`/`addss` had, and `movmskps` is the same sign bit the `shr 0x1f` form
+/// isolates, including for a NaN or a `-0.0` difference.
+///
 /// `aabb` is the 6-float `[min_xyz, max_xyz]` head; `v` is the vertex.
 #[must_use]
 pub fn tile_collect_outcode6__6aadc0(v: &[f32; 3], aabb: &[f32; 6], bias: f32) -> u32 {
-    // Each line: bit = to_bits((diff) + bias) >> shift, then masked. Because the
-    // shift isolates the sign bit, the high bits land at the mask position
-    // exactly (the original shifts each independently then ANDs the lone bit).
-    let mut code = ((v[0] - aabb[0]) + bias).to_bits() >> 0x1f;
-    code |= (((v[1] - aabb[1]) + bias).to_bits() >> 0x1e) & 2;
-    code |= (((v[2] - aabb[2]) + bias).to_bits() >> 0x1d) & 4;
-    code |= (((aabb[3] - v[0]) + bias).to_bits() >> 0x1c) & 8;
-    code |= (((aabb[4] - v[1]) + bias).to_bits() >> 0x1b) & 0x10;
-    code |= (((aabb[5] - v[2]) + bias).to_bits() >> 0x1a) & 0x20;
-    code
+    #[cfg(target_arch = "x86")]
+    use core::arch::x86::{_mm_add_ps, _mm_movemask_ps, _mm_set_ps, _mm_set1_ps, _mm_sub_ps};
+    #[cfg(target_arch = "x86_64")]
+    use core::arch::x86_64::{_mm_add_ps, _mm_movemask_ps, _mm_set_ps, _mm_set1_ps, _mm_sub_ps};
+    // Every intrinsic below is SSE1, available on every ISA baseline this crate
+    // builds for. Lane 3 is padding: its difference and bias add are computed and
+    // then dropped by the `& 7` masks, so it reaches no result bit. The vertex is
+    // gathered from its three floats rather than loaded 16 bytes wide, because
+    // the grid's last vertex has no fourth float to read.
+
+    // SAFETY: `_mm_set_ps` builds a register from four values; no precondition.
+    let vert = unsafe { _mm_set_ps(0.0, v[2], v[1], v[0]) };
+    // SAFETY: as above; `aabb[0..3]` is the min corner.
+    let lo = unsafe { _mm_set_ps(0.0, aabb[2], aabb[1], aabb[0]) };
+    // SAFETY: as above; `aabb[3..6]` is the max corner.
+    let hi = unsafe { _mm_set_ps(0.0, aabb[5], aabb[4], aabb[3]) };
+    // SAFETY: `_mm_set1_ps` broadcasts one value; no precondition.
+    let biases = unsafe { _mm_set1_ps(bias) };
+    // SAFETY: lane-wise subtract of two initialized vectors.
+    let lo_diff = unsafe { _mm_sub_ps(vert, lo) };
+    // SAFETY: lane-wise subtract of two initialized vectors.
+    let hi_diff = unsafe { _mm_sub_ps(hi, vert) };
+    // SAFETY: lane-wise add of two initialized vectors.
+    let lo_biased = unsafe { _mm_add_ps(lo_diff, biases) };
+    // SAFETY: lane-wise add of two initialized vectors.
+    let hi_biased = unsafe { _mm_add_ps(hi_diff, biases) };
+    // SAFETY: sign-bit extraction from an initialized vector.
+    let lo_code = unsafe { _mm_movemask_ps(lo_biased) }.cast_unsigned() & 7;
+    // SAFETY: sign-bit extraction from an initialized vector.
+    let hi_code = unsafe { _mm_movemask_ps(hi_biased) }.cast_unsigned() & 7;
+    lo_code | (hi_code << 3)
 }
 
 /// Translates one grid vertex into world space by adding the chunk origin.
@@ -4666,6 +4693,53 @@ mod tests_c_world__collect_tile_geometry__6aadc0 {
         );
         // bias 0 -> negative -> bit set.
         assert_eq!(tile_collect_outcode6__6aadc0(&v, &aabb, 0.0) & 1, 1);
+    }
+
+    #[test]
+    fn outcode_matches_the_scalar_sign_ladder() {
+        // The packed form has to set exactly the bits the lane-wise sign ladder
+        // it replaced set, over signed zeros, infinities and NaN differences as
+        // well as ordinary values.
+        fn ladder(v: &[f32; 3], aabb: &[f32; 6], bias: f32) -> u32 {
+            let mut code = ((v[0] - aabb[0]) + bias).to_bits() >> 0x1f;
+            code |= (((v[1] - aabb[1]) + bias).to_bits() >> 0x1e) & 2;
+            code |= (((v[2] - aabb[2]) + bias).to_bits() >> 0x1d) & 4;
+            code |= (((aabb[3] - v[0]) + bias).to_bits() >> 0x1c) & 8;
+            code |= (((aabb[4] - v[1]) + bias).to_bits() >> 0x1b) & 0x10;
+            code |= (((aabb[5] - v[2]) + bias).to_bits() >> 0x1a) & 0x20;
+            code
+        }
+
+        let odd = [
+            0.0f32,
+            -0.0,
+            1.0,
+            -1.0,
+            5.5,
+            -2.25,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::NAN,
+        ];
+        let biases = [
+            0.0f32,
+            -0.0,
+            TILE_OUTCODE_BIAS__6aadc0,
+            -TILE_OUTCODE_BIAS__6aadc0,
+            f32::NAN,
+        ];
+        for (bi, &bias) in biases.iter().enumerate() {
+            for r in 0..odd.len() {
+                let pick = |k: usize| odd[(r + k + bi) % odd.len()];
+                let v = [pick(0), pick(1), pick(2)];
+                let aabb = [pick(3), pick(4), pick(5), pick(6), pick(7), pick(8)];
+                assert_eq!(
+                    tile_collect_outcode6__6aadc0(&v, &aabb, bias),
+                    ladder(&v, &aabb, bias),
+                    "bias {bias} rotation {r}: v {v:?} aabb {aabb:?}"
+                );
+            }
+        }
     }
 
     #[test]

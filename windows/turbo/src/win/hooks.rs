@@ -31574,6 +31574,9 @@ pub extern "fastcall" fn c_world__collect_tile_geometry__6aadc0(
     const VERT_INDEX_TABLE: *const u32 = (BASE + 0x41_0468) as *const u32; // 5 entries
     const TRI_TABLE_BASE: usize = BASE + 0x41_043c; // walked esi, step 0xc, < 0x41046c
     const HOLE_MASK_TABLE: *const u32 = (BASE + 0x41_03f8) as *const u32;
+    // One outcode slot per grid vertex the fan can name: the largest fan offset
+    // is 18, so the scratch is 19 dwords.
+    const OUTCODE_SLOTS: usize = 19;
 
     // === Terrain pass: flags & 0xf00. (0x6aaedc..0x6ab3f7) ===
     if flags & 0x0000_0f00 != 0 {
@@ -31599,6 +31602,55 @@ pub extern "fastcall" fn c_world__collect_tile_geometry__6aadc0(
         // SAFETY: the mask is an initialized, 2-byte-aligned `u16`.
         let hole_word = u32::from(unsafe { hole_mask_p.cast::<u16>().read() });
 
+        // The fan-vertex and triangle index tables are fixed dwords in the
+        // image's read-only section, and nothing this walk calls writes there:
+        // the stock array grow 0x6742d0, the element ctor 0x674130, the plane
+        // builder 0x637480 and the two debug-draw entries 0x6acdd0 / 0x6a98e0 all
+        // leave it alone. So both tables are invariant across every cell and every
+        // triangle, and are read once here instead of once per cell and once per
+        // triangle. An empty row range now runs these loads where the stock's
+        // would not run at all; they are reads of read-only image data with no
+        // side effect.
+        let fan: [usize; 5] = core::array::from_fn(|k| {
+            // SAFETY: `k` < 5 and the `.rdata` table holds exactly the 5 cell-fan
+            // vertex offsets that bound feeds.
+            let entry = unsafe { VERT_INDEX_TABLE.add(k) };
+            // SAFETY: the table is fixed and initialized in the image.
+            let vidx = unsafe { entry.read() };
+            vidx as usize
+        });
+        let tris: [[usize; 3]; 4] = core::array::from_fn(|n| {
+            // A row reads [tri-4]=i0, [tri]=i1, [tri+4]=i2 (3 adjacent dwords),
+            // with `tri` stepping 0xc from `TRI_TABLE_BASE` while below
+            // `TRI_TABLE_BASE + 0x30`.
+            let tri = (TRI_TABLE_BASE + n * 0xc) as *const u32;
+            // SAFETY: `n` < 4, so `tri` is at most `TRI_TABLE_BASE + 0x24`. The
+            // `.rdata` triangle table is 4 rows of 3 dwords starting at
+            // `TRI_TABLE_BASE - 4`, so `tri - 4` is this row's first dword.
+            let i0_slot = unsafe { tri.sub(1) };
+            // SAFETY: the table is fixed and initialized in the image.
+            let i0 = unsafe { i0_slot.read() } as usize;
+            // SAFETY: `tri` is the middle dword of its row, in the table.
+            let i1 = unsafe { tri.read() } as usize;
+            // SAFETY: the last `tri` is `TRI_TABLE_BASE + 0x24`, so `tri + 4` is
+            // the table's final dword.
+            let i2_slot = unsafe { tri.add(1) };
+            // SAFETY: the table is fixed and initialized in the image.
+            let i2 = unsafe { i2_slot.read() } as usize;
+            [i0, i1, i2]
+        });
+        // Both tables index the per-cell outcode scratch, so every entry has to
+        // sit inside it. They hold the image's fixed fan offsets (0, 1, 9, 17, 18)
+        // and triangle rows drawn from those, so this cannot fire; it states the
+        // invariant once, here, rather than re-testing it on every cell and every
+        // triangle below.
+        assert!(
+            fan.iter()
+                .chain(tris.iter().flatten())
+                .all(|&i| i < OUTCODE_SLOTS),
+            "terrain index tables must address the outcode scratch"
+        );
+
         let mut iy = min_y;
         while iy <= max_y {
             let row_half = (iy >> 1) << 2; // dword offset into the hole-mask table half
@@ -31617,14 +31669,9 @@ pub extern "fastcall" fn c_world__collect_tile_geometry__6aadc0(
                 if hole_bit & hole_word == 0 {
                     // --- Compute the 6-bit outcode for the 5 distinct quad vertices.
                     // Outcodes are written into a 19-slot scratch indexed by the
-                    // vertex index (0,1,9,17,18) from VERT_INDEX_TABLE[0..5].
-                    let mut outcodes = [0u32; 19];
-                    for k in 0..5usize {
-                        // SAFETY: `k` < 5 and the `.rdata` table holds exactly the 5
-                        // cell-fan vertex offsets the loop bound was taken from.
-                        let vidx_slot = unsafe { VERT_INDEX_TABLE.add(k) };
-                        // SAFETY: the table is fixed and initialized in the image.
-                        let vidx = unsafe { vidx_slot.read() } as usize;
+                    // vertex index (0,1,9,17,18) hoisted out of the walk above.
+                    let mut outcodes = [0u32; OUTCODE_SLOTS];
+                    for &vidx in &fan {
                         // SAFETY: the entries are the fan offsets 0, 1, 9, 17, 18, and
                         // `cell_ptr` is at grid index `iy * 0x11 + ix` with both in
                         // [0, 7], so the largest index reached is 7*0x11+7+18 = 144,
@@ -31638,25 +31685,21 @@ pub extern "fastcall" fn c_world__collect_tile_geometry__6aadc0(
                     }
 
                     // --- Emit / cull the 4 triangles. (0x6ab01b..0x6ab3b8)
-                    let mut tri = TRI_TABLE_BASE;
-                    while tri < BASE + 0x41_046c {
-                        // tri reads [tri-4]=i0, [tri]=i1, [tri+4]=i2 (3 adjacent dwords).
-                        // SAFETY: `tri` steps 0xc from `TRI_TABLE_BASE` while below
-                        // `TRI_TABLE_BASE + 0x30`, so it takes the four values
-                        // `TRI_TABLE_BASE + n * 0xc` for n in 0..4. The `.rdata`
-                        // triangle table is 4 rows of 3 dwords starting at
-                        // `TRI_TABLE_BASE - 4`, so `tri - 4` is a row's first dword.
-                        let i0_slot = unsafe { (tri as *const u32).sub(1) };
-                        // SAFETY: the table is fixed and initialized in the image.
-                        let i0 = unsafe { i0_slot.read() } as usize;
-                        // SAFETY: `tri` is the middle dword of its row, in the table.
-                        let i1 = unsafe { (tri as *const u32).read() } as usize;
-                        // SAFETY: the last `tri` is `TRI_TABLE_BASE + 0x24`, so `tri + 4`
-                        // is the table's final dword.
-                        let i2_slot = unsafe { (tri as *const u32).add(1) };
-                        // SAFETY: the table is fixed and initialized in the image.
-                        let i2 = unsafe { i2_slot.read() } as usize;
-
+                    for &[i0, i1, i2] in &tris {
+                        // The three indices arrive as loads out of `tris`, and a
+                        // load carries no range, so the assert above the walk is
+                        // restated per index here. That is what drops the
+                        // per-triangle range tests on the scratch; the loud check
+                        // stays where it is and still fails first on an
+                        // unexpected table.
+                        // SAFETY: that assert proved every entry of `tris` is
+                        // below `OUTCODE_SLOTS`, and nothing writes `tris` after
+                        // it.
+                        unsafe { core::hint::assert_unchecked(i0 < OUTCODE_SLOTS) };
+                        // SAFETY: as above, for the row's second index.
+                        unsafe { core::hint::assert_unchecked(i1 < OUTCODE_SLOTS) };
+                        // SAFETY: as above, for the row's third index.
+                        unsafe { core::hint::assert_unchecked(i2 < OUTCODE_SLOTS) };
                         if outcodes[i0] & outcodes[i1] & outcodes[i2] == 0 {
                             // VISIBLE: allocate a 0x34-byte vertex record and fill it.
                             // TSGrowableArray__Reserve(out_ctx, 1, 1): thiscall ecx,2 stack.
@@ -31761,8 +31804,6 @@ pub extern "fastcall" fn c_world__collect_tile_geometry__6aadc0(
                                 debug_draw_on,
                             );
                         }
-
-                        tri += 0xc;
                     }
                 }
                 ix += 1;

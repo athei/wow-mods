@@ -112,36 +112,88 @@ pub fn gx_light_pack_fog_gradient_block__71c4e0(
     ac: f32,
     a8: f32,
 ) -> [f32; 28] {
-    [
-        p[3] * c4,
-        p[1] * c4,
-        p[2] * c0,
-        p[0] * bc - p[6] * b8,
-        p[12] * c4,
-        p[10] * c4,
-        p[11] * c0,
-        p[9] * bc - p[15] * b8,
-        p[21] * c4,
-        p[19] * c4,
-        p[20] * c0,
-        p[18] * bc - p[24] * b8,
-        p[4] * b4,
-        p[5] * b0,
-        p[6] * ac,
-        p[7] * b0,
-        p[13] * b4,
-        p[14] * b0,
-        p[15] * ac,
-        p[16] * b0,
-        p[22] * b4,
-        p[23] * b0,
-        p[24] * ac,
-        p[25] * b0,
-        p[8] * a8,
-        p[17] * a8,
-        p[26] * a8,
-        1.0,
-    ]
+    let mut out = [0.0_f32; 28];
+    // Lanes 0-11 are three packed rows; see `fog_gradient_row__71c4e0`.
+    fog_gradient_row__71c4e0::<0, 0>(p, &mut out, c4, c0, bc, b8);
+    fog_gradient_row__71c4e0::<9, 4>(p, &mut out, c4, c0, bc, b8);
+    fog_gradient_row__71c4e0::<18, 8>(p, &mut out, c4, c0, bc, b8);
+    // Lanes 12-27 stay lane-wise: their source floats are strided, not a
+    // contiguous quad, and each column takes its own scale.
+    out[12] = p[4] * b4;
+    out[13] = p[5] * b0;
+    out[14] = p[6] * ac;
+    out[15] = p[7] * b0;
+    out[16] = p[13] * b4;
+    out[17] = p[14] * b0;
+    out[18] = p[15] * ac;
+    out[19] = p[16] * b0;
+    out[20] = p[22] * b4;
+    out[21] = p[23] * b0;
+    out[22] = p[24] * ac;
+    out[23] = p[25] * b0;
+    out[24] = p[8] * a8;
+    out[25] = p[17] * a8;
+    out[26] = p[26] * a8;
+    out[27] = 1.0;
+    out
+}
+
+/// Builds one packed four-lane row of the fog/light gradient block's lanes 0-11.
+///
+/// `SRC` is the row's source index (0, 9, 18) and `DST` its output lane (0, 4,
+/// 8). `p[SRC..SRC + 4]` is contiguous, so the row is one 16-byte load, one
+/// permutation to `(3, 1, 2, 0)`, one multiply by the shared column vector
+/// `(c4, c4, c0, bc)`, and `p[SRC + 6] * b8` subtracted in lane 3 only.
+///
+/// Lanes 0-2 subtract `+0.0`, which is the identity for every value a `mulps`
+/// can produce: finite, either zero (`-0.0 - +0.0` stays `-0.0`), infinite, and
+/// quiet NaN. The constant must stay `+0.0`, because a `-0.0` would turn a
+/// stored `-0.0` lane into `+0.0`.
+#[inline]
+fn fog_gradient_row__71c4e0<const SRC: usize, const DST: usize>(
+    p: &[f32; 27],
+    out: &mut [f32; 28],
+    c4: f32,
+    c0: f32,
+    bc: f32,
+    b8: f32,
+) {
+    #[cfg(target_arch = "x86")]
+    use core::arch::x86::{
+        _mm_loadu_ps, _mm_mul_ps, _mm_set_ps, _mm_shuffle_ps, _mm_storeu_ps, _mm_sub_ps,
+    };
+    #[cfg(target_arch = "x86_64")]
+    use core::arch::x86_64::{
+        _mm_loadu_ps, _mm_mul_ps, _mm_set_ps, _mm_shuffle_ps, _mm_storeu_ps, _mm_sub_ps,
+    };
+    // Every intrinsic below is SSE1, available on every ISA baseline this crate
+    // builds for. The two const parameters are checked here so the loads and the
+    // store below need no runtime test.
+    const { assert!(SRC + 6 < 27 && DST + 4 <= 28) };
+
+    // SAFETY: `SRC + 6 < 27` is const-checked above, so `SRC` and the three
+    // floats after it are inside `p`.
+    let quad_p = unsafe { p.as_ptr().add(SRC) };
+    // SAFETY: as above; the 16 bytes read end well before `p`'s last float, and
+    // `_mm_loadu_ps` has no alignment requirement.
+    let quad = unsafe { _mm_loadu_ps(quad_p) };
+    // SAFETY: `_mm_shuffle_ps` is a register lane permute with no memory or
+    // aliasing precondition; the mask selects lanes 3, 1, 2, 0 of `quad`.
+    let perm = unsafe { _mm_shuffle_ps::<0x27>(quad, quad) };
+    // SAFETY: `_mm_set_ps` builds a register from four values; no precondition.
+    let cols = unsafe { _mm_set_ps(bc, c0, c4, c4) };
+    // SAFETY: lane-wise multiply of two initialized vectors.
+    let scaled = unsafe { _mm_mul_ps(perm, cols) };
+    // SAFETY: as for `cols`; lanes 0-2 are `+0.0` per this function's contract.
+    let minus = unsafe { _mm_set_ps(p[SRC + 6] * b8, 0.0, 0.0, 0.0) };
+    // SAFETY: lane-wise subtract of two initialized vectors.
+    let row = unsafe { _mm_sub_ps(scaled, minus) };
+    // SAFETY: `DST + 4 <= 28` is const-checked above, so `DST` and the three
+    // lanes after it are inside `out`.
+    let row_p = unsafe { out.as_mut_ptr().add(DST) };
+    // SAFETY: as above; the 16 bytes written are in bounds of `out`, which this
+    // call borrows exclusively, and `_mm_storeu_ps` has no alignment requirement.
+    unsafe { _mm_storeu_ps(row_p, row) };
 }
 
 #[cfg(test)]
@@ -187,6 +239,62 @@ mod tests_gx_light_pack_fog_gradient_block__71c4e0 {
         assert_eq!(out[3], 2.0 * 2.0 - 3.0 * 4.0);
         assert_eq!(out[7], 5.0 * 2.0 - 7.0 * 4.0);
         assert_eq!(out[11], 11.0 * 2.0 - 13.0 * 4.0);
+    }
+
+    #[test]
+    fn packed_rows_match_the_scalar_lanes_bit_for_bit() {
+        // Lanes 0-11 run as three packed rows; the lane-wise expressions they
+        // replaced are the oracle, compared on bits so a signed zero or a NaN
+        // payload cannot pass as equal.
+        let odd = [
+            0.0f32,
+            -0.0,
+            1.0,
+            -1.0,
+            f32::MIN_POSITIVE,
+            -f32::MIN_POSITIVE,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::NAN,
+            -7.25,
+            1e30,
+            1e-30,
+        ];
+        for rot in 0..odd.len() {
+            let mut p = [0.0f32; 27];
+            for (i, slot) in p.iter_mut().enumerate() {
+                *slot = odd[(i + rot) % odd.len()];
+            }
+            let c4 = odd[rot % odd.len()];
+            let c0 = odd[(rot + 3) % odd.len()];
+            let bc = odd[(rot + 5) % odd.len()];
+            let b8 = odd[(rot + 7) % odd.len()];
+            let out = f(&p, c4, c0, bc, b8, 1.0, 1.0, 1.0, 1.0);
+            for k in 0..3usize {
+                let s = k * 9;
+                let d = k * 4;
+                assert_eq!(
+                    out[d].to_bits(),
+                    (p[s + 3] * c4).to_bits(),
+                    "rot {rot} row {k} lane 0"
+                );
+                assert_eq!(
+                    out[d + 1].to_bits(),
+                    (p[s + 1] * c4).to_bits(),
+                    "rot {rot} row {k} lane 1"
+                );
+                assert_eq!(
+                    out[d + 2].to_bits(),
+                    (p[s + 2] * c0).to_bits(),
+                    "rot {rot} row {k} lane 2"
+                );
+                assert_eq!(
+                    out[d + 3].to_bits(),
+                    (p[s] * bc - p[s + 6] * b8).to_bits(),
+                    "rot {rot} row {k} lane 3"
+                );
+            }
+        }
     }
 
     #[test]
