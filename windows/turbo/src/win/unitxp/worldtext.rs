@@ -231,9 +231,15 @@ impl Faces {
         let selected = selected_stem();
         let named = core::iter::once(selected.as_str())
             .chain(FACE_ORDER)
-            .filter_map(|stem| self.resolve(stem).map(|face| (face, String::from(stem))));
-        let rest = self.faces.iter().map(|(name, face)| (*face, name.clone()));
-        named.chain(rest).find(|(face, _)| face.covers(text))
+            .filter_map(|stem| self.resolve(stem).map(|face| (face, stem)));
+        // The roster names are borrowed, not cloned: the candidate a
+        // `covers` test rejects would otherwise have allocated a name and
+        // freed it again, once per face examined.
+        let rest = self.faces.iter().map(|(name, face)| (*face, name.as_str()));
+        named
+            .chain(rest)
+            .find(|(face, _)| face.covers(text))
+            .map(|(face, name)| (face, String::from(name)))
     }
 }
 
@@ -731,11 +737,15 @@ impl Backend {
             return None; // dropping `handle` releases the texture
         }
         let pitch = usize::try_from(locked.pitch).unwrap_or(0);
-        if pitch >= (raster.width as usize) * 4 {
+        let width = raster.width as usize;
+        if pitch >= width * 4 {
             for y in 0..raster.height as usize {
                 let row = locked.bits + y * pitch;
-                for x in 0..raster.width as usize {
-                    let alpha = u32::from(raster.coverage[y * raster.width as usize + x]);
+                // The coverage row is taken once, so the per-pixel loop reads
+                // it by iteration and no longer bounds-checks every pixel.
+                let coverage = &raster.coverage[y * width..][..width];
+                for (x, &sample) in coverage.iter().enumerate() {
+                    let alpha = u32::from(sample);
                     // SAFETY: `row + x*4` is inside the locked level: `y`
                     // and `x` are bounded by the texture's own extent and
                     // the pitch was checked to hold a full row.

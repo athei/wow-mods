@@ -48,36 +48,52 @@ struct MobEntry {
 }
 
 /// A bounded candidate list on the sweep's stack frame.
+///
+/// The 256 slots are 6 KB the sweep would otherwise value-initialize before
+/// filling the handful it admits, so they are held uninitialized and only
+/// the `[..len]` prefix is ever handed out. `push` writes a whole `MobEntry`
+/// into slot `len` before bumping it, which is the invariant `as_mut_slice`
+/// assumes; `len` itself is a plain field and starts at zero.
 struct Candidates {
-    entries: [MobEntry; CAP],
+    entries: [core::mem::MaybeUninit<MobEntry>; CAP],
     len: usize,
 }
 
 impl Candidates {
-    const fn new() -> Self {
+    fn new() -> Self {
+        // The array is taken whole rather than as a `[MaybeUninit::uninit();
+        // CAP]` repeat: the repeat folds to an all-zero constant, and the
+        // 6 KB fill comes straight back as a copy out of it.
         Self {
-            entries: [MobEntry {
-                guid: 0,
-                distance: 0.0,
-                current_hp: 0.0,
-                mark: 0,
-            }; CAP],
+            // SAFETY: the element type is itself `MaybeUninit`, which has no
+            // validity requirement, so an array of them is a live value from
+            // the moment the frame slot exists.
+            entries: unsafe { core::mem::MaybeUninit::uninit().assume_init() },
             len: 0,
         }
     }
 
     fn push(&mut self, entry: MobEntry) {
-        if self.len == CAP {
+        // `>=` rather than `==` so the store below carries the `len < CAP`
+        // fact and needs no second bound test.
+        if self.len >= CAP {
             tally::bump(&OVERFLOW);
             return;
         }
-        self.entries[self.len] = entry;
+        self.entries[self.len] = core::mem::MaybeUninit::new(entry);
         self.len += 1;
         tally::bump(&ADMITTED);
     }
 
     fn as_mut_slice(&mut self) -> &mut [MobEntry] {
-        &mut self.entries[..self.len]
+        let len = self.len;
+        // SAFETY: `push` writes slot `len` whole before incrementing it and
+        // never lets `len` past `CAP`, so the first `len` slots are live
+        // `MobEntry` inside the array; `MaybeUninit<T>` shares `T`'s layout,
+        // so the cast pointer addresses the same run of entries.
+        unsafe {
+            core::slice::from_raw_parts_mut(self.entries.as_mut_ptr().cast::<MobEntry>(), len)
+        }
     }
 
     const fn is_empty(&self) -> bool {
