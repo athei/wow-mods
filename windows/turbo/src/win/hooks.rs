@@ -19327,15 +19327,24 @@ pub extern "thiscall" fn cm2_shared__animate_bones__714260(
         // SAFETY: `def+8` is the parent bone index word.
         let parent_u16 = unsafe { anim_u16(def, 8) };
         let parent_idx = u32::from(parent_u16);
+        // The parent's state block, null when the index is out of range. Three
+        // arms below (primary time, secondary time, cross-fade weight) ask that
+        // same question against the same 0x118 stride, and an idle bone takes
+        // all three. Wrapping arithmetic: this is an address computation the
+        // range test gates, not a claim that the slot is inside the array.
+        let parent_state: *const u8 = if parent_idx < bone_count {
+            states.wrapping_add(parent_idx as usize * 0x118)
+        } else {
+            core::ptr::null()
+        };
 
         // Primary keyframe time: follow the parent bone when no sequence is
         // assigned, else advance the clocks and fold the sequence time.
         // SAFETY: `state+0xa4` is the assigned-sequence id.
         let cur_seq = unsafe { anim_i32(state, 0xa4) };
         if cur_seq == -1 {
-            let src: *const u8 = if parent_idx < bone_count {
-                // SAFETY: `states[parent]` is in-bounds (`parent < count`).
-                unsafe { states.add(parent_idx as usize * 0x118) }
+            let src: *const u8 = if !parent_state.is_null() {
+                parent_state
             } else if i != 0 {
                 states
             } else {
@@ -19392,12 +19401,11 @@ pub extern "thiscall" fn cm2_shared__animate_bones__714260(
         // SAFETY: `state+0xd0` is the secondary-sequence id.
         let sec_seq = unsafe { anim_i32(state, 0xd0) };
         if sec_seq == -1 {
-            if parent_idx < bone_count {
-                // SAFETY: `states[parent]` is in-bounds (`parent < count`).
-                let src = unsafe { states.add(parent_idx as usize * 0x118) };
+            if !parent_state.is_null() {
                 for off in [0xc4usize, 0xc8] {
-                    // SAFETY: the source slot is in-bounds bone state.
-                    let v = unsafe { anim_u32(src, off) };
+                    // SAFETY: non-null means `parent < count`, so the source
+                    // slot is in-bounds bone state.
+                    let v = unsafe { anim_u32(parent_state, off) };
                     // SAFETY: the destination slot is writable bone state.
                     unsafe { anim_put_u32(state, off, v) };
                 }
@@ -19468,11 +19476,10 @@ pub extern "thiscall" fn cm2_shared__animate_bones__714260(
             // SAFETY: as above.
             && unsafe { anim_i32(state, 0xd0) } == -1;
         if both_idle {
-            if parent_idx < bone_count {
-                // SAFETY: `states[parent]` is in-bounds (`parent < count`).
-                let psrc = unsafe { states.add(parent_idx as usize * 0x118) };
-                // SAFETY: `states[parent]+0x10c` is the parent's weight.
-                let w = unsafe { anim_u32(psrc, 0x10c) };
+            if !parent_state.is_null() {
+                // SAFETY: non-null means `parent < count`, so `+0x10c` of that
+                // slot is the parent's weight.
+                let w = unsafe { anim_u32(parent_state, 0x10c) };
                 // SAFETY: `state+0x10c` is the writable blend weight.
                 unsafe { anim_put_u32(state, 0x10c, w) };
             } else if i != 0 {
@@ -19518,7 +19525,10 @@ pub extern "thiscall" fn cm2_shared__animate_bones__714260(
             | unsafe { anim_u32(def, 4) };
         // SAFETY: `def+0x60..0x6c` is the bone pivot triple.
         let pivot = unsafe { anim_vec3(def, 0x60) };
-        let mut local_m = [0.0f32; 16];
+        // Left uninitialised: the billboard arm is the only path that reads
+        // these 16 floats and it opens by writing all of them, so an
+        // initialiser here is four dead stores on every bone.
+        let mut local_m: [f32; 16];
         let compose_parent: *const f32 = if parent_u16 == 0xffff {
             model_mat
         } else {
@@ -19526,8 +19536,7 @@ pub extern "thiscall" fn cm2_shared__animate_bones__714260(
             let pm: *const f32 = unsafe { mats.add(parent_idx as usize * 0x40) }.cast();
             if flags & 7 != 0 {
                 // SAFETY: the parent matrix spans 16 in-bounds floats.
-                let pm_copy = unsafe { anim_read16(pm) };
-                local_m.copy_from_slice(&pm_copy);
+                local_m = unsafe { anim_read16(pm) };
                 let pw = crate::math::matrix44::bb_pivot_world_xyz__714260(&local_m, &pivot);
                 match flags & 6 {
                     2 => {
