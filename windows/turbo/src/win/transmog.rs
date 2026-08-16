@@ -134,9 +134,18 @@ fn visible_field(fields: usize, slot: usize) -> u32 {
 }
 
 /// Every visible-item field of an object, zeroed when it has no descriptor.
+///
+/// Written as a store-into-the-slot loop rather than `array::from_fn`, which
+/// unrolls into every load first and then every store, so most of the fields
+/// have to be parked in the frame until their slot's turn comes. Read order is
+/// ascending either way, and nothing between the reads writes the descriptor.
 fn visible_snapshot(this: *mut u8) -> [u32; VISIBLE_SLOTS] {
     descriptor(this).map_or([0; VISIBLE_SLOTS], |fields| {
-        core::array::from_fn(|slot| visible_field(fields, slot))
+        let mut out = [0u32; VISIBLE_SLOTS];
+        for (slot, field) in out.iter_mut().enumerate() {
+            *field = visible_field(fields, slot);
+        }
+        out
     })
 }
 

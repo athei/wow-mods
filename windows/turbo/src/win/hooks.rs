@@ -6417,13 +6417,13 @@ pub extern "thiscall" fn c_cubic_spline__eval_segment_tangent__454250(
     // Expand to the 16-slot stride-4 basis the kernel indexes (cols 0..2 per row;
     // column 3 = 0.0, last row's = 1.0, matching the original's stack fill). The
     // evaluator never reads column 3, so the pad value is structurally inert.
+    // A row at a time, pad included, so each row lands as one 16-byte move
+    // instead of three that have to queue behind the whole block's loads.
     let mut basis = [0.0f32; 16];
-    for row in 0..4 {
-        basis[row * 4] = baked[row * 3];
-        basis[row * 4 + 1] = baked[row * 3 + 1];
-        basis[row * 4 + 2] = baked[row * 3 + 2];
-    }
-    basis[15] = 1.0;
+    basis[..4].copy_from_slice(&[baked[0], baked[1], baked[2], 0.0]);
+    basis[4..8].copy_from_slice(&[baked[3], baked[4], baked[5], 0.0]);
+    basis[8..12].copy_from_slice(&[baked[6], baked[7], baked[8], 0.0]);
+    basis[12..].copy_from_slice(&[baked[9], baked[10], baked[11], 1.0]);
 
     // The control-point array base is a pointer field at `this + 0x10`.
     let cp_base_field = ((this as usize) + 0x10) as *const *const f32;
@@ -11474,10 +11474,6 @@ pub extern "fastcall" fn lua_h_mainposition__6fa1a0(t: *mut u8, key: *const u8) 
     // SAFETY: `key+0` is the in-bounds, aligned type-tag dword of the live value.
     let tt = unsafe { key.cast::<u32>().read() };
 
-    const BIAS: *const f64 = (crate::win::EXPECTED_IMAGE_BASE + 0x40_15b8) as *const f64;
-    // SAFETY: fixed, initialized `.data` double in the live host image.
-    let bias = unsafe { BIAS.read() };
-
     // SAFETY: `t+0x07` is the in-bounds `lsizenode` byte of the live table.
     let ls_ptr = unsafe { t.add(0x07) };
     // SAFETY: `ls_ptr` is the initialized `lsizenode` byte in the live table.
@@ -11490,12 +11486,24 @@ pub extern "fastcall" fn lua_h_mainposition__6fa1a0(t: *mut u8, key: *const u8) 
 
     // SAFETY: `key+0x08` is the in-bounds 8-byte value union of the live value.
     let val_ptr = unsafe { key.add(0x08) };
-    // SAFETY: `val_ptr` addresses the 8-byte number payload (aligned f64).
-    let key_num = unsafe { val_ptr.cast::<f64>().read() };
+
+    // The number tag is the only one that reads `key+0x08` as an f64 or wants
+    // the bias, so it is dispatched before the key word is built: every other
+    // tag then issues one narrow load of that slot and no wide one, and the
+    // two arms cannot share a load the register allocator has to park.
+    if tt == 3 {
+        // SAFETY: `val_ptr` addresses the 8-byte number payload (aligned f64).
+        let key_num = unsafe { val_ptr.cast::<f64>().read() };
+        const BIAS: *const f64 = (crate::win::EXPECTED_IMAGE_BASE + 0x40_15b8) as *const f64;
+        // SAFETY: fixed, initialized `.data` double in the live host image.
+        let bias = unsafe { BIAS.read() };
+        return crate::math::lua::lua_h_hashnum__6fa260(key_num, bias, lsizenode, node_base)
+            as *mut u8;
+    }
 
     // The masked/modulo paths need a 32-bit key word. For a string key (tag 4)
     // that word is the string's cached hash one indirection deeper; the others
-    // use the value dword directly. The number path (tag 3) ignores `key_u32`.
+    // use the value dword directly.
     let key_u32 = if tt == 4 {
         // SAFETY: `val_ptr` holds the live `TString*` for a string key.
         let str_ptr = unsafe { val_ptr.cast::<*const u8>().read() };
@@ -11511,9 +11519,11 @@ pub extern "fastcall" fn lua_h_mainposition__6fa1a0(t: *mut u8, key: *const u8) 
         unsafe { val_ptr.cast::<u32>().read() }
     };
 
-    let off = crate::math::lua::lua_h_mainposition__6fa1a0(
-        tt, node_base, lsizenode, key_u32, key_num, bias,
-    );
+    // The number arm returned above, so the kernel's `key_num`/`bias` operands
+    // are dead on every tag that reaches here and pass as zero. The kernel
+    // keeps its own tag-3 arm: it is the tested reference for this dispatch.
+    let off =
+        crate::math::lua::lua_h_mainposition__6fa1a0(tt, node_base, lsizenode, key_u32, 0.0, 0.0);
     off as *mut u8
 }
 
@@ -25913,6 +25923,50 @@ pub extern "thiscall" fn c_particle_emitter__update__7b5a10(
     }
 }
 
+/// The `+0xb0` reset arm of [`c_particle_emitter__update_fixed_step__7b5880`], kept out of line.
+///
+/// Clears the flag, then reseeds each `+0xbc`-array sub-emitter's rate window
+/// via the stock helper 0x7b9cf0 (delegate — both the count `+0xb8` and the
+/// rate `+0xac` are re-read EVERY iteration, as stock trusts the callee to
+/// mutate them). It is the only call between the caller's eps floor and its
+/// step compare, and it reads no `dt`: out of line, the reset==0 pass keeps
+/// `dt` in an xmm instead of round-tripping it through the frame.
+#[inline(never)]
+fn particle_emitter_reseed_rate_windows(base: *mut u8, this: *mut core::ffi::c_void) {
+    // Sub-emitter rate-window reseed helper (unhooked).
+    const RESEED_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x3b_9cf0;
+
+    // SAFETY: `this` is the live non-null emitter; stock clears the +0xb0
+    // reset flag before the reseed loop.
+    unsafe { base.wrapping_add(0xb0).write(0) };
+    // SAFETY: +0xb8 is the sub-emitter count dword.
+    let count0 = unsafe { base.wrapping_add(0xb8).cast::<u32>().read_unaligned() };
+    if count0 == 0 {
+        return;
+    }
+    // SAFETY: image base verified at load; `__thiscall(sub, rate: f32) ->
+    // void` per the 0x7b9cf0 prologue and `RET 0x4`.
+    let reseed: extern "thiscall" fn(*mut core::ffi::c_void, f32) =
+        unsafe { core::mem::transmute(RESEED_VA) };
+    let mut i: u32 = 0;
+    loop {
+        // SAFETY: the rate scalar at +0xac, re-read every iteration exactly as
+        // stock (0x7b58c5).
+        let rate = unsafe { base.wrapping_add(0xac).cast::<f32>().read_unaligned() };
+        let sub = (this as usize)
+            .wrapping_add(0xbc)
+            .wrapping_add(0x60_usize.wrapping_mul(i as usize));
+        reseed(sub as *mut core::ffi::c_void, rate);
+        // SAFETY: the count, re-read every iteration (0x7b58d3) — the callee
+        // may mutate the set.
+        let count = unsafe { base.wrapping_add(0xb8).cast::<u32>().read_unaligned() };
+        i = i.wrapping_add(1);
+        if i >= count {
+            break;
+        }
+    }
+}
+
 /// `CParticleEmitter::UpdateFixedStep`.
 ///
 /// `__thiscall(this, dt: f32, spawn_arg: i32)`, `RET 0x8`, void. Fixed-timestep catch-up driver
@@ -25948,8 +26002,6 @@ pub extern "thiscall" fn c_particle_emitter__update_fixed_step__7b5880(
     const CAP: *const f32 = (BASE + 0x3f_fe58) as *const f32;
     const MAGIC: *const f32 = (BASE + 0x40_29cc) as *const f32;
     const ONE: *const f32 = (BASE + 0x3f_f9d8) as *const f32;
-    // Sub-emitter rate-window reseed helper (unhooked).
-    const RESEED_VA: usize = BASE + 0x3b_9cf0;
 
     let probe = super::tally::arm();
     let timed = probe.is_some();
@@ -25966,33 +26018,7 @@ pub extern "thiscall" fn c_particle_emitter__update_fixed_step__7b5880(
     // SAFETY: `this` is the live non-null emitter; +0xb0 is the reset flag.
     let reset = unsafe { base.wrapping_add(0xb0).read() };
     if reset != 0 {
-        // SAFETY: as above; stock clears the flag before the reseed loop.
-        unsafe { base.wrapping_add(0xb0).write(0) };
-        // SAFETY: +0xb8 is the sub-emitter count dword.
-        let count0 = unsafe { base.wrapping_add(0xb8).cast::<u32>().read_unaligned() };
-        if count0 != 0 {
-            // SAFETY: image base verified at load; `__thiscall(sub, rate:
-            // f32) -> void` per the 0x7b9cf0 prologue and `RET 0x4`.
-            let reseed: extern "thiscall" fn(*mut core::ffi::c_void, f32) =
-                unsafe { core::mem::transmute(RESEED_VA) };
-            let mut i: u32 = 0;
-            loop {
-                // SAFETY: the rate scalar at +0xac, re-read every iteration
-                // exactly as stock (0x7b58c5).
-                let rate = unsafe { base.wrapping_add(0xac).cast::<f32>().read_unaligned() };
-                let sub = (this as usize)
-                    .wrapping_add(0xbc)
-                    .wrapping_add(0x60_usize.wrapping_mul(i as usize));
-                reseed(sub as *mut core::ffi::c_void, rate);
-                // SAFETY: the count, re-read every iteration (0x7b58d3) —
-                // the callee may mutate the set.
-                let count = unsafe { base.wrapping_add(0xb8).cast::<u32>().read_unaligned() };
-                i = i.wrapping_add(1);
-                if i >= count {
-                    break;
-                }
-            }
-        }
+        particle_emitter_reseed_rate_windows(base, this);
     }
 
     // SAFETY: fixed engine f32 global; read by value.
@@ -44973,6 +44999,22 @@ fn gx_backend_call_u32x2(device: *mut u8, vtbl_off: usize, a: u32, b: u32) {
     method(dev, a, b);
 }
 
+/// One render state's entry in `SetDeviceStateCached`'s shadow table.
+///
+/// The table starts at `device + 0x3a6c` and is indexed by `slot*4`, so states
+/// `0x52` and `0x53` sit at `device + 0x3bb4` and `device + 0x3bb8`. This is
+/// the dword the stock body at 0x5a2570 compares before doing anything else.
+#[inline]
+fn gx_device_state_shadow(device: *mut u8, slot: u32) -> u32 {
+    let shadow_addr = (device as usize)
+        .wrapping_add((slot as usize).wrapping_mul(4))
+        .wrapping_add(0x3a6c);
+    // SAFETY: the same shadow dword the stock callee compares first thing
+    // (every `slot` reaching this helper is a stock-transcribed constant or
+    // stage-derived index within the shadow table).
+    unsafe { (shadow_addr as *const u32).read() }
+}
+
 /// `CGxDeviceD3d::SetDeviceStateCached` (0x5a2570) with its shadow-cache early-out inlined.
 ///
 /// At the call site: on a hit (the shadow dword at `device + slot*4 + 0x3a6c`
@@ -44983,14 +45025,7 @@ fn gx_backend_call_u32x2(device: *mut u8, vtbl_off: usize, a: u32, b: u32) {
 /// seam were such hits.
 #[inline]
 fn gx_set_device_state_checked(device: *mut u8, slot: u32, value: u32) {
-    let shadow_addr = (device as usize)
-        .wrapping_add((slot as usize).wrapping_mul(4))
-        .wrapping_add(0x3a6c);
-    // SAFETY: the same shadow dword the stock callee compares first thing
-    // (every `slot` reaching this helper is a stock-transcribed constant or
-    // stage-derived index within the shadow table).
-    let shadow = unsafe { (shadow_addr as *const u32).read() };
-    if shadow == value {
+    if gx_device_state_shadow(device, slot) == value {
         return;
     }
     const SET_DEVICE_STATE_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x1a_2570;
@@ -45008,7 +45043,9 @@ fn gx_set_device_state_checked(device: *mut u8, slot: u32, value: u32) {
 /// Sets the render-state pair `0x52`/`0x53` both to 1 or both to 0 from flag
 /// bit `0x10` at `device+0x27d8`. Counter-measured on a busy scene, this pair
 /// alone was ~27% of all redundant Layer-B sets (~587k calls/s), now
-/// early-outed inline.
+/// early-outed inline. Both shadow dwords are read before either set, so the
+/// dominant both-already-equal pass holds nothing across a call and the
+/// register allocator has no callee-saved register to spill for it.
 pub fn cm2_scene__set_wireframe_attenuation_state__5a1e30(device: *mut u8) {
     if device.is_null() {
         return;
@@ -45016,6 +45053,19 @@ pub fn cm2_scene__set_wireframe_attenuation_state__5a1e30(device: *mut u8) {
     // SAFETY: `device+0x27d8` is the readable render-flags byte.
     let flags = unsafe { device.wrapping_add(0x27d8).read() };
     let on = u32::from(flags & 0x10 != 0);
+    if gx_device_state_shadow(device, 0x52) == on && gx_device_state_shadow(device, 0x53) == on {
+        return;
+    }
+    set_wireframe_attenuation_slow(device, on);
+}
+
+/// The change half of `SetWireframeAttenuationState`, kept out of line.
+///
+/// Each set re-reads its own shadow, so a pass where only `0x52` differs still
+/// issues exactly one stock set, in the stock order `0x52` then `0x53`.
+#[cold]
+#[inline(never)]
+fn set_wireframe_attenuation_slow(device: *mut u8, on: u32) {
     gx_set_device_state_checked(device, 0x52, on);
     gx_set_device_state_checked(device, 0x53, on);
 }
