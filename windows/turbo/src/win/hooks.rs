@@ -15510,8 +15510,13 @@ pub extern "fastcall" fn map_chunk__query_doodad_sets__6abe60(
     let head_slot = unsafe { doodad_set_list.add(2) };
     // SAFETY: `head_slot` holds the encoded head node (low bit = sentinel).
     let mut node = unsafe { head_slot.cast::<u32>().read() };
+    // Stock normalizes a sentinel or zero head to 0 and falls into the walk, whose
+    // guard rejects it immediately and reaches the same trailing 1. Exiting here
+    // instead keeps the 0x64-byte out-struct's zero-init below the branch: nothing
+    // on this path can read it, and the reads that sink with it (`queryBox`, the
+    // `0xc89f20` epoch) are pure.
     if node & 1 != 0 || node == 0 {
-        node = 0;
+        return 1;
     }
     // SAFETY: `query_box` addresses the 6 contiguous box floats.
     let query = &unsafe { query_box.cast::<[f32; 6]>().read_unaligned() };
