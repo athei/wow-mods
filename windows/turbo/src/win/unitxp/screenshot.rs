@@ -131,28 +131,39 @@ fn push_chunk(out: &mut Vec<u8>, kind: &[u8; 4], payload: &[u8]) {
     out.extend_from_slice(&crc.finish().to_be_bytes());
 }
 
-/// The PNG chunk checksum (reflected CRC-32, nibble-table form).
+/// The PNG chunk checksum (reflected CRC-32, byte-table form).
 struct Crc32(u32);
 
 impl Crc32 {
-    const TABLE: [u32; 16] = [
-        0x0000_0000,
-        0x1db7_1064,
-        0x3b6e_20c8,
-        0x26d9_30ac,
-        0x76dc_4190,
-        0x6b6b_51f4,
-        0x4db2_6158,
-        0x5005_713c,
-        0xedb8_8320,
-        0xf00f_9344,
-        0xd6d6_a3e8,
-        0xcb61_b38c,
-        0x9b64_c2b0,
-        0x86d3_d2d4,
-        0xa00a_e278,
-        0xbdbd_f21c,
-    ];
+    /// The reflected CRC-32 polynomial the PNG format fixes.
+    const POLYNOMIAL: u32 = 0xedb8_8320;
+
+    /// One fold per byte value, built from [`Self::POLYNOMIAL`] at compile time.
+    ///
+    /// A byte-wide table answers a payload byte in one load and one shift/xor
+    /// pair. The 16-entry nibble table it replaces fits in a sixteenth of the
+    /// read-only data and costs two loads and twice the arithmetic per byte,
+    /// over a payload that is the whole compressed image. Both forms fold the
+    /// same polynomial, so the checksum is unchanged.
+    const TABLE: [u32; 256] = {
+        let mut table = [0u32; 256];
+        let mut value = 0u32;
+        while value < 256 {
+            let mut fold = value;
+            let mut bit = 0;
+            while bit < 8 {
+                fold = if fold & 1 == 0 {
+                    fold >> 1
+                } else {
+                    Self::POLYNOMIAL ^ (fold >> 1)
+                };
+                bit += 1;
+            }
+            table[value as usize] = fold;
+            value += 1;
+        }
+        table
+    };
 
     const fn new() -> Self {
         Self(0xffff_ffff)
@@ -160,9 +171,7 @@ impl Crc32 {
 
     fn update(&mut self, bytes: &[u8]) {
         for &byte in bytes {
-            self.0 = Self::TABLE[((self.0 ^ u32::from(byte)) & 0xf) as usize] ^ (self.0 >> 4);
-            self.0 =
-                Self::TABLE[((self.0 ^ (u32::from(byte) >> 4)) & 0xf) as usize] ^ (self.0 >> 4);
+            self.0 = Self::TABLE[((self.0 ^ u32::from(byte)) & 0xff) as usize] ^ (self.0 >> 8);
         }
     }
 

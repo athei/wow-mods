@@ -115,14 +115,20 @@ fn should_have_nameplate(unit: super::super::objmgr::UnitRef, ctx: &FrameContext
             return 1;
         }
     }
-    let in_sight = super::insight::camera_in_sight(unit) > 0;
     let cam = super::camera::translated_position();
     let pos = unit.position();
     let dx = cam[0] - pos[0];
     let dy = cam[1] - pos[1];
     let dz = cam[2] - pos[2];
     let camera_distance = (dx * dx + dy * dy + dz * dz).sqrt();
-    i32::from(camera_distance <= SEE_THROUGH_WALL_DISTANCE || in_sight)
+    // Inside the see-through-wall radius the distance decides the plate on its
+    // own, so it is the operand that runs first and a near plate never spends
+    // a trace. Such a plate also leaves the sight cache (and, in an
+    // instrumented build, its counters) untouched, the sight question having
+    // never been asked of it.
+    i32::from(
+        camera_distance <= SEE_THROUGH_WALL_DISTANCE || super::insight::camera_in_sight(unit) > 0,
+    )
 }
 
 /// One pass over the live plate list looking for any raid-marked unit.

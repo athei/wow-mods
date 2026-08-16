@@ -79,6 +79,22 @@ const SOUND_ALIASES: [&str; 8] = [
     "SystemWelcome",
 ];
 
+/// Wide-buffer length: the longest alias plus its terminator.
+///
+/// Derived from the table itself, so an alias added there cannot outgrow the
+/// buffer the play call is handed.
+const WIDE_ALIAS_LEN: usize = {
+    let mut longest = 0;
+    let mut i = 0;
+    while i < SOUND_ALIASES.len() {
+        if SOUND_ALIASES[i].len() > longest {
+            longest = SOUND_ALIASES[i].len();
+        }
+        i += 1;
+    }
+    longest + 1
+};
+
 /// Play a system alert sound by alias; whether the request was issued.
 pub fn play_system_sound(name: &[u8]) -> bool {
     if in_foreground() {
@@ -101,8 +117,13 @@ pub fn play_system_sound(name: &[u8]) -> bool {
     if play == 0 {
         return false;
     }
-    let mut wide: Vec<u16> = alias.encode_utf16().collect();
-    wide.push(0);
+    // Every alias is an ASCII literal, so a code unit is its byte and the
+    // buffer's own trailing zero terminates it: the play path costs a widening
+    // copy of at most `WIDE_ALIAS_LEN` units, with no decode and no allocation.
+    let mut wide = [0u16; WIDE_ALIAS_LEN];
+    for (code, &byte) in wide.iter_mut().zip(alias.as_bytes()) {
+        *code = u16::from(byte);
+    }
     // SAFETY: the export's published signature (alias name, no module,
     // flags).
     let play_sound: extern "stdcall" fn(*const u16, usize, u32) -> i32 =
