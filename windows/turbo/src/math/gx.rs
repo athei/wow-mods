@@ -501,6 +501,13 @@ mod tests_gx_set_viewport__58af60 {
 /// smaller unsigned, `+1` when larger), all bytes equal returns `0`. Classic
 /// `memcmp` sign semantics.
 ///
+/// The block is walked four bytes at a time: one `u32` per side, tested for
+/// inequality raw (byte order is irrelevant to `==`), and the first unequal
+/// pair decided by `u32::from_be`, which puts the byte at the lowest address
+/// in the most significant position, so an unsigned `<` on the two big-endian
+/// values picks the same byte with the same sense the bytewise walk would.
+/// The `len % 4` tail stays bytewise; every caller here passes a multiple of 4.
+///
 /// Raw-pointer loop with unaligned reads — never a `&[u8]` over game memory
 /// (see the repo rule: `slice::from_raw_parts` debug-asserts alignment and
 /// non-null even for len 0 on lazily-allocated buffers).
@@ -508,8 +515,27 @@ mod tests_gx_set_viewport__58af60 {
 /// # Safety
 ///
 /// `a` and `b` must each point to at least `len` readable bytes.
-pub unsafe fn lex_cmp(a: *const u8, b: *const u8, len: usize) -> i32 {
-    for i in 0..len {
+pub const unsafe fn lex_cmp(a: *const u8, b: *const u8, len: usize) -> i32 {
+    // The chunked head; `chunked..len` is the 0-3 byte tail below.
+    let chunked = len & !3;
+    let mut i = 0usize;
+    while i < chunked {
+        // SAFETY: `a + i` is within the `len` readable bytes the caller guarantees.
+        let pa = unsafe { a.add(i) };
+        // SAFETY: `i + 4 <= chunked <= len`, so the dword is inside those bytes.
+        let ca = unsafe { pa.cast::<u32>().read_unaligned() };
+        // SAFETY: `b + i` is within the `len` readable bytes the caller guarantees.
+        let pb = unsafe { b.add(i) };
+        // SAFETY: as above, B side.
+        let cb = unsafe { pb.cast::<u32>().read_unaligned() };
+        if ca != cb {
+            let be_a = u32::from_be(ca);
+            let be_b = u32::from_be(cb);
+            return if be_a < be_b { -1 } else { 1 };
+        }
+        i += 4;
+    }
+    while i < len {
         // SAFETY: `a + i` is within the `len` readable bytes the caller guarantees.
         let pa = unsafe { a.add(i) };
         // SAFETY: as above.
@@ -521,6 +547,7 @@ pub unsafe fn lex_cmp(a: *const u8, b: *const u8, len: usize) -> i32 {
         if ba != bb {
             return if ba < bb { -1 } else { 1 };
         }
+        i += 1;
     }
     0
 }
@@ -593,6 +620,27 @@ mod tests_lex_cmp {
             for b in &blocks {
                 assert_eq!(cmp(a, b), oracle(a, b), "a={a:?} b={b:?}");
             }
+        }
+    }
+
+    #[test]
+    fn chunked_walk_matches_oracle_at_every_position() {
+        // Sweep the single differing byte across the block for every tail
+        // width and for the lengths the sort comparator actually passes
+        // (12, 36, 108), so a chunk boundary is crossed both ways.
+        for len in [1usize, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 13, 36, 108] {
+            for pos in 0..len {
+                for (x, y) in [(0x00u8, 0x01u8), (0x7f, 0x80), (0x80, 0xff), (0xff, 0x00)] {
+                    let mut a = vec![0x5au8; len];
+                    let mut b = vec![0x5au8; len];
+                    a[pos] = x;
+                    b[pos] = y;
+                    assert_eq!(cmp(&a, &b), oracle(&a, &b), "len={len} pos={pos}");
+                    assert_eq!(cmp(&b, &a), oracle(&b, &a), "len={len} pos={pos} swapped");
+                }
+            }
+            let equal = vec![0xa5u8; len];
+            assert_eq!(cmp(&equal, &equal), 0, "len={len} equal");
         }
     }
 

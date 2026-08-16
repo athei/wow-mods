@@ -35359,7 +35359,8 @@ pub extern "fastcall" fn angle_table__find_wrapped_interval_fraction__6d63e0(
 ///    f32 `S+0x184` then `S+0x188` (plain ordered `<` in both directions —
 ///    equal or NaN falls through, matching stock's `FCOMP; FNSTSW;
 ///    TEST AH,0x5; JP` / `TEST AH,0x41; JNZ` polarity), then memcmp blocks
-///    `S+0x190` (12B), `S+0x84`, `S+0xa8`, `S+0xcc` (36B each);
+///    `S+0x190` (12B) and `S+0x84` (108B: the three 36-byte blocks at `+0x84`,
+///    `+0xa8` and `+0xcc` are contiguous, so one walk decides them all);
 /// 4. k-indexed 0x50-stride table block, A-side asymmetry kept exactly as
 ///    stock: `k = *(u16*)(*(Ea+0x2c)+8)` (A element) guarded unsigned against
 ///    `bound = *(u32*)(*(*(recA+0x30)+0x130)+0x54)` (A record); only when
@@ -35471,7 +35472,7 @@ pub extern "fastcall" fn render_batch__compare_sort_key__70a710(
                 return 1;
             }
         }
-        for (off, len) in [(0x190usize, 12usize), (0x84, 36), (0xa8, 36), (0xcc, 36)] {
+        for (off, len) in [(0x190usize, 12usize), (0x84, 108)] {
             // SAFETY: `S+off` starts a `len`-byte in-bounds key block.
             let pa = unsafe { sa.add(off) };
             // SAFETY: as above, B side.
