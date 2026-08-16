@@ -15855,29 +15855,16 @@ pub extern "fastcall" fn map_chunk__query_doodad_sets__6abe60(
     1
 }
 
-/// `CWorldBsp::TraverseNode` — `__thiscall(ecx = bsp, stack = node_index, arg1, arg2)`.
+/// Recursive worker for `c_world_bsp__traverse_node__6bc1c0`.
 ///
-/// Recursively descends an axis-aligned BSP tree (`bsp+0x0` = geometry container;
-/// node array at `[[bsp+0x0]+0x4]`, 16-byte nodes). `arg1` is the node-local
-/// split/clip box (min in `[0..3]`, max in `[3..6]`); `arg2` is the box being
-/// traversed (same layout). Leaf-flagged nodes (flag bit 0x4) collect triangles
-/// overlapping the box; interior nodes classify the box against the split plane
-/// (pure x87-free kernels) and descend the matching child or children with the
-/// split face clamped. Box roles verified instruction-by-instruction against
-/// `0x6bc1c0..0x6bc36b` (the one-sided paths pass `arg1` unchanged; the
-/// both-children path clamps a fresh copy of `arg1` per child).
-pub extern "thiscall" fn c_world_bsp__traverse_node__6bc1c0(
-    this: *mut core::ffi::c_void,
-    node_index: u32,
-    arg1: *const f32,
-    arg2: *const f32,
-) {
+/// `base` is the entry's `this` cast to bytes, and each box is a copy an
+/// ancestor frame owns: the entry's snapshot at the root, a clamped child copy
+/// below it. So a node visit re-runs neither the three null checks nor that
+/// cast, and no lane is ever read back out of a caller-owned buffer. Both boxes
+/// are taken by reference: a one-sided descent hands the child the record it was
+/// given, and only a clamped child costs a copy.
+fn traverse_bsp_node(base: *mut u8, node_index: u32, box1: &[f32; 6], box2: &[f32; 6]) {
     use crate::math::world::BspChildSide;
-
-    if this.is_null() || arg1.is_null() || arg2.is_null() {
-        return;
-    }
-    let base = this.cast::<u8>();
 
     // node = [[this+0]+0x4] + node_index*0x10
     // SAFETY: `this+0x0` is the in-bounds, aligned geometry-container slot.
@@ -15958,18 +15945,12 @@ pub extern "thiscall" fn c_world_bsp__traverse_node__6bc1c0(
         return;
     }
 
-    // Interior node (0x6bc234..). Load both boxes into local copies first so the
-    // split-face clamps never mutate the caller's buffers and an aliased
-    // `arg1 == arg2` root call stays sound.
+    // Interior node (0x6bc234..).
     let axis = usize::from(flags & 0x3);
-    // SAFETY: `arg1` addresses 6 contiguous f32 (min XYZ, max XYZ).
-    let box1 = unsafe { *arg1.cast::<[f32; 6]>() };
-    // SAFETY: `arg2` addresses 6 contiguous f32 (min XYZ, max XYZ).
-    let box2 = unsafe { *arg2.cast::<[f32; 6]>() };
 
     // Interior overlap (site1/site2): reject when the split box and the traversed
     // box are strictly separated on the split axis.
-    if !crate::math::world::c_world_bsp__node_overlaps_box__6bc1c0_leaf(&box1, &box2, axis) {
+    if !crate::math::world::c_world_bsp__node_overlaps_box__6bc1c0_leaf(box1, box2, axis) {
         return;
     }
 
@@ -15987,60 +15968,82 @@ pub extern "thiscall" fn c_world_bsp__traverse_node__6bc1c0(
     let child_greater = unsafe { child_greater_slot.cast::<u16>().read() };
 
     // Clamped copies of the traversed box (arg2): the greater child raises its min
-    // face to the split, the less child lowers its max face — precomputed exactly
-    // as the stock does before the child-side branch (0x6bc264..0x6bc288).
-    let mut box2_greater = box2;
-    box2_greater[axis] = split;
-    let mut box2_less = box2;
-    box2_less[axis + 3] = split;
+    // face to the split, the less child lowers its max face (0x6bc264..0x6bc288).
+    // The stock builds both ahead of the child-side branch; each is built here in
+    // the arm that passes it, so a one-sided descent pays for one and a descent
+    // into an absent child pays for neither. The both-children arm keeps them
+    // ahead of its first recursive call, so no copy is taken after a callee ran.
 
     // Child-side selection compares ARG1 against the split.
     match crate::math::world::c_world_bsp__child_side__6bc1c0(box1[axis], box1[axis + 3], split) {
         BspChildSide::GreaterOnly => {
             if child_greater != 0xffff {
-                c_world_bsp__traverse_node__6bc1c0(
-                    this,
-                    u32::from(child_greater),
-                    box1.as_ptr(),
-                    box2_greater.as_ptr(),
-                );
+                let mut box2_greater = *box2;
+                box2_greater[axis] = split;
+                traverse_bsp_node(base, u32::from(child_greater), box1, &box2_greater);
             }
         }
         BspChildSide::LessOnly => {
             if child_less != 0xffff {
-                c_world_bsp__traverse_node__6bc1c0(
-                    this,
-                    u32::from(child_less),
-                    box1.as_ptr(),
-                    box2_less.as_ptr(),
-                );
+                let mut box2_less = *box2;
+                box2_less[axis + 3] = split;
+                traverse_bsp_node(base, u32::from(child_less), box1, &box2_less);
             }
         }
         BspChildSide::Both => {
+            let mut box2_greater = *box2;
+            box2_greater[axis] = split;
+            let mut box2_less = *box2;
+            box2_less[axis + 3] = split;
             // Greater child first (0x6bc2fd), then less (0x6bc334); each gets a
             // fresh clamped copy of arg1 paired with the matching arg2 copy.
             if child_greater != 0xffff {
-                let mut box1_greater = box1;
+                let mut box1_greater = *box1;
                 box1_greater[axis] = split;
-                c_world_bsp__traverse_node__6bc1c0(
-                    this,
-                    u32::from(child_greater),
-                    box1_greater.as_ptr(),
-                    box2_greater.as_ptr(),
-                );
+                traverse_bsp_node(base, u32::from(child_greater), &box1_greater, &box2_greater);
             }
             if child_less != 0xffff {
-                let mut box1_less = box1;
+                let mut box1_less = *box1;
                 box1_less[axis + 3] = split;
-                c_world_bsp__traverse_node__6bc1c0(
-                    this,
-                    u32::from(child_less),
-                    box1_less.as_ptr(),
-                    box2_less.as_ptr(),
-                );
+                traverse_bsp_node(base, u32::from(child_less), &box1_less, &box2_less);
             }
         }
     }
+}
+
+/// `CWorldBsp::TraverseNode` — `__thiscall(ecx = bsp, stack = node_index, arg1, arg2)`.
+///
+/// Recursively descends an axis-aligned BSP tree (`bsp+0x0` = geometry container;
+/// node array at `[[bsp+0x0]+0x4]`, 16-byte nodes). `arg1` is the node-local
+/// split/clip box (min in `[0..3]`, max in `[3..6]`); `arg2` is the box being
+/// traversed (same layout). Leaf-flagged nodes (flag bit 0x4) collect triangles
+/// overlapping the box; interior nodes classify the box against the split plane
+/// (pure x87-free kernels) and descend the matching child or children with the
+/// split face clamped. Box roles verified instruction-by-instruction against
+/// `0x6bc1c0..0x6bc36b` (the one-sided paths pass `arg1` unchanged; the
+/// both-children path clamps a fresh copy of `arg1` per child).
+///
+/// The entry is where the three pointers are checked and `bsp` is cast, and it
+/// copies both boxes into this frame before `traverse_bsp_node` takes over the
+/// recursion: none of that then repeats per node. The copies are also what keeps
+/// an aliased `arg1 == arg2` root call sound and stops a split-face clamp from
+/// reaching the caller's buffers, and they freeze the bytes before any callee the
+/// descent reaches can run.
+pub extern "thiscall" fn c_world_bsp__traverse_node__6bc1c0(
+    this: *mut core::ffi::c_void,
+    node_index: u32,
+    arg1: *const f32,
+    arg2: *const f32,
+) {
+    if this.is_null() || arg1.is_null() || arg2.is_null() {
+        return;
+    }
+    let base = this.cast::<u8>();
+    // SAFETY: `arg1` addresses 6 contiguous f32 (min XYZ, max XYZ).
+    let box1 = unsafe { *arg1.cast::<[f32; 6]>() };
+    // SAFETY: `arg2` addresses 6 contiguous f32 (min XYZ, max XYZ).
+    let box2 = unsafe { *arg2.cast::<[f32; 6]>() };
+    traverse_bsp_node(base, node_index, &box1, &box2);
 }
 
 /// `CWorld::LinkEntityToTiles`.
