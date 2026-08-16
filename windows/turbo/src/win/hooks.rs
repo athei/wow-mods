@@ -27592,16 +27592,16 @@ unsafe fn trace_skinned_submesh(
                     anim_u8(vert, 0xe),
                     anim_u8(vert, 0xf),
                 ];
-                let mut mats = [[0.0f32; 16]; 4];
-                mats[0] = trace_mat16u(bone_base.add(anim_u8(vert, 0x10) as usize * 0x40));
-                for k in 1..4 {
-                    if weights[k] == 0 {
-                        break;
-                    }
-                    let bidx = anim_u8(vert, 0x10 + k) as usize;
-                    mats[k] = trace_mat16u(bone_base.add(bidx * 0x40));
-                }
-                let blend = crate::math::m2::cm2_scene__skin_blend__7089c0(&weights, &mats);
+                // The bone indices sit at `vert+0x10..0x13`, one per influence.
+                // The kernel takes a fetch closure rather than a `[[f32; 16]; 4]`
+                // array so a zero-weight slot's matrix is never even addressed: an
+                // array argument would have to be fully initialised, and zeroing the
+                // slots the kernel skips costs up to 24 dead 16-byte stores on a
+                // single-influence vertex.
+                let mat0 = trace_mat16u(bone_base.add(anim_u8(vert, 0x10) as usize * 0x40));
+                let blend = crate::math::m2::cm2_scene__skin_blend__7089c0(&weights, &mat0, |k| {
+                    trace_mat16u(bone_base.add(anim_u8(vert, 0x10 + k) as usize * 0x40))
+                });
                 let pos_in = trace_vec3u(vert);
                 let mut pos =
                     crate::math::matrix44::c44_matrix__transform_point__7bca80(&pos_in, &blend);

@@ -1277,19 +1277,42 @@ pub fn heap_sort_u_int32__71f860<F: FnMut(u32, u32) -> i32>(array: &mut [u32], m
     if count <= 1 {
         return;
     }
+    // Both drivers below pass a `len` at or below `count`, which is `array.len()`
+    // itself: the build pass passes `count`, the drain pass passes `end < count`.
+    // So an index the loop has proved below `len` is a valid slice index, and the
+    // sift body indexes unchecked. `array[start]` stays checked, which is what
+    // makes `parent` a valid index on the first iteration.
     let sift = |array: &mut [u32], start: usize, len: usize, cmp: &mut F| {
         let held = array[start];
         let mut parent = start;
         let mut child = start * 2 + 1;
         while child < len {
             let mut larger = child;
-            if child + 1 < len && cmp(array[child + 1], array[child]) > 0 {
-                larger = child + 1;
+            if child + 1 < len {
+                // SAFETY: the enclosing test just proved `child + 1 < len`, and
+                // `len <= array.len()` at both call sites, so the right child is
+                // a valid index.
+                let right = unsafe { *array.get_unchecked(child + 1) };
+                // SAFETY: `child < child + 1 < len <= array.len()`, so the left
+                // child is in bounds wherever its sibling is.
+                let left = unsafe { *array.get_unchecked(child) };
+                if cmp(right, left) > 0 {
+                    larger = child + 1;
+                }
             }
-            if cmp(held, array[larger]) >= 0 {
+            // SAFETY: `larger` is either `child`, held below `len <= array.len()`
+            // by the loop guard, or `child + 1`, reached only under the test
+            // above. Reading it once ahead of the compare is what the shipped
+            // code already does: `cmp` takes `u32` by value and cannot reach
+            // `array`, so the value the store below writes is the same one.
+            let promoted = unsafe { *array.get_unchecked(larger) };
+            if cmp(held, promoted) >= 0 {
                 break;
             }
-            array[parent] = array[larger];
+            // SAFETY: `parent` is either `start`, which the checked read of
+            // `held` already proved a valid index, or a `larger` from an earlier
+            // iteration, which is below `len <= array.len()`.
+            unsafe { *array.get_unchecked_mut(parent) = promoted };
             parent = larger;
             child = larger * 2 + 1;
         }

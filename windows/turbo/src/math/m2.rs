@@ -1857,34 +1857,47 @@ pub fn cm2_scene__tri_barycentric_hit__7089c0(
 ///
 /// Accumulates the per-vertex blended 4×4 `C44Matrix` from up to four
 /// `(weight, bone)` influences. `weights` are the four raw weight bytes
-/// (`vert+0xc..0xf`); `mats[k]` is the bone matrix for influence `k`
-/// (`bone_base + bone_k·0x40`). Influence 0 is always applied; influences 1..3
-/// stop at the first zero weight (so `mats[k]` for a zero-weight slot is never
-/// read — the driver may pass any placeholder there).
+/// (`vert+0xc..0xf`); `mat0` is influence 0's bone matrix and `fetch(k)` answers
+/// influence `k`'s (`bone_base + bone_k·0x40`). Influence 0 is always applied;
+/// influences 1..3 stop at the first zero weight, and `fetch` runs only after
+/// that test, so a zero-weight slot's matrix is never loaded at all.
 ///
 /// Each weight is `(byte as i32 as f32)·(1/255)`; the matrix's translation column
-/// (`acc[3]`, `[7]`, `[11]`) stays `0` and `acc[15]` stays `1.0`, matching the
-/// stock scratch whose 4th column is pre-initialized. Per lane:
+/// (`acc[3]`, `[7]`, `[11]`) is `0` and `acc[15]` is `1.0`, matching the stock
+/// scratch whose 4th column is pre-initialized. Per lane:
 /// `acc[j] = w0·mat0[j]`, then `acc[j] = w_k·mat_k[j] + acc[j]`.
+///
+/// Both accumulate loops run all sixteen lanes rather than the twelve that
+/// survive, so each matrix is one contiguous span and how it packs is the
+/// vectorizer's choice rather than a stride table's. The four pinned lanes are
+/// written after both loops, which is what keeps the returned bits identical and
+/// what makes the products landing in them dead: they fold away with the loads.
 #[allow(clippy::assign_op_pattern)] // keep the stock `w·mat + acc` add order explicit
-pub fn cm2_scene__skin_blend__7089c0(weights: &[u8; 4], mats: &[[f32; 16]; 4]) -> [f32; 16] {
-    const LANES: [usize; 12] = [0, 1, 2, 4, 5, 6, 8, 9, 10, 12, 13, 14];
+pub fn cm2_scene__skin_blend__7089c0(
+    weights: &[u8; 4],
+    mat0: &[f32; 16],
+    mut fetch: impl FnMut(usize) -> [f32; 16],
+) -> [f32; 16] {
     let mut acc = [0.0f32; 16];
-    acc[15] = 1.0;
 
     let w0 = (weights[0] as i32 as f32) * WEIGHT_SCALE;
-    for &j in &LANES {
-        acc[j] = w0 * mats[0][j];
+    for (a, &m) in acc.iter_mut().zip(mat0) {
+        *a = w0 * m;
     }
-    for k in 1..4 {
-        if weights[k] == 0 {
+    for (k, &weight) in weights.iter().enumerate().skip(1) {
+        if weight == 0 {
             break;
         }
-        let wk = (weights[k] as i32 as f32) * WEIGHT_SCALE;
-        for &j in &LANES {
-            acc[j] = wk * mats[k][j] + acc[j];
+        let wk = (weight as i32 as f32) * WEIGHT_SCALE;
+        let mk = fetch(k);
+        for (a, &m) in acc.iter_mut().zip(&mk) {
+            *a = wk * m + *a;
         }
     }
+    acc[3] = 0.0;
+    acc[7] = 0.0;
+    acc[11] = 0.0;
+    acc[15] = 1.0;
     acc
 }
 
@@ -2085,7 +2098,7 @@ mod tests_cm2_scene__trace_line__7089c0 {
             *e = i as f32;
         }
         let zero = [0.0f32; 16];
-        let acc = blend(&[255, 0, 0, 0], &[m0, zero, zero, zero]);
+        let acc = blend(&[255, 0, 0, 0], &m0, |_| zero);
         let w = 255.0f32 * WEIGHT_SCALE;
         // Translation column + bottom row are fixed, not weighted.
         assert_eq!(acc[3].to_bits(), 0.0f32.to_bits());
@@ -2099,8 +2112,10 @@ mod tests_cm2_scene__trace_line__7089c0 {
     fn blend_two_bones_accumulate_in_order() {
         let m0 = [2.0f32; 16];
         let m1 = [4.0f32; 16];
-        let zero = [0.0f32; 16];
-        let acc = blend(&[100, 50, 0, 0], &[m0, m1, zero, zero]);
+        let acc = blend(&[100, 50, 0, 0], &m0, |k| {
+            assert_eq!(k, 1, "only influence 1 has a non-zero weight");
+            m1
+        });
         let w0 = 100.0f32 * WEIGHT_SCALE;
         let w1 = 50.0f32 * WEIGHT_SCALE;
         // lane 0: w0*2 then + w1*4, in that stock add order.
@@ -2114,7 +2129,7 @@ mod tests_cm2_scene__trace_line__7089c0 {
         // non-zero placeholder matrices (and weights[2] non-zero is unreachable).
         let m0 = [1.0f32; 16];
         let poison = [1.0e9f32; 16];
-        let acc = blend(&[200, 0, 200, 200], &[m0, poison, poison, poison]);
+        let acc = blend(&[200, 0, 200, 200], &m0, |_| poison);
         let w0 = 200.0f32 * WEIGHT_SCALE;
         assert_eq!(acc[0].to_bits(), (w0 * 1.0f32).to_bits());
     }
