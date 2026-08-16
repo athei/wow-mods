@@ -41167,15 +41167,30 @@ pub extern "fastcall" fn c_world__collect_geometry_from_nodes__6aaab0(
         if !skip {
             // SAFETY: live instance; +0x118 is the geometry pointer.
             let geom = unsafe { ((node + 0x118) as *const u32).read() } as usize;
+            // Both gates go straight to the kernels. The pointer adapters test
+            // their arguments for null AFTER the +0x44 / +0x50 offset, so the
+            // test can only fire for an instance sitting at -0x44 / -0x50 and
+            // never guards a null base; the instance is already dereferenced
+            // above (+0xd, +0x118), and the query box at the entry gate.
             if geom != 0
-                && aabb__min_less_than_max__6acb40(
-                    (node + 0x44) as *const f32,
-                    box_ptr.wrapping_add(3).cast_const(),
-                ) != 0
-                && c3_vector__greater_equal_all__699330(
-                    (node + 0x50) as *const f32,
-                    box_ptr.cast_const(),
-                ) != 0
+                && {
+                    // SAFETY: live instance; +0x44 is its box min corner, three
+                    // contiguous floats.
+                    let node_min = unsafe { ((node + 0x44) as *const [f32; 3]).read_unaligned() };
+                    // SAFETY: `box_ptr` addresses the caller's 6 contiguous
+                    // min/max floats; +3 is its max corner.
+                    let query_max =
+                        unsafe { box_ptr.wrapping_add(3).cast::<[f32; 3]>().read_unaligned() };
+                    crate::math::aabb::aabb__min_less_than_max__6acb40(&node_min, &query_max)
+                }
+                && {
+                    // SAFETY: live instance; +0x50 is its box max corner.
+                    let node_max = unsafe { ((node + 0x50) as *const [f32; 3]).read_unaligned() };
+                    // SAFETY: as above; the min corner is `box_ptr` itself.
+                    let query_min = unsafe { box_ptr.cast::<[f32; 3]>().read_unaligned() };
+                    crate::math::vector::c3_vector__greater_equal_all__699330(&node_max, &query_min)
+                        != 0
+                }
             {
                 // SAFETY: live geometry; +0x1d4 is the enable byte.
                 let enabled = unsafe { ((geom + 0x1d4) as *const u8).read() };
@@ -41188,12 +41203,24 @@ pub extern "fastcall" fn c_world__collect_geometry_from_nodes__6aaab0(
                     return 0;
                 }
                 let matrix = (node + 0xd4) as *const f32;
-                c44_matrix__transform_point__7bca80(scratch.as_mut_ptr(), center.as_ptr(), matrix);
+                // One read of the instance matrix serves both the transform and
+                // the row pick: the kernel reads indices 0,1,2,4,5,6,8,9,10 and
+                // the 12/13/14 translation row, so fifteen floats span every
+                // element either of them touches.
+                // SAFETY: live instance matrix at +0xd4; the rotation block and
+                // the translation row are its first fifteen floats.
+                let m = unsafe { matrix.cast::<[f32; 15]>().read_unaligned() };
+                let mut m16 = [0f32; 16];
+                m16[..15].copy_from_slice(&m);
+                // Straight to the kernel. The pointer adapter's `is_null` arm
+                // returns WITHOUT writing the out vector, which would leave
+                // `scratch` at its previous value and keep it live across the
+                // call; that arm is dead here, since the read above just
+                // dereferenced the same address.
+                scratch = crate::math::matrix44::c44_matrix__transform_point__7bca80(&center, &m16);
                 // 3x3 row pick from the 4x4 (`C33Matrix::Set`, a store pack)
                 // and its 9-dword shadow copy, collapsed to one local —
                 // neither address escapes past the transform call.
-                // SAFETY: live instance matrix; three 0x10-stride rows.
-                let m = unsafe { matrix.cast::<[f32; 12]>().read_unaligned() };
                 let mat3 = [m[0], m[1], m[2], m[4], m[5], m[6], m[8], m[9], m[10]];
                 xform_box(mat3.as_ptr(), local_box.as_ptr(), xformed.as_mut_ptr());
                 c3_vector__add_in_place__4841c0(xformed.as_mut_ptr(), scratch.as_ptr());
@@ -41257,21 +41284,34 @@ pub extern "fastcall" fn c_world__collect_geometry_from_nodes__6aaab0(
                 // stock re-reads it (the gathers can mutate the list).
                 // SAFETY: live instance; +0x138 is the tagged sub-chunk head.
                 let mut cur = unsafe { ((node + 0x138) as *const u32).read() } as usize;
+                // The query box is invariant across the gate below: nothing in
+                // this loop writes through the caller's pointer except the three
+                // calls in the taken arm, so the corners are read once here and
+                // refreshed after them. The reject path, which is where nearly
+                // every iteration ends, then touches the box not at all.
+                // SAFETY: `box_ptr` addresses the caller's 6 contiguous min/max
+                // floats; the min corner is `box_ptr` itself.
+                let mut query_min = unsafe { box_ptr.cast::<[f32; 3]>().read_unaligned() };
+                // SAFETY: as above; +3 is the max corner.
+                let mut query_max =
+                    unsafe { box_ptr.wrapping_add(3).cast::<[f32; 3]>().read_unaligned() };
                 loop {
                     if cur & 1 != 0 || cur == 0 {
                         break;
                     }
                     // SAFETY: untagged sub-chunk link; +4 is its data pointer.
                     let sub = unsafe { ((cur + 4) as *const u32).read() } as usize;
-                    if aabb__min_less_than_max__6acb40(
-                        (sub + 0x44) as *const f32,
-                        box_ptr.wrapping_add(3).cast_const(),
-                    ) != 0
-                        && c3_vector__greater_equal_all__699330(
-                            (sub + 0x50) as *const f32,
-                            box_ptr.cast_const(),
+                    // Gates as above: the kernels directly, past adapter null
+                    // tests that sit on the already-offset corner address.
+                    // SAFETY: sub-chunk data; +0x44 is its box min corner.
+                    let sub_min = unsafe { ((sub + 0x44) as *const [f32; 3]).read_unaligned() };
+                    if crate::math::aabb::aabb__min_less_than_max__6acb40(&sub_min, &query_max) && {
+                        // SAFETY: sub-chunk data; +0x50 is its box max corner.
+                        let sub_max = unsafe { ((sub + 0x50) as *const [f32; 3]).read_unaligned() };
+                        crate::math::vector::c3_vector__greater_equal_all__699330(
+                            &sub_max, &query_min,
                         ) != 0
-                    {
+                    } {
                         // SAFETY: sub-chunk data; +0x7c is its filter key.
                         let key = unsafe { ((sub + 0x7c) as *const i32).read() };
                         if chunk_filter(geom as *mut u8, key) == 0 {
@@ -41295,6 +41335,15 @@ pub extern "fastcall" fn c_world__collect_geometry_from_nodes__6aaab0(
                                 query_flags,
                             );
                         }
+                        // Refresh past the calls, which are the only things
+                        // that could write the caller's box; the snapshot is
+                        // read nowhere between them, so its next use is the
+                        // next iteration's gate.
+                        // SAFETY: `box_ptr` addresses the caller's 6 floats.
+                        query_min = unsafe { box_ptr.cast::<[f32; 3]>().read_unaligned() };
+                        // SAFETY: as above; +3 is the max corner.
+                        query_max =
+                            unsafe { box_ptr.wrapping_add(3).cast::<[f32; 3]>().read_unaligned() };
                     }
                     // Advance: next = *([node+0x130] + cur + 4).
                     // SAFETY: live instance; +0x130 is the sub-chunk link base.
