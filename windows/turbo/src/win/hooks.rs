@@ -9437,15 +9437,37 @@ pub extern "fastcall" fn collision_build_face_edge_planes__632460(
     // Only the prefix the original had finished: it writes each side plane through
     // this pointer during that edge's own iteration, so a degenerate edge leaves
     // the earlier ones behind rather than nothing at all.
+    //
+    // The prefix is written as four predicated constant-index stores rather than a
+    // counted loop. A loop makes the kernel's return value address-taken, so the
+    // four planes are staged into a stack aggregate first and copied back out; with
+    // constant indices each plane goes from the register it was computed in
+    // straight to `out_planes`. `written` is at most 4 by construction, so the four
+    // predicates cover every prefix the kernel can return.
     let slots = out_planes.cast::<[f32; 4]>();
-    for (i, plane) in planes.iter().take(written).enumerate() {
+    if written > 0 {
         // SAFETY: `out_planes` is non-null and addresses 16 writable contiguous f32
-        // (four plane equations), so `i < written <= 4` keeps the offset in bounds.
-        let slot = unsafe { slots.add(i) };
-        // SAFETY: `slot` addresses one writable plane inside that region.
-        unsafe {
-            *slot = *plane;
-        }
+        // (four plane equations), the first of which is `slots` itself.
+        unsafe { *slots = planes[0] };
+    }
+    if written > 1 {
+        // SAFETY: `slots` addresses four contiguous writable planes, so index 1 is
+        // in bounds.
+        let slot = unsafe { slots.add(1) };
+        // SAFETY: `slot` addresses the second plane inside that region.
+        unsafe { *slot = planes[1] };
+    }
+    if written > 2 {
+        // SAFETY: as above, index 2 of the same four-plane region.
+        let slot = unsafe { slots.add(2) };
+        // SAFETY: `slot` addresses the third plane inside that region.
+        unsafe { *slot = planes[2] };
+    }
+    if written > 3 {
+        // SAFETY: as above, index 3 of the same four-plane region.
+        let slot = unsafe { slots.add(3) };
+        // SAFETY: `slot` addresses the fourth plane inside that region.
+        unsafe { *slot = planes[3] };
     }
     u32::from(written == 4)
 }
