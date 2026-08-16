@@ -13,7 +13,10 @@
 
 use std::{
     collections::BinaryHeap,
-    sync::{LazyLock, Mutex},
+    sync::{
+        LazyLock, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
 use rustc_hash::FxHashMap;
@@ -55,6 +58,18 @@ static TIMERS: LazyLock<Mutex<Timers>> = LazyLock::new(|| {
     })
 });
 
+/// `schedule.len()`, mirrored outside the lock for the pump's entry test.
+///
+/// The pump runs every frame and the schedule is empty on every frame of a
+/// session that armed no timer, so reaching that answer used to cost forcing
+/// the `LazyLock`, taking the mutex and allocating the collection vector. The
+/// count is stored under the lock at both sites that change the schedule (the
+/// push in `arm` and the drain in `pump`), so it is never behind the heap.
+/// `disarm` needs none: it touches only `live`, and a schedule entry whose live
+/// record is gone still has to be popped, which is what the drain already does.
+/// All three run on the game thread, so `Relaxed` is the whole requirement.
+static SCHEDULED: AtomicUsize = AtomicUsize::new(0);
+
 fn now_ms() -> u64 {
     u64::from(super::super::objmgr::game_tick_ms())
 }
@@ -81,6 +96,7 @@ pub fn arm(delay_ms: u64, period_ms: u64, script: &str) -> u32 {
     timers
         .schedule
         .push(core::cmp::Reverse((now_ms().wrapping_add(delay_ms), id)));
+    SCHEDULED.store(timers.schedule.len(), Ordering::Relaxed);
     id
 }
 
@@ -98,6 +114,9 @@ pub fn live_count() -> usize {
 
 /// The per-frame pump, run from the world-render wrapper.
 pub fn pump() {
+    if SCHEDULED.load(Ordering::Relaxed) == 0 {
+        return;
+    }
     let now = now_ms();
     let mut due: Vec<(String, u32)> = Vec::new();
     {
@@ -124,6 +143,7 @@ pub fn pump() {
                 timers.live.remove(&id);
             }
         }
+        SCHEDULED.store(timers.schedule.len(), Ordering::Relaxed);
         drop(timers);
     }
     for (script, exec_state) in due {

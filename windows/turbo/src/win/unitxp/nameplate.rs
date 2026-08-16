@@ -153,10 +153,17 @@ pub fn cull_before_render() {
     if super::settings::prioritize_marked_nameplate() {
         refresh_mark_status();
     }
-    let ctx = frame_context();
     // SAFETY: `NAMEPLATE_LIST` is a fixed host global at the verified image
     // base, holding the list head (zero when no plates exist).
     let mut item = unsafe { *(NAMEPLATE_LIST as *const usize) };
+    // The head is tested before the context is built: the context is two
+    // object-manager lookups read only inside the walk, so an empty list has
+    // nothing to read them for. The mark prescan above stays where it is, so
+    // an empty list still clears the mark flag.
+    if item == 0 || item & 1 != 0 {
+        return;
+    }
+    let ctx = frame_context();
     while item != 0 && item & 1 == 0 {
         // The next link is saved before the filter runs: dropping a plate
         // frees the current node.

@@ -14061,7 +14061,13 @@ pub extern "thiscall" fn c_map_obj__trace_line_groups__6a37b0(
         let bounds_slot = unsafe { this.add(0x130) };
         // SAFETY: the slot above holds the group bounds-array base pointer.
         let bounds = unsafe { bounds_slot.cast::<*const u8>().read() };
-        let mut cursor = bounds.wrapping_add(4);
+        // The group index is the loop's only induction variable: a parallel
+        // bounds cursor is one more live value than this frame has registers
+        // for, and the entry address it would hold is the index scaled by the
+        // stride anyway. The scaling is wrapping so the address arithmetic
+        // cannot trap on a count the client made absurd, which is what the
+        // cursor's pointer arithmetic gave for free, and it holds under both
+        // profiles including release's checked overflow.
         let mut i: u32 = 0;
         loop {
             let group = get_group(this, i, 0);
@@ -14070,8 +14076,12 @@ pub extern "thiscall" fn c_map_obj__trace_line_groups__6a37b0(
                 let mask_ptr = unsafe { group.add(0x10) };
                 // SAFETY: the pointer above is the live group mask.
                 let mask = unsafe { mask_ptr.cast::<u32>().read() };
+                // Bounds entry `i`: base + 4, stride 0x20.
+                let entry = bounds
+                    .wrapping_add(4)
+                    .wrapping_add(0x20_usize.wrapping_mul(i as usize));
                 if mask & group_skip_mask == 0
-                    && c_aa_box__intersect_segment__6dc5a0(cursor.cast::<f32>(), start, end) != 0
+                    && c_aa_box__intersect_segment__6dc5a0(entry.cast::<f32>(), start, end) != 0
                 {
                     // SAFETY: fixed `.data` hit-state dword in the host image.
                     unsafe { HIT_STATE_A.write(0) };
@@ -14148,7 +14158,6 @@ pub extern "thiscall" fn c_map_obj__trace_line_groups__6a37b0(
                 }
             }
             i += 1;
-            cursor = cursor.wrapping_add(0x20);
             // SAFETY: the live group count is re-read every pass, exactly like
             // the reference.
             let live_count = unsafe { count_ptr.cast::<u32>().read() };
@@ -35969,8 +35978,17 @@ pub extern "fastcall" fn angle_table__find_wrapped_interval_fraction__6d63e0(
         let lo_ptr = (table as usize).wrapping_add((idx as u32 as usize).wrapping_mul(4));
         // SAFETY: keyframe-time entry at `table + idx*4`; unguarded as stock.
         let lo = unsafe { (lo_ptr as *const i32).read_unaligned() };
-        // Stock's signed IDIV remainder (idx ∈ [0, count) keeps it exact).
-        let next = idx.wrapping_add(1) % count;
+        // Stock's signed IDIV remainder, answered by a compare instead. `idx`
+        // is in [0, count) on every iteration (the entry store is 0, and the
+        // only path back to the top has just proved `bumped < count`), so the
+        // successor wraps at exactly one value and the compare is the same
+        // answer the division gave, aliasing between the out slots and the
+        // table included: every value that reaches `idx` was either written as
+        // 0, written from this select, or tested against `count` first. The
+        // bump stays wrapping so the range argument carries no dependence on
+        // the profile's overflow checks.
+        let succ = idx.wrapping_add(1);
+        let next = if succ == count { 0 } else { succ };
         // SAFETY: caller-owned out slot; stock writes it every iteration,
         // before reading the successor entry.
         unsafe { out_next.write_unaligned(next) };
@@ -45280,21 +45298,72 @@ const FS_REGISTRYINDEX: i32 = -10000;
 /// The dispatch error handler's registry ref, a `.data` dword at `0x8722c8`.
 const FS_ERRFUNC_REF: *const i32 = (crate::win::EXPECTED_IMAGE_BASE + 0x47_22c8) as *const i32;
 
-/// Key-string bytes per cache slot, nul-terminated for interning.
+/// One cached global key: its name, its packed compare form and its ref.
+///
+/// The name and the ref sit in one record because every use needs both and a
+/// caller that holds the record indexes nothing: the key is chosen once per
+/// formatted argument rather than three times per push. `head` and `tail` pack
+/// the name without its nul as a little-endian first word plus a fifth byte,
+/// which is what [`wow_shared::blit::short_bytes_eq`] compares a `TString`'s
+/// inline bytes against once the stored length has matched `len`.
+struct FsKey {
+    /// Nul-terminated name bytes, the form the interning push wants.
+    name: &'static [u8],
+    /// Name length without the nul; 4 or 5 for every key here.
+    len: usize,
+    /// First four name bytes, little-endian.
+    head: u32,
+    /// The fifth name byte, or 0 when `len` is 4.
+    tail: u8,
+    /// Registry ref of the interned string (0 = not built yet).
+    interned: core::sync::atomic::AtomicI32,
+}
+
+/// Derive a key's packed compare form from its nul-terminated name.
+///
+/// Const so the packing is the name's own bytes by construction: a hand-written
+/// head word that disagreed with its name would push the wrong global, which is
+/// a correctness fault rather than a slow path.
+const fn fs_key(name: &'static [u8]) -> FsKey {
+    let len = name.len() - 1;
+    FsKey {
+        name,
+        len,
+        head: u32::from_le_bytes([name[0], name[1], name[2], name[3]]),
+        tail: if len == 5 { name[4] } else { 0 },
+        interned: core::sync::atomic::AtomicI32::new(0),
+    }
+}
+
+/// The cached global keys, one per slot.
 ///
 /// Slot 0 is `this`; slot N is `argN`. 19 argument slots mirror the stock
 /// format-loop cap.
-const FS_KEY_NAMES: [&[u8]; 20] = [
-    b"this\0", b"arg1\0", b"arg2\0", b"arg3\0", b"arg4\0", b"arg5\0", b"arg6\0", b"arg7\0",
-    b"arg8\0", b"arg9\0", b"arg10\0", b"arg11\0", b"arg12\0", b"arg13\0", b"arg14\0", b"arg15\0",
-    b"arg16\0", b"arg17\0", b"arg18\0", b"arg19\0",
+static FS_KEYS: [FsKey; 20] = [
+    fs_key(b"this\0"),
+    fs_key(b"arg1\0"),
+    fs_key(b"arg2\0"),
+    fs_key(b"arg3\0"),
+    fs_key(b"arg4\0"),
+    fs_key(b"arg5\0"),
+    fs_key(b"arg6\0"),
+    fs_key(b"arg7\0"),
+    fs_key(b"arg8\0"),
+    fs_key(b"arg9\0"),
+    fs_key(b"arg10\0"),
+    fs_key(b"arg11\0"),
+    fs_key(b"arg12\0"),
+    fs_key(b"arg13\0"),
+    fs_key(b"arg14\0"),
+    fs_key(b"arg15\0"),
+    fs_key(b"arg16\0"),
+    fs_key(b"arg17\0"),
+    fs_key(b"arg18\0"),
+    fs_key(b"arg19\0"),
 ];
 
 /// `lua_State` the key cache was interned against (0 = not built yet).
 static FS_KEY_L: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
-/// Registry refs of the cached key strings, indexed like [`FS_KEY_NAMES`].
-static FS_KEY_REFS: [core::sync::atomic::AtomicI32; 20] =
-    [const { core::sync::atomic::AtomicI32::new(0) }; 20];
 
 /// `FrameScript_GetLuaState` at `0x7040d0`, no arguments, state in `eax`.
 fn fs_get_lua_state() -> i32 {
@@ -45426,19 +45495,23 @@ fn fs_register_script_object(object: *mut u32, name: *const u8) {
 /// state's registry.
 fn fs_build_keys(l: i32) {
     use core::sync::atomic::Ordering;
-    for (slot, name) in FS_KEY_NAMES.iter().enumerate() {
-        fs_pushstring(l, name.as_ptr());
-        FS_KEY_REFS[slot].store(fs_lua_ref(l, FS_REGISTRYINDEX), Ordering::Relaxed);
+    for key in &FS_KEYS {
+        fs_pushstring(l, key.name.as_ptr());
+        key.interned
+            .store(fs_lua_ref(l, FS_REGISTRYINDEX), Ordering::Relaxed);
     }
     FS_KEY_L.store(l as usize, Ordering::Relaxed);
 }
 
-/// Whether the value at the top of `l`'s stack is the interned string `name`.
+/// Whether the value at the top of `l`'s stack is `key`'s interned string.
 ///
 /// Layout facts: `L->top` at `L+0x8`, 16-byte `TObject` `{tt, shadow, value}`,
 /// string tag 4, `TString` length at `+0xc` and bytes at `+0x10`.
-fn fs_top_is_key(l: i32, name: &[u8]) -> bool {
-    let want = &name[..name.len() - 1];
+///
+/// The byte compare is the packed one rather than a slice equality: `key` is a
+/// runtime value here, so a slice compare cannot fold to an inline word test
+/// and goes out to the CRT helper on every push instead.
+fn fs_top_is_key(l: i32, key: &FsKey) -> bool {
     // SAFETY: `L+0x8` is the live stack-top pointer.
     let top = unsafe { *((l as usize + 0x8) as *const usize) };
     let val = top - 16;
@@ -45449,15 +45522,18 @@ fn fs_top_is_key(l: i32, name: &[u8]) -> bool {
     // SAFETY: tag 4 means the value dword at `+0x8` is a live `TString` pointer.
     let ts = unsafe { *((val + 0x8) as *const usize) };
     // SAFETY: `TString` length field at `+0xc`.
-    if unsafe { *((ts + 0xc) as *const u32) } as usize != want.len() {
+    if unsafe { *((ts + 0xc) as *const u32) } as usize != key.len {
         return false;
     }
-    // SAFETY: `TString` content bytes start at `+0x10`, `len` of them initialized.
-    let bytes = unsafe { core::slice::from_raw_parts((ts + 0x10) as *const u8, want.len()) };
-    bytes == want
+    // SAFETY: `TString` content bytes start at `+0x10` and the length just
+    // matched `key.len`, which is 4 or 5 for every entry of `FS_KEYS`, so that
+    // many bytes are initialized there and neither read leaves the string.
+    unsafe {
+        wow_shared::blit::short_bytes_eq((ts + 0x10) as *const u8, key.len, key.head, key.tail)
+    }
 }
 
-/// Push the cached key string for `slot`, rebuilding the cache when stale.
+/// Push `key`'s cached string, rebuilding the cache when it is stale.
 ///
 /// The pushed value is verified to be the expected interned string. The
 /// `L`-pointer identity check alone cannot prove the refs are ours: a UI
@@ -45465,26 +45541,23 @@ fn fs_top_is_key(l: i32, name: &[u8]) -> bool {
 /// allocation, leaving stale ref integers that index someone else's registry
 /// slots. On mismatch the stale value is popped and the cache rebuilt against
 /// the live state.
-fn fs_push_key(l: i32, slot: usize) {
+///
+/// The key arrives as a record, not a slot number: the caller already holds one
+/// per formatted argument and shares it across the two pushes that argument
+/// makes, so the table is indexed where the index is known to be in range
+/// rather than three times behind a runtime bound.
+fn fs_push_key(l: i32, key: &FsKey) {
     use core::sync::atomic::Ordering;
     if FS_KEY_L.load(Ordering::Relaxed) != l as usize {
         fs_build_keys(l);
     }
-    fs_rawgeti(
-        l,
-        FS_REGISTRYINDEX,
-        FS_KEY_REFS[slot].load(Ordering::Relaxed),
-    );
-    if fs_top_is_key(l, FS_KEY_NAMES[slot]) {
+    fs_rawgeti(l, FS_REGISTRYINDEX, key.interned.load(Ordering::Relaxed));
+    if fs_top_is_key(l, key) {
         return;
     }
     fs_settop(l, -2);
     fs_build_keys(l);
-    fs_rawgeti(
-        l,
-        FS_REGISTRYINDEX,
-        FS_KEY_REFS[slot].load(Ordering::Relaxed),
-    );
+    fs_rawgeti(l, FS_REGISTRYINDEX, key.interned.load(Ordering::Relaxed));
 }
 
 /// Bind the global `this` to `object`, leaving the old value stack-anchored.
@@ -45495,14 +45568,14 @@ fn fs_push_key(l: i32, slot: usize) {
 /// registry via `luaL_ref`; the stack slot used here anchors it against the
 /// collector just as strongly and costs no registry churn.
 fn fs_bind_this(l: i32, object: *mut u32) {
-    fs_push_key(l, 0);
+    fs_push_key(l, &FS_KEYS[0]);
     fs_gettable(l, FS_GLOBALSINDEX);
     let flag_ptr = object.wrapping_add(1);
     // SAFETY: `object+0x4` is the registration flag the stock body tests.
     if unsafe { flag_ptr.read() } == 0 {
         fs_register_script_object(object, core::ptr::null());
     }
-    fs_push_key(l, 0);
+    fs_push_key(l, &FS_KEYS[0]);
     let ref_ptr = object.wrapping_add(2);
     // SAFETY: `object+0x8` is the object's registry ref dword.
     let obj_ref = unsafe { ref_ptr.read() };
@@ -45512,7 +45585,7 @@ fn fs_bind_this(l: i32, object: *mut u32) {
 
 /// Restore the global `this` from the stack-anchored old value at the top.
 fn fs_restore_this(l: i32) {
-    fs_push_key(l, 0);
+    fs_push_key(l, &FS_KEYS[0]);
     fs_insert(l, -2);
     fs_settable(l, FS_GLOBALSINDEX);
 }
@@ -45642,7 +45715,11 @@ pub extern "cdecl" fn frame_script__execute_function_formatted_v__704f10(
     // format cap, the parked old `this`, the error handler and the function,
     // plus key/value transients.
     let _ = fs_checkstack(l, 25);
-    let mut arg_count: i32 = 0;
+    // Unsigned because the counter is only ever a slot number: the format loop
+    // starts it at 0, breaks at 19 and increments nowhere else, so the signed
+    // form left a range check on the slot the loop had already bounded. The two
+    // uses that are genuinely signed are the negative Lua stack indices below.
+    let mut arg_count: u32 = 0;
     let mut p = format;
     let mut va = args.cast::<u8>();
     // SAFETY: `format` is a readable nul-terminated string per the caller contract.
@@ -45693,11 +45770,11 @@ pub extern "cdecl" fn frame_script__execute_function_formatted_v__704f10(
             };
             if pushed {
                 arg_count += 1;
-                let slot = usize::try_from(arg_count).expect("argument count is 1..=19");
-                fs_push_key(l, slot);
+                let key = &FS_KEYS[arg_count as usize];
+                fs_push_key(l, key);
                 fs_gettable(l, FS_GLOBALSINDEX);
                 fs_insert(l, -2);
-                fs_push_key(l, slot);
+                fs_push_key(l, key);
                 fs_insert(l, -2);
                 fs_settable(l, FS_GLOBALSINDEX);
             }
@@ -45714,13 +45791,12 @@ pub extern "cdecl" fn frame_script__execute_function_formatted_v__704f10(
         fs_restore_this(l);
     }
     for i in 1..=arg_count {
-        let slot = usize::try_from(i).expect("argument index is 1..=19");
-        fs_push_key(l, slot);
-        fs_pushvalue(l, -(arg_count - i + 2));
+        fs_push_key(l, &FS_KEYS[i as usize]);
+        fs_pushvalue(l, -(arg_count - i + 2).cast_signed());
         fs_settable(l, FS_GLOBALSINDEX);
     }
     if arg_count > 0 {
-        fs_settop(l, -arg_count - 1);
+        fs_settop(l, -arg_count.cast_signed() - 1);
     }
 }
 
