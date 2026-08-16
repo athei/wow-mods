@@ -10465,12 +10465,45 @@ pub extern "fastcall" fn height_bucket__test_box__686180(aabb: *const f32, flags
         return 0;
     };
 
+    use core::arch::x86::{_mm_cmplt_ps, _mm_loadu_ps, _mm_movemask_ps, _mm_set1_ps};
+
     let lo = span.col_min.max(0);
     let hi = span.col_max.min(crate::math::world::HB_COLUMN_COUNT - 1);
+    // Exclusive end of the clamped span, so at most `HB_COLUMN_COUNT`. That is
+    // what keeps every four-wide group below from loading a lane past the last
+    // column of the 320-entry buffer: a lane read from whatever follows it in
+    // host `.data` could report an occluded box visible.
+    let end = hi + 1;
+
+    // `cmpltps` evaluates the same ordered `horizon < test_height` the scalar
+    // walk makes, per lane and in the same operand order, so an unordered column
+    // fails to occlude in both forms; the mask test is the boolean OR the early
+    // exit already computes over the group. The four-wide body compares columns
+    // the scalar walk would have skipped after a hit, and those results reach
+    // nothing but the mask.
+    // SAFETY: broadcasting an initialized f32 across four lanes.
+    let test4 = unsafe { _mm_set1_ps(span.test_height) };
     let mut c = lo;
-    while c <= hi {
-        // SAFETY: `c` is clamped to `[0, HB_COLUMN_COUNT)`, in bounds for the
-        // 320-entry horizon buffer.
+    while c + 4 <= end {
+        // SAFETY: `c + 4 <= end <= HB_COLUMN_COUNT`, so the group starts inside
+        // the 320-entry horizon buffer.
+        let group = unsafe { HORIZON.add(c as usize) };
+        // SAFETY: the same bound covers all four lanes; the buffer base is
+        // 16-byte aligned but `c` is arbitrary, hence the unaligned load.
+        let cols = unsafe { _mm_loadu_ps(group) };
+        // SAFETY: lane-wise ordered compare of two initialized vectors.
+        let below = unsafe { _mm_cmplt_ps(cols, test4) };
+        // SAFETY: sign-bit extraction from an initialized vector.
+        let hit = unsafe { _mm_movemask_ps(below) };
+        if hit != 0 {
+            // A covered column does not occlude the box: it is visible.
+            return 0;
+        }
+        c += 4;
+    }
+    while c < end {
+        // SAFETY: `c < end <= HB_COLUMN_COUNT`, in bounds for the 320-entry
+        // horizon buffer.
         let slot = unsafe { HORIZON.add(c as usize) };
         // SAFETY: `slot` is an initialized horizon column.
         let horizon = unsafe { slot.read() };

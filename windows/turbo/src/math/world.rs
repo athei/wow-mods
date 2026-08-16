@@ -1876,6 +1876,29 @@ pub fn height_bucket__test_box__686180(
     col_scale: f32,
     col_bias: f32,
 ) -> Option<OccluderSpan> {
+    if skip_near {
+        hb_test_box_corners::<true>(aabb, view, focal, near_z, col_scale, col_bias)
+    } else {
+        hb_test_box_corners::<false>(aabb, view, focal, near_z, col_scale, col_bias)
+    }
+}
+
+/// The 8-corner sweep of `HeightBucket::TestBox`, monomorphized on the near skip.
+///
+/// `SKIP_NEAR` is the caller's `flags & 8`, which the reference re-tests inside the
+/// corner sequence. Deciding it once above the loop leaves the set arm with no
+/// near-plane compare at all and the clear arm with the compare written exactly as
+/// the reference ordered it (`v[2] < near_z`, so an unordered depth falls through
+/// and does not reject). The corner enumeration is 0..8 in both arms, so the
+/// `min`/`max` accumulation order and the corner a rejection reports are unchanged.
+fn hb_test_box_corners<const SKIP_NEAR: bool>(
+    aabb: &[f32; 6],
+    view: &[f32; 16],
+    focal: f32,
+    near_z: f32,
+    col_scale: f32,
+    col_bias: f32,
+) -> Option<OccluderSpan> {
     let mut x_min = f32::MAX;
     let mut x_max = -f32::MAX;
     let mut y_max = -f32::MAX;
@@ -1887,7 +1910,7 @@ pub fn height_bucket__test_box__686180(
             aabb[((ci >> 2) & 1) * 3 + 2],
         ];
         let v = hb_transform_point(corner, view);
-        if !skip_near && v[2] < near_z {
+        if !SKIP_NEAR && v[2] < near_z {
             return None;
         }
         let inv_z = focal / v[2];
@@ -1950,6 +1973,36 @@ mod tests_height_bucket_test_box {
         let sa = test_box(&a, &ID, 1.0, 0.5, true, 100.0, 0.0).unwrap();
         let sb = test_box(&b, &ID, 1.0, 0.5, true, 100.0, 0.0).unwrap();
         assert_eq!(sa, sb);
+    }
+
+    /// The two near-skip arms differ only where the near plane rejects.
+    ///
+    /// `skip_near` selects between two copies of the corner sweep, so a box no
+    /// corner of which reaches the near plane has to project bit-identically
+    /// through either one.
+    #[test]
+    fn box_skip_flag_agrees_when_no_corner_clips() {
+        let mut view = ID;
+        // A view that mixes the axes, so each corner takes a different path
+        // through the transform rather than reducing to the identity.
+        view[0] = 0.75;
+        view[4] = 0.125;
+        view[9] = -0.25;
+        view[13] = 2.5;
+        for aabb in [
+            [-2.0f32, -1.0, 9.0, 3.0, 4.0, 11.0],
+            [0.5f32, -7.0, 40.0, 12.0, -3.0, 41.0],
+            [-31.0f32, 17.0, 3.0, -30.0, 19.0, 800.0],
+        ] {
+            let clear = test_box(&aabb, &view, 1.5, 0.5, false, 100.0, 3.0);
+            let skip = test_box(&aabb, &view, 1.5, 0.5, true, 100.0, 3.0);
+            assert_eq!(clear, skip);
+            let span = clear.expect("no corner reaches the near plane");
+            assert_eq!(
+                span.test_height.to_bits(),
+                skip.unwrap().test_height.to_bits()
+            );
+        }
     }
 }
 
