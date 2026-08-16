@@ -9602,9 +9602,25 @@ pub extern "fastcall" fn collision_ray_polygon_sweep_distance__632830(
     }
     // SAFETY: `ray_origin` is a non-null caller-owned C3Vector (3 contiguous f32).
     let origin = &unsafe { ray_origin.cast::<[f32; 3]>().read_unaligned() };
-    // SAFETY: `vert_array` addresses the nine bounding planes (36 contiguous f32,
-    // `[nx,ny,nz,d]` each) the sweep clips against.
-    let planes = unsafe { &*vert_array.cast::<[[f32; 4]; 9]>() };
+
+    // The kernel re-clips the polygon in place, so it borrows `polygon+0..0xf4`
+    // mutably while it reads the plane set; the two regions have to be disjoint.
+    // The planes belong to a separate structure, and if a caller ever passed one
+    // that touched the polygon they are read into a local instead, which leaves
+    // every float the kernel sees unchanged: it calls nothing that could observe
+    // the polygon between entry and the final store.
+    let overlapping = vert_array.addr().wrapping_sub(polygon.addr()) < 0xf4
+        || polygon.addr().wrapping_sub(vert_array.addr()) < 0x90;
+    let plane_copy;
+    let planes: &[[f32; 4]; 9] = if overlapping {
+        // SAFETY: `vert_array` addresses the nine bounding planes (36 contiguous
+        // f32, `[nx,ny,nz,d]` each) the sweep clips against.
+        plane_copy = unsafe { vert_array.cast::<[[f32; 4]; 9]>().read_unaligned() };
+        &plane_copy
+    } else {
+        // SAFETY: as above, and disjoint from the polygon this borrows mutably.
+        unsafe { &*vert_array.cast::<[[f32; 4]; 9]>() }
+    };
 
     // SAFETY: `polygon+0xf0` is the in-bounds, aligned vertex-count field — a raw
     // 32-bit integer in stock (loaded and compared with integer ops).
@@ -9612,14 +9628,16 @@ pub extern "fastcall" fn collision_ray_polygon_sweep_distance__632830(
     // SAFETY: `count_slot` is the initialized integer count of the live polygon.
     let mut count = unsafe { count_slot.cast::<i32>().read() }.clamp(0, 15) as usize;
 
-    // `polygon+0` addresses the 45 contiguous vertex floats (15 verts).
-    let verts_slot = polygon.cast::<[f32; 45]>();
-    // SAFETY: `verts_slot` is the live vertex buffer of the polygon.
-    let mut verts = unsafe { verts_slot.read() };
+    // `polygon+0` addresses the 45 contiguous vertex floats (15 verts), which the
+    // kernel rewrites in place exactly as stock does.
+    // SAFETY: the polygon's vertex buffer is live and writable for the call, and
+    // disjoint from the tag array below and from `planes`.
+    let verts = unsafe { &mut *polygon.cast::<[f32; 45]>() };
     // SAFETY: `polygon+0xb4` addresses the 15 contiguous per-vertex tag floats.
     let tags_slot = unsafe { polygon.add(0xb4).cast::<[f32; 15]>() };
-    // SAFETY: `tags_slot` is the live tag array of the polygon.
-    let mut tags = unsafe { tags_slot.read() };
+    // SAFETY: `tags_slot` is the live, writable tag array, disjoint from the
+    // vertex buffer above and from `planes`.
+    let tags = unsafe { &mut *tags_slot };
 
     // SAFETY: `best_dist` is a non-null caller-owned writable f32.
     let mut best = unsafe { best_dist.read() };
@@ -9638,8 +9656,8 @@ pub extern "fastcall" fn collision_ray_polygon_sweep_distance__632830(
     let eps_pos = unsafe { EPS_POS.read() };
 
     let hit = crate::math::collision::collision_ray_polygon_sweep_distance__632830(
-        &mut verts,
-        &mut tags,
+        verts,
+        tags,
         &mut count,
         origin,
         planes,
@@ -9651,11 +9669,6 @@ pub extern "fastcall" fn collision_ray_polygon_sweep_distance__632830(
         eps_pos,
     );
 
-    // Write the (possibly re-clipped) polygon back in place.
-    // SAFETY: `verts_slot` addresses the writable 45-float vertex buffer.
-    unsafe { verts_slot.write(verts) };
-    // SAFETY: `tags_slot` addresses the writable 15-float tag buffer.
-    unsafe { tags_slot.write(tags) };
     // SAFETY: `count_slot` is the writable integer count; store the new count.
     unsafe { count_slot.cast::<i32>().write(count as i32) };
 
@@ -16927,8 +16940,9 @@ pub extern "thiscall" fn object_draw_debug_box__6a7ac0(this: *mut u8, source: *m
 /// Walks the object's 0x20-byte child records (base `this+0x130`, count
 /// `this+0x168` re-read per iteration since the query call-out runs in between); a
 /// record whose flag word avoids `mask` and whose box strictly contains `point`
-/// (pure kernel) and whose child entry (`this+0x1f4 + i*4`, enable byte
-/// `this+0x1d4`, ready byte `child+0x164` — folded stock accessors) is live, is
+/// (4-lane kernel) and whose child entry (`this+0x1f4 + i*4`, enable byte
+/// `this+0x1d4` read once and refreshed after the call-out, ready byte
+/// `child+0x164` — folded stock accessors) is live, is
 /// validated through the stock liquid height query by absolute VA with the three
 /// out-pointers forwarded verbatim. The first validated hit returns 1, otherwise 0.
 pub extern "thiscall" fn object_pick_child_at_point__6a4e00(
@@ -16943,7 +16957,10 @@ pub extern "thiscall" fn object_pick_child_at_point__6a4e00(
         return 0;
     }
     // SAFETY: `point` addresses the caller's 3 query floats.
-    let p = &unsafe { point.cast::<[f32; 3]>().read_unaligned() };
+    let point_xyz = unsafe { point.cast::<[f32; 3]>().read_unaligned() };
+    // The box test compares one padded point vector against both record halves,
+    // so the point is packed once here rather than per record.
+    let p = [point_xyz[0], point_xyz[1], point_xyz[2], 0.0];
     // SAFETY: `this+0x130` is the in-bounds, aligned record-array base slot.
     let recs_slot = unsafe { this.add(0x130) };
     // SAFETY: `recs_slot` holds the record-array base pointer.
@@ -16953,6 +16970,20 @@ pub extern "thiscall" fn object_pick_child_at_point__6a4e00(
     }
     // SAFETY: `this+0x168` is the in-bounds, aligned record-count dword.
     let count_slot = unsafe { this.add(0x168) };
+    // SAFETY: `count_slot` is the live record count.
+    if unsafe { count_slot.cast::<u32>().read() } == 0 {
+        return 0;
+    }
+    // SAFETY: `this+0x1d4` is the child-table enable byte (gates every folded
+    // accessor below).
+    let enable_p = unsafe { this.add(0x1d4) };
+    // The enable byte is read here instead of at the head of every record: the
+    // height query is the only code in the loop that writes memory, so an
+    // iteration that did not reach it observes exactly this byte, and the one
+    // that did re-reads it below. The read sits after the count check so an
+    // object with no records never loads it.
+    // SAFETY: `enable_p` is the live enable byte.
+    let mut enabled = unsafe { enable_p.read() };
 
     let mut i: u32 = 0;
     loop {
@@ -16962,11 +16993,6 @@ pub extern "thiscall" fn object_pick_child_at_point__6a4e00(
         if i >= count {
             break;
         }
-        // SAFETY: `this+0x1d4` is the child-table enable byte (gates every
-        // folded accessor below).
-        let enable_p = unsafe { this.add(0x1d4) };
-        // SAFETY: `enable_p` is the live enable byte.
-        let enabled = unsafe { enable_p.read() };
         if enabled == 0 {
             // The folded stock accessor yields a null record; nothing matches.
             return 0;
@@ -16976,11 +17002,20 @@ pub extern "thiscall" fn object_pick_child_at_point__6a4e00(
         let rec_p = unsafe { recs.add(i as usize * 0x20) };
         // SAFETY: `rec_p` is the record's flag dword at +0.
         let rec_flags = unsafe { rec_p.cast::<u32>().read() };
-        // SAFETY: `rec_p+4` addresses the record's 6 box floats.
-        let box_p = unsafe { rec_p.add(4) };
-        // SAFETY: `box_p` is the live, aligned box (min then max).
-        let rec_box = &unsafe { box_p.cast::<[f32; 6]>().read_unaligned() };
-        if crate::math::object::object_pick_child_at_point__6a4e00(rec_flags, mask, rec_box, p) {
+        // The box test reads the record in two 16-byte halves: `+4` is the min
+        // triple with `max_x` behind it and `+0x10` is the max triple with the
+        // record's trailing dword behind it, both inside the 0x20-byte stride.
+        // SAFETY: `rec_p+4` is in bounds of record `i`.
+        let lo_p = unsafe { rec_p.add(4) };
+        // SAFETY: `lo_p` addresses 16 in-bounds bytes of the record.
+        let rec_lo = unsafe { lo_p.cast::<[f32; 4]>().read_unaligned() };
+        // SAFETY: `rec_p+0x10` is in bounds of record `i`.
+        let hi_p = unsafe { rec_p.add(0x10) };
+        // SAFETY: `hi_p` addresses the record's last 16 in-bounds bytes.
+        let rec_hi = unsafe { hi_p.cast::<[f32; 4]>().read_unaligned() };
+        if crate::math::object::object_pick_child_at_point4__6a4e00(
+            rec_flags, mask, &rec_lo, &rec_hi, &p,
+        ) {
             // SAFETY: `this+0x1f4 + i*4` is record `i`'s child-pointer slot.
             let child_slot = unsafe { this.add(0x1f4 + i as usize * 4) };
             // SAFETY: `child_slot` holds the child pointer.
@@ -16990,8 +17025,8 @@ pub extern "thiscall" fn object_pick_child_at_point__6a4e00(
                 let ready_p = unsafe { child.add(0x164) };
                 // SAFETY: `ready_p` is the live ready byte.
                 let ready = unsafe { ready_p.read() };
-                if ready != 0
-                    && c_world_liquid__query_height_at_point__6b9f10(
+                if ready != 0 {
+                    if c_world_liquid__query_height_at_point__6b9f10(
                         child as i32,
                         0,
                         point,
@@ -16999,8 +17034,12 @@ pub extern "thiscall" fn object_pick_child_at_point__6a4e00(
                         out_height,
                         out_normal.cast::<u32>(),
                     ) != 0
-                {
-                    return 1;
+                    {
+                        return 1;
+                    }
+                    // SAFETY: `enable_p` is the live enable byte; the query
+                    // above is the only call that can have written it.
+                    enabled = unsafe { enable_p.read() };
                 }
             }
         }

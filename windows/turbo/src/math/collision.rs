@@ -2781,28 +2781,33 @@ mod plane_box_clearance_tests {
 // One distance pass: for each polygon vertex (read as a plane normal) compute the
 // sweep time against `motion` (the folded ray-plane intersect kernel); optionally
 // track the closest non-negative time; returns whether every vertex stayed
-// outside the `sep_eps` band.
+// outside the `sep_eps` band, together with the running best.
+//
+// The triples come off `chunks_exact`, which carries its own bound, so the live
+// count meets no per-iteration check against the polygon's 15 slots; and the
+// running best is carried by value, so it has no address to anchor it to a stack
+// slot. The f32 round trip through `f64` stays exactly where it was.
 fn sweep_distance_pass(
     verts: &[f32; 45],
     count: usize,
     motion: &[f32; 4],
     point: &[f32; 3],
     sep_eps: f32,
-    best_so_far: &mut f32,
+    mut best_so_far: f32,
     track_best: bool,
-) -> bool {
+) -> (bool, f32) {
     let mut all_outside = true;
-    for i in 0..count {
-        let normal = [verts[i * 3], verts[i * 3 + 1], verts[i * 3 + 2], 0.0];
+    for vert in verts.chunks_exact(3).take(count) {
+        let normal = [vert[0], vert[1], vert[2], 0.0];
         let t = collision_ray_plane_intersect_time__6329e0(&normal, motion, point);
-        if track_best && t < f64::from(*best_so_far) {
-            *best_so_far = if t <= 0.0 { 0.0 } else { t as f32 };
+        if track_best && t < f64::from(best_so_far) {
+            best_so_far = if t <= 0.0 { 0.0 } else { t as f32 };
         }
         if t > f64::from(sep_eps) {
             all_outside = false;
         }
     }
-    all_outside
+    (all_outside, best_so_far)
 }
 
 fn sweep_finish(best: &mut f32, best_so_far: f32) -> u32 {
@@ -2846,15 +2851,16 @@ pub fn collision_ray_polygon_sweep_distance__632830(
     let mut live = *count;
 
     if live != 0 {
-        let all_outside = sweep_distance_pass(
+        let (all_outside, tracked) = sweep_distance_pass(
             verts,
             live,
             &motion,
             ray_origin,
             sep_far_eps,
-            &mut best_so_far,
+            best_so_far,
             true,
         );
+        best_so_far = tracked;
         if !all_outside {
             return sweep_finish(best, best_so_far);
         }
@@ -2880,13 +2886,13 @@ pub fn collision_ray_polygon_sweep_distance__632830(
     }
     *count = live;
 
-    let all_outside = sweep_distance_pass(
+    let (all_outside, best_so_far) = sweep_distance_pass(
         verts,
         live,
         &motion,
         ray_origin,
         sep_near_eps,
-        &mut best_so_far,
+        best_so_far,
         false,
     );
     if all_outside {

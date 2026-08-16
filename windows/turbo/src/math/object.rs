@@ -772,7 +772,9 @@ mod tests_object_draw_debug_box__6a7ac0 {
 /// `rec` is `[min_x, min_y, min_z, max_x, max_y, max_z]`; the point must
 /// lie strictly inside on every axis and the record's flag word must share
 /// no bit with `mask`. All comparisons are strict (`fcomp` reject paths),
-/// so any `NaN` lane fails.
+/// so any `NaN` lane fails. The shipped body runs the 4-lane form below;
+/// this scalar transcription stays as its test oracle.
+#[cfg(test)]
 pub fn object_pick_child_at_point__6a4e00(
     rec_flags: u32,
     mask: u32,
@@ -788,9 +790,55 @@ pub fn object_pick_child_at_point__6a4e00(
         && point[2] < rec[5]
 }
 
+/// 4-lane form of the scalar `object_pick_child_at_point__6a4e00` box test.
+///
+/// `rec_lo` and `rec_hi` are the two 16-byte halves of the child record that
+/// carry the box, read at record `+4` and `+0x10`: the min triple with `max_x`
+/// behind it, and the max triple with the record's trailing dword behind it.
+/// Both triples therefore sit in lanes 0..2, one padded `point` serves both
+/// compares, and lane 3 falls out of the `0b111` mask. `cmpltps` is the same
+/// ordered predicate as the scalar `<` with the same operand order, so a `NaN`
+/// lane yields false and the boolean matches the scalar kernel's on every input
+/// (the property test pins this).
+pub fn object_pick_child_at_point4__6a4e00(
+    rec_flags: u32,
+    mask: u32,
+    rec_lo: &[f32; 4],
+    rec_hi: &[f32; 4],
+    point: &[f32; 4],
+) -> bool {
+    #[cfg(target_arch = "x86")]
+    use core::arch::x86::{_mm_and_ps, _mm_cmplt_ps, _mm_loadu_ps, _mm_movemask_ps};
+    #[cfg(target_arch = "x86_64")]
+    use core::arch::x86_64::{_mm_and_ps, _mm_cmplt_ps, _mm_loadu_ps, _mm_movemask_ps};
+    if (rec_flags & mask) != 0 {
+        return false;
+    }
+    // Every intrinsic below is SSE1, available on every ISA baseline this
+    // crate builds for.
+    // SAFETY: the load covers the 16 in-bounds bytes of its `[f32; 4]` argument.
+    let lo = unsafe { _mm_loadu_ps(rec_lo.as_ptr()) };
+    // SAFETY: as above.
+    let hi = unsafe { _mm_loadu_ps(rec_hi.as_ptr()) };
+    // SAFETY: the load covers the 16 in-bounds bytes of its `[f32; 4]` argument.
+    let p = unsafe { _mm_loadu_ps(point.as_ptr()) };
+    // SAFETY: lane-wise ordered compare of two initialized vectors.
+    let above_min = unsafe { _mm_cmplt_ps(lo, p) };
+    // SAFETY: lane-wise ordered compare of two initialized vectors.
+    let below_max = unsafe { _mm_cmplt_ps(p, hi) };
+    // SAFETY: lane-wise AND of two compare masks.
+    let both = unsafe { _mm_and_ps(above_min, below_max) };
+    // SAFETY: sign-bit extraction from an initialized vector.
+    let lanes = unsafe { _mm_movemask_ps(both) };
+    (lanes & 0b111) == 0b111
+}
+
 #[cfg(test)]
 mod tests_object_pick_child_at_point__6a4e00 {
-    use super::object_pick_child_at_point__6a4e00 as inside;
+    use super::{
+        object_pick_child_at_point__6a4e00 as inside,
+        object_pick_child_at_point4__6a4e00 as inside4,
+    };
 
     const BOX: [f32; 6] = [0.0, 0.0, 0.0, 2.0, 2.0, 2.0];
 
@@ -829,6 +877,45 @@ mod tests_object_pick_child_at_point__6a4e00 {
             assert!(!inside(0, 0, &BOX, &p), "axis {axis} low");
             p[axis] = 2.5;
             assert!(!inside(0, 0, &BOX, &p), "axis {axis} high");
+        }
+    }
+
+    /// The 4-lane kernel must agree with the scalar one on every input class.
+    ///
+    /// Sweeps ordinary orderings, box faces, negative zero, infinities and
+    /// `NaN` through the significant lanes, with the record's trailing dword
+    /// and the point's fourth lane set to values that would flip the answer if
+    /// either ever leaked into the mask, and with flag/mask pairs that both
+    /// pass and reject.
+    #[test]
+    fn pick4_matches_scalar_kernel() {
+        let vals = [
+            -1.0f32,
+            0.0,
+            -0.0,
+            1.0,
+            2.0,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::NAN,
+        ];
+        for &a in &vals {
+            for &b in &vals {
+                let rec = [a, 0.0, -1.0, b, 2.0, 1.0];
+                let point = [b, 1.0, a];
+                for &junk in &[f32::NAN, f32::NEG_INFINITY, 0.0] {
+                    let rec_lo = [rec[0], rec[1], rec[2], rec[3]];
+                    let rec_hi = [rec[3], rec[4], rec[5], junk];
+                    let point4 = [point[0], point[1], point[2], junk];
+                    for (flags, mask) in [(0u32, 0u32), (0x8u32, 0x4u32), (0x8u32, 0x8u32)] {
+                        assert_eq!(
+                            inside(flags, mask, &rec, &point),
+                            inside4(flags, mask, &rec_lo, &rec_hi, &point4),
+                            "rec={rec:?} point={point:?} junk={junk} flags={flags:#x} mask={mask:#x}"
+                        );
+                    }
+                }
+            }
         }
     }
 }
