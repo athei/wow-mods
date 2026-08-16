@@ -117,7 +117,7 @@ items_after_statements = "allow"        # 854
 cast_ptr_alignment = "allow"            # 925 — reads are already `read_unaligned`
 unreadable_literal = "allow"            # 391 — addresses and bit masks, verbatim
 similar_names = "allow"                 # 184
-semicolon_if_nothing_returned = "allow" # 52
+semicolon_if_nothing_returned = "allow" # 51
 many_single_char_names = "allow"        # 43
 
 # Numeric conversions that must truncate, wrap and round exactly as the
@@ -126,7 +126,7 @@ many_single_char_names = "allow"        # 43
 # it is a crash. Float comparison is exact on purpose: the differential harness
 # compares bit patterns.
 cast_possible_truncation = "allow"      # 392
-cast_sign_loss = "allow"                # 235
+cast_sign_loss = "allow"                # 240
 cast_possible_wrap = "allow"            # 102
 cast_precision_loss = "allow"           # 122
 cast_lossless = "allow"                 # 60
@@ -139,7 +139,7 @@ float_cmp = "allow"                     # 48
 # and move the code away from the original it has to be checked against.
 borrow_as_ptr = "allow"                 # 43
 ptr_as_ptr = "allow"                    # 24
-ptr_cast_constness = "allow"            # 12
+ptr_cast_constness = "allow"            # 11
 # All five are `(a*a + b*b).sqrt()`, which clippy wants as `hypot`. `hypot` is a
 # different algorithm — it rescales operands and rounds differently — so it does
 # not reproduce the transcribed `mul, mul, add, sqrt` the harness compares.

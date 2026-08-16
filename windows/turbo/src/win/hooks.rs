@@ -36962,6 +36962,20 @@ pub extern "thiscall" fn cm2_shadow__project_collision_quads__7137c0(
             .read_unaligned();
         if n_verts != 0 {
             let b = bounds.cast::<[f32; 6]>().read_unaligned();
+            // The outcode kernel compares four lanes at a time, so the two
+            // corners are built once here rather than per vertex; lane 3 is
+            // masked out of both compare results and its value is arbitrary.
+            let corner_lo = [b[0], b[1], b[2], 0.0];
+            let corner_hi = [b[3], b[4], b[5], 0.0];
+            // The matrix is loop-invariant, but the per-vertex stores below go
+            // through a raw scratch pointer that could alias it as far as the
+            // compiler knows, so the sixteen loads and their widenings to f64
+            // stay inside the loop. Reading it into a non-escaping local once
+            // says they cannot, and the widenings hoist. It cannot alias in
+            // fact either: the only stores are into the two scratch blocks this
+            // function itself allocates out of the host's heap and hangs off
+            // `this`, which the caller cannot be passing back as its matrix.
+            let mat = matrix.cast::<[f32; 16]>().read_unaligned();
             let mut byte_off = 0usize;
             for i in 0..n_verts as usize {
                 // Stock re-reads both scratch pointers every iteration; a null
@@ -36971,11 +36985,11 @@ pub extern "thiscall" fn cm2_shadow__project_collision_quads__7137c0(
                     .cast::<*mut u8>()
                     .read_unaligned()
                     .wrapping_add(byte_off);
-                let mut tmp = [0.0f32; 3];
+                let mut tmp = [0.0f32; 4];
                 c44_matrix__transform_point__7bca80(
                     tmp.as_mut_ptr(),
                     src_verts.wrapping_add(byte_off).cast::<f32>(),
-                    matrix,
+                    mat.as_ptr(),
                 );
                 dst.cast::<u32>().write_unaligned(tmp[0].to_bits());
                 dst.wrapping_add(4)
@@ -36984,7 +36998,8 @@ pub extern "thiscall" fn cm2_shadow__project_collision_quads__7137c0(
                 dst.wrapping_add(8)
                     .cast::<u32>()
                     .write_unaligned(tmp[2].to_bits());
-                let oc = crate::math::m2::cm2_shadow__outcode6__7137c0(&tmp, &b);
+                let oc =
+                    crate::math::m2::cm2_shadow__outcode6__7137c0(&tmp, &corner_lo, &corner_hi);
                 this.add(0x3e8)
                     .cast::<*mut u8>()
                     .read_unaligned()
@@ -37230,10 +37245,23 @@ pub extern "thiscall" fn c_map_obj__compute_portal_ndc_rect__6b46f0(
     };
     let portal_verts = verts_base.wrapping_add(start * 0xc);
 
-    // --- Transform loop (0x6b4764..0x6b47da): seed [x, y, z, 1.0] into the
-    // static scratch, view-proj transform in place via our own
-    // `C44Matrix__TransformVector4` hook (0x7bcb40), called directly. ---
-    let matrix = (BASE + 0x8b_e2d8) as *const f32; // view-proj matrix at 0xcbe2d8
+    // --- Transform loop (0x6b4764..0x6b47da): seed [x, y, z, 1.0], view-proj
+    // transform, result into the static scratch. The transform is our own
+    // `C44Matrix__TransformVector4` kernel (0x7bcb40) called by name; the
+    // pointer-taking adapter around it would only re-read the matrix through a
+    // raw pointer on every call. ---
+    //
+    // The matrix is loop-invariant and nothing in the loop can write it: the
+    // only stores go into the scratch at 0xcbe4c0, which sits above the matrix
+    // block at 0xcbe2d8..0xcbe317 and only ever advances upward, and the vertex
+    // count is a u16 so even the deliberate stock over-run stays above it. Read
+    // once, the sixteen loads and their widenings to f64 leave the loop. Stock
+    // re-reads per vertex only because it re-enters the callee, and the
+    // difference is observable solely under a concurrent write to the global,
+    // which is same-thread render state.
+    // SAFETY: the fixed 16-float view-proj matrix at VA 0xcbe2d8, in the live
+    // host image (base verified at load).
+    let matrix = unsafe { ((BASE + 0x8b_e2d8) as *const [f32; 16]).read_unaligned() };
     let mut i: usize = 0;
     loop {
         // Stock re-reads the u16 vertex count from portal+2 on every iteration
@@ -37253,20 +37281,17 @@ pub extern "thiscall" fn c_map_obj__compute_portal_ndc_rect__6b46f0(
                 .read_unaligned()
         };
         let slot = SCRATCH.wrapping_add(i * 4);
+        // Stock parks the seed in the scratch slot before transforming, and
+        // that store is dead: the result store below rewrites all sixteen bytes
+        // of the same slot before `i` advances, the block between them is
+        // straight-line, and nothing in it reads the slot back — the transform
+        // takes the source vertex. So the seed is built in a local instead.
+        let seed = [src[0], src[1], src[2], 1.0];
+        let v = crate::math::matrix44::c44_matrix__transform_vector4__7bcb40(&seed, &matrix);
+        // Store the transformed vec4 into the scratch slot (0x6b47ac..0x6b47c1).
         // SAFETY: scratch slot `i` of the 192-byte static; WMO portal data
         // bounds `count` at 12 verts, and an over-long count over-writes past
         // the scratch exactly as stock does (no added clamp).
-        unsafe {
-            slot.cast::<[f32; 4]>()
-                .write_unaligned([src[0], src[1], src[2], 1.0])
-        };
-        let mut tmp = [0.0f32; 4];
-        let res =
-            c44_matrix__transform_vector4__7bcb40(tmp.as_mut_ptr(), slot as *const f32, matrix);
-        // Copy the returned vec4 back over the scratch slot (0x6b47ac..0x6b47c1).
-        // SAFETY: `res` is the transform's dst pointer (= `tmp`), four f32.
-        let v = unsafe { res.cast::<[f32; 4]>().read_unaligned() };
-        // SAFETY: same in-bounds scratch slot as the seed write above.
         unsafe { slot.cast::<[f32; 4]>().write_unaligned(v) };
         i += 1;
     }

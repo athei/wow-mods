@@ -368,20 +368,37 @@ pub unsafe fn cm2_shared__find_keyframe_interval__713d50(
     // tolerates a valid packed track's 2-byte-aligned timestamp array.
     let at = |i: u32| unsafe { ts_base.wrapping_add(i as usize).read_unaligned() };
 
+    // The forward scan walks a cursor rather than an index. Index-for-index it
+    // is the same search — `p <= end` is `from + 1 <= hi`, which is the index
+    // form's `from < hi` because `from` and `hi` are both clamped to `max` —
+    // but the loop body loses the reload of the loop-invariant `time` and the
+    // two-register index bookkeeping collapses to one pointer bump. The
+    // one-past-`hi` pointer is formed and never read, matching the index
+    // form's short-circuit.
+    let scan_forward = |from: u32| -> u32 {
+        let end = ts_base.wrapping_add(hi as usize);
+        let mut p = ts_base.wrapping_add(from as usize).wrapping_add(1);
+        // SAFETY: the short-circuit reaches the read only while `p <= end`, so
+        // every dereferenced `p` addresses one of `[1, hi]`, and `hi <= max =
+        // count - 1`, which the caller guarantees readable. `read_unaligned`
+        // tolerates a valid packed track's 2-byte-aligned timestamp array.
+        while p <= end && unsafe { p.read_unaligned() } <= time {
+            p = p.wrapping_add(1);
+        }
+        // SAFETY: `p` and `ts_base` address the same timestamp array and `p` is
+        // at most one past `ts_base + hi`, so the element distance is in range.
+        (unsafe { p.offset_from(ts_base) } as u32) - 1
+    };
+
     let mut idx = seed.min(max);
     let ahead = time.wrapping_sub(at(idx));
     if ahead < 500 {
         // Forward scan from the seed.
-        while idx < hi && at(idx + 1) <= time {
-            idx += 1;
-        }
+        idx = scan_forward(idx);
     } else if ahead < 500u32.wrapping_neg() {
         if time.wrapping_sub(at(lo)) < 500 {
             // Forward scan from the window start.
-            idx = lo;
-            while idx < hi && at(idx + 1) <= time {
-                idx += 1;
-            }
+            idx = scan_forward(lo);
         } else {
             // Binary search over the window.
             let mut l = lo;
@@ -2173,37 +2190,80 @@ mod tests_cm2_scene__trace_line__7089c0 {
 // for the arithmetic.
 // ---------------------------------------------------------------------------
 
+/// Remaps the packed `(above << 3) | below` compare mask to the stock bit order.
+///
+/// The two 3-bit masks leave `movmskps` in axis order (x, y, z), while the
+/// original interleaves them per axis: the below-min bit for axis `a` lands at
+/// `2a` and the above-max bit at `2a + 1`.
+const OUTCODE6_REMAP: [u8; 64] = {
+    let mut table = [0u8; 64];
+    let mut packed = 0usize;
+    while packed < 64 {
+        let below = packed & 7;
+        let above = packed >> 3;
+        let mut oc = 0u8;
+        let mut axis = 0u8;
+        while axis < 3 {
+            if below & (1 << axis) != 0 {
+                oc |= 1 << (2 * axis);
+            }
+            if above & (1 << axis) != 0 {
+                oc |= 1 << (2 * axis + 1);
+            }
+            axis += 1;
+        }
+        table[packed] = oc;
+        packed += 1;
+    }
+    table
+};
+
 /// 6-bit Cohen–Sutherland AABB outcode for one transformed collision vertex.
 ///
 /// (`CM2Shadow::ProjectCollisionQuads`, per-vertex block 0x7138d1–0x713944.)
 ///
-/// `bounds` is `[minX, minY, minZ, maxX, maxY, maxZ]`. Bit layout: `x < minX`
-/// = 1, `x > maxX` = 2, `y < minY` = 4, `y > maxY` = 8, `z < minZ` = 0x10,
-/// `z > maxZ` = 0x20. Each axis transcribes the stock x87 pair — `FCOMP min` /
-/// `TEST AH,0x5` (below-min sets the low bit and skips the max test) then
-/// `FCOMP max` / `TEST AH,0x41` (strictly above max sets the high bit). Both
-/// compares are strict and ORDERED: a `NaN` coordinate is unordered against
-/// both bounds, sets NEITHER bit, and classifies the vertex as inside (never
-/// trivially rejected). Rust `<`/`>` are IEEE ordered compares (false on NaN)
-/// and reproduce this exactly; a `>=`-style rewrite would not.
-pub fn cm2_shadow__outcode6__7137c0(v: &[f32; 3], bounds: &[f32; 6]) -> u32 {
-    let mut oc = 0u32;
-    if v[0] < bounds[0] {
-        oc = 1;
-    } else if v[0] > bounds[3] {
-        oc = 2;
-    }
-    if v[1] < bounds[1] {
-        oc |= 4;
-    } else if v[1] > bounds[4] {
-        oc |= 8;
-    }
-    if v[2] < bounds[2] {
-        oc |= 0x10;
-    } else if v[2] > bounds[5] {
-        oc |= 0x20;
-    }
-    oc
+/// `lo` is `[minX, minY, minZ, _]` and `hi` is `[maxX, maxY, maxZ, _]`; lane 3
+/// of all three vectors is compared and then masked out of both results, so the
+/// caller may leave it holding anything. Bit layout: `x < minX` = 1, `x > maxX`
+/// = 2, `y < minY` = 4, `y > maxY` = 8, `z < minZ` = 0x10, `z > maxZ` = 0x20.
+/// Each axis transcribes the stock x87 pair — `FCOMP min` / `TEST AH,0x5`
+/// (below-min sets the low bit and skips the max test) then `FCOMP max` /
+/// `TEST AH,0x41` (strictly above max sets the high bit). Both compares are
+/// strict and ORDERED: a `NaN` coordinate is unordered against both bounds,
+/// sets NEITHER bit, and classifies the vertex as inside (never trivially
+/// rejected).
+///
+/// `cmpltps` is that same ordered strict less-than, false on unordered, so the
+/// six-branch ladder becomes two lane-wise compares; `v > max` is written
+/// `max < v`, the same ordered predicate with its operands swapped rather than
+/// a different compare form. Clearing the below-min mask out of the above-max
+/// mask is what reproduces the ladder's `else if` exclusivity, and it is
+/// load-bearing on inverted bounds (`min > max`), the one input where both
+/// compares of an axis are true and stock sets the low bit alone.
+pub fn cm2_shadow__outcode6__7137c0(v: &[f32; 4], lo: &[f32; 4], hi: &[f32; 4]) -> u32 {
+    #[cfg(target_arch = "x86")]
+    use core::arch::x86::{_mm_cmplt_ps, _mm_loadu_ps, _mm_movemask_ps};
+    #[cfg(target_arch = "x86_64")]
+    use core::arch::x86_64::{_mm_cmplt_ps, _mm_loadu_ps, _mm_movemask_ps};
+    // Every intrinsic below is SSE1, available on every ISA baseline this
+    // crate builds for.
+    // SAFETY: the load covers the 16 in-bounds bytes of its `[f32; 4]` argument.
+    let vertex = unsafe { _mm_loadu_ps(v.as_ptr()) };
+    // SAFETY: as above.
+    let min = unsafe { _mm_loadu_ps(lo.as_ptr()) };
+    // SAFETY: as above.
+    let max = unsafe { _mm_loadu_ps(hi.as_ptr()) };
+    // SAFETY: lane-wise ordered compare of two initialized vectors.
+    let below = unsafe { _mm_cmplt_ps(vertex, min) };
+    // SAFETY: lane-wise ordered compare of two initialized vectors.
+    let above = unsafe { _mm_cmplt_ps(max, vertex) };
+    // SAFETY: sign-bit extraction from an initialized vector.
+    let below_mask = unsafe { _mm_movemask_ps(below) };
+    // SAFETY: sign-bit extraction from an initialized vector.
+    let above_mask = unsafe { _mm_movemask_ps(above) };
+    let below_bits = (below_mask as u32) & 7;
+    let above_bits = (above_mask as u32) & 7 & !below_bits;
+    u32::from(OUTCODE6_REMAP[((above_bits << 3) | below_bits) as usize])
 }
 
 /// Row-normalizes the 3×3 shadow basis in place (0x71399e–0x713a45).
@@ -2287,13 +2347,81 @@ pub fn ts_growable_array__align_up__674500(value: u32, alignment: u32) -> u32 {
 #[cfg(test)]
 mod tests_cm2_shadow__project_collision_quads__7137c0 {
     use super::{
-        cm2_shadow__normalize_basis3__7137c0 as normalize, cm2_shadow__outcode6__7137c0 as outcode,
-        cm2_shadow__quad_plane__7137c0 as plane, ts_growable_array__align_up__674500 as align_up,
+        cm2_shadow__normalize_basis3__7137c0 as normalize, cm2_shadow__quad_plane__7137c0 as plane,
+        ts_growable_array__align_up__674500 as align_up,
     };
 
     const BOUNDS: [f32; 6] = [-1.0, -2.0, -3.0, 1.0, 2.0, 3.0];
 
     // -- outcode ------------------------------------------------------------
+
+    /// The six-branch ladder the packed kernel replaces, kept as its oracle.
+    ///
+    /// Per axis a strict ordered below-min compare that, when it fires, skips
+    /// the above-max compare — the shape the original emits.
+    fn outcode_scalar(v: &[f32; 3], bounds: &[f32; 6]) -> u32 {
+        let mut oc = 0u32;
+        if v[0] < bounds[0] {
+            oc = 1;
+        } else if v[0] > bounds[3] {
+            oc = 2;
+        }
+        if v[1] < bounds[1] {
+            oc |= 4;
+        } else if v[1] > bounds[4] {
+            oc |= 8;
+        }
+        if v[2] < bounds[2] {
+            oc |= 0x10;
+        } else if v[2] > bounds[5] {
+            oc |= 0x20;
+        }
+        oc
+    }
+
+    /// Feeds the packed kernel from the `[f32; 6]` bounds the cases spell.
+    ///
+    /// Lane 3 is deliberately garbage, not zero: the kernel masks it out of
+    /// both compare results, and these cases are what says so.
+    fn outcode(v: &[f32; 3], bounds: &[f32; 6]) -> u32 {
+        super::cm2_shadow__outcode6__7137c0(
+            &[v[0], v[1], v[2], f32::NAN],
+            &[bounds[0], bounds[1], bounds[2], -7.5],
+            &[bounds[3], bounds[4], bounds[5], 7.5],
+        )
+    }
+
+    #[test]
+    fn outcode_packed_matches_the_ladder() {
+        // Sweeps both coordinates and both bounds of two axes over NaN, the
+        // infinities, both zeros and finite values, so the cases include an
+        // inverted axis (`min > max`) — the one input where both compares of an
+        // axis are true and the ladder's `else if` sets the low bit alone.
+        const VALS: [f32; 7] = [
+            f32::NAN,
+            f32::NEG_INFINITY,
+            -2.0,
+            -0.0,
+            0.0,
+            2.0,
+            f32::INFINITY,
+        ];
+        for &x in &VALS {
+            for &lo in &VALS {
+                for &hi in &VALS {
+                    for &y in &VALS {
+                        let v = [x, y, 1.0];
+                        let b = [lo, hi, -3.0, hi, lo, 3.0];
+                        assert_eq!(
+                            outcode(&v, &b),
+                            outcode_scalar(&v, &b),
+                            "v={v:?} bounds={b:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn outcode_inside_is_zero() {

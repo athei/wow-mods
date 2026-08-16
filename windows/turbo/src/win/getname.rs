@@ -122,112 +122,210 @@ static MODE: AtomicU8 = AtomicU8::new(MODE_DELEGATE);
 const SETS: usize = 256;
 const WAYS: usize = 4;
 
+/// What a memo is keyed by: the cell the key is published through, and its set.
+///
+/// The two stores are keyed at different widths, and on this target that is
+/// worth spelling out rather than widening both. Names are keyed by a 32-bit
+/// object pointer, so a `u64` cell would cost a `movq` plus a lane extract and
+/// two compares on every way probed, where a dword cell costs one `cmp`. GUIDs
+/// are 64-bit values and keep theirs.
+trait MemoKey: Copy + Eq {
+    /// The atomic cell a key of this width is published through.
+    type Cell: Sync;
+
+    /// The empty marker: no key equal to it is ever recorded.
+    const EMPTY: Self;
+
+    /// Read a cell.
+    fn load(cell: &Self::Cell) -> Self;
+
+    /// Publish a key into a cell.
+    fn store(cell: &Self::Cell, key: Self);
+
+    /// Empty a cell, answering what it held.
+    fn take(cell: &Self::Cell) -> Self;
+
+    /// The set this key belongs to, mixed from the whole key.
+    fn set_of(self) -> usize;
+}
+
+impl MemoKey for u32 {
+    type Cell = AtomicU32;
+    const EMPTY: Self = 0;
+
+    fn load(cell: &Self::Cell) -> Self {
+        cell.load(Ordering::Relaxed)
+    }
+
+    fn store(cell: &Self::Cell, key: Self) {
+        cell.store(key, Ordering::Relaxed);
+    }
+
+    fn take(cell: &Self::Cell) -> Self {
+        cell.swap(0, Ordering::Relaxed)
+    }
+
+    fn set_of(self) -> usize {
+        // Object pointers cluster, so the top bits of a Fibonacci mix rather
+        // than the address bits themselves.
+        ((self.wrapping_mul(0x9e37_79b9) >> 24) as usize) & (SETS - 1)
+    }
+}
+
+impl MemoKey for u64 {
+    type Cell = AtomicU64;
+    const EMPTY: Self = 0;
+
+    fn load(cell: &Self::Cell) -> Self {
+        cell.load(Ordering::Relaxed)
+    }
+
+    fn store(cell: &Self::Cell, key: Self) {
+        cell.store(key, Ordering::Relaxed);
+    }
+
+    fn take(cell: &Self::Cell) -> Self {
+        cell.swap(0, Ordering::Relaxed)
+    }
+
+    fn set_of(self) -> usize {
+        let mixed = (self ^ (self >> 29)).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+        ((mixed >> 33) as usize) & (SETS - 1)
+    }
+}
+
 /// One memo way: a key and the anchored string it resolves to.
 ///
 /// Written only from the game thread (the one thread that runs script
 /// methods); the atomics provide shared mutability for a `static`, not
-/// cross-thread ordering. `key == 0` marks an empty way, and `key` is written
-/// last on insert so a partially-written way is never live.
-struct Way {
+/// cross-thread ordering. An empty-marker key marks an empty way, and the key
+/// is written last on insert so a partially-written way is never live. The
+/// payload is two dwords rather than one qword because a probe that hits reads
+/// only the `TString*`; the registry ref is touched solely on eviction. The
+/// 16-byte alignment holds the way stride at a power of two for both key
+/// widths, so a set index stays a shift.
+#[repr(align(16))]
+struct Way<K: MemoKey> {
     /// Object pointer, or the GUID itself, depending on the store.
-    key: AtomicU64,
-    /// Interned `TString*` in the low half, its registry ref above it.
-    value: AtomicU64,
+    key: K::Cell,
+    /// The interned `TString*`.
+    ts: AtomicU32,
+    /// Its registry ref, released when the way is displaced.
+    anchored: AtomicU32,
 }
 
-impl Way {
+// An empty way is spelled per key width rather than through an associated
+// constant, because a `const` of a type holding an atomic is a hazard in
+// general: it is inlined at every use, so an operation on it would run on a
+// temporary. A `const fn` naming the concrete cell has no such reading.
+impl Way<u32> {
+    const fn empty() -> Self {
+        Self {
+            key: AtomicU32::new(0),
+            ts: AtomicU32::new(0),
+            anchored: AtomicU32::new(0),
+        }
+    }
+}
+
+impl Way<u64> {
     const fn empty() -> Self {
         Self {
             key: AtomicU64::new(0),
-            value: AtomicU64::new(0),
+            ts: AtomicU32::new(0),
+            anchored: AtomicU32::new(0),
         }
     }
 }
 
 /// A set-associative store of anchored strings.
-struct Memo {
-    ways: [[Way; WAYS]; SETS],
+struct Memo<K: MemoKey> {
+    ways: [[Way<K>; WAYS]; SETS],
     /// Round-robin eviction cursor; a full set evicts `cursor % WAYS`.
     cursor: AtomicU32,
 }
 
-impl Memo {
-    const fn new() -> Self {
-        Self {
-            ways: [const { [const { Way::empty() }; WAYS] }; SETS],
-            cursor: AtomicU32::new(0),
-        }
-    }
-
-    /// The set a key belongs to, mixed from the whole key.
-    const fn set_of(key: u64) -> usize {
-        let mixed = (key ^ (key >> 29)).wrapping_mul(0x9e37_79b9_7f4a_7c15);
-        ((mixed >> 33) as usize) & (SETS - 1)
-    }
-
+impl<K: MemoKey> Memo<K> {
     /// The `TString*` recorded for `key`, if any.
-    fn get(&self, key: u64) -> Option<usize> {
-        if key == 0 {
-            // Zero marks an empty way: a zero key would match one and hand
-            // back a null `TString`. Callers never record it (a zero GUID
-            // renders without being stored), so it is never a hit either.
+    fn get(&self, key: K) -> Option<usize> {
+        if key == K::EMPTY {
+            // The empty marker would match an empty way and hand back a null
+            // `TString`. Callers never record it (a zero GUID renders without
+            // being stored), so it is never a hit either.
             return None;
         }
-        self.ways[Self::set_of(key)].iter().find_map(|way| {
-            (way.key.load(Ordering::Relaxed) == key).then(|| {
-                let value = way.value.load(Ordering::Relaxed);
-                usize::try_from(value & 0xffff_ffff).expect("masked to 32 bits")
-            })
-        })
+        self.ways[key.set_of()]
+            .iter()
+            .find_map(|way| (K::load(&way.key) == key).then(|| way.ts.load(Ordering::Relaxed)))
+            .map(|ts| ts as usize)
     }
 
     /// Record `key -> (ts, anchored)`, releasing whatever it displaces.
-    fn put(&self, key: u64, ts: usize, anchored: u32) {
-        let set = &self.ways[Self::set_of(key)];
+    fn put(&self, key: K, ts: usize, anchored: u32) {
+        let set = &self.ways[key.set_of()];
         let chosen = set
             .iter()
-            .find(|way| matches!(way.key.load(Ordering::Relaxed), k if k == key || k == 0));
+            .find(|way| matches!(K::load(&way.key), k if k == key || k == K::EMPTY));
         let way = chosen.unwrap_or_else(|| {
             let cursor = self.cursor.load(Ordering::Relaxed);
             self.cursor.store(cursor.wrapping_add(1), Ordering::Relaxed);
             super::tally::bump(&EVICTIONS);
             &set[cursor as usize % WAYS]
         });
-        let prior = way.key.swap(0, Ordering::Relaxed);
-        if prior != 0 {
+        let prior = K::take(&way.key);
+        if prior != K::EMPTY {
             // Every anchor this way stops pointing at has to go back, or it
             // holds a registry slot for the life of the state. That covers
             // re-recording the same key: the replacement anchor is a
             // different slot even when the key is unchanged.
-            let victim = way.value.load(Ordering::Relaxed);
-            release_ref((victim >> 32) as u32);
+            release_ref(way.anchored.load(Ordering::Relaxed));
         }
-        way.value
-            .store(ts as u64 | u64::from(anchored) << 32, Ordering::Relaxed);
-        way.key.store(key, Ordering::Relaxed);
+        way.ts.store(
+            u32::try_from(ts).expect("32-bit host pointer"),
+            Ordering::Relaxed,
+        );
+        way.anchored.store(anchored, Ordering::Relaxed);
+        K::store(&way.key, key);
     }
 
     /// Forget everything, without unref-ing: the state itself is going away.
     fn clear(&self) {
         for set in &self.ways {
             for way in set {
-                way.key.store(0, Ordering::Relaxed);
+                K::store(&way.key, K::EMPTY);
             }
         }
     }
 }
 
 /// Frame names, keyed by object and guarded by the live name bytes.
-static NAMES: Memo = Memo::new();
+static NAMES: Memo<u32> = Memo {
+    ways: [const { [const { Way::<u32>::empty() }; WAYS] }; SETS],
+    cursor: AtomicU32::new(0),
+};
 
 /// GUID renderings, keyed by the GUID itself — a pure function, no guard.
-static GUIDS: Memo = Memo::new();
+static GUIDS: Memo<u64> = Memo {
+    ways: [const { [const { Way::<u64>::empty() }; WAYS] }; SETS],
+    cursor: AtomicU32::new(0),
+};
 
 /// Class vtables whose `IsA` predicate has already answered yes.
 ///
-/// A vtable is a fixed address in the host image, so an entry can never go
-/// stale within a run; the array is a bound, not a cache policy.
+/// A vtable is a fixed address in the host image, so a recorded entry can never
+/// go stale within a run. The table is direct-mapped, so a collision costs one
+/// predicate call and nothing else: the stored value is the vtable itself, and
+/// the hit test is an equality compare.
 static ISA_OK: [AtomicU32; 64] = [const { AtomicU32::new(0) }; 64];
+
+/// Which [`ISA_OK`] slot a vtable address maps to.
+///
+/// Class vtables sit close together in the image's read-only data, so this
+/// takes the top six bits of a Fibonacci mix rather than address bits that
+/// would cluster.
+const fn isa_set(vtbl: u32) -> usize {
+    (vtbl.wrapping_mul(0x9e37_79b9) >> 26) as usize
+}
 
 static NAME_HITS: Counter = Counter::zero();
 static NAME_MISSES: Counter = Counter::zero();
@@ -488,20 +586,17 @@ fn object_of(table: usize) -> Option<usize> {
 /// Whether this object's class answers the frame-object type predicate.
 ///
 /// The answer is a property of the class, so a vtable that has answered yes is
-/// remembered and the virtual call skipped. A class the table has no room for
-/// simply pays the call every time.
+/// remembered and the virtual call skipped. The probe is direct-mapped: one
+/// load and one compare regardless of how many classes are resident, and a
+/// collision costs a predicate call rather than a wrong answer, since the
+/// stored value is the vtable and the hit test is equality. Zero marks an empty
+/// slot, so a null vtable never reads as a hit — it takes the predicate call
+/// and faults where the stock dispatch would.
 fn is_a(obj: usize, vtbl: usize, token: u32) -> bool {
     let slot_value = u32::try_from(vtbl).expect("32-bit image pointer");
-    let mut free: Option<&AtomicU32> = None;
-    for entry in &ISA_OK {
-        match entry.load(Ordering::Relaxed) {
-            0 => {
-                free = Some(entry);
-                break;
-            }
-            known if known == slot_value => return true,
-            _ => {}
-        }
+    let slot = &ISA_OK[isa_set(slot_value)];
+    if slot_value != 0 && slot.load(Ordering::Relaxed) == slot_value {
+        return true;
     }
     // SAFETY: a frame class's vtable holds its type predicate at `+0x10`,
     // taking the object in `ecx` and the token on the stack.
@@ -513,9 +608,7 @@ fn is_a(obj: usize, vtbl: usize, token: u32) -> bool {
     if is_a(obj, token) == 0 {
         return false;
     }
-    if let Some(entry) = free {
-        entry.store(slot_value, Ordering::Relaxed);
-    }
+    slot.store(slot_value, Ordering::Relaxed);
     true
 }
 
@@ -568,7 +661,7 @@ fn push_name(l: i32, obj: usize, vtbl: usize) {
         push_nil(l);
         return;
     }
-    let key = name.addr() as u64;
+    let key = u32::try_from(name.addr()).expect("32-bit host pointer");
     if let Some(ts) = NAMES.get(key).filter(|&ts| name_matches(name, ts)) {
         push_cached(l, ts);
         super::tally::bump(&NAME_HITS);
@@ -631,13 +724,19 @@ fn render_guid(guid: u64) -> [u8; 18] {
 /// shorter name, and a wide read of the cached length could run off the end of
 /// its allocation. A mismatch is found at or before that end, since the live
 /// name's terminator differs from any cached byte there.
+///
+/// The policy is about the live buffer only, so the CACHED bytes are walked as
+/// a slice: that keeps the loop a half-open counter over a known length instead
+/// of the inclusive range's done-flag, and leaves the invariant `name` pointer
+/// in a register rather than reloading it per byte.
 fn name_matches(name: *const u8, ts: usize) -> bool {
     // SAFETY: a `TString`'s length lives at `+0xc`.
     let len = unsafe { *((ts + 0xc) as *const usize) };
-    for i in 0..=len {
-        // SAFETY: `ts + 0x10` is the interned string's byte array, `len + 1`
-        // long including its terminator (the registry ref keeps it alive).
-        let want = unsafe { *((ts + 0x10 + i) as *const u8) };
+    // SAFETY: `ts + 0x10` is the interned string's byte array, `len + 1` long
+    // including its terminator, immutable for as long as the registry ref this
+    // memo holds keeps it alive.
+    let cached = unsafe { core::slice::from_raw_parts((ts + 0x10) as *const u8, len + 1) };
+    for (i, &want) in cached.iter().enumerate() {
         // SAFETY: every byte before `i` matched, so byte `i` is still within
         // the object's name buffer (its terminator at worst).
         if unsafe { name.wrapping_byte_add(i).read() } != want {

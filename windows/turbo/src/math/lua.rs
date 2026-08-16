@@ -106,10 +106,43 @@ mod tests_eval_polynomial_horner__453620 {
 /// Pure integer hashing over the bit pattern; no floating-point arithmetic other
 /// than the single bias add. The wrapping sum mirrors the 32-bit `ADD` in the
 /// original (the two halves can carry out of 32 bits).
+///
+/// The halves are taken out of the vector register rather than through
+/// `f64::to_bits`, which on i686 lowers to an 8-byte spill read back as two
+/// dwords — the function's only stack object, and the whole reason its frame
+/// gets realigned. `castpd_si128` is a bitcast, the two extracts are SSE2 data
+/// moves, and the bias add itself is untouched, so every bit of the result is
+/// the same on every input.
 pub fn lua_h_hashnum__6fa260(n: f64, bias: f64, lsizenode: u8, node_base: u32) -> u32 {
-    let bits = (n + bias).to_bits();
-    let lo = bits as u32;
-    let hi = (bits >> 32) as u32;
+    #[cfg(target_arch = "x86")]
+    use core::arch::x86::{_mm_castpd_si128, _mm_cvtsi128_si32, _mm_set_sd, _mm_srli_si128};
+    #[cfg(target_arch = "x86_64")]
+    use core::arch::x86_64::{_mm_castpd_si128, _mm_cvtsi128_si32, _mm_set_sd, _mm_srli_si128};
+
+    let biased = n + bias;
+
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    let (lo, hi) = {
+        // SAFETY: `_mm_set_sd` moves a scalar into lane 0 of a fresh register;
+        // SSE2, no memory or alignment precondition.
+        let scalar = unsafe { _mm_set_sd(biased) };
+        // SAFETY: a reinterpretation between vector types, touching no memory.
+        let bits = unsafe { _mm_castpd_si128(scalar) };
+        // SAFETY: reads dword lane 0 of an initialized vector.
+        let lo = unsafe { _mm_cvtsi128_si32(bits) };
+        // SAFETY: byte-shifts an initialized vector; SSE2, no precondition.
+        let shifted = unsafe { _mm_srli_si128::<4>(bits) };
+        // SAFETY: reads dword lane 0 of an initialized vector.
+        let hi = unsafe { _mm_cvtsi128_si32(shifted) };
+        (lo as u32, hi as u32)
+    };
+    #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+    let (lo, hi) = {
+        // Non-x86 fallback (never the parity target; keeps the crate buildable).
+        let bits = biased.to_bits();
+        (bits as u32, (bits >> 32) as u32)
+    };
+
     let sum = hi.wrapping_add(lo);
     let divisor = ((1u32 << (lsizenode & 0x1f)) - 1) | 1;
     let idx = sum % divisor;
@@ -147,9 +180,27 @@ mod tests_lua_h_hashnum__6fa260 {
 
     #[test]
     fn matches_independent_oracle() {
+        // The oracle takes the two halves through `f64::to_bits`, so this also
+        // pins the register extraction the kernel uses in its place. `ls` covers
+        // the two shifts that collapse the divisor to 1, and stops at 20 because
+        // the oracle spells `idx * 0x28` without wrapping; the keys include the
+        // values whose bit patterns have a distinctive half: the infinities
+        // (zero low half), both zeros, a NaN, and a subnormal (zero high half).
         let bias = 1.0f64;
-        for &ls in &[1u8, 3, 4, 7] {
-            for &n in &[0.0f64, 2.0, -3.5, 100.0, -0.0, 65536.0] {
+        for &ls in &[0u8, 1, 3, 4, 7, 20] {
+            for &n in &[
+                0.0f64,
+                2.0,
+                -3.5,
+                100.0,
+                -0.0,
+                65536.0,
+                f64::INFINITY,
+                f64::NEG_INFINITY,
+                f64::NAN,
+                f64::MIN_POSITIVE / 4.0,
+                f64::MAX,
+            ] {
                 assert_eq!(hashnum(n, bias, ls, 0x1000), oracle(n, bias, ls, 0x1000));
             }
         }
