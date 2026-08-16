@@ -1185,14 +1185,41 @@ mod tests_c_math_wrap_angle__7abbe0 {
 /// NaN polarity: both compares are ordered (the x87 `FCOMP` chain falls to the
 /// identity tail on unordered), so a NaN angle returns unchanged — matched by
 /// Rust `>`/`<` both being false on NaN. Do NOT reorder into `<=`/`>=`.
+///
+/// Reaching a wrap arm already puts the widened value more than one divisor out,
+/// so up to two divisors out the fmod quotient truncates to `1` or `-1` and the
+/// whole reduction is one subtract — itself exact by Sterbenz over that same
+/// window. The `fmod` stays for anything further out and for a non-finite
+/// widened value, out of line so that the sites this kernel inlines into carry
+/// the subtract rather than a libcall.
 pub fn normalize_angle_to_pi__6084f0(angle: f32) -> f32 {
     const HI: f32 = f32::from_bits(0x4049_0fdb); //  PI as f32
     const LO: f32 = f32::from_bits(0xc049_0fdb); // -PI as f32
     const TWO_PI: f64 = f64::from_bits(0x4019_21fb_6000_0000); // 2 * PI_f32
+    // Two divisors out, the edge of the one-subtract window. Scaling by 2.0 is a
+    // power-of-two step, so the bound is exact and the gate is a clean split.
+    const WINDOW: f64 = 2.0 * TWO_PI;
+
+    /// The reduction for a widened angle two or more divisors out of range.
+    ///
+    /// Also the non-finite path: an infinite widened value fails its window gate
+    /// and reaches the same `fmod` the stock body called unconditionally.
+    #[cold]
+    #[inline(never)]
+    fn fmod_far(x: f64) -> f64 {
+        x % TWO_PI
+    }
+
     if angle > HI {
-        (((f64::from(angle) + f64::from(HI)) % TWO_PI) - f64::from(HI)) as f32
+        // The gate makes `x > TWO_PI`, so the quotient is 1 inside the window.
+        let x = f64::from(angle) + f64::from(HI);
+        let wrapped = if x < WINDOW { x - TWO_PI } else { fmod_far(x) };
+        (wrapped - f64::from(HI)) as f32
     } else if angle < LO {
-        (((f64::from(angle) - f64::from(HI)) % TWO_PI) + f64::from(HI)) as f32
+        // Mirrored: `x < -TWO_PI`, so the quotient is -1 inside the window.
+        let x = f64::from(angle) - f64::from(HI);
+        let wrapped = if x > -WINDOW { x + TWO_PI } else { fmod_far(x) };
+        (wrapped + f64::from(HI)) as f32
     } else {
         // In `(-PI, PI]`, or NaN — returned unchanged.
         angle
@@ -1260,6 +1287,52 @@ mod tests_normalize_angle_to_pi__6084f0 {
                 "a={a} r={r} not congruent mod 2PI (k={k})"
             );
             a += 0.37;
+        }
+    }
+
+    /// The unwindowed fmod form, the oracle the windowed subtract has to match.
+    fn fmod_form(angle: f32) -> f32 {
+        const LO: f32 = f32::from_bits(0xc049_0fdb); // -PI as f32
+        if angle > HI {
+            (((f64::from(angle) + f64::from(HI)) % TWO_PI) - f64::from(HI)) as f32
+        } else if angle < LO {
+            (((f64::from(angle) - f64::from(HI)) % TWO_PI) + f64::from(HI)) as f32
+        } else {
+            angle
+        }
+    }
+
+    #[test]
+    fn windowed_subtract_matches_fmod_bit_for_bit() {
+        // The non-finite and far-out inputs, which take the out-of-line fmod.
+        for a in [
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::NAN,
+            f32::MAX,
+            f32::MIN,
+            1e30,
+            -1e30,
+            HI,
+            -HI,
+        ] {
+            assert_eq!(norm(a).to_bits(), fmod_form(a).to_bits(), "a={a}");
+        }
+        // Every f32 either side of the window edge (3*PI, where the quotient stops
+        // truncating to +/-1), both signs.
+        let mut a = f32::from_bits((3.0 * HI).to_bits() - 8192);
+        for _ in 0..16384 {
+            let neg = -a;
+            assert_eq!(norm(a).to_bits(), fmod_form(a).to_bits(), "a={a}");
+            assert_eq!(norm(neg).to_bits(), fmod_form(neg).to_bits(), "a={neg}");
+            a = f32::from_bits(a.to_bits() + 1);
+        }
+        // And a dense sweep of the range a frame actually produces.
+        let mut x = -60.0f64;
+        while x <= 60.0 {
+            let a = x as f32;
+            assert_eq!(norm(a).to_bits(), fmod_form(a).to_bits(), "a={a}");
+            x += 0.0007;
         }
     }
 }

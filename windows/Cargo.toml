@@ -114,7 +114,7 @@ undocumented_unsafe_blocks = "warn"
 # it to suit a lint makes the reimplementation harder to check against the
 # behaviour it has to match.
 items_after_statements = "allow"        # 855
-cast_ptr_alignment = "allow"            # 927 — reads are already `read_unaligned`
+cast_ptr_alignment = "allow"            # 926 — reads are already `read_unaligned`
 unreadable_literal = "allow"            # 391 — addresses and bit masks, verbatim
 similar_names = "allow"                 # 184
 semicolon_if_nothing_returned = "allow" # 51
@@ -125,7 +125,7 @@ many_single_char_names = "allow"        # 43
 # narrowing into a panic, which is a behaviour change, and in a per-frame hook
 # it is a crash. Float comparison is exact on purpose: the differential harness
 # compares bit patterns.
-cast_possible_truncation = "allow"      # 392
+cast_possible_truncation = "allow"      # 395
 cast_sign_loss = "allow"                # 240
 cast_possible_wrap = "allow"            # 102
 cast_precision_loss = "allow"           # 122
@@ -148,7 +148,7 @@ imprecise_flops = "allow"               # 8
 # Style preferences that fight the transcription: restructuring control flow to
 # satisfy them moves code away from the shape being reproduced, for no change
 # in what the function does.
-missing_const_for_fn = "allow"          # 116
+missing_const_for_fn = "allow"          # 115
 useless_let_if_seq = "allow"            # 22
 if_not_else = "allow"                   # 13
 suspicious_operation_groupings = "allow" # 12
@@ -181,7 +181,7 @@ redundant_else = "allow"                # 1
 # compare against an independent oracle, and they mask expected values with the
 # same decimal quantities the comment above each one derives — rewriting either
 # to satisfy the lint makes the test harder to read against its own reasoning.
-while_float = "allow"                   # 9
+while_float = "allow"                   # 10
 # The masked operands are decimal quantities, not bit patterns: `65025` is
 # `255 * 255` as the comment above derives it, `50`/`33` are the test's own
 # coordinates. Hex would sever each literal from the arithmetic it comes from.

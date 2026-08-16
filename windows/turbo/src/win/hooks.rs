@@ -32205,14 +32205,17 @@ unsafe fn bdl_rd16s(p: *const u8, off: usize) -> i32 {
     i32::from(unsafe { q.cast::<i16>().read() })
 }
 
-/// View `n` contiguous 4-aligned `u32`s starting at `p + off` as a slice.
+/// View `N` contiguous 4-aligned `u32`s starting at `p + off` as an array.
+///
+/// The length is a const parameter because the sole consumer folds these runs
+/// with a per-run constant power of `0x13`, which only exists at compile time.
 #[inline]
-unsafe fn bdl_u32_range<'a>(p: *const u8, off: usize, n: usize) -> &'a [u32] {
-    // SAFETY: caller guarantees `n` initialised, aligned, contiguous dwords live
+unsafe fn bdl_u32_range<'a, const N: usize>(p: *const u8, off: usize) -> &'a [u32; N] {
+    // SAFETY: caller guarantees `N` initialised, aligned, contiguous dwords live
     // at `p + off` and are not mutated while the borrow is held (read-only use).
     let q = unsafe { p.add(off) };
     // SAFETY: as above.
-    unsafe { core::slice::from_raw_parts(q.cast::<u32>(), n) }
+    unsafe { &*q.cast::<[u32; N]>() }
 }
 
 /// Highest power of two `<= need`, minimum 1.
@@ -32532,11 +32535,14 @@ fn bdl_resolve_texture_slot(this: *const u8, handle: u32) -> u32 {
 ///
 /// Gather the fixed record/node/substate term ranges in stock order and fold
 /// them through the host-tested kernel (`h = h*0x13 + term`, seeded with the
-/// `node[0x30]` value). The stock body ignores `ecx`, so this takes only the
-/// record. Bit-exact to the original, so the dedup buckets identically — and it
-/// inlines into the dedup loop instead of calling out.
+/// `node[0x30]` value). Every run has a compile-time length, so each one costs
+/// `h` one multiply and one add rather than a dependent step per term. The stock
+/// body ignores `ecx`, so this takes only the record. Bit-exact to the original,
+/// so the dedup buckets identically — and it inlines into the dedup loop instead
+/// of calling out.
+#[inline]
 fn bdl_compute_sort_hash(record: *const u8) -> u32 {
-    use crate::math::world::c_world_view__compute_sort_hash_fold__70a600 as fold;
+    use crate::math::world::c_world_view__compute_sort_hash_fold4__70a600 as fold;
     // SAFETY: `record` addresses one 0x40-byte draw record of the view's record array (header
     // `this+0x2c`, data pointer `this+0x34`); the sole caller `bdl_finalize` forms it from that
     // data pointer and a bucket-0 index, and `+4` is the spatial-node pointer the record append
@@ -32556,13 +32562,13 @@ fn bdl_compute_sort_hash(record: *const u8) -> u32 {
     // SAFETY: `ns` is the render substate, of which the node walk reads fields up to `+0x1b0`,
     // so the dwords at `+0x184`/`+0x188` are in bounds. The borrow is read-only and consumed by
     // `fold` within this expression.
-    h = fold(h, unsafe { bdl_u32_range(ns, 0x184, 2) }); // ns[0x184], ns[0x188]
+    h = fold(h, unsafe { bdl_u32_range::<2>(ns, 0x184) }); // ns[0x184], ns[0x188]
     // SAFETY: same substate and the same `+0x1b0` extent; `+0x190..0x19c` ends at the `+0x19c`
     // field the node walk itself reads. Read-only borrow, consumed here.
-    h = fold(h, unsafe { bdl_u32_range(ns, 0x190, 3) }); // ns[0x190..0x198]
+    h = fold(h, unsafe { bdl_u32_range::<3>(ns, 0x190) }); // ns[0x190..0x198]
     // SAFETY: same substate; `+0x84..0xec` sits well below the `+0x180` field the node walk
     // reads, so all 27 dwords are in bounds. Read-only borrow, consumed here.
-    h = fold(h, unsafe { bdl_u32_range(ns, 0x84, 27) }); // ns[0x84..0xec]
+    h = fold(h, unsafe { bdl_u32_range::<27>(ns, 0x84) }); // ns[0x84..0xec]
     // Conditional batch block: node[0xa0][cx*0x50 + 0xc ..], cx = word[record[0x2c]+8].
     // SAFETY: same record; `+0x2c` holds the batch descriptor pointer (stride 0x18, an element
     // of the node's own batch array) that the record append stored there.
@@ -32582,14 +32588,14 @@ fn bdl_compute_sort_hash(record: *const u8) -> u32 {
         // SAFETY: `cx` was just checked against the `m_mat[0x54]` bound the node walk applies
         // to this array, so entry `cx` exists and its dwords at `+0xc..0x18` lie inside that
         // entry's 0x50 bytes. Read-only borrow, consumed by `fold` here.
-        h = fold(h, unsafe { bdl_u32_range(n_a0, cx * 0x50 + 0xc, 3) });
+        h = fold(h, unsafe { bdl_u32_range::<3>(n_a0, cx * 0x50 + 0xc) });
     }
     // SAFETY: `node` is the live spatial node above, whose `+0x3b8` and `+0x3f0` fields the node
     // walk reads, so the three dwords at `+0x1a0..0x1ac` are in bounds.
-    h = fold(h, unsafe { bdl_u32_range(node, 0x1a0, 3) }); // node[0x1a0..0x1a8]
+    h = fold(h, unsafe { bdl_u32_range::<3>(node, 0x1a0) }); // node[0x1a0..0x1a8]
     // SAFETY: same node and the same extent; `+0x1ac..0x1b8` is still far below `+0x3b8`.
     // Read-only borrow, consumed by `fold` here.
-    h = fold(h, unsafe { bdl_u32_range(node, 0x1ac, 3) }); // node[0x1ac..0x1b4]
+    h = fold(h, unsafe { bdl_u32_range::<3>(node, 0x1ac) }); // node[0x1ac..0x1b4]
     h
 }
 

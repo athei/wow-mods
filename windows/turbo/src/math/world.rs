@@ -5141,6 +5141,109 @@ mod tests_c_world_view__compute_sort_hash_fold__70a600 {
     }
 }
 
+/// `0x13^n` in the sort hash's wrapping `u32` arithmetic.
+const fn sort_hash_pow(n: usize) -> u32 {
+    let mut p: u32 = 1;
+    let mut i = 0;
+    while i < n {
+        p = p.wrapping_mul(0x13);
+        i += 1;
+    }
+    p
+}
+
+/// `CWorldView::ComputeSortHash` (0x70a600) fold with the term chain off `h`.
+///
+/// The same `h = h*0x13 + term` recurrence over the same `u32` as the serial
+/// kernel, for a run whose length the call site knows: `h*0x13^N + P(terms)`,
+/// where the term polynomial `P` does not depend on `h` at all. `P` is four
+/// chains, each taking every fourth term and stepping by `0x13^4`, recombined
+/// with the `0x13^3..0x13^0` weights; the leading `N % 4` terms go through the
+/// serial kernel first so the four chains stay equal length.
+///
+/// Multiplication and addition mod 2^32 are exactly associative, commutative and
+/// distributive, so the result is the serial fold's bit for bit — this is integer
+/// strength reduction, not a reassociated float sum. What changes is the shape of
+/// the dependency chain: `h` crosses a term run in one multiply and one add
+/// instead of `N` dependent steps, and the four term chains issue independently.
+#[inline]
+#[must_use]
+pub fn c_world_view__compute_sort_hash_fold4__70a600<const N: usize>(
+    initial: u32,
+    terms: &[u32; N],
+) -> u32 {
+    const LANES: usize = 4;
+    // What one chain multiplies by while the other three take their step.
+    const STEP: u32 = sort_hash_pow(LANES);
+    // Chain `l` holds the terms whose serial exponents are `LANES-1-l` above a
+    // multiple of `LANES`, so that is the weight it recombines at.
+    const WEIGHT: [u32; LANES] = {
+        let mut w = [0u32; LANES];
+        let mut l = 0;
+        while l < LANES {
+            w[l] = sort_hash_pow(LANES - 1 - l);
+            l += 1;
+        }
+        w
+    };
+
+    let head = N % LANES;
+    let mut poly = c_world_view__compute_sort_hash_fold__70a600(0, &terms[..head]);
+    let mut chain = [0u32; LANES];
+    for step in terms[head..].chunks_exact(LANES) {
+        for (c, &t) in chain.iter_mut().zip(step) {
+            *c = c.wrapping_mul(STEP).wrapping_add(t);
+        }
+    }
+    poly = poly.wrapping_mul(const { sort_hash_pow(N - N % LANES) });
+    for (&c, &w) in chain.iter().zip(&WEIGHT) {
+        poly = poly.wrapping_add(c.wrapping_mul(w));
+    }
+    initial
+        .wrapping_mul(const { sort_hash_pow(N) })
+        .wrapping_add(poly)
+}
+
+#[cfg(test)]
+mod tests_c_world_view__compute_sort_hash_fold4__70a600 {
+    use super::{
+        c_world_view__compute_sort_hash_fold__70a600 as fold,
+        c_world_view__compute_sort_hash_fold4__70a600 as fold4,
+    };
+
+    /// Pin the four-chain fold to the serial one over one run length.
+    fn agrees<const N: usize>(seed: &mut u32) {
+        let mut terms = [0u32; N];
+        for t in &mut terms {
+            *seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            *t = *seed;
+        }
+        for h in [0u32, 1, 0x13, 0x8000_0000, 0x1234_5678, u32::MAX] {
+            assert_eq!(fold4(h, &terms), fold(h, &terms), "n={N} h={h}");
+        }
+    }
+
+    #[test]
+    fn fold4_matches_the_serial_fold() {
+        // Every length up to two full chain steps, plus the run lengths the sort
+        // hash actually folds (1, 2, 3, 27).
+        let mut seed = 0x9e37_79b9u32;
+        agrees::<0>(&mut seed);
+        agrees::<1>(&mut seed);
+        agrees::<2>(&mut seed);
+        agrees::<3>(&mut seed);
+        agrees::<4>(&mut seed);
+        agrees::<5>(&mut seed);
+        agrees::<6>(&mut seed);
+        agrees::<7>(&mut seed);
+        agrees::<8>(&mut seed);
+        agrees::<9>(&mut seed);
+        agrees::<26>(&mut seed);
+        agrees::<27>(&mut seed);
+        agrees::<28>(&mut seed);
+    }
+}
+
 /// x87 `FISTP m32` under the default control word.
 ///
 /// Round-to-nearest-even to a 32-bit integer, storing the integer-indefinite
