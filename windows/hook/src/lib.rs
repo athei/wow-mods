@@ -39,6 +39,8 @@ unsafe extern "system" {
         new_protect: u32,
         old_protect: *mut u32,
     ) -> i32;
+    fn GetCurrentProcess() -> *mut c_void;
+    fn FlushInstructionCache(process: *mut c_void, base: *const c_void, size: usize) -> i32;
 }
 
 /// Resolve a module handle from an address inside it, taking no reference.
@@ -648,6 +650,19 @@ pub unsafe fn patch_bytes(va: usize, expected: &[u8], replacement: &[u8], label:
     unsafe {
         core::ptr::copy_nonoverlapping(replacement.as_ptr(), va as *mut u8, replacement.len())
     };
+    // SAFETY: the published signature; returns a pseudo-handle, which is a
+    // constant needing no lifetime reasoning and never closed.
+    let process = unsafe { GetCurrentProcess() };
+    // Tell the host the bytes at this address are not the ones it may have
+    // already read. On an x86 host it is close to a no-op, which is why writing
+    // code without it went unnoticed; where the client is x86 code translated
+    // for another CPU, the translator caches what it has translated, and this
+    // is the notification that invalidates it. A hooking library does the same
+    // after patching a prologue.
+    //
+    // SAFETY: the published signature; the range is mapped code of the verified
+    // length, and the handle is this process's own.
+    unsafe { FlushInstructionCache(process, va as *const c_void, replacement.len()) };
     let mut restored = 0u32;
     // SAFETY: same range as above; restores the protection the page had.
     unsafe {
