@@ -46,7 +46,8 @@ wow_translate-<version>/
 └── wine/
     └── lib/wine/
         ├── i386-windows/     wow_mods.dll, wow_mods.fake.dll
-        └── x86_64-unix/      wow_mods.so
+        ├── x86_64-unix/      wow_mods.so
+        └── aarch64-unix/     wow_mods.so, for an arm64 Wine
 
 version_loader-<version>/
 ├── game/dlls.txt
@@ -61,7 +62,9 @@ version_loader-<version>/
    that points Wine at the real bridge. (`make install` stages the `wine/`
    half for a source build, but the prefix copy is yours to do — the Makefile
    deliberately never writes into a Wine prefix, since the prefix belongs to
-   whatever launches the game.)
+   whatever launches the game.) The bridge's unix half ships for both Wine host
+   arches; Wine loads only the one matching its own build, so the other copy
+   sits there inert and there is nothing to choose.
 3. Load the mods with whatever mod loader you already use — **after your
    other mods**, so `wow_turbo` yields on anything they already hooked (see
    [Playing with other mods](#playing-with-other-mods)). If you don't have

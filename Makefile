@@ -48,15 +48,22 @@ endif
 
 # WoW 1.12 is 32-bit only, so the PE side builds i686 exclusively (no x64).
 PE_i386     := i686-pc-windows-msvc
-# The unix `.so` must be x86_64 Mach-O (Wine's unix-call boundary), so shipped
-# artifacts are always built for x86_64.
-UNIX_RELEASE_TARGET := x86_64-apple-darwin
+# Wine picks a builtin's unix half out of `lib/wine/<cpu>-unix` by the arch of
+# the Wine build that loads it, so the `.so` ships once per Wine host ISA:
+# x86_64 for a Wine running under Rosetta, aarch64 for an arm64-native one. The
+# PE side is unaffected, staying i686 either way, so both halves pair with the
+# same 32-bit bridge DLL over Wine's wow64 path.
+UNIX_TARGET_x64    := x86_64-apple-darwin
+UNIX_TARGET_arm64  := aarch64-apple-darwin
+UNIX_WINEDIR_x64   := x86_64-unix
+UNIX_WINEDIR_arm64 := aarch64-unix
 # The unix host-target legs (tests + clippy) reach the native host — aarch64 on
 # Apple Silicon, no Rosetta — by omitting `--target`, per unix/.cargo/config.toml.
 
-OUT_i386 := windows/target/$(PE_i386)/$(PROFILE)
-OUT_avx  := windows/target/avx/$(PE_i386)/$(PROFILE)
-OUT_unix := unix/target/$(UNIX_RELEASE_TARGET)/$(PROFILE)
+OUT_i386       := windows/target/$(PE_i386)/$(PROFILE)
+OUT_avx        := windows/target/avx/$(PE_i386)/$(PROFILE)
+OUT_unix_x64   := unix/target/$(UNIX_TARGET_x64)/$(PROFILE)
+OUT_unix_arm64 := unix/target/$(UNIX_TARGET_arm64)/$(PROFILE)
 
 # Hard-fail on any warning (cargo counts emitted warnings, including ones
 # replayed from cache, and errors at the end of the run) — applied only to the
@@ -112,29 +119,41 @@ windows-avx: require-wine-sdk
 	    --target $(PE_i386) --target-dir target/avx --config .cargo/avx.toml
 
 unix: require-wine-sdk
-	cd unix && cargo build --profile $(PROFILE) --target $(UNIX_RELEASE_TARGET)
+	cd unix && cargo build --profile $(PROFILE) --target $(UNIX_TARGET_x64)
+	cd unix && cargo build --profile $(PROFILE) --target $(UNIX_TARGET_arm64)
 	# On Mach-O the DWARF stays behind in the compiler's `.o` files, with only a
 	# debug map in the dylib pointing at them by absolute path; `dsymutil` walks
 	# that map and gathers the DWARF into a `.dSYM`, the shippable equivalent of
 	# an MSVC `.pdb`. Run it on a copy already named `wow_mods.so`, because it
 	# stamps the inner DWARF file after the input's basename and lldb looks it up
 	# by that name — renaming the bundle afterwards produces one lldb won't find.
-	cp $(OUT_unix)/libwow_mods.dylib $(OUT_unix)/wow_mods.so
-	rm -rf $(OUT_unix)/wow_mods.so.dSYM
-	dsymutil $(OUT_unix)/wow_mods.so
+	for out in $(OUT_unix_x64) $(OUT_unix_arm64); do \
+	    cp $$out/libwow_mods.dylib $$out/wow_mods.so ; \
+	    rm -rf $$out/wow_mods.so.dSYM ; \
+	    dsymutil $$out/wow_mods.so ; \
+	done
 
 install: all require-wow-exe
 	# Wine builtins → the wine dirs: the i686 version.dll + wow_mods.dll and the
-	# companion wow_mods.so. WoW is 32-bit, so the 32-bit bridge pairs the x86_64
+	# companion wow_mods.so. WoW is 32-bit, so the 32-bit bridge pairs the host
 	# `.so` over Wine's wow64 path. Symbols travel with each binary: the `.pdb`
 	# beside every PE, the `.dSYM` beside the `.so`, so a local crash
 	# symbolicates against the installed files with no extra flags.
+	#
+	# Both unix arches go in, creating whichever directory the tree lacks: a
+	# Wine loads only the `.so` matching its own build, so the other copy is
+	# inert, and an x86_64 tree has no aarch64-unix (nor an arm64 one an
+	# x86_64-unix) for the copy to land in otherwise.
 	for dir in $(INSTALL_DIRS); do \
 	    cp $(OUT_i386)/version.dll   $(OUT_i386)/version.pdb   $$dir/lib/wine/i386-windows/ ; \
 	    cp $(OUT_i386)/wow_mods.dll  $(OUT_i386)/wow_mods.pdb  $$dir/lib/wine/i386-windows/ ; \
-	    cp $(OUT_unix)/wow_mods.so       $$dir/lib/wine/x86_64-unix/ ; \
-	    rm -rf $$dir/lib/wine/x86_64-unix/wow_mods.so.dSYM ; \
-	    cp -R $(OUT_unix)/wow_mods.so.dSYM $$dir/lib/wine/x86_64-unix/ ; \
+	    mkdir -p $$dir/lib/wine/$(UNIX_WINEDIR_x64) $$dir/lib/wine/$(UNIX_WINEDIR_arm64) ; \
+	    cp $(OUT_unix_x64)/wow_mods.so       $$dir/lib/wine/$(UNIX_WINEDIR_x64)/ ; \
+	    rm -rf $$dir/lib/wine/$(UNIX_WINEDIR_x64)/wow_mods.so.dSYM ; \
+	    cp -R $(OUT_unix_x64)/wow_mods.so.dSYM $$dir/lib/wine/$(UNIX_WINEDIR_x64)/ ; \
+	    cp $(OUT_unix_arm64)/wow_mods.so     $$dir/lib/wine/$(UNIX_WINEDIR_arm64)/ ; \
+	    rm -rf $$dir/lib/wine/$(UNIX_WINEDIR_arm64)/wow_mods.so.dSYM ; \
+	    cp -R $(OUT_unix_arm64)/wow_mods.so.dSYM $$dir/lib/wine/$(UNIX_WINEDIR_arm64)/ ; \
 	    cp $(OUT_i386)/wow_mods.fake.dll $$dir/lib/wine/i386-windows/ ; \
 	done
 	# Native game-side mods → the app bundle's game mods/ dir (loaded by path via
@@ -179,14 +198,19 @@ bundle: all windows-avx
 	cp $(OUT_i386)/wow_turbo.dll  dist/$(TURBO_MAC)/game/mods/
 	cp $(OUT_avx)/wow_turbo.dll   dist/$(TURBO_WIN)/game/mods/
 	# WoWTranslate (Wine-on-macOS only): the mod DLL + Lua addon, and the wine/
-	# half with the wow_mods unixlib bridge pair.
+	# half with the wow_mods unixlib bridge pair. The `.so` ships for both Wine
+	# host arches so one archive drops into either build; each Wine reads only
+	# the directory matching itself.
 	mkdir -p dist/$(TRANSLATE)/game/mods dist/$(TRANSLATE)/game/Interface/AddOns \
-	         dist/$(TRANSLATE)/wine/lib/wine/i386-windows dist/$(TRANSLATE)/wine/lib/wine/x86_64-unix
+	         dist/$(TRANSLATE)/wine/lib/wine/i386-windows \
+	         dist/$(TRANSLATE)/wine/lib/wine/$(UNIX_WINEDIR_x64) \
+	         dist/$(TRANSLATE)/wine/lib/wine/$(UNIX_WINEDIR_arm64)
 	cp $(OUT_i386)/wow_translate.dll  dist/$(TRANSLATE)/game/mods/
 	cp -R addon/WoWTranslate          dist/$(TRANSLATE)/game/Interface/AddOns/
 	cp $(OUT_i386)/wow_mods.dll       dist/$(TRANSLATE)/wine/lib/wine/i386-windows/
 	cp $(OUT_i386)/wow_mods.fake.dll  dist/$(TRANSLATE)/wine/lib/wine/i386-windows/
-	cp $(OUT_unix)/wow_mods.so        dist/$(TRANSLATE)/wine/lib/wine/x86_64-unix/
+	cp $(OUT_unix_x64)/wow_mods.so    dist/$(TRANSLATE)/wine/lib/wine/$(UNIX_WINEDIR_x64)/
+	cp $(OUT_unix_arm64)/wow_mods.so  dist/$(TRANSLATE)/wine/lib/wine/$(UNIX_WINEDIR_arm64)/
 	# The standalone loader: version.dll injects every mod listed in dlls.txt
 	# (ships with both mods listed — users drop the lines they don't want).
 	mkdir -p dist/$(LOADER)/game dist/$(LOADER)/wine/lib/wine/i386-windows
@@ -194,14 +218,17 @@ bundle: all windows-avx
 	cp $(OUT_i386)/version.dll  dist/$(LOADER)/wine/lib/wine/i386-windows/
 	# The symbols for exactly the binaries staged above. Grouped by ISA baseline
 	# rather than by install destination: debug info has no install route, and
-	# the split is what keeps the two wow_turbo.pdb files apart.
-	mkdir -p dist/$(DEBUG)/mac dist/$(DEBUG)/windows-avx
+	# the split is what keeps the two wow_turbo.pdb files apart. The two `.so`
+	# dSYMs share a name as well, so they take a subdirectory each.
+	mkdir -p dist/$(DEBUG)/mac/$(UNIX_WINEDIR_x64) dist/$(DEBUG)/mac/$(UNIX_WINEDIR_arm64) \
+	         dist/$(DEBUG)/windows-avx
 	echo $(BUILD_ID)                     > dist/$(DEBUG)/BUILD
 	cp $(OUT_i386)/version.pdb             dist/$(DEBUG)/mac/
 	cp $(OUT_i386)/wow_mods.pdb            dist/$(DEBUG)/mac/
 	cp $(OUT_i386)/wow_turbo.pdb           dist/$(DEBUG)/mac/
 	cp $(OUT_i386)/wow_translate.pdb       dist/$(DEBUG)/mac/
-	cp -R $(OUT_unix)/wow_mods.so.dSYM     dist/$(DEBUG)/mac/
+	cp -R $(OUT_unix_x64)/wow_mods.so.dSYM   dist/$(DEBUG)/mac/$(UNIX_WINEDIR_x64)/
+	cp -R $(OUT_unix_arm64)/wow_mods.so.dSYM dist/$(DEBUG)/mac/$(UNIX_WINEDIR_arm64)/
 	cp $(OUT_avx)/wow_turbo.pdb            dist/$(DEBUG)/windows-avx/
 	for name in $(BUNDLE_NAMES); do \
 	    (cd dist && zip -qr $$name.zip $$name) ; \
@@ -220,7 +247,7 @@ test:
 	# 7s in one threaded process. Same tests, same target, same assertions; what
 	# is given up is per-test process isolation, which `make test-isolated`
 	# still buys when a test is suspected of leaking into its neighbours.
-	cd windows && cargo test -p wow-turbo-dll --target $(UNIX_RELEASE_TARGET)
+	cd windows && cargo test -p wow-turbo-dll --target $(UNIX_TARGET_x64)
 	# Native aarch64, no Rosetta toll, so this leg keeps nextest.
 	cd unix && cargo nextest run
 
@@ -228,7 +255,7 @@ test:
 # to pin down a test that passes alone and fails in company, or one that aborts
 # the whole run rather than failing.
 test-isolated:
-	cd windows && cargo nextest run -p wow-turbo-dll --target $(UNIX_RELEASE_TARGET)
+	cd windows && cargo nextest run -p wow-turbo-dll --target $(UNIX_TARGET_x64)
 	cd unix && cargo nextest run
 
 clippy:
@@ -238,13 +265,14 @@ clippy:
 	cd windows && cargo clippy --target $(PE_i386) --all-targets $(DENY_WARNINGS)
 	# wow_turbo's tests + portable kernels only exist off the PE target; lint them
 	# on the x86_64 host target the host tests run under.
-	cd windows && cargo clippy -p wow-turbo-dll --target $(UNIX_RELEASE_TARGET) --all-targets $(DENY_WARNINGS)
+	cd windows && cargo clippy -p wow-turbo-dll --target $(UNIX_TARGET_x64) --all-targets $(DENY_WARNINGS)
 	cd unix && cargo clippy --all-targets $(DENY_WARNINGS)
 	# `unix/shared` ships into both worlds but is a member of only this
 	# workspace, so the windows legs run it through plain rustc with no lint
-	# table. Lint it on the target it actually ships as, and again on the PE
-	# target that reaches its 32-bit arms.
-	cd unix && cargo clippy --all-targets --target $(UNIX_RELEASE_TARGET) $(DENY_WARNINGS)
+	# table. The leg above already covers aarch64, one of the two arches the
+	# `.so` ships as; this one takes the other, and the last takes the PE target
+	# that reaches its 32-bit arms.
+	cd unix && cargo clippy --all-targets --target $(UNIX_TARGET_x64) $(DENY_WARNINGS)
 	cd unix && cargo clippy -p wow-shared --target $(PE_i386) $(DENY_WARNINGS)
 
 # The conventions clippy can't express: doc-comment shape, the Clone/Copy derive

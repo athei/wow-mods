@@ -18,9 +18,9 @@ For what the mods do, how to install them and which other mods they coexist with
 
 ## The two workspaces
 
-`windows/` and `unix/` are separate Cargo workspaces because they are separate linkage worlds, and a single workspace cannot hold two `[build] target` defaults or two sets of linker flags. `windows/.cargo/config.toml` pins `i686-pc-windows-msvc` with `lld-link` and the xwin include/lib paths. `unix/` deliberately declares **no** default target, so a bare `cargo test` or `cargo clippy` there runs native aarch64 with no Rosetta; the shipped `.so` is built by passing `--target x86_64-apple-darwin` explicitly from the Makefile.
+`windows/` and `unix/` are separate Cargo workspaces because they are separate linkage worlds, and a single workspace cannot hold two `[build] target` defaults or two sets of linker flags. `windows/.cargo/config.toml` pins `i686-pc-windows-msvc` with `lld-link` and the xwin include/lib paths. `unix/` deliberately declares **no** default target, so a bare `cargo test` or `cargo clippy` there runs native aarch64 with no Rosetta; the shipped `.so` is built by passing `--target` explicitly from the Makefile, once per Wine host ISA.
 
-Wine's unix-call boundary is what forces x86_64 Mach-O on the unix side even though the game is 32-bit.
+Wine's unix-call boundary is what decides the unix side's arch, and it has nothing to do with the game being 32-bit: the `.so` has to match the Wine build that loads it, which resolves a builtin's unix half out of `lib/wine/<cpu>-unix`. So it ships twice, x86_64 for a Wine running under Rosetta and aarch64 for an arm64-native one, and the PE side stays i686 for both.
 
 | Crate | Workspace | Produces |
 | --- | --- | --- |

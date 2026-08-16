@@ -1,8 +1,11 @@
 # No `[build] target` here: a bare `cargo build`/`test` in this workspace
 # defaults to the native host arch (fast, no Rosetta), which is what unit
-# tests and clippy want. Shipped artifacts are built for x86_64-apple-darwin
-# by passing `--target` explicitly (see the Makefile `unix:` recipe) — Wine's
-# unix-call boundary requires the `.so` to be x86_64 Mach-O.
+# tests and clippy want. Shipped artifacts are built by passing `--target`
+# explicitly (see the Makefile `unix:` recipe), once per Wine host ISA:
+# x86_64-apple-darwin for a Wine running under Rosetta, aarch64-apple-darwin
+# for an arm64-native one, since Wine loads the `.so` matching its own build.
+# The aarch64 build needs no entry of its own: it is the native arch, and its
+# ABI mandates a frame pointer anyway.
 [target.x86_64-apple-darwin]
 rustflags = [
     "-C", "target-cpu=x86-64-v2",
