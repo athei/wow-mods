@@ -31392,9 +31392,6 @@ fn bdl_pow2_floor(need: u32) -> u32 {
 /// the count. (0x707bae..0x707bf2.) The caller fail-returns when the slot is null (the stock `je`
 /// overflow guard).
 unsafe fn bdl_record_reserve(ctl: *mut u8) -> *mut u8 {
-    const DEF_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x30_daf0;
-    const ALIGN_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x30_db30;
-    const SETCAP_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x30_db50;
     // SAFETY: `ctl` is a live `{cap@0,count@4,data@8,gran@0xc}` control block the caller keeps
     // alive across the call; `count` is its dword at `+4`.
     let count = unsafe { bdl_rd32(ctl, 4) };
@@ -31402,24 +31399,9 @@ unsafe fn bdl_record_reserve(ctl: *mut u8) -> *mut u8 {
     let cap = unsafe { bdl_rd32(ctl, 0) };
     let need = count.wrapping_add(1);
     if need > cap {
-        // SAFETY: same control block; `gran` is its dword at `+0xc`.
-        let mut gran = unsafe { bdl_rd32(ctl, 0xc) };
-        if gran == 0 {
-            // SAFETY: image base verified at load, so `DEF_VA` is the client's
-            // default-granularity routine; signature matches the callee.
-            let f: extern "thiscall" fn(*mut u8, u32) -> u32 =
-                unsafe { core::mem::transmute(DEF_VA) };
-            gran = f(ctl, need);
-        }
-        // SAFETY: image base verified at load, so `ALIGN_VA` is the client's capacity-rounding
-        // routine; signature matches the callee.
-        let fa: extern "thiscall" fn(*mut u8, u32, u32) -> u32 =
-            unsafe { core::mem::transmute(ALIGN_VA) };
-        let newcap = fa(ctl, need, gran);
-        // SAFETY: image base verified at load, so `SETCAP_VA` is the client's set-capacity
-        // routine; signature matches the callee.
-        let fs: extern "thiscall" fn(*mut u8, u32) = unsafe { core::mem::transmute(SETCAP_VA) };
-        fs(ctl, newcap);
+        // SAFETY: same control block, which is the layout `bdl_record_grow` reads `gran@0xc`
+        // from and hands to the client's capacity helpers; it writes no other field.
+        unsafe { bdl_record_grow(ctl, need) };
     }
     // SAFETY: same control block; `count@4` is re-read because the grow above can reallocate
     // `data@8` but leaves the control block itself in place.
@@ -31430,6 +31412,38 @@ unsafe fn bdl_record_reserve(ctl: *mut u8) -> *mut u8 {
     // to admit.
     unsafe { bdl_wr32(ctl, 4, count2.wrapping_add(1)) };
     (data as usize).wrapping_add((count2 as usize) << 6) as *mut u8
+}
+
+/// Raise the 64-stride record array `ctl` to a capacity admitting `need` records.
+///
+/// The grow arm of `bdl_record_reserve`: default granularity (0x70daf0) when `gran@0xc` is zero,
+/// then capacity-align (0x70db30) and set-capacity (0x70db50). Outlined rather than left inline
+/// because the reserve is called from every draw-record append in the node walk and this arm runs
+/// only on the appends that reallocate, so inlining it lays never-executed bytes between the
+/// executed blocks of the batch loop.
+#[cold]
+#[inline(never)]
+unsafe fn bdl_record_grow(ctl: *mut u8, need: u32) {
+    const DEF_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x30_daf0;
+    const ALIGN_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x30_db30;
+    const SETCAP_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x30_db50;
+    // SAFETY: same control block; `gran` is its dword at `+0xc`.
+    let mut gran = unsafe { bdl_rd32(ctl, 0xc) };
+    if gran == 0 {
+        // SAFETY: image base verified at load, so `DEF_VA` is the client's
+        // default-granularity routine; signature matches the callee.
+        let f: extern "thiscall" fn(*mut u8, u32) -> u32 = unsafe { core::mem::transmute(DEF_VA) };
+        gran = f(ctl, need);
+    }
+    // SAFETY: image base verified at load, so `ALIGN_VA` is the client's capacity-rounding
+    // routine; signature matches the callee.
+    let fa: extern "thiscall" fn(*mut u8, u32, u32) -> u32 =
+        unsafe { core::mem::transmute(ALIGN_VA) };
+    let newcap = fa(ctl, need, gran);
+    // SAFETY: image base verified at load, so `SETCAP_VA` is the client's set-capacity
+    // routine; signature matches the callee.
+    let fs: extern "thiscall" fn(*mut u8, u32) = unsafe { core::mem::transmute(SETCAP_VA) };
+    fs(ctl, newcap);
 }
 
 /// 64-stride record reserve via the `reserve(1, 1)` helper (0x70da00) instead of the inline grow.
@@ -31456,37 +31470,20 @@ unsafe fn bdl_record_reserve1(ctl: *mut u8) -> *mut u8 {
 
 /// Append `value` to a 4-stride index array `ctl` (`{cap@0,count@4,data@8,gran@0xc}`).
 ///
-/// The elements are 4 bytes; the array grows via the inline default-granularity path
-/// (0x4292e0/0x429320/0x429340) when `count+1 > cap`. Store-then-bump, skipping the store on a null
-/// data slot (the stock `je`). (e.g. 0x707dd5..0x707f7a.)
+/// The elements are 4 bytes; the array grows through the default-granularity path
+/// (0x4292e0/0x429320/0x429340), which `bdl_index_grow` holds, when `count+1 > cap`.
+/// Store-then-bump, skipping the store on a null data slot (the stock `je`). (e.g.
+/// 0x707dd5..0x707f7a.)
 unsafe fn bdl_index_push(ctl: *mut u8, value: u32) {
-    const DEF_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x02_92e0;
-    const ALIGN_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x02_9320;
-    const SETCAP_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x02_9340;
     // SAFETY: the caller passes a live array descriptor, so `+4` is its in-bounds `count` dword.
     let count = unsafe { bdl_rd32(ctl, 4) };
     // SAFETY: `+0` on that same descriptor is its in-bounds `cap` dword.
     let cap = unsafe { bdl_rd32(ctl, 0) };
     let need = count.wrapping_add(1);
     if need > cap {
-        // SAFETY: `+0xc` on that same descriptor is its in-bounds `gran` dword.
-        let mut gran = unsafe { bdl_rd32(ctl, 0xc) };
-        if gran == 0 {
-            // SAFETY: image base verified at load; the default-granularity helper is
-            // `thiscall(this, need) -> gran`.
-            let f: extern "thiscall" fn(*mut u8, u32) -> u32 =
-                unsafe { core::mem::transmute(DEF_VA) };
-            gran = f(ctl, need);
-        }
-        // SAFETY: image base verified at load; the capacity-align helper is
-        // `thiscall(this, need, gran) -> newcap`.
-        let fa: extern "thiscall" fn(*mut u8, u32, u32) -> u32 =
-            unsafe { core::mem::transmute(ALIGN_VA) };
-        let newcap = fa(ctl, need, gran);
-        // SAFETY: image base verified at load; the set-capacity helper is `thiscall(this, newcap)`
-        // and returns nothing.
-        let fs: extern "thiscall" fn(*mut u8, u32) = unsafe { core::mem::transmute(SETCAP_VA) };
-        fs(ctl, newcap);
+        // SAFETY: the same descriptor, which is the layout `bdl_index_grow` reads `gran@0xc`
+        // from and hands to the client's capacity helpers; it writes no other field.
+        unsafe { bdl_index_grow(ctl, need) };
     }
     // SAFETY: `+4` is that descriptor's `count` dword, re-read here because the grow helpers
     // above write through `ctl`.
@@ -31501,6 +31498,37 @@ unsafe fn bdl_index_push(ctl: *mut u8, value: u32) {
     // SAFETY: `+4` is that descriptor's writable `count` dword, and the grow above reserved
     // capacity for the bumped value.
     unsafe { bdl_wr32(ctl, 4, count2.wrapping_add(1)) };
+}
+
+/// Raise the 4-stride index array `ctl` to a capacity admitting `need` elements.
+///
+/// The grow arm of `bdl_index_push`: default granularity (0x4292e0) when `gran@0xc` is zero, then
+/// capacity-align (0x429320) and set-capacity (0x429340). Outlined for the same reason as
+/// `bdl_record_grow`: the append runs per batch and this arm only when the bucket array
+/// reallocates, so inlining it interleaves never-executed bytes with the executed blocks.
+#[cold]
+#[inline(never)]
+unsafe fn bdl_index_grow(ctl: *mut u8, need: u32) {
+    const DEF_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x02_92e0;
+    const ALIGN_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x02_9320;
+    const SETCAP_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x02_9340;
+    // SAFETY: `+0xc` on that same descriptor is its in-bounds `gran` dword.
+    let mut gran = unsafe { bdl_rd32(ctl, 0xc) };
+    if gran == 0 {
+        // SAFETY: image base verified at load; the default-granularity helper is
+        // `thiscall(this, need) -> gran`.
+        let f: extern "thiscall" fn(*mut u8, u32) -> u32 = unsafe { core::mem::transmute(DEF_VA) };
+        gran = f(ctl, need);
+    }
+    // SAFETY: image base verified at load; the capacity-align helper is
+    // `thiscall(this, need, gran) -> newcap`.
+    let fa: extern "thiscall" fn(*mut u8, u32, u32) -> u32 =
+        unsafe { core::mem::transmute(ALIGN_VA) };
+    let newcap = fa(ctl, need, gran);
+    // SAFETY: image base verified at load; the set-capacity helper is `thiscall(this, newcap)`
+    // and returns nothing.
+    let fs: extern "thiscall" fn(*mut u8, u32) = unsafe { core::mem::transmute(SETCAP_VA) };
+    fs(ctl, newcap);
 }
 
 /// Append `value` to a 4-stride index array via the `reserve(1, 1)` helper (0x4291f0).
@@ -33359,20 +33387,52 @@ fn bdl_process_spatial_node(base: *mut u8, node: *const u8, draw_idx: &mut u32) 
             // SAFETY: the same live node; `+0x1c4` is an in-bounds dword of it.
             && unsafe { bdl_rd32(node, 0x1c4) } != 0,
     );
-    let batch_count = if edi_flag != 0 {
+    // The `m30`-side descriptor base and record base are bound here with the count
+    // they belong to rather than per batch, and only on the branch that indexes
+    // them: `m30_138` is a live block only when `edi_flag` is clear, so binding
+    // them unconditionally would dereference it on the branch that never does.
+    let (batch_count, base24, m30_recs) = if edi_flag != 0 {
         // SAFETY: the same live node; `+0x3f0` is the element count of the batch
         // descriptor array based at its `+0x3ec`, the array this branch indexes.
-        unsafe { bdl_rd32(node, 0x3f0) }
+        (unsafe { bdl_rd32(node, 0x3f0) }, core::ptr::null(), 0)
     } else {
         // SAFETY: `m30_138` is the block loaded from `m30 + 0x138`; `+0x20` is the
         // element count of the 0x18-stride descriptor array based at its `+0x24`.
-        unsafe { bdl_rd32(m30_138, 0x20) }
+        let count = unsafe { bdl_rd32(m30_138, 0x20) };
+        // SAFETY: the same block; `+0x24` is the base pointer of the array that
+        // count belongs to.
+        let descs = unsafe { bdl_rdp(m30_138, 0x24) };
+        // SAFETY: `m30` is the node's `+0x30` block; `+0x158` holds the base address
+        // of the 0x20-stride record array those descriptors index.
+        let recs = unsafe { bdl_rd32(m30, 0x158) };
+        (count, descs, recs)
     };
+    // The two model-block fields the loop reads once per batch. Both are loop
+    // invariant: the only per-batch callees are the client's growable-array
+    // helpers, which write the `{cap@0,count@4,data@8,gran@0xc}` header they are
+    // handed (one of the view's own, at `base+0x2c/0x3c/0x4c/0x5c/0x6c`) and its
+    // heap buffer, and the texture-slot resolver at 0x70b040, which writes the
+    // view's `+0x14c` cache. None of them addresses the node's `+0x30` block or
+    // the model block. Binding them above an empty batch array dereferences
+    // nothing new either: the cloud fill below reads `m_mat[0x134]` on every path
+    // that reaches it.
+    // SAFETY: `m_mat` is the node's model block; `+0x54` is the dword that bounds
+    // the `node+0xa0` array the batch index words address, the same pairing
+    // `bdl_compute_sort_hash` relies on.
+    let a0_bound = unsafe { bdl_rd32(m_mat, 0x54) };
+    // SAFETY: the same model block; `+0x88` is the pointer to a 4-byte-stride array
+    // of per-material flag entries.
+    let flags_base = unsafe { bdl_rdp(m_mat, 0x88) };
 
     // 0x707a87..0x708087: per-batch classification inner loop.
     for inner_idx in 0..batch_count as usize {
         // 0x707a8d: locate the per-batch descriptor (`edi_batch`, stride 0x18)
-        // and the `slot1c` material/texture entry.
+        // and the `slot1c` material/texture entry. The byte offset is one binding
+        // dominating both arms because the original steps it as a second induction
+        // variable beside the counter: spelled inside each arm it is two ways to
+        // say one value, and the arm that ends in a `continue` has the product
+        // rebuilt in the successor block rather than the stepped offset reused.
+        let batch_off = 0x18 * inner_idx;
         let edi_batch;
         let slot1c: usize;
         if edi_flag != 0 {
@@ -33381,7 +33441,7 @@ fn bdl_process_spatial_node(base: *mut u8, node: *const u8, draw_idx: &mut u32) 
             let base3ec = unsafe { bdl_rdp(node, 0x3ec) };
             // SAFETY: `inner_idx < batch_count` and the descriptors are 0x18 bytes
             // apart, so this lands on the start of the `inner_idx`-th element.
-            edi_batch = unsafe { base3ec.add(0x18 * inner_idx) };
+            edi_batch = unsafe { base3ec.add(batch_off) };
             // SAFETY: `edi_batch` is the 0x18-byte batch descriptor selected above; `+4`
             // is its index word into the record array addressed next.
             let w = unsafe { bdl_rd16(edi_batch, 4) } as usize;
@@ -33392,19 +33452,13 @@ fn bdl_process_spatial_node(base: *mut u8, node: *const u8, draw_idx: &mut u32) 
             // later.
             slot1c = unsafe { bdl_rd32(node, 0x3f4) } as usize + w * 0x20;
         } else {
-            // SAFETY: `m30_138` is the node's `+0x30` block's `+0x138` sub-block, whose
-            // `+0x20` dword is `batch_count` on this branch; `+0x24` is the base pointer
-            // of the descriptor array that count belongs to.
-            let base24 = unsafe { bdl_rdp(m30_138, 0x24) };
-            // SAFETY: the descriptors are 0x18 bytes and `inner_idx < batch_count`, which
-            // on this branch is that same array's `m30_138[0x20]` count.
-            edi_batch = unsafe { base24.add(0x18 * inner_idx) };
+            // SAFETY: `base24` is the `m30_138[0x24]` descriptor base bound above, the
+            // array whose `m30_138[0x20]` count is `batch_count` on this branch, and the
+            // descriptors are 0x18 bytes with `inner_idx < batch_count`.
+            edi_batch = unsafe { base24.add(batch_off) };
             // SAFETY: `edi_batch` is that 0x18-byte descriptor; `+4` is its index word.
             let w = unsafe { bdl_rd16(edi_batch, 4) } as usize;
-            // SAFETY: `m30` is the node's `+0x30` block; `+0x158` holds the base address
-            // of the 0x20-stride record array these descriptors index. Only the load is
-            // unsafe.
-            slot1c = unsafe { bdl_rd32(m30, 0x158) } as usize + w * 0x20;
+            slot1c = m30_recs as usize + w * 0x20;
             // 0x707adb: skip the batch when the visibility slot is empty.
             // SAFETY: the same live node; `+0x98` is a pointer field of it.
             let vis = unsafe { bdl_rdp(node, 0x98) };
@@ -33424,10 +33478,7 @@ fn bdl_process_spatial_node(base: *mut u8, node: *const u8, draw_idx: &mut u32) 
         // SAFETY: the same 0x18-byte descriptor; `+8` is the index word
         // `bdl_compute_sort_hash` reads from this same field as `cx`.
         let w2 = unsafe { bdl_rd16(edi_batch, 8) };
-        // SAFETY: `m_mat` is the node's model block; `+0x54` is the dword that bounds the
-        // `node+0xa0` array this index addresses, the same pairing
-        // `bdl_compute_sort_hash` relies on.
-        if w2 < unsafe { bdl_rd32(m_mat, 0x54) } {
+        if w2 < a0_bound {
             // SAFETY: the same live node; `+0xa0` is the pointer to that 0x50-stride
             // array.
             let n_a0 = unsafe { bdl_rdp(node, 0xa0) };
@@ -33461,11 +33512,8 @@ fn bdl_process_spatial_node(base: *mut u8, node: *const u8, draw_idx: &mut u32) 
 
         // 0x707b62: per-batch material slot + the additive/translucent flags.
         // SAFETY: the same 0x18-byte descriptor; `+0xa` is its index into the
-        // `m_mat[0x88]` array read next.
+        // `m_mat[0x88]` array bound as `flags_base` above.
         let w4 = unsafe { bdl_rd16(edi_batch, 0xa) } as usize;
-        // SAFETY: `m_mat` is the node's model block; `+0x88` is the pointer to a
-        // 4-byte-stride array.
-        let flags_base = unsafe { bdl_rdp(m_mat, 0x88) };
         // SAFETY: `w4` is that array's own index word, taken from the descriptor this
         // batch belongs to and applied unchecked by the stock body; the stride is 4 and
         // only `+0` and `+2` of the selected entry are read.
