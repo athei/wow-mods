@@ -5530,37 +5530,46 @@ mod tests_step_offset__616cb0 {
     }
 }
 
-/// WMO-group trace-segment normalize folds (0x6b9359..0x6b9385).
+/// WMO-group trace-segment direction scale (part of 0x6b9359..0x6b9385).
 ///
 /// From the squared delta magnitude, `len = sqrt(sqmag)` (80-bit on the x87
-/// stack), `len_dist = len × dist` and `inv_len = one / len`, each narrowed
-/// once. The subsequent direction normalize is a separate
-/// `ScaleInPlace(delta, inv_len)` hook call. Returns `(inv_len, len_dist)`.
-pub fn trace_seg_normalize__6b92b0(sqmag: f32, dist: f32, one: f32) -> (f32, f32) {
+/// stack) and `inv_len = one / len`, narrowed once. The direction normalize
+/// itself is a separate `ScaleInPlace(delta, inv_len)` hook call. `len` comes
+/// back un-narrowed because `trace_seg_len_dist__6b92b0` multiplies it wide,
+/// and narrowing it here would move that product's bits. Returns
+/// `(inv_len, len)`.
+pub fn trace_seg_dir_scale__6b92b0(sqmag: f32, one: f32) -> (f32, f64) {
     let len = f64::from(sqmag).sqrt();
-    (
-        super::f64_to_f32(f64::from(one) / len),
-        super::f64_to_f32(len * f64::from(dist)),
-    )
+    (super::f64_to_f32(f64::from(one) / len), len)
+}
+
+/// WMO-group trace-segment `len × dist` fold (part of 0x6b9359..0x6b9385).
+///
+/// The wide `len` from `trace_seg_dir_scale__6b92b0` times the caller's running
+/// distance, narrowed once. It is a separate fold because a caller tracing one
+/// segment against many sub-parts holds `len` invariant while `dist` moves with
+/// every hit it records.
+pub fn trace_seg_len_dist__6b92b0(len: f64, dist: f32) -> f32 {
+    super::f64_to_f32(len * f64::from(dist))
 }
 
 #[cfg(test)]
-mod tests_trace_seg_normalize__6b92b0 {
-    use super::trace_seg_normalize__6b92b0 as norm;
+mod tests_trace_seg_folds__6b92b0 {
+    use super::{trace_seg_dir_scale__6b92b0 as dir_scale, trace_seg_len_dist__6b92b0 as len_dist};
 
     #[test]
     fn splits_inv_len_and_len_dist() {
         // sqmag 16 -> len 4; inv 1/4 = 0.25; len*dist = 4*2.5 = 10.
-        let (inv, ld) = norm(16.0, 2.5, 1.0);
+        let (inv, len) = dir_scale(16.0, 1.0);
         assert_eq!(inv, 0.25);
-        assert_eq!(ld, 10.0);
+        assert_eq!(len_dist(len, 2.5), 10.0);
     }
 
     #[test]
     fn zero_length_yields_inf_inv() {
-        let (inv, ld) = norm(0.0, 3.0, 1.0);
+        let (inv, len) = dir_scale(0.0, 1.0);
         assert_eq!(inv, f32::INFINITY);
-        assert_eq!(ld, 0.0);
+        assert_eq!(len_dist(len, 3.0), 0.0);
     }
 }
 

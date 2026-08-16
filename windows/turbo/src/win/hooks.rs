@@ -14671,9 +14671,13 @@ pub extern "fastcall" fn cloud_shade_layer__6cfb00(layer: *mut core::ffi::c_void
 
 /// Recursive worker for `collide_bsp_node_trace_segment__6bc370`.
 ///
-/// Takes the segment and clip slab by reference to per-level copies,
-/// mirroring the reference's per-frame stack rebuilds of the clipped records.
-fn trace_bsp_segment(this: *mut u8, node_index: u32, seg: &[f32; 6], clip: &[f32; 6]) {
+/// Takes the segment by reference to a per-level copy, mirroring the
+/// reference's per-frame stack rebuilds of the clipped records. The clip slab
+/// travels as a bare pointer instead: at the top level it addresses the group's
+/// own slab in client memory (`group+0x90`), so a live shared reference held
+/// across a recursion that re-enters client code would be a stronger claim than
+/// the walk can back, and the entry would have to snapshot it to form one.
+fn trace_bsp_segment(this: *mut u8, node_index: u32, seg: &[f32; 6], clip: *const f32) {
     // SAFETY: `this+0x0` is the in-bounds, aligned geometry-tables slot.
     let geometry = unsafe { this.cast::<*mut u8>().read() };
     if geometry.is_null() {
@@ -14759,54 +14763,64 @@ fn trace_bsp_segment(this: *mut u8, node_index: u32, seg: &[f32; 6], clip: &[f32
     // SAFETY: fixed, initialized `.rdata` float in the live host image.
     let front_gate = unsafe { FRONT_GATE.read() };
 
+    // SAFETY: `clip` addresses 6 contiguous f32 (slab min, then max): the
+    // group's slab at the top level, the caller's own child slab below it. The
+    // read runs ahead of the classify kernel and of both child slabs, so it is
+    // ahead of every recursion, and no client code can have written it since
+    // the caller formed the pointer.
+    let clip6 = unsafe { clip.cast::<[f32; 6]>().read_unaligned() };
+
     let step = crate::math::collision::collide_bsp_node_trace_segment__6bc370(
-        seg, clip, axis, split, band_lo, band_hi, front_gate,
+        seg, &clip6, axis, split, band_lo, band_hi, front_gate,
     );
 
     use crate::math::collision::BspTraceStep as Step;
     // High child: slab minimum raised to the split; low child: maximum lowered.
-    let mut clip_high = *clip;
+    // Both are built here rather than inside the arms that use them: the second
+    // arm of a straddle runs after the first child's whole subtree, which has
+    // re-entered the client's triangle collider by then.
+    let mut clip_high = clip6;
     clip_high[axis] = split;
-    let mut clip_low = *clip;
+    let mut clip_low = clip6;
     clip_low[axis + 3] = split;
     match step {
         Step::Reject => {}
         Step::Band => {
             if child_high != 0xffff {
-                trace_bsp_segment(this, u32::from(child_high), seg, &clip_high);
+                trace_bsp_segment(this, u32::from(child_high), seg, clip_high.as_ptr());
             }
             if child_low != 0xffff {
-                trace_bsp_segment(this, u32::from(child_low), seg, &clip_low);
+                trace_bsp_segment(this, u32::from(child_low), seg, clip_low.as_ptr());
             }
         }
         Step::HighOnly => {
             if child_high != 0xffff {
-                trace_bsp_segment(this, u32::from(child_high), seg, &clip_high);
+                trace_bsp_segment(this, u32::from(child_high), seg, clip_high.as_ptr());
             }
         }
         Step::LowOnly => {
             if child_low != 0xffff {
-                trace_bsp_segment(this, u32::from(child_low), seg, &clip_low);
+                trace_bsp_segment(this, u32::from(child_low), seg, clip_low.as_ptr());
             }
         }
         Step::SplitHighFirst { mid } => {
             if child_high != 0xffff {
                 let first = [seg[0], seg[1], seg[2], mid[0], mid[1], mid[2]];
-                trace_bsp_segment(this, u32::from(child_high), &first, &clip_high);
+                trace_bsp_segment(this, u32::from(child_high), &first, clip_high.as_ptr());
             }
             if child_low != 0xffff {
                 let second = [mid[0], mid[1], mid[2], seg[3], seg[4], seg[5]];
-                trace_bsp_segment(this, u32::from(child_low), &second, &clip_low);
+                trace_bsp_segment(this, u32::from(child_low), &second, clip_low.as_ptr());
             }
         }
         Step::SplitLowFirst { mid } => {
             if child_low != 0xffff {
                 let first = [seg[0], seg[1], seg[2], mid[0], mid[1], mid[2]];
-                trace_bsp_segment(this, u32::from(child_low), &first, &clip_low);
+                trace_bsp_segment(this, u32::from(child_low), &first, clip_low.as_ptr());
             }
             if child_high != 0xffff {
                 let second = [mid[0], mid[1], mid[2], seg[3], seg[4], seg[5]];
-                trace_bsp_segment(this, u32::from(child_high), &second, &clip_high);
+                trace_bsp_segment(this, u32::from(child_high), &second, clip_high.as_ptr());
             }
         }
     }
@@ -14832,11 +14846,13 @@ pub extern "thiscall" fn collide_bsp_node_trace_segment__6bc370(
     if this.is_null() || segment.is_null() || clip.is_null() {
         return;
     }
+    // The segment is snapshotted, the clip slab is not. A straddle re-reads
+    // `seg[3..6]` after a subtree has run, and this is a public entry other
+    // callers reach with client pointers, so the copy is what makes those reads
+    // pre-call values; the clip's three consumers all run before any recursion.
     // SAFETY: `segment` addresses 6 contiguous f32 (start, then end).
     let seg = unsafe { *segment.cast::<[f32; 6]>() };
-    // SAFETY: `clip` addresses 6 contiguous f32 (slab min, then max).
-    let clip6 = unsafe { *clip.cast::<[f32; 6]>() };
-    trace_bsp_segment(this, node_index, &seg, &clip6);
+    trace_bsp_segment(this, node_index, &seg, clip);
 }
 
 /// `CWorld::IntersectMapObjSegment`.
@@ -14921,6 +14937,14 @@ pub extern "fastcall" fn c_world__intersect_map_obj_segment__6a8840(
                 let mut tend = [0f32; 3];
                 c44_matrix__transform_point__7bca80(tstart.as_mut_ptr(), start, matrix);
                 c44_matrix__transform_point__7bca80(tend.as_mut_ptr(), end, matrix);
+                // Both endpoints are fixed for this instance, so the trace's
+                // segment and everything its normalize derives from it hold
+                // across the whole sub-part loop below. Only the running
+                // distance moves, and that stays inside the loop. The two local
+                // arrays do escape into the stock sub-part cull each turn, but
+                // that path reads them and never writes through them.
+                let seg = [tstart[0], tstart[1], tstart[2], tend[0], tend[1], tend[2]];
+                let pro = trace_seg_prologue(seg.as_ptr());
                 // SAFETY: live instance; +0x138 is the tagged sub-part head.
                 let mut cur = unsafe { ((node + 0x138) as *const u32).read() } as usize;
                 loop {
@@ -14942,12 +14966,11 @@ pub extern "fastcall" fn c_world__intersect_map_obj_segment__6a8840(
                             }
                             // SAFETY: caller out frac seeds the trace max dist.
                             let mut dist = unsafe { out_frac.read_unaligned() };
-                            let seg = [tstart[0], tstart[1], tstart[2], tend[0], tend[1], tend[2]];
                             let mut ctx_scratch: u32 = 0;
-                            let hit = c_map_obj_group__trace_segment__6b92b0(
+                            let hit = trace_seg_body(
                                 group,
                                 (&raw mut ctx_scratch) as usize as u32,
-                                seg.as_ptr(),
+                                &pro,
                                 &raw mut dist,
                                 node as u32,
                                 0,
@@ -15061,24 +15084,56 @@ pub extern "thiscall" fn c_map_obj__trace_segment_against_group__6a2600(
     1
 }
 
-/// `CMapObjGroup::TraceSegment`.
+/// Everything `CMapObjGroup::TraceSegment` derives from its segment alone.
 ///
-/// thiscall(ecx = group; ctx, seg f32*[6], inoutDist f32*, facetSink, flags, mask
-/// u16), RET 0x18, bool in AL.
+/// `dir` is `end − start` normalized by `inv_len = 1/len`, and `len` is the
+/// un-narrowed `sqrt` that the per-call `len × dist` at `desc[19]` still
+/// multiplies, so carrying it as f32 would move that product's bits. None of it
+/// depends on the running distance or on the group, so a caller walking one
+/// segment across many sub-parts builds it once and hands the same value to
+/// every trace.
+struct TraceSegPrologue {
+    seg: *const f32,
+    dir: [f32; 3],
+    inv_len: f32,
+    len: f64,
+}
+
+/// Builds the segment-invariant half of `CMapObjGroup::TraceSegment`.
 ///
-/// Builds a ~0x58-byte trace descriptor on the stack (group liquid/geom
-/// pointers, the segment start+end copied twice, the normalized ray
-/// direction, `len × dist`, `1/len`, the mask `ORed` with 0x80, and a global
-/// context word), runs the BSP segment trace (OUR hook), emits the collision
-/// facets, optionally intersects liquid, then clears the per-trace visited
-/// marks (byte array at `group+0xc4`, indices in the global stack
-/// 0xce26e8/count 0xce26e0). Returns whether the global hit counter at
-/// 0xc5a474 advanced. Own math is the FSQRT normalize (0.74% hot block) —
-/// everything else is pointer/list plumbing.
-pub extern "thiscall" fn c_map_obj_group__trace_segment__6b92b0(
+/// The subtract, squared-magnitude and scale-in-place delegates run here rather
+/// than against the descriptor's own `desc[15..18]` slot, which is why the
+/// direction reaches the descriptor already normalized instead of being stored
+/// raw and rewritten in place.
+fn trace_seg_prologue(seg: *const f32) -> TraceSegPrologue {
+    // delta = end - start via our subtract hook (out, a=end, b=start).
+    let mut dir = [0f32; 3];
+    c3_vector__subtract__4841f0(dir.as_mut_ptr(), seg.wrapping_add(3), seg);
+    // sqmag of the raw delta, then the normalize folds.
+    let sqmag = c3_vector__squared_magnitude__4549f0(dir.as_ptr());
+    // SAFETY: fixed `.rdata` 1.0 numerator (0x7ff9d8).
+    let one = unsafe { ((crate::win::EXPECTED_IMAGE_BASE + 0x3f_f9d8) as *const f32).read() };
+    let (inv_len, len) = crate::math::collision::trace_seg_dir_scale__6b92b0(sqmag, one);
+    // Normalize the direction in place (delta *= 1/len).
+    c3_vector__scale_in_place__5132f0(dir.as_mut_ptr(), inv_len);
+    TraceSegPrologue {
+        seg,
+        dir,
+        inv_len,
+        len,
+    }
+}
+
+/// `CMapObjGroup::TraceSegment` with its segment-invariant half precomputed.
+///
+/// The body of the hook below, minus the prologue. Everything left is per-call:
+/// the descriptor is rebuilt because the trace and the facet emit mutate it in
+/// place (the leaf collider writes the best parameter at `desc+0x4c`), and
+/// `len × dist` at `desc[19]` moves with the caller's running distance.
+fn trace_seg_body(
     this: *mut u8,
     ctx: u32,
-    seg: *const f32,
+    pro: &TraceSegPrologue,
     inout_dist: *mut f32,
     facet_sink: u32,
     flags: u32,
@@ -15092,52 +15147,58 @@ pub extern "thiscall" fn c_map_obj_group__trace_segment__6b92b0(
     const VISIT_STACK: usize = BASE + 0x8e_26e8; // 0xce26e8
     const HIT_FLAG2: usize = BASE + 0x8e_66fc; // 0xce66fc
 
+    let seg = pro.seg;
     // SAFETY: fixed hit-counter global in the live host image.
     let saved = unsafe { (HIT_COUNTER as *const u32).read() };
 
     // ---- descriptor (22 dwords = 0x58 bytes) ----
-    let mut desc = [0u32; 22];
-    // SAFETY: live group; +0xc4 visited-mark base, +0xd0/+0xc8 sub-lists.
-    desc[1] = unsafe { ((thisu + 0xc4) as *const u32).read() };
+    // SAFETY: live group; +0xc4 is the visited-mark base.
+    let mark_base = unsafe { ((thisu + 0xc4) as *const u32).read() };
     // SAFETY: live group; +0xd0.
-    desc[2] = unsafe { ((thisu + 0xd0) as *const u32).read() };
+    let sub_list_hi = unsafe { ((thisu + 0xd0) as *const u32).read() };
     // SAFETY: live group; +0xc8.
-    desc[3] = unsafe { ((thisu + 0xc8) as *const u32).read() };
-    desc[4] = inout_dist as usize as u32;
+    let sub_list_lo = unsafe { ((thisu + 0xc8) as *const u32).read() };
     // SAFETY: `seg` addresses 6 contiguous f32 (start xyz, end xyz).
     let seg6 = unsafe { *seg.cast::<[f32; 6]>() };
-    for i in 0..6 {
-        desc[6 + i] = seg6[i].to_bits(); // MOVSD copy of start+end
-    }
-    for i in 0..3 {
-        desc[12 + i] = seg6[i].to_bits(); // segment start
-    }
-    // delta = end - start via our subtract hook (out, a=end, b=start).
-    let mut delta = [0f32; 3];
-    c3_vector__subtract__4841f0(delta.as_mut_ptr(), seg.wrapping_add(3), seg);
-    for i in 0..3 {
-        desc[15 + i] = delta[i].to_bits();
-    }
-    // sqmag of the raw delta, then the normalize folds.
-    let dir_ptr = (&raw mut desc[15]).cast::<f32>();
-    let sqmag = c3_vector__squared_magnitude__4549f0(dir_ptr.cast_const());
     // SAFETY: caller's inout distance; [0] is the segment length scale.
     let dist0 = unsafe { inout_dist.read_unaligned() };
-    // SAFETY: fixed `.rdata` 1.0 numerator (0x7ff9d8).
-    let one = unsafe { ((BASE + 0x3f_f9d8) as *const f32).read() };
-    let (inv_len, len_dist) =
-        crate::math::collision::trace_seg_normalize__6b92b0(sqmag, dist0, one);
-    desc[5] = dist0.to_bits();
-    desc[18] = inv_len.to_bits();
-    desc[19] = len_dist.to_bits();
-    // Normalize the direction in place (delta *= 1/len).
-    c3_vector__scale_in_place__5132f0(dir_ptr, inv_len);
-    desc[20] = u32::from(mask | 0x80);
+    let len_dist = crate::math::collision::trace_seg_len_dist__6b92b0(pro.len, dist0);
     // SAFETY: fixed context-word global.
-    desc[21] = unsafe { (CTX_WORD as *const u32).read() };
+    let ctx_word = unsafe { (CTX_WORD as *const u32).read() };
+    // Only `desc[0]` is zero, and the literal below is what proves the other 21
+    // dwords are written. The descriptor goes straight to the BSP trace and to
+    // the facet emit, so a slot left out would hand the client stack garbage.
+    // Keep it exhaustive: nothing here may become conditional.
+    let mut desc: [u32; 22] = [
+        0,
+        mark_base,
+        sub_list_hi,
+        sub_list_lo,
+        inout_dist as usize as u32,
+        dist0.to_bits(),
+        // MOVSD copy of start+end
+        seg6[0].to_bits(),
+        seg6[1].to_bits(),
+        seg6[2].to_bits(),
+        seg6[3].to_bits(),
+        seg6[4].to_bits(),
+        seg6[5].to_bits(),
+        // segment start
+        seg6[0].to_bits(),
+        seg6[1].to_bits(),
+        seg6[2].to_bits(),
+        // the already-normalized ray direction
+        pro.dir[0].to_bits(),
+        pro.dir[1].to_bits(),
+        pro.dir[2].to_bits(),
+        pro.inv_len.to_bits(),
+        len_dist.to_bits(),
+        u32::from(mask | 0x80),
+        ctx_word,
+    ];
 
     // ---- BSP trace (OUR hook): this = {group+0x44, &desc} ----
-    let mut bsp_this = [(thisu + 0x44) as u32, desc.as_ptr() as usize as u32];
+    let mut bsp_this = [(thisu + 0x44) as u32, desc.as_mut_ptr() as usize as u32];
     collide_bsp_node_trace_segment__6bc370(
         bsp_this.as_mut_ptr().cast::<u8>(),
         0,
@@ -15167,16 +15228,19 @@ pub extern "thiscall" fn c_map_obj_group__trace_segment__6b92b0(
     // SAFETY: fixed hit-counter global re-read after the trace.
     let result = u8::from(unsafe { (HIT_COUNTER as *const u32).read() } != saved);
     let visit_base = desc[1] as usize;
-    loop {
-        // SAFETY: fixed visited-count global, re-read each iteration.
-        let count = unsafe { (VISIT_COUNT as *const u32).read() };
-        if count == 0 {
-            break;
-        }
-        let nc = count - 1;
-        // SAFETY: fixed visited-count global.
-        unsafe { (VISIT_COUNT as *mut u32).write(nc) };
-        let widx_ptr = (VISIT_STACK as *const u16).wrapping_add(nc as usize);
+    // The count lives in a register for the whole clear instead of being stored
+    // and re-read each turn. That is sound because `visit_base` is the group's
+    // own heap mark array at `*(group+0xc4)`, which can never overlap the fixed
+    // `.data` count at 0xce26e0 or the index stack at 0xce26e8, and because the
+    // loop is call-free, so nothing can observe an intermediate count. The
+    // terminal store of 0 below is what makes the end state identical; only a
+    // fault mid-loop would differ, leaving the count whole rather than partly
+    // decremented.
+    // SAFETY: fixed visited-count global, read once for the whole clear.
+    let mut count = unsafe { (VISIT_COUNT as *const u32).read() };
+    while count != 0 {
+        count -= 1;
+        let widx_ptr = (VISIT_STACK as *const u16).wrapping_add(count as usize);
         // SAFETY: visited-index stack, indexed by the decremented count.
         let widx = unsafe { widx_ptr.read() } as usize;
         let addr = visit_base.wrapping_add(widx * 2);
@@ -15190,6 +15254,36 @@ pub extern "thiscall" fn c_map_obj_group__trace_segment__6b92b0(
     // SAFETY: fixed secondary hit flag cleared at exit.
     unsafe { (HIT_FLAG2 as *mut u32).write(0) };
     result
+}
+
+/// `CMapObjGroup::TraceSegment`.
+///
+/// thiscall(ecx = group; ctx, seg f32*[6], inoutDist f32*, facetSink, flags, mask
+/// u16), RET 0x18, bool in AL.
+///
+/// Builds a ~0x58-byte trace descriptor on the stack (group liquid/geom
+/// pointers, the segment start+end copied twice, the normalized ray
+/// direction, `len × dist`, `1/len`, the mask `ORed` with 0x80, and a global
+/// context word), runs the BSP segment trace (OUR hook), emits the collision
+/// facets, optionally intersects liquid, then clears the per-trace visited
+/// marks (byte array at `group+0xc4`, indices in the global stack
+/// 0xce26e8/count 0xce26e0). Returns whether the global hit counter at
+/// 0xc5a474 advanced. Own math is the FSQRT normalize (0.74% hot block) —
+/// everything else is pointer/list plumbing.
+pub extern "thiscall" fn c_map_obj_group__trace_segment__6b92b0(
+    this: *mut u8,
+    ctx: u32,
+    seg: *const f32,
+    inout_dist: *mut f32,
+    facet_sink: u32,
+    flags: u32,
+    mask: u16,
+) -> u8 {
+    // 0x6b92b0 is a patched entry the client also calls directly, so this body
+    // builds the prologue itself. A caller of ours that traces one segment
+    // against many sub-parts calls `trace_seg_body` with a hoisted one instead.
+    let pro = trace_seg_prologue(seg);
+    trace_seg_body(this, ctx, &pro, inout_dist, facet_sink, flags, mask)
 }
 
 /// `CollideLeaf_RayTriangleMesh` — `__thiscall(ecx = state, stack = geometry, node)`.
