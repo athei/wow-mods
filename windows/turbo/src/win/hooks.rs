@@ -13222,6 +13222,61 @@ pub extern "fastcall" fn cg_object__update_wmo_liquid_submersion__69dc30(entity:
     unsafe { normal_p.cast::<[f32; 3]>().write_unaligned(world_normal) };
 }
 
+/// The zero-sample arm of `CGRenderEntity::AccumulateBounds` (0x672a20).
+///
+/// Expands two byte-color vectors from the fixed fallback object at `0x8e9b60`
+/// (the folded stock accessor returns that constant address) scaled by the host
+/// `1/255` constant at `0x4026c8`, and feeds them to the stock centroid and
+/// moment accumulators by absolute VA, the moment paired with the fallback's
+/// float block at `+0x168`.
+///
+/// Outlined because these two expanded vectors are the only stack-addressed
+/// values in the whole entry: with them here the sampled path holds no frame
+/// locals and reserves none, and the epilogue sits next to the hot body rather
+/// than behind this arm.
+#[cold]
+#[inline(never)]
+fn cg_render_entity__accumulate_bounds_fallback__672a20(fit: *mut u8) {
+    const FALLBACK_OBJ: *const u8 = (crate::win::EXPECTED_IMAGE_BASE + 0x8e_9b60) as *const u8;
+    const INV255: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x40_26c8) as *const f32;
+    // SAFETY: fixed, initialized `.data` scale constant in the live host image.
+    let scale = unsafe { INV255.read() };
+
+    // SAFETY: fixed in-image color byte of the fallback object (+0x17a).
+    let bx_p = unsafe { FALLBACK_OBJ.add(0x17a) };
+    // SAFETY: `bx_p` is an initialized in-image byte.
+    let bx = unsafe { bx_p.read() };
+    // SAFETY: fixed in-image color byte of the fallback object (+0x179).
+    let by_p = unsafe { FALLBACK_OBJ.add(0x179) };
+    // SAFETY: `by_p` is an initialized in-image byte.
+    let by = unsafe { by_p.read() };
+    // SAFETY: fixed in-image color byte of the fallback object (+0x178).
+    let bz_p = unsafe { FALLBACK_OBJ.add(0x178) };
+    // SAFETY: `bz_p` is an initialized in-image byte.
+    let bz = unsafe { bz_p.read() };
+    let v1 =
+        crate::math::object::cg_render_entity__accumulate_bounds_expand__672a20(bx, by, bz, scale);
+    bounds_fit__accumulate_centroid__71bc70(fit, v1.as_ptr());
+
+    // SAFETY: fixed in-image color byte of the fallback object (+0x176).
+    let cx_p = unsafe { FALLBACK_OBJ.add(0x176) };
+    // SAFETY: `cx_p` is an initialized in-image byte.
+    let cx = unsafe { cx_p.read() };
+    // SAFETY: fixed in-image color byte of the fallback object (+0x175).
+    let cy_p = unsafe { FALLBACK_OBJ.add(0x175) };
+    // SAFETY: `cy_p` is an initialized in-image byte.
+    let cy = unsafe { cy_p.read() };
+    // SAFETY: fixed in-image color byte of the fallback object (+0x174).
+    let cz_p = unsafe { FALLBACK_OBJ.add(0x174) };
+    // SAFETY: `cz_p` is an initialized in-image byte.
+    let cz = unsafe { cz_p.read() };
+    let v2 =
+        crate::math::object::cg_render_entity__accumulate_bounds_expand__672a20(cx, cy, cz, scale);
+    // SAFETY: fixed in-image offset of the fallback object's float block.
+    let moment_vec = unsafe { FALLBACK_OBJ.add(0x168) };
+    bounds_fit__accumulate_moment__71bce0(fit, v2.as_ptr(), moment_vec.cast::<f32>());
+}
+
 /// `CGRenderEntity::AccumulateBounds`.
 ///
 /// `__fastcall(edx = fit, stack = renderable; ecx carries an unused slot)`.
@@ -13229,11 +13284,9 @@ pub extern "fastcall" fn cg_object__update_wmo_liquid_submersion__69dc30(entity:
 /// `+4`, `+8` (the latter gated on the strict depth-span kernel
 /// `[+0x78] - [+0x68] < threshold`, threshold a host global), and `+0xc`, each
 /// `__thiscall(renderable, fit)`; a set `0x20` bit in the flag byte at `+8`
-/// then marks the fit's dword at `+0x1b0`. With no renderable, expands two
-/// byte-color vectors from the fixed fallback object (folded stock accessor
-/// returning a constant address) scaled by the host `1/255` constant and feeds
-/// them to the stock centroid/moment accumulators by absolute VA (the moment
-/// paired with the fallback's float block at `+0x168`).
+/// then marks the fit's dword at `+0x1b0`. With no renderable, the whole
+/// fallback expansion is
+/// [`cg_render_entity__accumulate_bounds_fallback__672a20`].
 pub extern "fastcall" fn cg_render_entity__accumulate_bounds__672a20(
     _unused: i32,
     fit: *mut u8,
@@ -13243,46 +13296,7 @@ pub extern "fastcall" fn cg_render_entity__accumulate_bounds__672a20(
         return;
     }
     if renderable.is_null() {
-        const FALLBACK_OBJ: *const u8 = (crate::win::EXPECTED_IMAGE_BASE + 0x8e_9b60) as *const u8;
-        const INV255: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x40_26c8) as *const f32;
-        // SAFETY: fixed, initialized `.data` scale constant in the live host image.
-        let scale = unsafe { INV255.read() };
-
-        // SAFETY: fixed in-image color byte of the fallback object (+0x17a).
-        let bx_p = unsafe { FALLBACK_OBJ.add(0x17a) };
-        // SAFETY: `bx_p` is an initialized in-image byte.
-        let bx = unsafe { bx_p.read() };
-        // SAFETY: fixed in-image color byte of the fallback object (+0x179).
-        let by_p = unsafe { FALLBACK_OBJ.add(0x179) };
-        // SAFETY: `by_p` is an initialized in-image byte.
-        let by = unsafe { by_p.read() };
-        // SAFETY: fixed in-image color byte of the fallback object (+0x178).
-        let bz_p = unsafe { FALLBACK_OBJ.add(0x178) };
-        // SAFETY: `bz_p` is an initialized in-image byte.
-        let bz = unsafe { bz_p.read() };
-        let v1 = crate::math::object::cg_render_entity__accumulate_bounds_expand__672a20(
-            bx, by, bz, scale,
-        );
-        bounds_fit__accumulate_centroid__71bc70(fit, v1.as_ptr());
-
-        // SAFETY: fixed in-image color byte of the fallback object (+0x176).
-        let cx_p = unsafe { FALLBACK_OBJ.add(0x176) };
-        // SAFETY: `cx_p` is an initialized in-image byte.
-        let cx = unsafe { cx_p.read() };
-        // SAFETY: fixed in-image color byte of the fallback object (+0x175).
-        let cy_p = unsafe { FALLBACK_OBJ.add(0x175) };
-        // SAFETY: `cy_p` is an initialized in-image byte.
-        let cy = unsafe { cy_p.read() };
-        // SAFETY: fixed in-image color byte of the fallback object (+0x174).
-        let cz_p = unsafe { FALLBACK_OBJ.add(0x174) };
-        // SAFETY: `cz_p` is an initialized in-image byte.
-        let cz = unsafe { cz_p.read() };
-        let v2 = crate::math::object::cg_render_entity__accumulate_bounds_expand__672a20(
-            cx, cy, cz, scale,
-        );
-        // SAFETY: fixed in-image offset of the fallback object's float block.
-        let moment_vec = unsafe { FALLBACK_OBJ.add(0x168) };
-        bounds_fit__accumulate_moment__71bce0(fit, v2.as_ptr(), moment_vec.cast::<f32>());
+        cg_render_entity__accumulate_bounds_fallback__672a20(fit);
         return;
     }
 
@@ -22779,10 +22793,11 @@ pub extern "fastcall" fn lua_c_collectgarbage__6f7340(l: i32) {
     let sweep_ticks = t2.wrapping_sub(t1);
     let sizes_ticks = t3.wrapping_sub(t2);
     let gctm_ticks = t4.wrapping_sub(t3);
-    let mark_ms = clock_ticks_to_ms(mark_ticks);
-    let sweep_ms = clock_ticks_to_ms(sweep_ticks);
-    let sizes_ms = clock_ticks_to_ms(sizes_ticks);
-    let gctm_ms = clock_ticks_to_ms(gctm_ticks);
+    // Only `total_ms` is needed unconditionally, for the GC_WARN_MS test. The
+    // four per-phase folds are each a 64x64->128 multiply-shift and nothing but
+    // the two lines below reads them, so they are spelled as format arguments:
+    // the log macros evaluate those inside their own level gate, which is where
+    // this work belongs.
     let total_ms = clock_ticks_to_ms(
         mark_ticks
             .wrapping_add(sweep_ticks)
@@ -22803,6 +22818,10 @@ pub extern "fastcall" fn lua_c_collectgarbage__6f7340(l: i32) {
         "gc: {total_ms} ms (mark {mark_ms}, sweep {sweep_ms}, \
          sizes {sizes_ms}, gctm {gctm_ms}), nblocks {nblocks_before} -> \
          {nblocks_after}, threshold {threshold}",
+        mark_ms = clock_ticks_to_ms(mark_ticks),
+        sweep_ms = clock_ticks_to_ms(sweep_ticks),
+        sizes_ms = clock_ticks_to_ms(sizes_ticks),
+        gctm_ms = clock_ticks_to_ms(gctm_ticks),
     );
     if total_ms >= GC_WARN_MS {
         static SLOW: AtomicU32 = AtomicU32::new(0);
@@ -22813,6 +22832,10 @@ pub extern "fastcall" fn lua_c_collectgarbage__6f7340(l: i32) {
                 "slow gc #{n}: {total_ms} ms (mark {mark_ms}, \
                  sweep {sweep_ms}, sizes {sizes_ms}, gctm {gctm_ms}), nblocks \
                  {nblocks_before} -> {nblocks_after}, threshold {threshold}",
+                mark_ms = clock_ticks_to_ms(mark_ticks),
+                sweep_ms = clock_ticks_to_ms(sweep_ticks),
+                sizes_ms = clock_ticks_to_ms(sizes_ticks),
+                gctm_ms = clock_ticks_to_ms(gctm_ticks),
             );
         }
     }
@@ -23315,7 +23338,9 @@ impl PqEnv for PqLiveEnv {
 trait PqDepthHeap {
     /// Reserve one slot at the end of the vector.
     ///
-    /// May leave the count unchanged when the stock grow fails.
+    /// May leave the count unchanged when the stock grow fails. This is the one
+    /// point at which an implementation's element storage may move, which is
+    /// what lets a sift hold a storage base across its whole body.
     ///
     /// SAFETY: the backing vector control state is live.
     unsafe fn reserve_one(&mut self);
@@ -23340,12 +23365,36 @@ trait PqDepthHeap {
 }
 
 /// The stock shared depth-sort vector (`0xcf58c8` control block).
-struct PqGlobalHeap;
+///
+/// Carries the control block's data-base field (`0xcf58d4`) instead of reading
+/// it back per element access. Only the stock grow behind
+/// [`PqDepthHeap::reserve_one`] can relocate that storage, and neither sift
+/// loop reserves or calls anything at all, so the base is refreshed exactly
+/// where it can move and the sift bodies index off a register. The elements
+/// live in the vector's own allocation, never in the image `.data` the control
+/// block sits in, so the appends cannot write the base out from under itself.
+struct PqGlobalHeap {
+    /// The element-storage base as of the last reserve.
+    base: *mut u8,
+}
+
+impl PqGlobalHeap {
+    /// A handle on the stock vector, seeded with its current storage base.
+    const fn new() -> Self {
+        // SAFETY: the data-base pointer field is live.
+        let base = unsafe { PQ_HEAP_DATA.read() };
+        Self { base }
+    }
+}
 
 impl PqDepthHeap for PqGlobalHeap {
     unsafe fn reserve_one(&mut self) {
         // SAFETY: forwarded; the control block is the live stock vector.
-        unsafe { pq_heap_reserve_one() }
+        unsafe { pq_heap_reserve_one() };
+        // The stock grow relocates the storage, so this is where the cached
+        // base is re-read: the one point in the algorithm it can move.
+        // SAFETY: the data-base pointer field is live.
+        self.base = unsafe { PQ_HEAP_DATA.read() };
     }
 
     fn count(&self) -> usize {
@@ -23360,18 +23409,21 @@ impl PqDepthHeap for PqGlobalHeap {
     }
 
     unsafe fn z(&self, idx: usize) -> f32 {
-        // SAFETY: forwarded; `idx` is within the live heap extent.
-        unsafe { pq_heap_z(idx) }
+        // SAFETY: forwarded; the base is the one the last reserve published and
+        // `idx` is within the live heap extent.
+        unsafe { pq_heap_z(self.base, idx) }
     }
 
     unsafe fn ptr(&self, idx: usize) -> u32 {
-        // SAFETY: forwarded; `idx` is within the live heap extent.
-        unsafe { pq_heap_ptr(idx) }
+        // SAFETY: forwarded; the base is the one the last reserve published and
+        // `idx` is within the live heap extent.
+        unsafe { pq_heap_ptr(self.base, idx) }
     }
 
     unsafe fn set(&mut self, idx: usize, z: f32, ptr: u32) {
-        // SAFETY: forwarded; `idx` is within the reserved heap extent.
-        unsafe { pq_heap_set(idx, z, ptr) }
+        // SAFETY: forwarded; the base is the one the last reserve published and
+        // `idx` is within the reserved heap extent.
+        unsafe { pq_heap_set(self.base, idx, z, ptr) }
     }
 }
 
@@ -23547,32 +23599,29 @@ unsafe fn pq_particle_ptr(inst: *const u8, idx: usize) -> *mut f32 {
     raw.wrapping_shl(shift).wrapping_add(base) as *mut f32
 }
 
-/// Read element `idx`'s view-Z from the depth-sort heap (base re-read live).
+/// Read element `idx`'s view-Z from the depth-sort storage at `base`.
 ///
-/// SAFETY: `idx` is within the live heap extent.
-unsafe fn pq_heap_z(idx: usize) -> f32 {
-    // SAFETY: the data-base pointer field is live.
-    let base = unsafe { PQ_HEAP_DATA.read() };
+/// SAFETY: `base` is the storage base published by the last reserve and `idx`
+/// is within the live heap extent.
+unsafe fn pq_heap_z(base: *mut u8, idx: usize) -> f32 {
     // SAFETY: element `idx`'s `.z` is the dword at byte `idx*8`.
     f32::from_bits(unsafe { anim_u32(base, idx * 8) })
 }
 
-/// Read element `idx`'s particle pointer from the depth-sort heap.
+/// Read element `idx`'s particle pointer from the depth-sort storage at `base`.
 ///
-/// SAFETY: `idx` is within the live heap extent.
-unsafe fn pq_heap_ptr(idx: usize) -> u32 {
-    // SAFETY: the data-base pointer field is live.
-    let base = unsafe { PQ_HEAP_DATA.read() };
+/// SAFETY: `base` is the storage base published by the last reserve and `idx`
+/// is within the live heap extent.
+unsafe fn pq_heap_ptr(base: *mut u8, idx: usize) -> u32 {
     // SAFETY: element `idx`'s `.ptr` is the dword at byte `idx*8+4`.
     unsafe { anim_u32(base, idx * 8 + 4) }
 }
 
-/// Write `{ z, ptr }` into heap element `idx`.
+/// Write `{ z, ptr }` into element `idx` of the storage at `base`.
 ///
-/// SAFETY: `idx` is within the reserved heap extent.
-unsafe fn pq_heap_set(idx: usize, z: f32, ptr: u32) {
-    // SAFETY: the data-base pointer field is live.
-    let base = unsafe { PQ_HEAP_DATA.read() };
+/// SAFETY: `base` is the storage base published by the last reserve and `idx`
+/// is within the reserved heap extent.
+unsafe fn pq_heap_set(base: *mut u8, idx: usize, z: f32, ptr: u32) {
     // SAFETY: element `idx`'s `.z` dword is writable.
     unsafe { anim_put_u32(base, idx * 8, z.to_bits()) };
     // SAFETY: element `idx`'s `.ptr` dword is writable.
@@ -23632,7 +23681,8 @@ pub extern "thiscall" fn c_particle_emitter__render_particles__7b3a10(
     if this.is_null() || vertex_stream.is_null() {
         return;
     }
-    pq_render_particles(&PqLiveEnv, &mut PqGlobalHeap, this, vertex_stream);
+    let mut heap = PqGlobalHeap::new();
+    pq_render_particles(&PqLiveEnv, &mut heap, this, vertex_stream);
     let inst: *mut u8 = this.cast();
     let cur: *mut u8 = vertex_stream.cast();
     // Emitted-quad count = emitted verts / verts-per-quad (unsigned).
@@ -30331,6 +30381,12 @@ fn write_u32(base: *mut u8, off: usize, v: u32) {
 /// referenced by `tag`/`flags`). The result is the logical OR of every visited
 /// node's collector result — the whole list is always walked; never
 /// early-returns on the first hit.
+///
+/// Eligible means the node's `+0xd` skip flag is clear, its `+0x118` sub-object
+/// is non-null, and that sub-object's `+0x1d4` enable byte is set. The last is
+/// the threshold predicate's own first test, taken here so a disabled
+/// sub-object skips the AABB build instead of paying for a box only the
+/// predicate would then throw away.
 //
 // Dense impure list-walk driver: a per-node strided gather of the object
 // transform/flags where one-unsafe-op-per-block would fragment each read into
@@ -30393,7 +30449,27 @@ pub extern "fastcall" fn world__query_object_boxes__6ad330(
         // dword-aligned, which is what reading a 32-bit pointer requires.
         let sub = unsafe { sub_slot.cast::<*mut u8>().read() };
 
-        if node_flag & 1 == 0 && !sub.is_null() {
+        // The sub-object's enable byte at `+0x1d4` is the first thing
+        // `object_test_value_threshold__6a4670` tests, before it touches a
+        // float, and that predicate plus the collector behind it are the only
+        // readers of the world AABB built below. A clear byte therefore answers
+        // the whole node, so it is read here and skips the build rather than
+        // discarding it afterwards. Stock reads it after the build; the visible
+        // contract (the returned bool and the collector's side effects) is
+        // unchanged, and the build itself writes nothing but this frame's own
+        // stack temporaries.
+        let eligible = node_flag & 1 == 0 && !sub.is_null() && {
+            // SAFETY: `0x1d4` is the enable byte of the live sub-object the
+            // node's `0x118` slot just yielded, the same field the predicate
+            // reads off its `this`.
+            let enable_slot = unsafe { sub.add(0x1d4) };
+            // SAFETY: `enable_slot` is a byte of that live sub-object, so it is
+            // initialised, and a one-byte read has no alignment requirement.
+            let enabled = unsafe { enable_slot.read() };
+            enabled != 0
+        };
+
+        if eligible {
             // Node transform: a 4x4 (16 f32, row-major) at `node+0xd4`.
             // SAFETY: the 64-byte matrix at `0xd4` ends at `0x114`, below the `0x118`
             // sub-object slot just read out of the same live instance, so all 16 floats
@@ -36122,6 +36198,15 @@ pub extern "fastcall" fn render_batch__compare_sort_key__70a710(
 /// reproduced exactly (raw pointer + wrapping offset, never a slice — the
 /// buffer's sizing is the caller's contract). Zero callees; the four module
 /// f32 constants and both list globals are read live from the host image.
+///
+/// The list base is read once and the dword cursor rides in a local across the
+/// whole walk, stored back to `0xc89f40` after the last pair. The walk makes no
+/// call, so nothing can observe either global between the first append and the
+/// last, and the value finally stored is the one stock's per-dword `INC`s would
+/// have left. That equivalence assumes the appends stay inside the caller's
+/// buffer: a list already overrunning into `0xc89f40` or `0xc962c8` is out of
+/// contract for stock too, which bumps the same cursor with the same absence of
+/// a bound.
 pub extern "fastcall" fn world_rasterize_trace_line_cells__69c780(
     p1: *const f32,
     p2: *const f32,
@@ -36159,6 +36244,10 @@ pub extern "fastcall" fn world_rasterize_trace_line_cells__69c780(
     let scale = unsafe { SCALE.read() };
     // SAFETY: as above.
     let bias = unsafe { BIAS.read() };
+    // SAFETY: the global list-base pointer at fixed VA 0xc962c8.
+    let list = unsafe { LIST.read() };
+    // SAFETY: the global dword write cursor at fixed VA 0xc89f40.
+    let mut cursor = unsafe { CURSOR.read() };
     crate::math::world::world_rasterize_trace_line_cells__69c780(
         a,
         b,
@@ -36169,20 +36258,18 @@ pub extern "fastcall" fn world_rasterize_trace_line_cells__69c780(
         bias,
         |first, second| {
             for v in [first, second] {
-                // SAFETY: the global dword write cursor at fixed VA 0xc89f40.
-                let c = unsafe { CURSOR.read() };
-                // SAFETY: as above; stock-faithful raw bump (wrapping, and with
-                // no bounds check, exactly like the original's INC).
-                unsafe { CURSOR.write(c.wrapping_add(1)) };
-                // SAFETY: the global list-base pointer at fixed VA 0xc962c8.
-                let list = unsafe { LIST.read() };
                 // SAFETY: appends at `list[cursor]` exactly as stock — the
                 // caller sizes the buffer, no added guard; raw wrapping offset
                 // (never a slice) + unaligned store for game memory.
-                unsafe { list.wrapping_offset(c as isize).write_unaligned(v) };
+                unsafe { list.wrapping_offset(cursor as isize).write_unaligned(v) };
+                // Stock-faithful raw bump: wrapping, and with no bounds check,
+                // exactly like the original's INC.
+                cursor = cursor.wrapping_add(1);
             }
         },
     );
+    // SAFETY: the global dword write cursor at fixed VA 0xc89f40.
+    unsafe { CURSOR.write(cursor) };
 }
 
 /// `World_TraceLineAgainstTerrain` — the terrain trace-line entry point.
