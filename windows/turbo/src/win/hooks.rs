@@ -12816,9 +12816,138 @@ pub extern "fastcall" fn build_mesh_triangle_planes__671cc0(
         }
     }
 
+    /// Appends one plane record per triangle of every entry in the mesh table.
+    ///
+    /// `PRECISE` is the host toggle at `0x89e388`, a fixed `.data` dword read
+    /// once before the mesh table is walked, so it is loop-invariant over every
+    /// triangle in the frame. Carrying it as a const parameter unswitches the
+    /// triangle loop on it: each instantiation keeps only the growth variant
+    /// and only the builder arm that its value selects, instead of testing a
+    /// spilled dword twice per triangle and carrying the other arm's body
+    /// through the loop. The two arms stay two arms. The non-precise builder
+    /// ends in a bare `rsqrtss` with no Newton step, so folding them into one
+    /// would be a different algorithm, not a tidier spelling of this one.
+    fn emit_mesh_planes<const PRECISE: bool>(quads: *mut u8, mesh_count: u32, target_len: f64) {
+        const MESH_TABLE: *const u8 = (crate::win::EXPECTED_IMAGE_BASE + 0x86_2550) as *const u8;
+        // Stock growable-array helpers, all `__thiscall` by fixed absolute VA.
+        const RESERVE_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x27_42d0;
+        const CONSTRUCT_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x27_4130;
+        const GRANULARITY_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x27_44c0;
+        const GROW_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x11_38b0;
+        // SAFETY: fixed `.text` entry in the live host image (base verified at
+        // load); matches the declared prototype `__thiscall(array, extra,
+        // align_to_granularity)` (`ret 0x8`).
+        let reserve: extern "thiscall" fn(*mut u8, u32, i32) =
+            unsafe { core::mem::transmute(RESERVE_VA) };
+        // SAFETY: fixed `.text` entry; matches the declared prototype
+        // `__thiscall(element, fill)` returning the element (`ret 0x4`).
+        let construct: extern "thiscall" fn(*mut u8, f32) -> *mut u8 =
+            unsafe { core::mem::transmute(CONSTRUCT_VA) };
+        // SAFETY: fixed `.text` entry; matches the declared prototype
+        // `__thiscall(array, count) -> granularity` (`ret 0x4`).
+        let granularity: extern "thiscall" fn(*mut u8, u32) -> u32 =
+            unsafe { core::mem::transmute(GRANULARITY_VA) };
+        // SAFETY: fixed `.text` entry; matches the declared prototype
+        // `__thiscall(array, capacity)` reallocating element storage (`ret 0x4`).
+        let grow: extern "thiscall" fn(*mut u8, u32) = unsafe { core::mem::transmute(GROW_VA) };
+
+        // SAFETY: `quads+0x4` is the in-bounds, aligned element-count dword.
+        let count_slot = unsafe { quads.add(0x4) };
+
+        for mesh_i in 0..mesh_count as usize {
+            // SAFETY: mesh entries live at fixed `.data` addresses, stride 0x20,
+            // `mesh_i` bounded by the host's table count.
+            let entry = unsafe { MESH_TABLE.add(mesh_i * 0x20) };
+            // SAFETY: `entry+0x16` is the entry's triangle-count word.
+            let tri_count_ptr = unsafe { entry.add(0x16) };
+            // SAFETY: `tri_count_ptr` is the initialized count.
+            let tri_count = unsafe { tri_count_ptr.cast::<u16>().read() };
+            // SAFETY: `entry+0x0` is the entry's transform-matrix pointer.
+            let mat_ptr = unsafe { entry.cast::<*const f32>().read() };
+            // SAFETY: `entry+0x4` is the entry's vertex-base pointer.
+            let vert_slot = unsafe { entry.add(0x4) };
+            // SAFETY: `vert_slot` holds the initialized vertex base.
+            let verts = unsafe { vert_slot.cast::<*const u8>().read() };
+            // SAFETY: `entry+0xc` is the entry's index-triple pointer.
+            let idx_slot = unsafe { entry.add(0xc) };
+            // SAFETY: `idx_slot` holds the initialized index base.
+            let indices = unsafe { idx_slot.cast::<*const u8>().read() };
+            if tri_count == 0 || mat_ptr.is_null() || verts.is_null() || indices.is_null() {
+                continue;
+            }
+            // SAFETY: the entry matrix is a live `C44Matrix` — 16 contiguous,
+            // 4-byte-aligned f32.
+            let mat = &unsafe { mat_ptr.cast::<[f32; 16]>().read_unaligned() };
+            for tri in 0..usize::from(tri_count) {
+                // Make room for one more 0x34-byte element; the reference's two
+                // variants differ only in how the growth helpers are driven.
+                if PRECISE {
+                    // SAFETY: `quads+0x0` is the element-capacity dword.
+                    let capacity = unsafe { quads.cast::<u32>().read() };
+                    // SAFETY: `count_slot` is the live element count.
+                    let count = unsafe { count_slot.cast::<u32>().read() };
+                    let needed = count.wrapping_add(1);
+                    if capacity < needed {
+                        // SAFETY: `quads+0xc` is the cached granularity dword.
+                        let gran_slot = unsafe { quads.add(0xc) };
+                        // SAFETY: initialized granularity (0 = not yet computed).
+                        let mut gran = unsafe { gran_slot.cast::<u32>().read() };
+                        if gran == 0 {
+                            gran = granularity(quads, needed);
+                        }
+                        grow(quads, align_up(needed, gran));
+                    }
+                } else {
+                    reserve(quads, 1, 1);
+                }
+                // SAFETY: `quads+0x8` is the element-storage pointer.
+                let data_slot = unsafe { quads.add(0x8) };
+                // SAFETY: `data_slot` holds the initialized storage base.
+                let data = unsafe { data_slot.cast::<*mut u8>().read() };
+                // SAFETY: `count_slot` is the live element count (just reserved).
+                let count = unsafe { count_slot.cast::<u32>().read() };
+                // SAFETY: `count_slot` is writable array state.
+                unsafe { count_slot.cast::<u32>().write(count.wrapping_add(1)) };
+                if data.is_null() {
+                    continue;
+                }
+                // SAFETY: the reserve/grow above guarantees storage for `count+1`
+                // elements of 0x34 bytes.
+                let elem = unsafe { data.add(count as usize * 0x34) };
+                construct(elem, 0.0);
+
+                // Transform the triangle's three vertices into the record.
+                let mut q = [[0.0_f32; 3]; 3];
+                for (k, corner) in q.iter_mut().enumerate() {
+                    // SAFETY: index triple `tri` (3 contiguous u16) lives in the
+                    // entry's index array.
+                    let id_ptr = unsafe { indices.add(tri * 6 + k * 2) };
+                    // SAFETY: `id_ptr` is an initialized vertex index.
+                    let idx = unsafe { id_ptr.cast::<u16>().read() };
+                    // SAFETY: vertex `idx` (3 contiguous f32, stride 0xc) lives in
+                    // the entry's vertex array.
+                    let v_ptr = unsafe { verts.add(usize::from(idx) * 0xc) };
+                    // SAFETY: `v_ptr` is a live, aligned mesh vertex.
+                    let v = &unsafe { v_ptr.cast::<[f32; 3]>().read_unaligned() };
+                    *corner = crate::math::matrix44::c44_matrix__transform_point__7bca80(v, mat);
+                    // SAFETY: `elem+0x10 + k*0xc` is the record's k-th corner —
+                    // writable element storage.
+                    let out_ptr = unsafe { elem.add(0x10 + k * 0xc) };
+                    // SAFETY: `out_ptr` addresses 3 writable, contiguous f32.
+                    unsafe { out_ptr.cast::<[f32; 3]>().write_unaligned(*corner) };
+                }
+                let plane = crate::math::collision::build_mesh_triangle_planes__671cc0(
+                    &q[0], &q[1], &q[2], target_len, PRECISE,
+                );
+                // SAFETY: `elem+0x0` is the record's 4-float plane — writable
+                // element storage.
+                unsafe { elem.cast::<[f32; 4]>().write_unaligned(plane) };
+            }
+        }
+    }
+
     const PATH_TOGGLE: *const u32 = (crate::win::EXPECTED_IMAGE_BASE + 0x89_e388) as *const u32;
     const MESH_COUNT: *const u32 = (crate::win::EXPECTED_IMAGE_BASE + 0x85_a474) as *const u32;
-    const MESH_TABLE: *const u8 = (crate::win::EXPECTED_IMAGE_BASE + 0x86_2550) as *const u8;
     // SAFETY: fixed, initialized `.data` dword in the live host image (base
     // verified at load; client non-`DYNAMICBASE`).
     let precise = unsafe { PATH_TOGGLE.read() } == 0;
@@ -12833,29 +12962,8 @@ pub extern "fastcall" fn build_mesh_triangle_planes__671cc0(
     // SAFETY: `count_slot` is the initialized element count.
     let start_count = unsafe { count_slot.cast::<u32>().read() };
 
-    // Stock growable-array helpers, all `__thiscall` by fixed absolute VA.
-    const RESERVE_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x27_42d0;
-    const CONSTRUCT_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x27_4130;
-    const GRANULARITY_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x27_44c0;
-    const GROW_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x11_38b0;
     const PAIR_GRANULARITY_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x27_4520;
     const PAIR_GROW_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x21_3750;
-    // SAFETY: fixed `.text` entry in the live host image (base verified at
-    // load); matches the declared prototype `__thiscall(array, extra,
-    // align_to_granularity)` (`ret 0x8`).
-    let reserve: extern "thiscall" fn(*mut u8, u32, i32) =
-        unsafe { core::mem::transmute(RESERVE_VA) };
-    // SAFETY: fixed `.text` entry; matches the declared prototype
-    // `__thiscall(element, fill)` returning the element (`ret 0x4`).
-    let construct: extern "thiscall" fn(*mut u8, f32) -> *mut u8 =
-        unsafe { core::mem::transmute(CONSTRUCT_VA) };
-    // SAFETY: fixed `.text` entry; matches the declared prototype
-    // `__thiscall(array, count) -> granularity` (`ret 0x4`).
-    let granularity: extern "thiscall" fn(*mut u8, u32) -> u32 =
-        unsafe { core::mem::transmute(GRANULARITY_VA) };
-    // SAFETY: fixed `.text` entry; matches the declared prototype
-    // `__thiscall(array, capacity)` reallocating element storage (`ret 0x4`).
-    let grow: extern "thiscall" fn(*mut u8, u32) = unsafe { core::mem::transmute(GROW_VA) };
     // SAFETY: fixed `.text` entry; matches the declared prototype
     // `__thiscall(pairs, count) -> granularity` (`ret 0x4`).
     let pair_granularity: extern "thiscall" fn(*mut u8, u32) -> u32 =
@@ -12865,95 +12973,10 @@ pub extern "fastcall" fn build_mesh_triangle_planes__671cc0(
     let pair_grow: extern "thiscall" fn(*mut u8, u32) =
         unsafe { core::mem::transmute(PAIR_GROW_VA) };
 
-    for mesh_i in 0..mesh_count as usize {
-        // SAFETY: mesh entries live at fixed `.data` addresses, stride 0x20,
-        // `mesh_i` bounded by the host's table count.
-        let entry = unsafe { MESH_TABLE.add(mesh_i * 0x20) };
-        // SAFETY: `entry+0x16` is the entry's triangle-count word.
-        let tri_count_ptr = unsafe { entry.add(0x16) };
-        // SAFETY: `tri_count_ptr` is the initialized count.
-        let tri_count = unsafe { tri_count_ptr.cast::<u16>().read() };
-        // SAFETY: `entry+0x0` is the entry's transform-matrix pointer.
-        let mat_ptr = unsafe { entry.cast::<*const f32>().read() };
-        // SAFETY: `entry+0x4` is the entry's vertex-base pointer.
-        let vert_slot = unsafe { entry.add(0x4) };
-        // SAFETY: `vert_slot` holds the initialized vertex base.
-        let verts = unsafe { vert_slot.cast::<*const u8>().read() };
-        // SAFETY: `entry+0xc` is the entry's index-triple pointer.
-        let idx_slot = unsafe { entry.add(0xc) };
-        // SAFETY: `idx_slot` holds the initialized index base.
-        let indices = unsafe { idx_slot.cast::<*const u8>().read() };
-        if tri_count == 0 || mat_ptr.is_null() || verts.is_null() || indices.is_null() {
-            continue;
-        }
-        // SAFETY: the entry matrix is a live `C44Matrix` — 16 contiguous,
-        // 4-byte-aligned f32.
-        let mat = &unsafe { mat_ptr.cast::<[f32; 16]>().read_unaligned() };
-        for tri in 0..usize::from(tri_count) {
-            // Make room for one more 0x34-byte element; the reference's two
-            // variants differ only in how the growth helpers are driven.
-            if precise {
-                // SAFETY: `quads+0x0` is the element-capacity dword.
-                let capacity = unsafe { quads.cast::<u32>().read() };
-                // SAFETY: `count_slot` is the live element count.
-                let count = unsafe { count_slot.cast::<u32>().read() };
-                let needed = count.wrapping_add(1);
-                if capacity < needed {
-                    // SAFETY: `quads+0xc` is the cached granularity dword.
-                    let gran_slot = unsafe { quads.add(0xc) };
-                    // SAFETY: initialized granularity (0 = not yet computed).
-                    let mut gran = unsafe { gran_slot.cast::<u32>().read() };
-                    if gran == 0 {
-                        gran = granularity(quads, needed);
-                    }
-                    grow(quads, align_up(needed, gran));
-                }
-            } else {
-                reserve(quads, 1, 1);
-            }
-            // SAFETY: `quads+0x8` is the element-storage pointer.
-            let data_slot = unsafe { quads.add(0x8) };
-            // SAFETY: `data_slot` holds the initialized storage base.
-            let data = unsafe { data_slot.cast::<*mut u8>().read() };
-            // SAFETY: `count_slot` is the live element count (just reserved).
-            let count = unsafe { count_slot.cast::<u32>().read() };
-            // SAFETY: `count_slot` is writable array state.
-            unsafe { count_slot.cast::<u32>().write(count.wrapping_add(1)) };
-            if data.is_null() {
-                continue;
-            }
-            // SAFETY: the reserve/grow above guarantees storage for `count+1`
-            // elements of 0x34 bytes.
-            let elem = unsafe { data.add(count as usize * 0x34) };
-            construct(elem, 0.0);
-
-            // Transform the triangle's three vertices into the record.
-            let mut q = [[0.0_f32; 3]; 3];
-            for (k, corner) in q.iter_mut().enumerate() {
-                // SAFETY: index triple `tri` (3 contiguous u16) lives in the
-                // entry's index array.
-                let id_ptr = unsafe { indices.add(tri * 6 + k * 2) };
-                // SAFETY: `id_ptr` is an initialized vertex index.
-                let idx = unsafe { id_ptr.cast::<u16>().read() };
-                // SAFETY: vertex `idx` (3 contiguous f32, stride 0xc) lives in
-                // the entry's vertex array.
-                let v_ptr = unsafe { verts.add(usize::from(idx) * 0xc) };
-                // SAFETY: `v_ptr` is a live, aligned mesh vertex.
-                let v = &unsafe { v_ptr.cast::<[f32; 3]>().read_unaligned() };
-                *corner = crate::math::matrix44::c44_matrix__transform_point__7bca80(v, mat);
-                // SAFETY: `elem+0x10 + k*0xc` is the record's k-th corner —
-                // writable element storage.
-                let out_ptr = unsafe { elem.add(0x10 + k * 0xc) };
-                // SAFETY: `out_ptr` addresses 3 writable, contiguous f32.
-                unsafe { out_ptr.cast::<[f32; 3]>().write_unaligned(*corner) };
-            }
-            let plane = crate::math::collision::build_mesh_triangle_planes__671cc0(
-                &q[0], &q[1], &q[2], target_len, precise,
-            );
-            // SAFETY: `elem+0x0` is the record's 4-float plane — writable
-            // element storage.
-            unsafe { elem.cast::<[f32; 4]>().write_unaligned(plane) };
-        }
+    if precise {
+        emit_mesh_planes::<true>(quads, mesh_count, target_len);
+    } else {
+        emit_mesh_planes::<false>(quads, mesh_count, target_len);
     }
 
     // Back-fill the parallel pairs array for the appended element range.

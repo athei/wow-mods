@@ -583,10 +583,6 @@ pub fn light_animate_color_and_intensity__69e770(
     intensity_scale: f32,
     threshold: f32,
 ) -> (u32, bool, f32) {
-    // Color increment: truncate-toward-zero of the scaled dt, floored at 1.
-    let raw = (dt * color_scale_a * color_scale_b) as i32;
-    let inc = if raw < 1 { 1 } else { raw };
-
     let mut cur = [
         i32::from(color[0]),
         i32::from(color[1]),
@@ -598,17 +594,29 @@ pub fn light_animate_color_and_intensity__69e770(
         i32::from(target_color[2]),
     ];
 
-    let mut any_changed = false;
-    for (c, t) in cur.iter_mut().zip(tgt.iter()) {
-        let delta = *t - *c;
-        if delta != 0 {
-            any_changed = true;
-            if delta > 0 {
-                let v = *c + inc;
-                *c = if v > *t { *t } else { v };
-            } else {
-                let v = *c - inc;
-                *c = if v < *t { *t } else { v };
+    // Some per-channel delta is non-zero exactly when the two byte triples
+    // differ, so this is the same flag the march used to raise from inside the
+    // loop, and it is also the only condition under which the increment below
+    // is read, since every use of it sits in a `delta != 0` arm. Deciding it up
+    // front keeps the two scale loads and the saturating conversion off the
+    // settled path, which is the one a light that has reached its target takes
+    // every frame.
+    let any_changed = color != target_color;
+    if any_changed {
+        // Color increment: truncate-toward-zero of the scaled dt, floored at 1.
+        let raw = (dt * color_scale_a * color_scale_b) as i32;
+        let inc = if raw < 1 { 1 } else { raw };
+
+        for (c, t) in cur.iter_mut().zip(tgt.iter()) {
+            let delta = *t - *c;
+            if delta != 0 {
+                if delta > 0 {
+                    let v = *c + inc;
+                    *c = if v > *t { *t } else { v };
+                } else {
+                    let v = *c - inc;
+                    *c = if v < *t { *t } else { v };
+                }
             }
         }
     }
@@ -740,6 +748,29 @@ mod tests_light_animate_color_and_intensity__69e770 {
             0.0,
             0.0,
         );
+        assert!(!snap);
+    }
+
+    /// A settled channel stays put while its neighbours march.
+    ///
+    /// The march is entered on the whole triple differing, so the per-channel
+    /// `delta != 0` test still has to hold each settled channel in place, and
+    /// the increment still has to reach the two that move.
+    #[test]
+    fn settled_channel_holds_while_others_march() {
+        let (c, snap, _) = f(
+            [10, 50, 30],
+            [40, 50, 20],
+            1.0,
+            1.0,
+            5.0,
+            false,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        );
+        assert_eq!(bytes(c), [15, 50, 25]);
         assert!(!snap);
     }
 
