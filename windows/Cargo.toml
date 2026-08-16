@@ -125,8 +125,8 @@ many_single_char_names = "allow"        # 43
 # narrowing into a panic, which is a behaviour change, and in a per-frame hook
 # it is a crash. Float comparison is exact on purpose: the differential harness
 # compares bit patterns.
-cast_possible_truncation = "allow"      # 391
-cast_sign_loss = "allow"                # 233
+cast_possible_truncation = "allow"      # 392
+cast_sign_loss = "allow"                # 234
 cast_possible_wrap = "allow"            # 102
 cast_precision_loss = "allow"           # 122
 cast_lossless = "allow"                 # 60

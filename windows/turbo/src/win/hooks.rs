@@ -17148,16 +17148,26 @@ pub extern "thiscall" fn spatial_grid__prune_region__70a0f0(this: *mut u8, regio
     let frame = unsafe { frame_ptr.cast::<u32>().read() };
 
     // Inclusive wrap-around walk: outer x, inner y, both masked to 6 bits, at
-    // least one cell processed (the reference's do-while shape).
+    // least one cell processed (the reference's do-while shape). The inner
+    // variable is the row's byte offset rather than the row index, so each
+    // iteration steps it instead of rebuilding `y << 8` from the masked index:
+    // a row of the 64x64 array is 64 four-byte cell pointers, so `+ 0x100` is
+    // the next row and `& 0x3fff` wraps the array exactly where `(y + 1) & 0x3f`
+    // wrapped the index. The column base then only moves on the outer step.
+    let y_lo_off = (y_lo as usize) << 8;
+    let y_hi_off = (y_hi as usize) << 8;
     let mut x = x_lo;
-    let mut y = y_lo;
+    let mut off = y_lo_off;
     loop {
-        let idx = y as usize * 64 + x as usize;
-        // SAFETY: `idx < 64*64` (both indices kernel-masked to 6 bits), in
-        // bounds for the 4096-entry cell array.
-        let head_slot = unsafe { cells.add(idx) };
-        // SAFETY: the slot above is an initialized cell head pointer.
-        let mut cell_node = unsafe { head_slot.read() };
+        // SAFETY: `x` is kernel-masked to 6 bits, so the column base is inside
+        // the 4096-entry cell array.
+        let column = unsafe { cells.cast::<u8>().add(x as usize * 4) };
+        // SAFETY: `off <= 0x3f00` (a 6-bit row index shifted), so together with
+        // the column the slot is at worst the array's last four bytes.
+        let head_slot = unsafe { column.add(off) };
+        // SAFETY: the slot above is an initialized cell head pointer; the array
+        // is aligned, but stepping it in bytes does not lean on that.
+        let mut cell_node = unsafe { head_slot.cast::<*mut u8>().read_unaligned() };
         while !cell_node.is_null() {
             // SAFETY: `node+0x68` is the in-bounds, aligned next-link slot.
             let next_slot = unsafe { cell_node.add(0x68) };
@@ -17176,14 +17186,14 @@ pub extern "thiscall" fn spatial_grid__prune_region__70a0f0(this: *mut u8, regio
             }
             cell_node = next;
         }
-        if y == y_hi {
+        if off == y_hi_off {
             if x == x_hi {
                 break;
             }
             x = (x + 1) & 0x3f;
-            y = y_lo;
+            off = y_lo_off;
         } else {
-            y = (y + 1) & 0x3f;
+            off = (off + 0x100) & 0x3fff;
         }
     }
 }

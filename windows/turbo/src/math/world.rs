@@ -3039,26 +3039,74 @@ mod tests_map_chunk__query_wmo_groups__6abc40 {
 
 /// Low/high cell indices (per axis, masked to a 64-wide grid) covered by a circular region.
 ///
-/// `ftol(floor((center ± radius) * scale ∓ bias)) & 0x3f`.
+/// `ftol(floor((center ± radius) * scale ± bias)) & 0x3f`.
 ///
 /// The reference evaluates each bound in extended precision and floors the
 /// double; the four results are `[x_lo, x_hi, y_lo, y_hi]`.
+///
+/// An axis's two bounds share every operand but the sign of the radius and of
+/// the bias, so an axis is one `[-r, +r]` / `[-bias, +bias]` lane pair rather
+/// than two scalar chains: `addpd`/`mulpd`/`addpd`/`roundpd` twice in place of
+/// sixteen scalar float ops. A packed lane rounds exactly as its scalar form
+/// does, and `roundpd` carries the same round-toward-negative-infinity
+/// immediate `floor` lowers to, so every bound that is a number comes out bit
+/// for bit as the four-chain form's. Where an operand is NaN the two spellings
+/// are free to pick different NaN payloads, and no caller can see it: `ftol`
+/// answers the indefinite value for every NaN and the 6-bit mask takes that to
+/// cell 0 either way. The test module pins both halves of that against a scalar
+/// transcription.
 pub fn spatial_grid__prune_region__70a0f0(
     center: [f32; 2],
     radius: f32,
     scale: f32,
     bias: f32,
 ) -> [u32; 4] {
-    let cell = |c: f32, r: f32, b: f32| -> u32 {
-        let v = (f64::from(c) + f64::from(r)) * f64::from(scale) + f64::from(b);
-        (crate::math::misc::ftol__40a2b0(v.floor()) as u32) & 0x3f
+    #[cfg(target_arch = "x86")]
+    use core::arch::x86::{
+        _mm_add_pd, _mm_cvtsd_f64, _mm_floor_pd, _mm_mul_pd, _mm_set_pd, _mm_set1_pd,
+        _mm_unpackhi_pd,
     };
-    [
-        cell(center[0], -radius, -bias),
-        cell(center[0], radius, bias),
-        cell(center[1], -radius, -bias),
-        cell(center[1], radius, bias),
-    ]
+    #[cfg(target_arch = "x86_64")]
+    use core::arch::x86_64::{
+        _mm_add_pd, _mm_cvtsd_f64, _mm_floor_pd, _mm_mul_pd, _mm_set_pd, _mm_set1_pd,
+        _mm_unpackhi_pd,
+    };
+    // Every intrinsic below is SSE2 except `_mm_floor_pd`, which is SSE4.1;
+    // both sit inside the `nehalem` baseline this crate ships on.
+    // SAFETY: builds the `[-radius, +radius]` lane pair. Flipping the sign after
+    // the widening is the same bit pattern as flipping it before it, so the pair
+    // holds what the four-chain form widened.
+    let radius_lanes = unsafe { _mm_set_pd(f64::from(radius), -f64::from(radius)) };
+    // SAFETY: builds the `[-bias, +bias]` lane pair, on the same argument.
+    let bias_lanes = unsafe { _mm_set_pd(f64::from(bias), -f64::from(bias)) };
+    // SAFETY: broadcasts the widened scale into both lanes, which is the operand
+    // each of the two bounds already multiplied by.
+    let scale_lanes = unsafe { _mm_set1_pd(f64::from(scale)) };
+    let axis = |c: f32| -> [f64; 2] {
+        // SAFETY: broadcasts the widened centre component into both lanes.
+        let centre_lanes = unsafe { _mm_set1_pd(f64::from(c)) };
+        // SAFETY: lane-wise add of two initialized vectors.
+        let offset = unsafe { _mm_add_pd(centre_lanes, radius_lanes) };
+        // SAFETY: lane-wise multiply of two initialized vectors.
+        let scaled = unsafe { _mm_mul_pd(offset, scale_lanes) };
+        // SAFETY: lane-wise add of two initialized vectors.
+        let biased = unsafe { _mm_add_pd(scaled, bias_lanes) };
+        // SAFETY: lane-wise round of an initialized vector toward negative
+        // infinity with the precision exception suppressed, which is the
+        // immediate `f64::floor` lowers to.
+        let floored = unsafe { _mm_floor_pd(biased) };
+        // SAFETY: reads lane 0 of an initialized vector.
+        let lo = unsafe { _mm_cvtsd_f64(floored) };
+        // SAFETY: duplicates lane 1 of an initialized vector down into lane 0.
+        let upper = unsafe { _mm_unpackhi_pd(floored, floored) };
+        // SAFETY: reads lane 0 of an initialized vector.
+        let hi = unsafe { _mm_cvtsd_f64(upper) };
+        [lo, hi]
+    };
+    let cell = |v: f64| -> u32 { (crate::math::misc::ftol__40a2b0(v) as u32) & 0x3f };
+    let [x_lo, x_hi] = axis(center[0]);
+    let [y_lo, y_hi] = axis(center[1]);
+    [cell(x_lo), cell(x_hi), cell(y_lo), cell(y_hi)]
 }
 
 #[cfg(test)]
@@ -3094,6 +3142,87 @@ mod tests_spatial_grid__prune_region__70a0f0 {
     fn mask_keeps_low_six_bits() {
         // floor(100) = 100 -> 100 & 0x3f = 36.
         assert_eq!(cells([100.0, 100.0], 0.0, 1.0, 0.0), [36, 36, 36, 36]);
+    }
+
+    /// Four independent scalar chains, the shape the packed kernel replaced.
+    ///
+    /// Kept as the oracle rather than as the shipped body: it is the spelling
+    /// the reference compiled to, one `addsd`/`mulsd`/`addsd`/`roundsd` per
+    /// bound, so an agreement here is an agreement with the original.
+    fn scalar_chains(center: [f32; 2], radius: f32, scale: f32, bias: f32) -> [u32; 4] {
+        let cell = |c: f32, r: f32, b: f32| -> u32 {
+            let v = (f64::from(c) + f64::from(r)) * f64::from(scale) + f64::from(b);
+            (crate::math::misc::ftol__40a2b0(v.floor()) as u32) & 0x3f
+        };
+        [
+            cell(center[0], -radius, -bias),
+            cell(center[0], radius, bias),
+            cell(center[1], -radius, -bias),
+            cell(center[1], radius, bias),
+        ]
+    }
+
+    /// The lane pairs answer what the four scalar chains answer, specials included.
+    ///
+    /// The infinities and NaN are in the sweep on purpose: they are the inputs
+    /// where the packed and scalar spellings are free to choose different NaN
+    /// payloads in the double, and so the inputs that pin the `ftol` and mask
+    /// tail collapsing that freedom back onto one cell index.
+    #[test]
+    fn lane_pairs_match_the_scalar_chains() {
+        const SPECIALS: [f32; 10] = [
+            0.0,
+            -1.0,
+            10.5,
+            -16384.0,
+            f32::MIN_POSITIVE,
+            f32::MAX,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::NAN,
+            1.0 / 64.0,
+        ];
+        for &cx in &SPECIALS {
+            for &cy in &SPECIALS {
+                for &r in &SPECIALS {
+                    for &s in &SPECIALS {
+                        for &b in &SPECIALS {
+                            let c = [cx, cy];
+                            assert_eq!(
+                                cells(c, r, s, b),
+                                scalar_chains(c, r, s, b),
+                                "c=[{cx:e}, {cy:e}] r={r:e} s={s:e} b={b:e}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// The lane pairs match the scalar chains over a sweep of raw bit patterns.
+    ///
+    /// Walks whole `f32` encodings rather than decimal literals, so the sweep
+    /// reaches subnormals, both zeroes and every NaN payload shape the
+    /// cross-product above only samples.
+    #[test]
+    fn lane_pairs_match_over_raw_bit_patterns() {
+        let mut state = 0x1234_5678_9abc_def0_u64;
+        let mut next = || {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            f32::from_bits((state >> 33) as u32)
+        };
+        for _ in 0..40_000 {
+            let c = [next(), next()];
+            let (r, s, b) = (next(), next(), next());
+            assert_eq!(
+                cells(c, r, s, b),
+                scalar_chains(c, r, s, b),
+                "c={c:?} r={r:e} s={s:e} b={b:e}"
+            );
+        }
     }
 }
 
