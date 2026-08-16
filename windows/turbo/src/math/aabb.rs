@@ -419,6 +419,15 @@ mod tests_c_aa_box__intersect_segment__6dc5a0 {
 /// on `p0 >= p1` **and on unordered**: a NaN sends `p1` to the min and `p0` to
 /// the max. Written `if p0 < p1` for exactly that reason — the negation of a
 /// `<=` would swap the NaN case.
+///
+/// Nothing in this source shape decides how the unrolled 3x3 lowers the select.
+/// The shipped body picks `MINSD` once, `MAXSD` once, `MINPD` twice, `BLENDVPD`
+/// four times and four extract-and-branch tails whose direction follows float
+/// data; writing the pair select as two scalar selects on the same predicate
+/// leaves that body byte-identical, so the branches are not reachable from here.
+///
+/// `f64::min` and `f64::max` are not an alternative at any price: they answer
+/// with the non-NaN operand, which is the opposite of the polarity above.
 pub fn c_aa_box__transform_by3x3__6dc470(
     row0: &[f32; 3],
     row1: &[f32; 3],
@@ -586,6 +595,25 @@ mod tests_c_aa_box__transform_by3x3__6dc470 {
             "fixture no longer separates the polarity"
         );
         assert_eq!(naive[3].to_bits(), 26.0f32.to_bits());
+    }
+
+    /// `-0.0 < +0.0` is false, so the min lane takes `p1` and the max takes `p0`.
+    ///
+    /// Zero signs survive this accumulate (`+0.0 + -0.0` is `+0.0` and
+    /// `-0.0 + -0.0` is `-0.0`), so the two written lanes record which operand
+    /// the compare picked. Rows 1 and 2 feed `-0.0` into both lanes so a later
+    /// `j` cannot wash the sign out again.
+    #[test]
+    fn signed_zero_follows_the_compare() {
+        let r0 = [1.0f32, 0.0, 0.0];
+        let zero = [0.0f32; 3];
+        // row0[0] = 1 with src_box[0] = -0.0 gives p0 = -0.0, and src_box[3] =
+        // +0.0 gives p1 = +0.0.
+        let src_box = [-0.0f32, -0.0, -0.0, 0.0, -0.0, -0.0];
+        let dst = [-0.0f32, 0.0, 0.0, -0.0, 0.0, 0.0];
+        let got = xf(&r0, &zero, &zero, &src_box, &dst);
+        assert_eq!(got[0].to_bits(), 0.0f32.to_bits(), "min lane took p1");
+        assert_eq!(got[3].to_bits(), (-0.0f32).to_bits(), "max lane took p0");
     }
 }
 
