@@ -29928,6 +29928,19 @@ pub extern "fastcall" fn world__query_object_boxes__6ad330(
     acc != 0
 }
 
+thread_local! {
+    /// Reusable scratch-record backing for the cloud-layer noise update.
+    ///
+    /// The stock body takes a zeroing `HeapAlloc` of `depth*0x54 + 0x40` bytes and
+    /// frees it again on every call. This slot is taken for the call and put back
+    /// once the records are done, so a steady-state frame still pays the clear the
+    /// allocator used to do but neither the heap lock nor the free. Taken rather
+    /// than borrowed: a reentrant call finds it empty and allocates its own instead
+    /// of failing on the borrow.
+    static CLOUD_LAYER_FRAME: core::cell::RefCell<Vec<u8>> =
+        const { core::cell::RefCell::new(Vec::new()) };
+}
+
 // Per-frame procedural cloud-layer noise update. A faithful byte-exact
 // transcription of the stock impure driver: the 0x54-stride scratch records, the
 // runtime `.data` permutation/gradient/weight/clamp tables, the two unhooked
@@ -30106,18 +30119,38 @@ pub extern "thiscall" fn cloud_update_layer__6cffc0(this: *mut core::ffi::c_void
     //   WRAP eax = ebp-0x1ce = B+4
     // Record `k` spans `B + k*0x54 ..`. A flat byte buffer keeps every store/load
     // bit-identical to the stock window aliasing.
-    let mut frame = vec![0u8; depth.max(1) * 0x54 + 0x40];
-    let wr16 = |f: &mut [u8], at: usize, v: u16| f[at..at + 2].copy_from_slice(&v.to_le_bytes());
-    let wr32 = |f: &mut [u8], at: usize, v: u32| f[at..at + 4].copy_from_slice(&v.to_le_bytes());
-    let rd16 = |f: &[u8], at: usize| -> u16 { u16::from_le_bytes([f[at], f[at + 1]]) };
-    let rd32 = |f: &[u8], at: usize| -> u32 {
-        u32::from_le_bytes([f[at], f[at + 1], f[at + 2], f[at + 3]])
+    //
+    // Every access all four loops make to record `k` lies in
+    // `B + k*0x54 + 2 ..= B + k*0x54 + 0x55` — lowest is FILL/CELL `[eax-4]`,
+    // highest the dword at GRAD `[eax+0x42]`, which is CELL `[eax+0x4c]`, the same
+    // sentinel slot — and consecutive records tile that window disjointly at the
+    // 0x54 stride. So an iteration binds its record once as a fixed-size array and
+    // reaches every field by constant index into it, which is what removes the
+    // per-byte bounds check a flat buffer indexed by absolute offset pays. The
+    // four bases below are window-relative: each the stock base less that +2.
+    let mut frame = CLOUD_LAYER_FRAME.with(core::cell::RefCell::take);
+    // Set to exactly the stock length and zeroed over all of it, not merely grown:
+    // the records carry float bits, so a byte left by a longer previous frame would
+    // move the result, and a length only grown would answer an out-of-range index
+    // instead of failing on it the way the freshly allocated buffer does.
+    frame.clear();
+    frame.resize(depth.max(1) * 0x54 + 0x40, 0);
+    let wr16 =
+        |f: &mut [u8; 0x54], at: usize, v: u16| f[at..at + 2].copy_from_slice(&v.to_le_bytes());
+    let wr32 =
+        |f: &mut [u8; 0x54], at: usize, v: u32| f[at..at + 4].copy_from_slice(&v.to_le_bytes());
+    // One unaligned load per field rather than a byte-at-a-time shift/or tree.
+    let rd16 = |f: &[u8; 0x54], at: usize| -> u16 {
+        u16::from_le_bytes(f[at..at + 2].try_into().unwrap())
     };
-    let rdf32 = |f: &[u8], at: usize| -> f32 { f32::from_bits(rd32(f, at)) };
-    let fill_b = 8usize;
-    let grad_b = 0x10usize;
-    let cell_b = 6usize;
-    let wrap_b = 4usize;
+    let rd32 = |f: &[u8; 0x54], at: usize| -> u32 {
+        u32::from_le_bytes(f[at..at + 4].try_into().unwrap())
+    };
+    let rdf32 = |f: &[u8; 0x54], at: usize| -> f32 { f32::from_bits(rd32(f, at)) };
+    let fill_b = 6usize;
+    let grad_b = 0xeusize;
+    let cell_b = 4usize;
+    let wrap_b = 2usize;
 
     // --- Per-octave inverse-stride + header fill (0x6d0046..0x6d00d4). Source value
     // table row starts at 0x86f3dc + (this+0x10)*10 (ushort stride).
@@ -30125,7 +30158,8 @@ pub extern "thiscall" fn cloud_update_layer__6cffc0(this: *mut core::ffi::c_void
         let value_row = (IMG + 0x46_f3dc) + (fld_i32(0x10) as usize) * 10;
         let width16 = fld_u16(0x18);
         for k in 0..depth {
-            let r = fill_b + k * 0x54; // eax before the +0x54 mid-iteration advance
+            let rec: &mut [u8; 0x54] = (&mut frame[k * 0x54 + 2..][..0x54]).try_into().unwrap();
+            let r = fill_b; // eax before the +0x54 mid-iteration advance, window-relative
             // SAFETY: `value_row` is the stock source-value row at
             // `0x86f3dc + [this+0x10]*10`, an even address, so the word load is
             // aligned; `k` runs the stock `+0x28` octave count and the stock
@@ -30133,22 +30167,22 @@ pub extern "thiscall" fn cloud_update_layer__6cffc0(this: *mut core::ffi::c_void
             let vp = unsafe { (value_row as *const u16).add(k) };
             // SAFETY: `vp` is a word of that row, live in the loaded image.
             let v = unsafe { vp.read() };
-            wr16(&mut frame, r, v); // [eax]
-            wr16(&mut frame, r + 2, v); // [eax+2]
-            wr16(&mut frame, r + 6, u16::from(seed_byte)); // [eax+6]
-            wr16(&mut frame, r + 0xa, u16::from(seed_byte)); // [eax+0xa]
+            wr16(rec, r, v); // [eax]
+            wr16(rec, r + 2, v); // [eax+2]
+            wr16(rec, r + 6, u16::from(seed_byte)); // [eax+6]
+            wr16(rec, r + 0xa, u16::from(seed_byte)); // [eax+0xa]
             // After-advance stores (asm eax = r + 0x54 - <imm>):
-            wr16(&mut frame, r - 4, width16.wrapping_mul(v)); // [eax+0x54-0x58]
-            wr16(&mut frame, r - 2, frame_ctr); // [eax+0x54-0x56]
+            wr16(rec, r - 4, width16.wrapping_mul(v)); // [eax+0x54-0x58]
+            wr16(rec, r - 2, frame_ctr); // [eax+0x54-0x56]
             let hashed = ((u32::from(v) << shift) >> 8) as u16;
             wr16(
-                &mut frame,
+                rec,
                 r + 0xc,
                 hashed.wrapping_add(2).wrapping_add(u16::from(seed_byte)),
             ); // [eax+0x54-0x48]
-            wr16(&mut frame, r + 0x10, u16::from(seed_byte).wrapping_add(1)); // [eax+0x54-0x44]
+            wr16(rec, r + 0x10, u16::from(seed_byte).wrapping_add(1)); // [eax+0x54-0x44]
             let s = crate::math::weather::cloud_layer_inv_stride__6cffc0(one, k as u32);
-            wr32(&mut frame, r + 0x12, s.to_bits()); // [eax+0x54-0x42]
+            wr32(rec, r + 0x12, s.to_bits()); // [eax+0x54-0x42]
         }
     }
 
@@ -30178,76 +30212,85 @@ pub extern "thiscall" fn cloud_update_layer__6cffc0(this: *mut core::ffi::c_void
 
         // GRAD-build: per-octave hashed gradient indices into the record. (0x6d0140..0x6d01cb)
         for k in 0..depth {
-            let r = grad_b + k * 0x54; // eax
-            let bcolor = frame[r - 0xb]; // [eax-0xb] octave base color
-            wr16(&mut frame, r, u16::from(bcolor)); // [eax]
+            let rec: &mut [u8; 0x54] = (&mut frame[k * 0x54 + 2..][..0x54]).try_into().unwrap();
+            let r = grad_b; // eax, window-relative
+            let bcolor = rec[r - 0xb]; // [eax-0xb] octave base color
+            wr16(rec, r, u16::from(bcolor)); // [eax]
             let i0 = perm(usize::from(bcolor).wrapping_add(color_here));
-            wr32(&mut frame, r + 0xe, u32::from(i0)); // [eax+0xe]
+            wr32(rec, r + 0xe, u32::from(i0)); // [eax+0xe]
             let nbcolor = bcolor.wrapping_add(1);
-            wr16(&mut frame, r + 6, u16::from(nbcolor)); // [eax+6]
+            wr16(rec, r + 6, u16::from(nbcolor)); // [eax+6]
             let i1 = perm(usize::from(nbcolor).wrapping_add(color_here));
-            wr32(&mut frame, r + 0x12, u32::from(i1)); // [eax+0x12]
+            wr32(rec, r + 0x12, u32::from(i1)); // [eax+0x12]
             let i2 = perm(usize::from(bcolor).wrapping_add(color_next));
-            wr32(&mut frame, r + 0x16, u32::from(i2)); // [eax+0x16]
+            wr32(rec, r + 0x16, u32::from(i2)); // [eax+0x16]
             let i3 = perm(usize::from(nbcolor).wrapping_add(color_next));
-            wr16(&mut frame, r - 0xe, frame_ctr); // [eax-0xe]
-            wr32(&mut frame, r + 0x1a, u32::from(i3)); // [eax+0x1a]
-            wr32(&mut frame, r + 0x42, 0xffff_ffff); // [eax+0x42] sentinel (octave-column miss)
+            wr16(rec, r - 0xe, frame_ctr); // [eax-0xe]
+            wr32(rec, r + 0x1a, u32::from(i3)); // [eax+0x1a]
+            wr32(rec, r + 0x42, 0xffff_ffff); // [eax+0x42] sentinel (octave-column miss)
         }
 
         // Per-column accumulation with the cross-term carry `fvar4`.
         let mut fvar4 = zero;
         for ucol in 0..cols {
             for d in 0..depth {
-                let r = cell_b + d * 0x54; // eax
-                let wa_idx = usize::from(frame[r - 2]); // [eax-2] -> [ebp-0x28] smoothstep idx
-                let wu_idx = usize::from(rd16(&frame, r - 4) & 0xff); // [eax-4] accumulated word low byte
-                let wb_idx = usize::from(frame[r]); // [eax] -> [ebp-0x24] smoothstep idx
-                let oct_col = usize::from(frame[r - 3]); // [eax-3] octave column index
-                let prev_oct = rd32(&frame, r + 0x4c);
-                wr32(&mut frame, r + 0x48, oct_col as u32); // [eax+0x48]
-                if oct_col as u32 != prev_oct {
-                    wr32(&mut frame, r + 0x4c, oct_col as u32); // [eax+0x4c]
+                let rec: &mut [u8; 0x54] = (&mut frame[d * 0x54 + 2..][..0x54]).try_into().unwrap();
+                let r = cell_b; // eax, window-relative
+                let wa_idx = usize::from(rec[r - 2]); // [eax-2] -> [ebp-0x28] smoothstep idx
+                let wu_idx = usize::from(rd16(rec, r - 4) & 0xff); // [eax-4] accumulated word low byte
+                let wb_idx = usize::from(rec[r]); // [eax] -> [ebp-0x24] smoothstep idx
+                let oct_col = usize::from(rec[r - 3]); // [eax-3] octave column index
+                let prev_oct = rd32(rec, r + 0x4c);
+                wr32(rec, r + 0x48, oct_col as u32); // [eax+0x48]
+                // Core bilinear cell (kernel). The eight record slots the taken arm
+                // writes are exactly the eight it would read straight back: the round
+                // trip is `to_bits`/`from_bits` over the same four bytes, so nothing
+                // rounds, narrows or passes through st(0) in between. Only the
+                // not-taken arm, whose bytes an earlier iteration left there, reads
+                // the record. The stores stay either way, so that arm is unaffected.
+                let recf: [f32; 8] = if oct_col as u32 != prev_oct {
+                    wr32(rec, r + 0x4c, oct_col as u32); // [eax+0x4c]
                     // 8 adjacent gradient-LUT samples -> base + forward-difference pairs.
                     let gp = |slot: usize, extra: usize| -> f32 {
-                        let idx = (rd32(&frame, slot) as usize)
+                        let idx = (rd32(rec, slot) as usize)
                             .wrapping_add(oct_col)
                             .wrapping_add(extra);
                         grad(usize::from(perm(idx)))
                     };
-                    let rec = crate::math::weather::cloud_layer_grad_diff__6cffc0([
+                    let diffs = crate::math::weather::cloud_layer_grad_diff__6cffc0([
                         (gp(r + 0x18, 0), gp(r + 0x18, 1)),
                         (gp(r + 0x1c, 0), gp(r + 0x1c, 1)),
                         (gp(r + 0x20, 0), gp(r + 0x20, 1)),
                         (gp(r + 0x24, 0), gp(r + 0x24, 1)),
                     ]);
-                    for (j, val) in rec.iter().enumerate() {
-                        wr32(&mut frame, r + 0x28 + j * 4, val.to_bits());
+                    for (j, val) in diffs.iter().enumerate() {
+                        wr32(rec, r + 0x28 + j * 4, val.to_bits());
                     }
-                }
-                // Core bilinear cell (kernel).
-                let recf = [
-                    rdf32(&frame, r + 0x28),
-                    rdf32(&frame, r + 0x2c),
-                    rdf32(&frame, r + 0x30),
-                    rdf32(&frame, r + 0x34),
-                    rdf32(&frame, r + 0x38),
-                    rdf32(&frame, r + 0x3c),
-                    rdf32(&frame, r + 0x40),
-                    rdf32(&frame, r + 0x44),
-                ];
+                    diffs
+                } else {
+                    [
+                        rdf32(rec, r + 0x28),
+                        rdf32(rec, r + 0x2c),
+                        rdf32(rec, r + 0x30),
+                        rdf32(rec, r + 0x34),
+                        rdf32(rec, r + 0x38),
+                        rdf32(rec, r + 0x3c),
+                        rdf32(rec, r + 0x40),
+                        rdf32(rec, r + 0x44),
+                    ]
+                };
                 let wu = weight(wu_idx);
                 let wa = weight(wa_idx);
                 let wb = weight(wb_idx);
-                let scale = rdf32(&frame, r + 0x14);
+                let scale = rdf32(rec, r + 0x14);
                 // SAFETY: `field_row + ucol*4` is cell `ucol` of the `+0x50`
                 // field row based at the stock `(scroll+row) << shift`, with
                 // `ucol` running the layer's own `+0x1c` column count; the byte
                 // offset is a multiple of 4, keeping the buffer's alignment.
                 let acc_prev = unsafe { ((field_row + ucol * 4) as *const f32).read() };
                 // Advance the per-cell accumulator word: [eax-4] += [eax+2].
-                let nw = rd16(&frame, r - 4).wrapping_add(rd16(&frame, r + 2));
-                wr16(&mut frame, r - 4, nw);
+                let nw = rd16(rec, r - 4).wrapping_add(rd16(rec, r + 2));
+                wr16(rec, r - 4, nw);
                 let acc = crate::math::weather::cloud_layer_bilerp_cell__6cffc0(
                     recf, wu, wa, wb, scale, acc_prev,
                 );
@@ -30281,12 +30324,15 @@ pub extern "thiscall" fn cloud_update_layer__6cffc0(this: *mut core::ffi::c_void
 
         // Per-octave wrap: record-word += its frame-counter word. (0x6d0416..0x6d0430)
         for k in 0..depth {
-            let r = wrap_b + k * 0x54; // eax
-            let delta = rd16(&frame, r + 6);
-            let cur = rd16(&frame, r).wrapping_add(delta);
-            wr16(&mut frame, r, cur);
+            let rec: &mut [u8; 0x54] = (&mut frame[k * 0x54 + 2..][..0x54]).try_into().unwrap();
+            let r = wrap_b; // eax, window-relative
+            let delta = rd16(rec, r + 6);
+            let cur = rd16(rec, r).wrapping_add(delta);
+            wr16(rec, r, cur);
         }
     }
+    // The records are finished; hand the buffer back for the next call.
+    CLOUD_LAYER_FRAME.with(|slot| slot.replace(frame));
 
     // --- Byte-quantize the accumulated field to the density output at +0x44.
     // (0x6d0444..0x6d04c0) Floor = the +0x8 seed byte; clamp via the 0xce91d8 table.

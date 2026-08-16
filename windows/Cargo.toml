@@ -150,7 +150,7 @@ imprecise_flops = "allow"               # 8
 # in what the function does.
 missing_const_for_fn = "allow"          # 115
 useless_let_if_seq = "allow"            # 22
-if_not_else = "allow"                   # 12
+if_not_else = "allow"                   # 13
 suspicious_operation_groupings = "allow" # 12
 # The tail `match` of a transcribed function: the arms ARE the original's branch
 # structure, and four of the five sites are installed hook adapters.
