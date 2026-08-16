@@ -502,98 +502,34 @@ mod tests_c_world_frustum__test_oriented_box__6869c0 {
 /// `[x, y, z, radius]`. A plane rejects when the signed distance of the centre
 /// is below the negated radius (`a*x + b*y + c*z + d < -radius`).
 ///
-/// Planes 0-3 are evaluated four lanes at a time. Their rows are transposed so
-/// lane `i` carries plane `i`'s coefficient, and three `mulps` followed by
-/// three `addps` fold `((a*x + b*y) + c*z) + d` in the same association the
-/// scalar tail below uses, so each lane rounds through the identical operand
-/// pairs. The reduction is per-lane, so no dot-product or horizontal-add
-/// instruction is involved. `cmpltps` is the ordered predicate `<` is (a NaN
-/// distance rejects under neither), and the four early exits collapse into one
-/// mask test because the answer is 3 or 0 and does not name the rejecting
-/// plane. All four rows are read even where plane 0 alone rejects: the function
-/// stores nothing and every row is inside `planes`. Planes 4-5 stay scalar.
+/// The distance chain is register-resident in the original: between the first
+/// `FMUL` at `0x686b97` and the `FCOMP` at `0x686bab` there is no `FST`/`FSTP
+/// m32`, so nothing narrows to `f32` on the way. At the client's 53-bit
+/// precision control that register carries an `f64` significand, and a product
+/// of two `f32` needs 48 bits and is therefore exact, which leaves the three
+/// adds as the whole of the rounding. Their order is the one the `FADDP` pair
+/// at `0x686b9f` and `0x686ba6` gives: `(a*x + c*z) + b*y`, the z term before
+/// the y term, then `+ d`.
+///
+/// Both facts are observable, not cosmetic. A per-step `f32` chain, or the
+/// textual `a*x + b*y + c*z + d` order, decides this compare the other way
+/// whenever the centre sits within an `f32` ulp of the rejecting radius.
+///
+/// Only `-radius` narrows, because the original spills it once at `0x686b91`
+/// and reads that `f32` slot as the compare's operand. Negation is exact, so
+/// the spill costs nothing.
 pub fn c_world_frustum__test_sphere__686b80(planes: &[f32; 24], sphere: &[f32; 4]) -> u32 {
-    #[cfg(target_arch = "x86")]
-    use core::arch::x86::{
-        _mm_add_ps, _mm_cmplt_ps, _mm_loadu_ps, _mm_movehl_ps, _mm_movelh_ps, _mm_movemask_ps,
-        _mm_mul_ps, _mm_set1_ps, _mm_unpackhi_ps, _mm_unpacklo_ps,
-    };
-    #[cfg(target_arch = "x86_64")]
-    use core::arch::x86_64::{
-        _mm_add_ps, _mm_cmplt_ps, _mm_loadu_ps, _mm_movehl_ps, _mm_movelh_ps, _mm_movemask_ps,
-        _mm_mul_ps, _mm_set1_ps, _mm_unpackhi_ps, _mm_unpacklo_ps,
-    };
+    let x = f64::from(sphere[0]);
+    let y = f64::from(sphere[1]);
+    let z = f64::from(sphere[2]);
+    let neg_r = f64::from(-sphere[3]);
 
-    let x = sphere[0];
-    let y = sphere[1];
-    let z = sphere[2];
-    let neg_r = -sphere[3];
-
-    // Every intrinsic below is SSE1, available on every ISA baseline this crate
-    // builds for. The loads are unaligned because the receiver arrives as a
-    // 4-byte-aligned copy of the client's plane block.
-    // SAFETY: the load covers the 16 in-bounds bytes of plane 0's row.
-    let row0 = unsafe { _mm_loadu_ps(planes.as_ptr()) };
-    // SAFETY: as above, for plane 1's row.
-    let row1 = unsafe { _mm_loadu_ps(planes[4..].as_ptr()) };
-    // SAFETY: as above, for plane 2's row.
-    let row2 = unsafe { _mm_loadu_ps(planes[8..].as_ptr()) };
-    // SAFETY: as above, for plane 3's row.
-    let row3 = unsafe { _mm_loadu_ps(planes[12..].as_ptr()) };
-
-    // Transpose: `ab01` holds plane 0 and 1's first two coefficients, `cd23`
-    // plane 2 and 3's last two, and the four half-selects below gather one
-    // coefficient of all four planes into one register.
-    // SAFETY: lane interleave of two initialized vectors.
-    let ab01 = unsafe { _mm_unpacklo_ps(row0, row1) };
-    // SAFETY: as above.
-    let cd01 = unsafe { _mm_unpackhi_ps(row0, row1) };
-    // SAFETY: as above.
-    let ab23 = unsafe { _mm_unpacklo_ps(row2, row3) };
-    // SAFETY: as above.
-    let cd23 = unsafe { _mm_unpackhi_ps(row2, row3) };
-    // SAFETY: 64-bit half select between two initialized vectors.
-    let a = unsafe { _mm_movelh_ps(ab01, ab23) };
-    // SAFETY: as above.
-    let b = unsafe { _mm_movehl_ps(ab23, ab01) };
-    // SAFETY: as above.
-    let c = unsafe { _mm_movelh_ps(cd01, cd23) };
-    // SAFETY: as above.
-    let d = unsafe { _mm_movehl_ps(cd23, cd01) };
-
-    // SAFETY: broadcast of an initialized scalar.
-    let xs = unsafe { _mm_set1_ps(x) };
-    // SAFETY: as above.
-    let ys = unsafe { _mm_set1_ps(y) };
-    // SAFETY: as above.
-    let zs = unsafe { _mm_set1_ps(z) };
-    // SAFETY: as above.
-    let neg_rs = unsafe { _mm_set1_ps(neg_r) };
-
-    // SAFETY: lane-wise multiply of two initialized vectors.
-    let ax = unsafe { _mm_mul_ps(a, xs) };
-    // SAFETY: as above.
-    let by = unsafe { _mm_mul_ps(b, ys) };
-    // SAFETY: as above.
-    let cz = unsafe { _mm_mul_ps(c, zs) };
-    // SAFETY: lane-wise add of two initialized vectors.
-    let ax_by = unsafe { _mm_add_ps(ax, by) };
-    // SAFETY: as above.
-    let ax_by_cz = unsafe { _mm_add_ps(ax_by, cz) };
-    // SAFETY: as above.
-    let dist03 = unsafe { _mm_add_ps(ax_by_cz, d) };
-    // SAFETY: lane-wise ordered compare of two initialized vectors.
-    let below = unsafe { _mm_cmplt_ps(dist03, neg_rs) };
-    // SAFETY: sign-bit extraction from an initialized vector.
-    let rejects = unsafe { _mm_movemask_ps(below) };
-    if rejects != 0 {
-        return 0;
-    }
-
-    for p in 4..6 {
+    for p in 0..6 {
         let base = p * 4;
-        let dist =
-            planes[base] * x + planes[base + 1] * y + planes[base + 2] * z + planes[base + 3];
+        let ax = f64::from(planes[base]) * x;
+        let cz = f64::from(planes[base + 2]) * z;
+        let by = y * f64::from(planes[base + 1]);
+        let dist = ((ax + cz) + by) + f64::from(planes[base + 3]);
         if dist < neg_r {
             return 0;
         }
@@ -605,12 +541,12 @@ pub fn c_world_frustum__test_sphere__686b80(planes: &[f32; 24], sphere: &[f32; 4
 mod tests_c_world_frustum__test_sphere__686b80 {
     use super::c_world_frustum__test_sphere__686b80;
 
-    /// One-plane-at-a-time transcription, the oracle for the 4-lane pass.
+    /// The per-step `f32` chain in textual `a*x + b*y + c*z + d` order.
     ///
-    /// This is the shape the kernel had before planes 0-3 were folded into
-    /// lanes, and it stays here so the packed form has something to be compared
-    /// against on every input class.
-    fn test_sphere_scalar(planes: &[f32; 24], sphere: &[f32; 4]) -> u32 {
+    /// Not an oracle: this is the form the kernel must NOT have, and it is kept
+    /// so the pinned fixtures below can witness that the width and the term
+    /// order are both observable rather than assert it in prose.
+    fn test_sphere_narrow(planes: &[f32; 24], sphere: &[f32; 4]) -> u32 {
         let x = sphere[0];
         let y = sphere[1];
         let z = sphere[2];
@@ -620,6 +556,25 @@ mod tests_c_world_frustum__test_sphere__686b80 {
             let base = p * 4;
             let dist =
                 planes[base] * x + planes[base + 1] * y + planes[base + 2] * z + planes[base + 3];
+            if dist < neg_r {
+                return 0;
+            }
+        }
+        3
+    }
+
+    /// The original's chain: exact products, `f64` adds, `(a*x + c*z) + b*y + d`.
+    fn test_sphere_wide(planes: &[f32; 24], sphere: &[f32; 4]) -> u32 {
+        let x = f64::from(sphere[0]);
+        let y = f64::from(sphere[1]);
+        let z = f64::from(sphere[2]);
+        let neg_r = f64::from(-sphere[3]);
+
+        for p in 0..6 {
+            let base = p * 4;
+            let dist = ((f64::from(planes[base]) * x + f64::from(planes[base + 2]) * z)
+                + y * f64::from(planes[base + 1]))
+                + f64::from(planes[base + 3]);
             if dist < neg_r {
                 return 0;
             }
@@ -680,27 +635,28 @@ mod tests_c_world_frustum__test_sphere__686b80 {
         );
     }
 
-    /// A NaN distance rejects under neither the packed nor the scalar compare.
+    /// A NaN distance rejects under neither width.
     ///
-    /// The poison sits in plane 1, inside the 4-lane pass, so the case pins
-    /// `cmpltps` answering false on an unordered pair exactly as `<` does: the
-    /// polarity that decides whether a NaN plane culls the sphere or ignores it.
+    /// `FCOMP` leaves the unordered case falling through the `C0|C2` parity
+    /// test, so a NaN plane ignores the sphere rather than culling it, which is
+    /// what `<` does on an unordered pair.
     #[test]
     fn nan_plane_does_not_reject() {
         let mut planes = box_frustum();
         planes[4] = f32::NAN;
         let sphere = [0.0f32, 0.0, 0.0, 1.0];
         assert_eq!(c_world_frustum__test_sphere__686b80(&planes, &sphere), 3);
-        assert_eq!(test_sphere_scalar(&planes, &sphere), 3);
+        assert_eq!(test_sphere_wide(&planes, &sphere), 3);
     }
 
-    /// The 4-lane pass answers what the one-plane-at-a-time oracle answers.
+    /// The kernel answers the original's chain on every input class.
     ///
     /// Sweeps seeded plane sets and spheres at game-scale magnitudes, poisoning
     /// one coefficient every fourth case with a NaN, an infinity or a signed
-    /// zero so the ordered compare is exercised in both halves of the 4+2 split.
+    /// zero so the ordered compare is exercised on unordered and saturating
+    /// operands as well as ordinary ones.
     #[test]
-    fn packed_pass_matches_scalar_oracle() {
+    fn matches_the_wide_oracle() {
         let mut state = 0x2545_f491_4f6c_dd1d_u64;
         let mut next = move || {
             state ^= state << 13;
@@ -723,10 +679,63 @@ mod tests_c_world_frustum__test_sphere__686b80 {
             }
             assert_eq!(
                 c_world_frustum__test_sphere__686b80(&planes, &sphere),
-                test_sphere_scalar(&planes, &sphere),
+                test_sphere_wide(&planes, &sphere),
                 "case {case}"
             );
         }
+    }
+
+    /// Two centres a per-step `f32` chain classifies the other way round.
+    ///
+    /// Both sit at world-scale coordinates with a radius in the tens of yards,
+    /// the regime the visibility walk feeds this function, and each carries a
+    /// companion assert that the narrow chain really does disagree: a fixture
+    /// that stopped separating the two forms would leave the test passing under
+    /// either one. Plane 0 carries the first case and plane 5 the second, so the
+    /// loop's first and last iterations are both pinned; the other planes are
+    /// all-zero, whose distance is 0 and never below a negative radius.
+    #[test]
+    fn narrow_chain_classifies_two_real_centres_the_other_way() {
+        // Narrow culls, the original keeps: the f32 sum rounds one ulp below
+        // -radius while the f64 sum stays above it.
+        let mut planes = [0.0f32; 24];
+        planes[0] = f32::from_bits(0x3f4f_30c9);
+        planes[1] = f32::from_bits(0x3f54_e46c);
+        planes[2] = f32::from_bits(0xbee3_0b73);
+        planes[3] = f32::from_bits(0x4319_6872);
+        let sphere = [
+            f32::from_bits(0xc353_b260),
+            f32::from_bits(0xc335_ffd2),
+            f32::from_bits(0xc3a9_5215),
+            f32::from_bits(0x4198_e027),
+        ];
+        assert_eq!(c_world_frustum__test_sphere__686b80(&planes, &sphere), 3);
+        assert_eq!(test_sphere_wide(&planes, &sphere), 3);
+        assert_eq!(
+            test_sphere_narrow(&planes, &sphere),
+            0,
+            "fixture must separate"
+        );
+
+        // Narrow keeps, the original culls.
+        let mut planes = [0.0f32; 24];
+        planes[20] = f32::from_bits(0xbdaa_9ad2);
+        planes[21] = f32::from_bits(0xbeb3_ceef);
+        planes[22] = f32::from_bits(0x3f7a_05cf);
+        planes[23] = f32::from_bits(0xc32a_88bc);
+        let sphere = [
+            f32::from_bits(0xc348_791e),
+            f32::from_bits(0xc26c_f4dd),
+            f32::from_bits(0x42ee_9f92),
+            f32::from_bits(0x4184_0879),
+        ];
+        assert_eq!(c_world_frustum__test_sphere__686b80(&planes, &sphere), 0);
+        assert_eq!(test_sphere_wide(&planes, &sphere), 0);
+        assert_eq!(
+            test_sphere_narrow(&planes, &sphere),
+            3,
+            "fixture must separate"
+        );
     }
 }
 
@@ -742,6 +751,18 @@ mod tests_c_world_frustum__test_sphere__686b80 {
 /// `threshold` for *any* plane the whole box is outside that half-space and the
 /// box is culled (returns 0). If no plane culls, the box is inside or
 /// intersecting and the function returns 3.
+///
+/// Only the corner *selection* is packed. The distance itself is register-
+/// resident in the original: between the first `FMUL` at `0x686966` and the
+/// `FCOMP` at `0x68698b` there is no `FST`/`FSTP m32`, so at the client's
+/// 53-bit precision control every product and partial sum carries an `f64`
+/// significand. A product of two `f32` needs 48 bits and is exact, which puts
+/// the whole of the rounding in the three adds, and the `FADDP` pair at
+/// `0x68697f` and `0x686986` fixes their order as `(x + z) + y`, the z term
+/// before the y term, then `+ d`. A packed `f32` multiply would round all three
+/// products a step early and flip this compare on any box whose positive vertex
+/// lands within an `f32` ulp of the threshold, so the lanes carry corners here,
+/// not products.
 pub fn frustum__cull_box__686940(
     planes: &[f32; 24],
     box_min_max: &[f32; 6],
@@ -750,27 +771,31 @@ pub fn frustum__cull_box__686940(
     #[cfg(target_arch = "x86")]
     use core::arch::x86::{
         _mm_and_ps, _mm_andnot_ps, _mm_castpd_ps, _mm_castps_si128, _mm_castsi128_ps,
-        _mm_cvtss_f32, _mm_load_sd, _mm_loadu_ps, _mm_movehl_ps, _mm_mul_ps, _mm_or_ps,
-        _mm_shuffle_ps, _mm_srai_epi32,
+        _mm_cvtss_f32, _mm_load_sd, _mm_loadu_ps, _mm_movehl_ps, _mm_or_ps, _mm_shuffle_ps,
+        _mm_srai_epi32,
     };
     #[cfg(target_arch = "x86_64")]
     use core::arch::x86_64::{
         _mm_and_ps, _mm_andnot_ps, _mm_castpd_ps, _mm_castps_si128, _mm_castsi128_ps,
-        _mm_cvtss_f32, _mm_load_sd, _mm_loadu_ps, _mm_movehl_ps, _mm_mul_ps, _mm_or_ps,
-        _mm_shuffle_ps, _mm_srai_epi32,
+        _mm_cvtss_f32, _mm_load_sd, _mm_loadu_ps, _mm_movehl_ps, _mm_or_ps, _mm_shuffle_ps,
+        _mm_srai_epi32,
     };
 
     // Every intrinsic below is SSE1 or SSE2, present on every ISA baseline this
-    // crate builds for. Written per component the x term lowers to a scalar
-    // multiply behind a data-dependent branch while y and z share a blend and a
-    // multiply; three lanes wide there is no branch left to mispredict. The
-    // reduction stays scalar and left to right, so no add is reassociated.
+    // crate builds for. Written per component each corner pick lowers to a
+    // data-dependent branch on the normal's sign; three lanes wide there is no
+    // branch left to mispredict, and the picked corners then feed the same
+    // scalar reduction they would have fed anyway.
     //
     // The two corner reads split the 24-byte box record in two rather than
     // overlapping: `min.xy` is its first 8 bytes and the remaining 16 hold
     // `min.z` beside the whole max corner, so each corner is one shuffle away
     // and neither read straddles the other. Lane 3 of both is a repeat of the
-    // lane below it and its product is never read.
+    // lane below it and is never read.
+    //
+    // The threshold widens once, above the loop: the original's `FCOMP` reads it
+    // as an `f32` memory operand and the compare happens at register width.
+    let wide_threshold = f64::from(threshold);
     // SAFETY: an 8-byte load of the record's first two floats; `_mm_load_sd`
     // has no alignment requirement, which is why the f32 pointer may be read
     // as one f64.
@@ -808,24 +833,26 @@ pub fn frustum__cull_box__686940(
         let from_max = unsafe { _mm_andnot_ps(mask, max) };
         // SAFETY: lane-wise OR of two initialized vectors; no memory access.
         let corner = unsafe { _mm_or_ps(from_min, from_max) };
-        // SAFETY: lane-wise multiply of two initialized vectors; no memory access.
-        let prod = unsafe { _mm_mul_ps(corner, n) };
         // SAFETY: reads lane 0 of an initialized vector; no memory access.
-        let px = unsafe { _mm_cvtss_f32(prod) };
+        let px = unsafe { _mm_cvtss_f32(corner) };
         // SAFETY: lane shuffle of an initialized vector; no memory access.
-        let prod_y = unsafe { _mm_shuffle_ps::<0b01_01_01_01>(prod, prod) };
+        let corner_y = unsafe { _mm_shuffle_ps::<0b01_01_01_01>(corner, corner) };
         // SAFETY: reads lane 0 of an initialized vector; no memory access.
-        let py = unsafe { _mm_cvtss_f32(prod_y) };
+        let py = unsafe { _mm_cvtss_f32(corner_y) };
         // SAFETY: lifts an initialized vector's upper half into its lower half;
         // no memory access.
-        let prod_z = unsafe { _mm_movehl_ps(prod, prod) };
+        let corner_z = unsafe { _mm_movehl_ps(corner, corner) };
         // SAFETY: reads lane 0 of an initialized vector; no memory access.
-        let pz = unsafe { _mm_cvtss_f32(prod_z) };
-        // Left to right, the order the original reduces in. `d` is read at its
-        // use rather than bound above the picks; the plane load already holds
-        // it, so it costs a lane lift and no second read.
-        let dist = ((px + py) + pz) + planes[p * 4 + 3];
-        if dist < threshold {
+        let pz = unsafe { _mm_cvtss_f32(corner_z) };
+        // The reduction the original performs, at the width it performs it:
+        // exact products, `f64` adds, z joining before y. `d` is read at its use
+        // rather than bound above the picks; the plane load already holds it, so
+        // it costs a lane lift and no second read.
+        let x_term = f64::from(px) * f64::from(planes[p * 4]);
+        let z_term = f64::from(pz) * f64::from(planes[p * 4 + 2]);
+        let y_term = f64::from(py) * f64::from(planes[p * 4 + 1]);
+        let dist = ((x_term + z_term) + y_term) + f64::from(planes[p * 4 + 3]);
+        if dist < wide_threshold {
             return 0;
         }
     }
@@ -953,44 +980,56 @@ mod tests_frustum__cull_box__686940 {
         assert_eq!(cull(&planes, &b_cull, 0.0), 0);
     }
 
-    // The per-component transcription the packed body replaces, kept as the
-    // oracle the sweep below compares against.
-    fn oracle(planes: &[f32; 24], b: &[f32; 6], threshold: f32) -> u32 {
-        let min = [b[0], b[1], b[2]];
-        let max = [b[3], b[4], b[5]];
+    // The positive-vertex pick, shared by both reference chains below.
+    fn positive_vertex(n: [f32; 3], b: &[f32; 6]) -> [f32; 3] {
+        let mut v = [0.0f32; 3];
+        for i in 0..3 {
+            v[i] = if n[i].to_bits() >> 31 == 0 {
+                b[3 + i]
+            } else {
+                b[i]
+            };
+        }
+        v
+    }
+
+    // The per-step `f32` chain in textual order. Not an oracle: the form the
+    // kernel must NOT have, kept so the fixtures below can witness that the
+    // width and the term order are observable.
+    fn narrow_chain(planes: &[f32; 24], b: &[f32; 6], threshold: f32) -> u32 {
         for p in 0..6 {
-            let nx = planes[p * 4];
-            let ny = planes[p * 4 + 1];
-            let nz = planes[p * 4 + 2];
-            let d = planes[p * 4 + 3];
-            let px = if nx.to_bits() >> 31 == 0 {
-                max[0]
-            } else {
-                min[0]
-            };
-            let py = if ny.to_bits() >> 31 == 0 {
-                max[1]
-            } else {
-                min[1]
-            };
-            let pz = if nz.to_bits() >> 31 == 0 {
-                max[2]
-            } else {
-                min[2]
-            };
-            if px * nx + py * ny + pz * nz + d < threshold {
+            let n = [planes[p * 4], planes[p * 4 + 1], planes[p * 4 + 2]];
+            let v = positive_vertex(n, b);
+            if v[0] * n[0] + v[1] * n[1] + v[2] * n[2] + planes[p * 4 + 3] < threshold {
                 return 0;
             }
         }
         3
     }
 
-    // The blend picks on the sign bit and the reduction stays left to right, so
-    // the packed body has to answer the per-component one on every input,
+    // The original's chain: exact products, `f64` adds, `(x + z) + y + d`.
+    fn wide_oracle(planes: &[f32; 24], b: &[f32; 6], threshold: f32) -> u32 {
+        for p in 0..6 {
+            let n = [planes[p * 4], planes[p * 4 + 1], planes[p * 4 + 2]];
+            let v = positive_vertex(n, b);
+            let dist = ((f64::from(v[0]) * f64::from(n[0]) + f64::from(v[2]) * f64::from(n[2]))
+                + f64::from(v[1]) * f64::from(n[1]))
+                + f64::from(planes[p * 4 + 3]);
+            if dist < f64::from(threshold) {
+                return 0;
+            }
+        }
+        3
+    }
+
+    // The blend picks on the sign bit and the reduction keeps the original's
+    // width and order, so the body has to answer the wide chain on every input,
     // including the ones the sign-bit rule turns on: both zeros, both
-    // infinities and a NaN normal.
+    // infinities and a NaN normal. `1e30 * 1e30` is also in reach here, and it
+    // saturates to an infinity in `f32` while staying finite in the register the
+    // original reduces in.
     #[test]
-    fn packed_form_matches_the_scalar_oracle() {
+    fn packed_form_matches_the_wide_oracle() {
         const POOL: [f32; 12] = [
             0.0,
             -0.0,
@@ -1024,14 +1063,74 @@ mod tests_frustum__cull_box__686940 {
             let threshold = POOL[next()];
             assert_eq!(
                 cull(&planes, &b, threshold),
-                oracle(&planes, &b, threshold),
+                wide_oracle(&planes, &b, threshold),
                 "planes={planes:?} box={b:?} threshold={threshold}"
             );
         }
     }
 
-    // The dead fourth lane is inert: `d` reaches the sum only, never the corner
-    // pick, so a non-finite one still decides the plane on its own.
+    /// Two boxes a per-step `f32` chain classifies the other way round.
+    ///
+    /// Both are world-scale boxes measured against the host cull threshold at
+    /// `0x8101b4`, the regime this function actually runs in, and each carries a
+    /// companion assert that the narrow chain really does disagree: a fixture
+    /// that stopped separating the two forms would leave the test passing under
+    /// either one. Plane 0 carries the first case and plane 5 the second, so the
+    /// loop's first and last iterations are both pinned; the other planes are
+    /// all-zero, whose distance is 0 and never below a negative threshold. All
+    /// three normals are positive, so the pick is the max corner and the min
+    /// corner is only there to keep the record a well-formed box.
+    #[test]
+    fn narrow_chain_classifies_two_real_boxes_the_other_way() {
+        const THRESHOLD: f32 = f32::from_bits(0xbc9f_49f4);
+
+        // Narrow culls, the original keeps.
+        let mut planes = [0.0f32; 24];
+        planes[0] = f32::from_bits(0x3ea6_9579);
+        planes[1] = f32::from_bits(0x3f45_b8a5);
+        planes[2] = f32::from_bits(0x3f27_c3da);
+        planes[3] = f32::from_bits(0xc305_d02b);
+        let b = [
+            -1000.0,
+            -1000.0,
+            -1000.0,
+            f32::from_bits(0x430f_782b),
+            f32::from_bits(0xc351_e6fe),
+            f32::from_bits(0x43be_2845),
+        ];
+        assert_eq!(cull(&planes, &b, THRESHOLD), 3);
+        assert_eq!(wide_oracle(&planes, &b, THRESHOLD), 3);
+        assert_eq!(
+            narrow_chain(&planes, &b, THRESHOLD),
+            0,
+            "fixture must separate"
+        );
+
+        // Narrow keeps, the original culls.
+        let mut planes = [0.0f32; 24];
+        planes[20] = f32::from_bits(0x3e90_18c8);
+        planes[21] = f32::from_bits(0x3f19_d5f4);
+        planes[22] = f32::from_bits(0x3f3f_1cfe);
+        planes[23] = f32::from_bits(0xc255_72ee);
+        let b = [
+            -1000.0,
+            -1000.0,
+            -1000.0,
+            f32::from_bits(0xc3b9_709f),
+            f32::from_bits(0x43b8_3635),
+            f32::from_bits(0xc2aa_936a),
+        ];
+        assert_eq!(cull(&planes, &b, THRESHOLD), 0);
+        assert_eq!(wide_oracle(&planes, &b, THRESHOLD), 0);
+        assert_eq!(
+            narrow_chain(&planes, &b, THRESHOLD),
+            3,
+            "fixture must separate"
+        );
+    }
+
+    // `d` reaches the sum only, never the corner pick, so a non-finite one still
+    // decides the plane on its own.
     #[test]
     fn non_finite_plane_offset_only_reaches_the_sum() {
         let mut planes = [0.0f32; 24];
