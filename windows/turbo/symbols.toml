@@ -688,8 +688,18 @@ preserve = []
 # arming `all` breaks it: `C44Matrix__SetRotationAxisAngle__7bdb00` armed means
 # the game proceeds on ITS original's value, so the shell used as ground truth
 # here composes with the hardware trig while this side composes with the
-# polynomial. The result is a guaranteed one-ulp report on the cosine lanes that
-# says nothing about this entry — measured, not predicted.
+# polynomial. Every lane the builder's residual reaches then reports, not only
+# the ones the cosine lands on: an armed session shows lanes 0, 1, 4, 5 and 6,
+# which is where the multiply spreads it.
+#
+# The baseline for that is measured, not predicted. An `all` run reports 27,648
+# times in about two minutes, and every report is a single byte adrift by one,
+# so nothing under it exceeds an ulp in the lane it lands in. The pinned
+# quarter-turn path produced none of them, and that silence is the reading to
+# take from the number: it is the path that never enters 0x7bdb00, so it is also
+# the check that the pinned matrix still tracks 0x7bdb00's own output, and
+# everything reported is the armed builder's residual arriving through the
+# multiply.
 # No `orig_twice`, for the reason the quaternion rotate gives: the mode is
 # `inout`, so a second run of the original would read the first run's output.
 [functions.C44Matrix__RotateAxisAngle__7bdd60.diff]
@@ -905,6 +915,23 @@ preserve = ["ecx"]
 # Golden-diff the built plane (out = arg 0, `[nx, ny, nz, d]`). Byte compare:
 # `d` accumulates through the normalize, so it carries every rounding decision
 # the body makes and a tolerant compare would hide all of them.
+#
+# What it reports is lane 3, `d`, and nothing else, and two readings of that are
+# ruled out before the arithmetic one. It is not a composed arm: the body makes
+# no call, so no other hook is inside this comparison. And it is not a
+# reciprocal estimate on either side. The normalize is INLINE at
+# 0x6374f2..0x63752b and it is an `FSQRT` followed by an `FDIVR` against the 1.0
+# at 0x7ff9d8, which is the `1.0 / len2.sqrt()` the kernel writes, so no
+# `RSQRTSS` is in the picture to explain a difference.
+#
+# What is left is the register width the `FST`-not-`FSTP` stores at 0x63751c,
+# 0x637523 and 0x63752b leave standing: the three normal lanes are narrowed to
+# f32 in memory while `d` is built from the wide values the stores kept in the
+# registers, so any last-place difference arrives at `d` unattenuated and the
+# cancellation in the dot amplifies it. One case runs to about 0.3% relative,
+# and it does so on a `d` of order 1e-8, where every term that builds it is
+# orders larger. The byte compare stays as written: on the three normal lanes it
+# is the watch that the normal itself has not moved, and they are silent.
 [functions.C4Plane__FromTriangle__637480.diff]
 mode  = "out"
 out   = { arg = 0, len = 16 }
@@ -3632,6 +3659,20 @@ ret  = "*mut u8"
 args = ["*mut u8", "*const f32", "f32", "*mut f32", "*mut f32", "*mut u8"]
 preserve = []
 
+# Arg 3 is `out_planes`, an output, and it is declared `ins` for one reason: an
+# `ins` region is what redirects the replayed reimplementation's write into the
+# snapshot buffer, so the replay cannot overwrite the planes the game is about
+# to consume. The drift check that comes with it is not a drift check here. Its
+# baseline is that snapshot, and the snapshot holds what the replay just wrote
+# through the hooked `0x631440`, while the live side holds what the original's
+# own `call` at 0x631c00 left there. Arm `0x631440` as well and the live side is
+# ITS original's planes, so a divergence in that entry reaches this one as
+# INPUT DRIFT on the same byte: one finding, reported twice, and the entry to
+# read it on is the plane builder's. Arg 5 is sandboxed the same way and cannot
+# drift, both sides writing the same 32 constant bytes.
+#
+# What this entry is a statement about is the compared `out` region, arg 4: the
+# 27 corner floats the body builds itself.
 [functions.Collision_BuildSweepPrism__631be0.diff]
 mode  = "out"
 out   = { arg = 4, len = 108 }
