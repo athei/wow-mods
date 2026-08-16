@@ -1443,7 +1443,9 @@ pub fn intro_sort_u_int32<F: FnMut(u32, u32) -> i32>(array: &mut [u32], mut cmp:
 /// a client crash is not an acceptable answer to bad input. Both partition
 /// scans carry their own bounds guard rather than relying on the sentinel the
 /// ordering would otherwise provide, and the split is clamped so every
-/// recursion step shrinks.
+/// recursion step shrinks. Those guards are also what the scans read through:
+/// having proved the index, the reads themselves are unchecked, so dropping a
+/// guard would be a memory-safety change rather than a tidy-up.
 pub fn intro_sort_by<T: Copy, F: FnMut(&T, &T) -> i32>(array: &mut [T], mut cmp: F) {
     let depth = 2 * (usize::BITS - array.len().leading_zeros()) as usize;
     intro_sort_range(array, &mut cmp, depth);
@@ -1532,7 +1534,11 @@ fn intro_sort_insertion<T: Copy, F: FnMut(&T, &T) -> i32>(array: &mut [T], cmp: 
             array[j] = array[j - 1];
             j -= 1;
         }
-        array[j] = held;
+        // SAFETY: `j` starts at `i`, which `1..array.len()` keeps below the
+        // length, and the walk back above only ever decrements it, so it
+        // indexes an element. A checked write-back re-tests it against the
+        // length once per element for a bound the loop it just left carries.
+        *unsafe { array.get_unchecked_mut(j) } = held;
     }
 }
 
@@ -1560,10 +1566,16 @@ fn intro_sort_partition<T: Copy, F: FnMut(&T, &T) -> i32>(array: &mut [T], cmp: 
     let mut i = 0usize;
     let mut j = last;
     loop {
-        while i < last && cmp(&array[i], &pivot) < 0 {
+        // SAFETY: `i < last` is tested first and `last` is `len - 1`, so `i`
+        // indexes an element. A checked read costs an `i == len` test and a
+        // panic edge on every iteration of the scan, for the case the guard on
+        // the same line has already excluded.
+        while i < last && cmp(unsafe { array.get_unchecked(i) }, &pivot) < 0 {
             i += 1;
         }
-        while j > 0 && cmp(&array[j], &pivot) > 0 {
+        // SAFETY: `j` enters at `last` = `len - 1` and only ever decrements, so
+        // it indexes an element whatever the comparator answers.
+        while j > 0 && cmp(unsafe { array.get_unchecked(j) }, &pivot) > 0 {
             j -= 1;
         }
         if i >= j {
@@ -1573,7 +1585,11 @@ fn intro_sort_partition<T: Copy, F: FnMut(&T, &T) -> i32>(array: &mut [T], cmp: 
             // the whole slice for ever.
             return (j + 1).min(last);
         }
-        array.swap(i, j);
+        // SAFETY: control reaches here only on `i < j`, and neither scan leaves
+        // its index above `last` = `len - 1`, so the two are in bounds and
+        // distinct, which is exactly what the disjoint form asks for.
+        let [at_i, at_j] = unsafe { array.get_disjoint_unchecked_mut([i, j]) };
+        core::mem::swap(at_i, at_j);
         i += 1;
         j -= 1;
     }

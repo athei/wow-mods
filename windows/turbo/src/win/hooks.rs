@@ -31940,22 +31940,25 @@ fn bdl_sort_opaque_keyed(
     let flags = unsafe { flags_slot.cast::<u32>().read_unaligned() };
     let prio_enabled = (flags & 4) != 0;
     let tex_enabled = (flags & 2) != 0;
-    // No longer a bound on a table's size — the scratch is one entry per bucket
-    // element now — but still the sanity bound on an element index this walk
-    // will turn into an address, so it stays.
-    let Some(&max_index) = slice.iter().max() else {
-        return false;
-    };
-    if max_index >= BDL_KEY_INDEX_CAP {
-        return false;
-    }
     BDL_OPAQUE_KEYS.with(|cell| {
         let mut keys = cell.borrow_mut();
         keys.clear();
         keys.reserve(slice.len());
-        for &index in slice.iter() {
+        // The `reserve` above is what makes the loop a write rather than a
+        // push: it sizes the spare region at `slice.len()`, so the zip covers
+        // every index and no element can grow the vector. The length is
+        // published once, after the last slot is whole.
+        for (slot, &index) in keys.spare_capacity_mut().iter_mut().zip(slice.iter()) {
+            // No longer a bound on a table's size — the scratch is one entry
+            // per bucket element now — but still the sanity bound on an element
+            // index this walk will turn into an address, so it stays, tested
+            // beside the load it guards rather than by a separate streaming
+            // pass over the whole index array.
+            if index >= BDL_KEY_INDEX_CAP {
+                return false;
+            }
             // SAFETY: `index*0x40` addresses an in-bounds 0x40-byte element
-            // (caller-validated), the same address the comparator computes.
+            // (the bound just above), the same address the comparator computes.
             let elem = unsafe { elem_base.add(index as usize * 0x40) };
             let e = read_draw_elem(elem);
             let prio = if prio_enabled {
@@ -31968,16 +31971,31 @@ fn bdl_sort_opaque_keyed(
             else {
                 return false;
             };
-            keys.push(BdlOpaqueKey { key, index });
+            slot.write(BdlOpaqueKey { key, index });
         }
+        // SAFETY: the loop ran to completion, so each of the first `slice.len()`
+        // slots of a region `reserve` sized at least that large holds a whole
+        // element. On either early return the length stays 0 and the slots
+        // written so far are never read: the scratch is thread-local and the
+        // next call clears it before it looks at anything.
+        unsafe { keys.set_len(slice.len()) };
+        // Lexicographic over the nine lanes, spelled as a walk rather than as
+        // `<[u32; 9]>::cmp`, because the tie-break arm here is a call: that
+        // stops the -1/+1 folding into the caller's sign test the way it does
+        // for the texture bucket's `u64`, and the ordering comes back as a
+        // value every comparison then has to re-test. A lane that decides the
+        // answer branches straight to the arm the sort wants, so no ordering is
+        // materialised and no lane has to copy its operand for a merge to read.
         let cmp = |a: &BdlOpaqueKey, b: &BdlOpaqueKey| -> i32 {
-            match a.key.cmp(&b.key) {
-                core::cmp::Ordering::Less => -1,
-                core::cmp::Ordering::Greater => 1,
-                core::cmp::Ordering::Equal => {
-                    c_world_view__compare_draw_list_extended__70aa30(a.index, b.index, view)
+            for (&lane_a, &lane_b) in a.key.iter().zip(b.key.iter()) {
+                if lane_a < lane_b {
+                    return -1;
+                }
+                if lane_a > lane_b {
+                    return 1;
                 }
             }
+            c_world_view__compare_draw_list_extended__70aa30(a.index, b.index, view)
         };
         match cmps {
             // Armed: one branch per sort, not per comparison.
