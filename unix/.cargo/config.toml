@@ -17,5 +17,10 @@ MACOSX_DEPLOYMENT_TARGET = "15.0"
 # AVX/AVX2 ops are split across two halves and underperform plain SSE, so the
 # baseline caps at SSE4.2 (128-bit, 1:1 with the host vector unit) plus the
 # AVX-independent GPR bit-manipulation features (BMI1/BMI2/LZCNT).
+#
+# The BMI flags are kept here and banned on the PE side, which is not an
+# oversight: this is host code, translated by Rosetta, which implements them.
+# The DLLs are guest code and meet whichever translator the host Wine brings,
+# including one that does not (see `windows/.cargo/config.toml`).
 CFLAGS_x86_64-apple-darwin   = "-march=x86-64-v2 -mbmi -mbmi2 -mlzcnt"
 CXXFLAGS_x86_64-apple-darwin = "-march=x86-64-v2 -mbmi -mbmi2 -mlzcnt"

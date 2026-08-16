@@ -3,7 +3,9 @@
 # target). Native hardware executes 256-bit ops at full width — the 128-bit
 # translation-unit reasoning behind the nehalem baseline in config.toml does
 # not apply — so this variant raises the baseline to haswell (AVX2 + FMA +
-# BMI1/BMI2/LZCNT; Intel 2013+, any AMD Ryzen).
+# BMI1/BMI2/LZCNT; Intel 2013+, any AMD Ryzen). BMI comes back with the
+# baseline, and may: config.toml bans it because an arm64 Wine's x86 translator
+# cannot decode it, and this build never meets a translator.
 #
 # rustflags ARRAYS from merged config sources are JOINED, with this file's
 # entries placed later — so `target-cpu=haswell` overrides the base `nehalem`
