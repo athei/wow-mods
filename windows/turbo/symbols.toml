@@ -94,10 +94,9 @@ preserve = []
 # aliases the destination over an input: the original is alias-safe (it builds
 # all sixteen elements in stack temps and only then assigns), so callers may do
 # it, and the compare path would then replay our adapter against an `a` the
-# original had already overwritten. It showed up as a single lane-2 signed-zero
-# report in an armed session — one event, because it needs an aliasing caller.
-# Our own adapter reads both inputs into locals before writing, so the hook is
-# correct unarmed either way; this is about the harness telling the truth.
+# original had already overwritten. Our own adapter reads both inputs before it
+# writes, so the hook is correct unarmed either way; this is about the harness
+# telling the truth.
 #
 # `orig_twice` runs the original a second time on the same arguments and reports if
 # it disagrees with itself. Safe here: the body writes only its destination matrix
@@ -105,14 +104,25 @@ preserve = []
 # touches global state, so a second run recomputes the same thing and the game
 # consumes it exactly as it would the first.
 #
-# It is on because this entry reports a signed zero that the reimplementation is
-# proven not to cause: replaying the operands the harness dumped shows all four
-# products of the failing lane are a positive zero times a negative value, so the
-# sum is negative zero under every rounding mode and every regrouping, while the
-# original returned positive zero. Those bytes cannot produce that, so the original
-# did not read those bytes. `ins` drift cannot see it, because drift compares the
-# snapshot against live memory only after the original returns and this is a value
-# that changed and changed back. This probe is what distinguishes the two.
+# SIGNED ZERO ON A ZERO LANE, SETTLED: this entry reports lanes 2 and 10 as
+# `ours 0x80 vs orig 0x00`, a negative zero against a positive zero, and nothing
+# else. It is not attributable to the reimplementation and there is nothing here
+# to fix. Replaying the operands the harness dumped shows all four products of
+# the failing lane are a zero times a value of the opposite sign, so all 24
+# summation orders of those four terms give negative zero while the original
+# returned positive zero. Order is not the explanation either: the sixteen `k`
+# orders were re-transcribed from the stock bytes at 0x7bc6a8 through 0x7bc8dc
+# and match the shipped table lane for lane. Nor is the original reading
+# something else. `orig_twice` has stayed silent across an armed session that
+# logged more than five thousand of these, so the original is a deterministic
+# function of exactly the bytes it was handed, and on those bytes IEEE requires
+# the negative zero our kernel produces. What is left is the host's x87
+# multiply, which is where the sign is lost. `ins` drift cannot see any of it:
+# drift compares the snapshot against live memory only after the original
+# returns, and a sign bit that changed and changed back leaves no trace.
+#
+# `C44Matrix__RotateQuaternion__7bddb0` inherits the same report through its
+# `call` at 0x7bded7 and needs no separate reading.
 [functions.C44Matrix__Multiply__7bc6a0.diff]
 mode  = "out"
 out   = { arg = 0, len = 64 }
@@ -699,12 +709,15 @@ preserve = []
 # Golden-diff the written region, byte compare. Region covers everything the
 # adapter touches, reads included: the argument is swapped for a fixed-size
 # scratch buffer, so a read past the declared length reads past that buffer.
-# No `orig_twice` here even though this reports the identical signed zero on the
-# identical lane, because the mode is `inout`: the out region is also an input, so a
+# No `orig_twice` here even though this reports the same signed zero on the same
+# lanes, because the mode is `inout`: the out region is also an input, so a
 # second run of the original would read the first run's output and disagree with it
 # for a reason that says nothing about the client. The probe is on
 # `C44Matrix__Multiply__7bc6a0`, which this one `call`s at 0x7bded7, and that is the
-# right place for it — if the multiply is not self-consistent this inherits it.
+# right place for it: if the multiply is not self-consistent this inherits it. The
+# signed zero itself is settled there too, under SIGNED ZERO ON A ZERO LANE. This
+# entry composes through that `call`, so a lane it reports as `ours 0x80 vs orig
+# 0x00` is the multiply's report reaching the receiver, not a second finding.
 [functions.C44Matrix__RotateQuaternion__7bddb0.diff]
 mode  = "inout"
 out   = { arg = 0, len = 64 }

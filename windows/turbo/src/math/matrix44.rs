@@ -148,17 +148,20 @@ mod tests_c44_matrix__multiply__7bc6a0 {
     /// Two composed right-angle rotations, captured operand-for-operand off a real
     /// call that the harness flagged on lane 6. Every one of that lane's four
     /// products is `+0.0 * negative`, so the sum is `-0.0` under every IEEE
-    /// rounding mode and no summation order can change it — a sum of zeros is
+    /// rounding mode and no summation order can change it: a sum of zeros is
     /// negative exactly when all its addends are. The original reported `+0.0`,
-    /// which those bytes cannot produce, so it did not read these bytes: the
-    /// snapshot is compared against live memory only *after* the original returns,
-    /// which catches a value that changed and stayed changed, not one that changed
-    /// and changed back. A sign-bit flip on a zero is what a matrix being rebuilt
-    /// on another thread looks like.
+    /// which those bytes cannot produce.
+    ///
+    /// What the original was doing instead is now answered rather than guessed.
+    /// The `orig_twice` probe on the manifest entry runs it a second time on the
+    /// same arguments, and across thousands of these reports it has never seen the
+    /// two runs disagree, so the original is a deterministic function of exactly
+    /// these bytes and nothing is moving underneath the compare. The sign it drops
+    /// is the host's. The entry's SIGNED ZERO ON A ZERO LANE note carries the
+    /// full reading.
     ///
     /// So this pins the kernel against real client data rather than against a
-    /// transcription, and it is why lane 6's divergence is a harness artifact
-    /// rather than an arithmetic bug.
+    /// transcription, and it is why lane 6's divergence is not an arithmetic bug.
     #[test]
     fn matches_the_captured_client_case_on_the_signed_zero_lane() {
         const A: [u32; 16] = [
@@ -226,6 +229,114 @@ mod tests_c44_matrix__multiply__7bc6a0 {
             (-0.0f32).to_bits(),
             "k-ascending regrouping must also be -0.0"
         );
+    }
+
+    /// A second live case, this one reached through `C44Matrix::RotateQuaternion`.
+    ///
+    /// Captured operand-for-operand off the call the harness flagged on lane 2:
+    /// `a` is the rotation the quaternion built (a quarter turn about Z carrying
+    /// `-0.0` in slots 2 and 9), `b` is the receiver, an identity with a
+    /// translation in its last row. It pins all sixteen lanes against real client
+    /// bytes, and lane 2 against the same signed-zero reading as the lane 6 case:
+    /// its four products are each a zero times a value of the opposite sign, so
+    /// the sum is `-0.0` however it is grouped, while the original returned
+    /// `+0.0`.
+    #[test]
+    fn matches_the_captured_quaternion_case_on_lane_two() {
+        const A: [u32; 16] = [
+            0xbc0f_013d,
+            0xbf7f_fd7f,
+            0x8000_0000,
+            0,
+            0x3f7f_fd7f,
+            0xbc0f_0100,
+            0,
+            0,
+            0,
+            0x8000_0000,
+            0x3f80_0000,
+            0,
+            0,
+            0,
+            0,
+            0x3f80_0000,
+        ];
+        const B: [u32; 16] = [
+            0x3f80_0000,
+            0,
+            0,
+            0,
+            0,
+            0x3f80_0000,
+            0,
+            0,
+            0,
+            0,
+            0x3f80_0000,
+            0,
+            0x44c7_66b8,
+            0x4332_b168,
+            0xc201_915f,
+            0x3f80_0000,
+        ];
+        // The bytes the reimplementation wrote, taken from the same report.
+        const WANT: [u32; 16] = [
+            0xbc0f_013d,
+            0xbf7f_fd7f,
+            0x8000_0000,
+            0,
+            0x3f7f_fd7f,
+            0xbc0f_0100,
+            0,
+            0,
+            0,
+            0,
+            0x3f80_0000,
+            0,
+            0x44c7_66b8,
+            0x4332_b168,
+            0xc201_915f,
+            0x3f80_0000,
+        ];
+        let (a, b) = (A.map(f32::from_bits), B.map(f32::from_bits));
+        let got = stock(&a, &b);
+        for i in 0..16 {
+            assert_eq!(got[i].to_bits(), WANT[i], "lane {i}");
+        }
+
+        // Lane 9 is the control: its products mix both signs of zero, so it is
+        // `+0.0` and both sides always agreed on it.
+        assert_eq!(got[9].to_bits(), 0, "lane 9 must be +0.0");
+
+        // Lane 2 is the reported one. Every product is a zero of the sign
+        // opposite its partner, so no regrouping of the four reaches `+0.0`.
+        let term = |k: usize| f64::from(a[k]) * f64::from(b[k * 4 + 2]);
+        for k in 0..4 {
+            assert!(term(k).is_sign_negative(), "k={k} product must be -0.0");
+            assert_eq!(term(k), 0.0, "k={k} product must be a zero");
+        }
+        for first in 0..4 {
+            for second in 0..4 {
+                if second == first {
+                    continue;
+                }
+                for third in 0..4 {
+                    if third == first || third == second {
+                        continue;
+                    }
+                    let fourth = 6 - first - second - third;
+                    let mut acc = term(first);
+                    acc += term(second);
+                    acc += term(third);
+                    acc += term(fourth);
+                    assert_eq!(
+                        super::super::f64_to_f32(acc).to_bits(),
+                        (-0.0f32).to_bits(),
+                        "order {first}{second}{third}{fourth} must be -0.0"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
