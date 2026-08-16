@@ -17,7 +17,7 @@
 //! swallowed those; delegating per line is strictly better and costs one
 //! coverage scan at creation.
 
-use core::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{LazyLock, Mutex};
 
 use crate::{
@@ -830,9 +830,18 @@ struct Overlay {
 }
 
 impl Overlay {
-    /// Whether nothing is alive at all.
-    fn is_empty(&self) -> bool {
-        self.floats.is_empty() && self.smalls.is_empty() && self.groups.is_empty()
+    /// Republish [`LIVE_ENTRIES`] from the three lists.
+    ///
+    /// Called at the end of every locked section that can add or drop an
+    /// entry. Recomputing the sum beats a matched increment/decrement per
+    /// mutation site: a count that is only ever derived cannot drift from the
+    /// lengths, and a missed publish leaves the previous frame's answer
+    /// rather than an arbitrary one.
+    fn publish_live(&self) {
+        LIVE_ENTRIES.store(
+            self.floats.len() + self.smalls.len() + self.groups.len(),
+            Ordering::Relaxed,
+        );
     }
 
     /// Drop every entry, releasing textures against the live device.
@@ -840,6 +849,7 @@ impl Overlay {
         self.floats.clear();
         self.smalls.clear();
         self.groups.clear();
+        self.publish_live();
     }
 
     /// Leak every texture: the device they were created on is gone.
@@ -847,6 +857,7 @@ impl Overlay {
         let floats = core::mem::take(&mut self.floats);
         let smalls = core::mem::take(&mut self.smalls);
         let groups = core::mem::take(&mut self.groups);
+        self.publish_live();
         let mut leaked = 0u32;
         for line in floats.into_iter().chain(smalls) {
             line.tex.leak();
@@ -888,6 +899,15 @@ static OVERLAY: Mutex<Overlay> = Mutex::new(Overlay {
     smalls: Vec::new(),
     groups: Vec::new(),
 });
+
+/// Live overlay entries, the draw pass's lock-free preflight.
+///
+/// [`draw_pass`] runs at every presenting scene-end and has nothing to draw
+/// on almost all of them; the three lists it would have to lock to measure
+/// are game-thread only, so a plain relaxed load answers the same question.
+/// Published by [`Overlay::publish_live`] from inside the lock, which is
+/// where every mutation of the lists already happens.
+static LIVE_ENTRIES: AtomicUsize = AtomicUsize::new(0);
 
 /// Ticks per virtual animation frame, from the calibrated invariant counter.
 static TICKS_PER_FRAME: LazyLock<i64> = LazyLock::new(|| {
@@ -1262,6 +1282,7 @@ fn insert_line(mut line: Line, small: bool) {
             overlay.floats.remove(0);
         }
     }
+    overlay.publish_live();
     drop(guard);
 }
 
@@ -1319,17 +1340,18 @@ fn insert_crit(text: &str, guid: u64, color: [u8; 3], base_alpha: u8) -> bool {
         group
             .carousel
             .add(kernel::Crit::new(&spec), payload, coin, now);
-        return true;
+    } else {
+        // Push distances from the reference's five-eights measure at the big px.
+        let (push_w, push_h) = face.measure("88888", big_px);
+        let mut carousel = kernel::CritsGroup::new(push_w, push_h);
+        carousel.add(kernel::Crit::new(&spec), payload, coin, now);
+        overlay.groups.push(Group {
+            guid,
+            player_stick: guid == player_guid,
+            carousel,
+        });
     }
-    // Push distances from the reference's five-eights measure at the big px.
-    let (push_w, push_h) = face.measure("88888", big_px);
-    let mut carousel = kernel::CritsGroup::new(push_w, push_h);
-    carousel.add(kernel::Crit::new(&spec), payload, coin, now);
-    overlay.groups.push(Group {
-        guid,
-        player_stick: guid == player_guid,
-        carousel,
-    });
+    overlay.publish_live();
     true
 }
 
@@ -1420,6 +1442,48 @@ pub fn add_crit_text(text: &str, color: [u8; 3], alpha: u8) -> bool {
     shown
 }
 
+thread_local! {
+    /// The pass's fill command list, kept across passes for its capacity.
+    ///
+    /// Game-thread owned; taken for the duration of one pass and put back
+    /// before it returns, so a session's list capacity converges instead of
+    /// regrowing from empty every frame that draws.
+    static DRAW_CMDS: core::cell::RefCell<Vec<DrawCmd>> =
+        const { core::cell::RefCell::new(Vec::new()) };
+    /// The crit half of [`DRAW_CMDS`], appended after the float commands.
+    static DRAW_CRIT_CMDS: core::cell::RefCell<Vec<DrawCmd>> =
+        const { core::cell::RefCell::new(Vec::new()) };
+}
+
+/// Both command lists, borrowed for one pass and handed back on drop.
+///
+/// [`Drop`] rather than a pair of stores at the exits: the pass returns early
+/// on the frames that tick everything away without drawing, and that is
+/// exactly the frame whose capacity is worth keeping.
+struct PassCmds {
+    cmds: Vec<DrawCmd>,
+    crit_cmds: Vec<DrawCmd>,
+}
+
+impl PassCmds {
+    /// Take both lists, empty, with the last drawing pass's capacity.
+    fn take() -> Self {
+        Self {
+            cmds: DRAW_CMDS.with(core::cell::RefCell::take),
+            crit_cmds: DRAW_CRIT_CMDS.with(core::cell::RefCell::take),
+        }
+    }
+}
+
+impl Drop for PassCmds {
+    fn drop(&mut self) {
+        self.cmds.clear();
+        self.crit_cmds.clear();
+        DRAW_CMDS.with(|slot| slot.replace(core::mem::take(&mut self.cmds)));
+        DRAW_CRIT_CMDS.with(|slot| slot.replace(core::mem::take(&mut self.crit_cmds)));
+    }
+}
+
 /// One draw command: a texture quad at a screen position with a tint.
 struct DrawCmd {
     tex: usize,
@@ -1476,11 +1540,8 @@ pub fn draw_pass(gx: *mut u8) {
     if gx == 0 {
         return;
     }
-    {
-        let overlay = OVERLAY.lock().expect("overlay is game-thread only");
-        if overlay.is_empty() {
-            return;
-        }
+    if LIVE_ENTRIES.load(Ordering::Relaxed) == 0 {
+        return;
     }
     // SAFETY: `gx + 0x3a38` is the graphics device's backend-ready dword the
     // reference gates its own draws on.
@@ -1494,14 +1555,14 @@ pub fn draw_pass(gx: *mut u8) {
 
     let now = now_ticks();
     let offset = Env::current().map_or(0.0, |e| e.scaled(nameplate_height()));
-    let mut cmds: Vec<DrawCmd> = Vec::new();
+    let mut pass = PassCmds::take();
+    let PassCmds { cmds, crit_cmds } = &mut pass;
 
     let mut guard = OVERLAY.lock().expect("overlay is game-thread only");
     guard.adopt_device(backend.dev);
 
     // Crit carousels tick first so the float passes can test overlap against
     // this frame's crit rects, the reference's pre-pass.
-    let mut crit_cmds: Vec<DrawCmd> = Vec::new();
     let Overlay {
         groups,
         floats,
@@ -1565,14 +1626,15 @@ pub fn draw_pass(gx: *mut u8) {
                 kernel::Tick::Hidden => true,
                 kernel::Tick::Draw { rect, alpha } => {
                     if !groups.iter().any(|g| g.carousel.intersects(&rect)) {
-                        push_pair(&mut cmds, line, rect.left - 1, rect.top - 1, alpha);
+                        push_pair(cmds, line, rect.left - 1, rect.top - 1, alpha);
                     }
                     true
                 }
             }
         });
     }
-    cmds.append(&mut crit_cmds);
+    cmds.append(crit_cmds);
+    guard.publish_live();
     // The device section below reads only the command list; the textures it
     // names stay alive because their owning entries stayed in the lists and
     // every overlay path runs on this thread.
@@ -1581,20 +1643,16 @@ pub fn draw_pass(gx: *mut u8) {
         return;
     }
 
-    // Save, set, draw, restore.
-    let saved_rs: Vec<u32> = RENDER_STATES
-        .iter()
-        .map(|&(state, _)| backend.render_state(state))
-        .collect();
-    let saved_tss: Vec<u32> = STAGE0_STATES
-        .iter()
-        .map(|&(ty, _)| backend.stage_state(0, ty))
-        .collect();
+    // Save, set, draw, restore. The three saved-state lists are as long as the
+    // tables they mirror, so they are arrays: a heap block per list per frame
+    // bought nothing but its allocator round trip.
+    let saved_rs: [u32; RENDER_STATES.len()] =
+        core::array::from_fn(|i| backend.render_state(RENDER_STATES[i].0));
+    let saved_tss: [u32; STAGE0_STATES.len()] =
+        core::array::from_fn(|i| backend.stage_state(0, STAGE0_STATES[i].0));
     let saved_stage1_colorop = backend.stage_state(1, 1);
-    let saved_samp: Vec<u32> = SAMPLER0_STATES
-        .iter()
-        .map(|&(ty, _)| backend.sampler_state(0, ty))
-        .collect();
+    let saved_samp: [u32; SAMPLER0_STATES.len()] =
+        core::array::from_fn(|i| backend.sampler_state(0, SAMPLER0_STATES[i].0));
     let saved_fvf = backend.fvf();
     let saved_texture = backend.texture0();
     let saved_vs = backend.vertex_shader();
@@ -1615,7 +1673,7 @@ pub fn draw_pass(gx: *mut u8) {
     backend.set_pixel_shader(0);
 
     let mut bound = 0usize;
-    for cmd in &cmds {
+    for cmd in &*cmds {
         if cmd.tex != bound {
             backend.set_texture0(cmd.tex);
             bound = cmd.tex;

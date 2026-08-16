@@ -11,7 +11,7 @@
 //! structures, and only the raw array is indexed by the field numbers the
 //! write entry receives.
 
-use core::sync::atomic::{AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{LazyLock, Mutex};
 
 use super::tally::SharedCounter;
@@ -75,6 +75,19 @@ static STATE: LazyLock<Mutex<Coalescer>> = LazyLock::new(|| Mutex::new(Coalescer
 
 /// The player object the mirrors were bound against, zero when unbound.
 static BOUND_PLAYER: AtomicUsize = AtomicUsize::new(0);
+
+/// Whether the coalescer may hold a pending entry, shadowing `idle()`.
+///
+/// The scene-end flush runs on every frame and is idle on almost all of them,
+/// so it reads this before the engine-tick query and the lock. Every store
+/// sits inside the `STATE` critical section that could have made the state
+/// non-idle, and the flush clears it only while holding the lock and seeing
+/// `idle()`, so a set can never be lost against a concurrent clear. Stale in
+/// the true direction costs exactly the old path; stale in the false
+/// direction cannot happen. It is deliberately not cleared by the drain that
+/// empties the table: `player_expire` is time-driven, so an entry that comes
+/// due with no further write still needs the next frame to look.
+static PENDING: AtomicBool = AtomicBool::new(false);
 
 // Declared as the locked-add shape: the write intercept is reached from the
 // descriptor-write hook, the scene-end flush and the world-entry downgrade, and
@@ -240,6 +253,7 @@ fn visible_write(this: *mut u8, slot: usize, value: u32) -> bool {
         now,
         u32::try_from(this.addr()).unwrap_or(0),
     );
+    PENDING.store(true, Ordering::Relaxed);
     drop(state);
     if swallowed {
         super::tally::bump_shared(&SWALLOWED);
@@ -253,6 +267,7 @@ fn player_visible_write(this: *mut u8, slot: usize, value: u32, now: u32) -> boo
         return false;
     };
     let verdict = state.player_visible_write(slot, value, now);
+    PENDING.store(true, Ordering::Relaxed);
     drop(state);
     match verdict {
         PlayerWrite::Passthrough => false,
@@ -300,6 +315,7 @@ fn item_write(this: *mut u8, value: u32) -> bool {
     };
     let slot = (0..VISIBLE_SLOTS).find(|&slot| state.equip_guid(slot) == guid);
     let parked = slot.is_some_and(|slot| state.defer_item_write(slot, value, now));
+    PENDING.store(true, Ordering::Relaxed);
     drop(state);
     if parked {
         super::tally::bump_shared(&DEFERRED_ITEMS);
@@ -320,6 +336,7 @@ fn inv_guid_write(this: *mut u8, dword: u32, value: u32) -> bool {
         return false;
     };
     let verdict = state.player_inv_guid_write(dword, value);
+    PENDING.store(true, Ordering::Relaxed);
     drop(state);
     if let InvWrite::ApplyZeroThenPassthrough { visible_slot } = verdict {
         write_field(this.addr(), visible_index(visible_slot), 0);
@@ -375,12 +392,16 @@ fn refresh_unit(obj: usize) {
 /// the rest to their next natural refresh rather than spending the frame on
 /// model rebuilds.
 pub fn flush() {
+    if !PENDING.load(Ordering::Relaxed) {
+        return;
+    }
     let now = now_ms();
     {
         let Ok(mut state) = STATE.lock() else {
             return;
         };
         if state.idle() {
+            PENDING.store(false, Ordering::Relaxed);
             return;
         }
         state.player_expire(now);

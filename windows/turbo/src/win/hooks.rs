@@ -1164,8 +1164,15 @@ pub fn c44_matrix__transform_vector4__7bcb40(
     in_vec4: *const f32,
     mat4x4: *const f32,
 ) -> *mut f32 {
-    if out_vec4.is_null() || in_vec4.is_null() || mat4x4.is_null() {
-        return out_vec4;
+    // Three guards, three exits: see `transform_vector4_null_exit`.
+    if out_vec4.is_null() {
+        return transform_vector4_null_exit(out_vec4);
+    }
+    if in_vec4.is_null() {
+        return transform_vector4_null_exit(out_vec4);
+    }
+    if mat4x4.is_null() {
+        return transform_vector4_null_exit(out_vec4);
     }
     // SAFETY: `in_vec4` is a non-null caller-owned C4Vector (4 contiguous f32).
     let v = &unsafe { in_vec4.cast::<[f32; 4]>().read_unaligned() };
@@ -1174,6 +1181,22 @@ pub fn c44_matrix__transform_vector4__7bcb40(
     let r = crate::math::matrix44::c44_matrix__transform_vector4__7bcb40(v, m);
     // SAFETY: `out_vec4` is non-null and addresses 4 writable contiguous f32.
     unsafe { out_vec4.cast::<[f32; 4]>().write_unaligned(r) };
+    out_vec4
+}
+
+/// The null-argument exit of [`c44_matrix__transform_vector4__7bcb40`].
+///
+/// It answers `out_vec4` and nothing else; being cold and out of line is its
+/// whole job. Three null tests that share one hot exit are folded into a flat
+/// `test`/`setcc`/`or` chain in byte registers, and that chain is the body's
+/// only use of `ebx`, so it also costs the save and restore of a register the
+/// transform never needs. Returning through a cold destination keeps them as
+/// three early-exit branches: the guards test in order, the first two leave
+/// before the frame is even set up, and the call itself folds away, so
+/// nothing of this function survives into the image.
+#[cold]
+#[inline(never)]
+fn transform_vector4_null_exit(out_vec4: *mut f32) -> *mut f32 {
     out_vec4
 }
 
@@ -11960,6 +11983,22 @@ pub extern "fastcall" fn c_map_chunk__rasterize_chunk_triangles__6ad7e0(
         u32::from(unsafe { holes_ptr.cast::<u16>().read() })
     };
 
+    // Every index into a cell's outcode array comes from one of the two fixed
+    // `.rdata` tables, so the range is a property of the call rather than of
+    // the cell: the twelve triangle indices and the five vertex offsets are
+    // checked once here, and the per-triangle and per-vertex indexing below
+    // needs no check of its own. A table reaching past the array is not a
+    // shape this entry can serve, so it answers "nothing survived" without
+    // touching the pools.
+    const OUTCODE_SLOTS: usize = 19;
+    let indices_in_range = cell_verts
+        .iter()
+        .chain(tri_table.iter().flatten())
+        .all(|&idx| usize::try_from(idx).is_ok_and(|idx| idx < OUTCODE_SLOTS));
+    if !indices_in_range {
+        return 0;
+    }
+
     let mut emitted_any = false;
     // Lazily-allocated batch slot and its running span write cursor.
     let mut slot: *mut u8 = core::ptr::null_mut();
@@ -11975,7 +12014,7 @@ pub extern "fastcall" fn c_map_chunk__rasterize_chunk_triangles__6ad7e0(
             // Outcodes of the cell's 5 fan vertices, stored at their grid
             // offsets (the triangle table indexes the same offsets).
             let base_index = row * 17 + col;
-            let mut outcodes = [0_u32; 19];
+            let mut outcodes = [0_u32; OUTCODE_SLOTS];
             for &v in &cell_verts {
                 let vert_ptr = chunk.wrapping_offset(0x83c + (base_index + v) as isize * 0xc);
                 // SAFETY: vertex `v` of the cell at `chunk + 0x83c +
@@ -11983,16 +12022,23 @@ pub extern "fastcall" fn c_map_chunk__rasterize_chunk_triangles__6ad7e0(
                 // the chunk's position grid for the caller's cell rect (the
                 // original indexes identically).
                 let pos = &unsafe { vert_ptr.cast::<[f32; 3]>().read_unaligned() };
-                outcodes[v as usize] =
-                    crate::math::world::c_map_chunk__rasterize_chunk_triangles__6ad7e0(
-                        pos, bounds, eps,
-                    );
+                let code = crate::math::world::c_map_chunk__rasterize_chunk_triangles__6ad7e0(
+                    pos, bounds, eps,
+                );
+                // SAFETY: `v` is a `cell_verts` entry, checked below
+                // `OUTCODE_SLOTS` before the loops.
+                unsafe { *outcodes.get_unchecked_mut(v as usize) = code };
             }
 
             for tri in &tri_table {
-                if outcodes[tri[0] as usize] & outcodes[tri[1] as usize] & outcodes[tri[2] as usize]
-                    != 0
-                {
+                // SAFETY: every `tri_table` index was checked below
+                // `OUTCODE_SLOTS` before the loops.
+                let a = unsafe { *outcodes.get_unchecked(tri[0] as usize) };
+                // SAFETY: as above, the second index of the same triangle.
+                let b = unsafe { *outcodes.get_unchecked(tri[1] as usize) };
+                // SAFETY: as above, the third index of the same triangle.
+                let c = unsafe { *outcodes.get_unchecked(tri[2] as usize) };
+                if a & b & c != 0 {
                     continue;
                 }
 
@@ -21851,8 +21897,15 @@ impl GcParSink<'_> {
                 _ => {}
             }
             if self.local.len() > 1024 {
-                let surplus: Vec<usize> = self.local.drain(..512).collect();
-                self.shared.injector.lock().unwrap().extend(surplus);
+                // Straight into the injector: collecting first would allocate
+                // a 512-element block, copy into it and free it again per
+                // hand-off. The lock is held across the drain instead of only
+                // across the extend, which is the same elements moved once.
+                self.shared
+                    .injector
+                    .lock()
+                    .unwrap()
+                    .extend(self.local.drain(..512));
             }
         }
     }
@@ -24276,17 +24329,25 @@ fn pq_scan_emitter(
 /// of the pass, and calling the SAME kernel makes this prediction exact by
 /// construction (an independent emulation of the chain drifted by 1 ulp in
 /// the translation row and failed every snapshot validation).
-fn pq_walk_current_matrix(ctx: *const u8) -> Option<[f32; 16]> {
-    // SAFETY: the pass block pointer at ctx+0x40.
-    let base = unsafe { ctx.wrapping_add(0x40).cast::<*const u8>().read_unaligned() };
-    if base.is_null() {
-        return None;
-    }
+///
+/// `base` is the `*(ctx+0x40)` pass block, from [`pq_pass_block`].
+fn pq_walk_current_matrix(base: *const u8) -> [f32; 16] {
     // SAFETY: the 4x4 pass world matrix at base+0x9c.
     let m = unsafe { base.wrapping_add(0x9c).cast::<[f32; 16]>().read_unaligned() };
     // SAFETY: the billboard offset triple at base+0x10c.
     let bv = unsafe { base.wrapping_add(0x10c).cast::<[f32; 3]>().read_unaligned() };
-    Some(crate::math::particle::c_particle_emitter__draw_batch__70ca50(&m, &bv))
+    crate::math::particle::c_particle_emitter__draw_batch__70ca50(&m, &bv)
+}
+
+/// The pass block both matrix inputs hang off, `None` when it is null.
+///
+/// The `ctx+0x40` half of [`pq_walk_current_matrix`], split out so the
+/// publish gate can keep the null test at its head while the sixteen-float
+/// snapshot moves below the gate, where a gated pass never pays for it.
+fn pq_pass_block(ctx: *const u8) -> Option<*const u8> {
+    // SAFETY: the pass block pointer at ctx+0x40.
+    let base = unsafe { ctx.wrapping_add(0x40).cast::<*const u8>().read_unaligned() };
+    (!base.is_null()).then_some(base)
 }
 
 /// Publish gate: does this pass hold [`PQ_MIN_EMITTERS`] qualifying draws?
@@ -24694,10 +24755,13 @@ pub extern "thiscall" fn cm2_scene__draw_batch_pass_entry__70b360(
         original(ctx, pass_idx, batches, indices, count);
         return;
     }
-    // The publish gate, all game-thread and capture-free: the pass current
-    // matrix (a per-pass input the scan needs anyway), the copy-reservation
-    // bound, then the qualifying-emitter prefix walk.
-    let Some(cur) = pq_walk_current_matrix(ctx.cast::<u8>().cast_const()) else {
+    // The publish gate, all game-thread and capture-free: the pass block the
+    // current matrix hangs off, the copy-reservation bound, then the
+    // qualifying-emitter prefix walk. The matrix itself is a per-pass input
+    // only the published path uses, so it is built below the gate rather than
+    // above it; the reads it makes are the same bytes either way, since
+    // nothing between the two writes the pass block.
+    let Some(pass_block) = pq_pass_block(ctx.cast::<u8>().cast_const()) else {
         super::seam_probe::pq_pass_gated();
         original(ctx, pass_idx, batches, indices, count);
         return;
@@ -24707,6 +24771,7 @@ pub extern "thiscall" fn cm2_scene__draw_batch_pass_entry__70b360(
         original(ctx, pass_idx, batches, indices, count);
         return;
     }
+    let cur = pq_walk_current_matrix(pass_block);
     // One arm read for the whole pass: it gates the publish bracket here,
     // the scanner's scan bracket, the per-entry bracket the workers keep,
     // and the retire sums below.

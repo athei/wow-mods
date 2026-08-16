@@ -166,11 +166,20 @@ fn current(slot: &AtomicU64) -> f64 {
 
 /// The limiter, run at the tail of the presenting scene-end while in world.
 pub fn limit() {
+    // Both caps default off, so the uncapped client answers on two relaxed
+    // loads: the foreground query (a `user32` call plus the client's own
+    // window accessor) only decides which of the two non-zero intervals
+    // applies, and either selection would return here anyway.
+    let foreground_interval = TARGET_INTERVAL.load(Ordering::Relaxed);
+    let background_interval = BACKGROUND_INTERVAL.load(Ordering::Relaxed);
+    if foreground_interval == 0 && background_interval == 0 {
+        return;
+    }
     let in_foreground = game_in_foreground();
     let interval = if in_foreground {
-        TARGET_INTERVAL.load(Ordering::Relaxed)
+        foreground_interval
     } else {
-        BACKGROUND_INTERVAL.load(Ordering::Relaxed)
+        background_interval
     };
     if interval == 0 {
         return;
@@ -185,8 +194,16 @@ pub fn limit() {
     if sleep > timing.spin.cast_signed() && timing.delay_fn != 0 {
         sleep -= timing.spin.cast_signed();
         // Convert ticks to the kernel's 100 ns units, negative for relative.
-        let hundred_ns = -(sleep as i128 * 10_000_000 / i128::from(wow_shared::tsc::tsc_hz()));
-        let mut delay = i64::try_from(hundred_ns).unwrap_or(i64::MIN);
+        // Split into quotient and remainder rather than widening to 128 bits,
+        // which costs a software divide: truncating division splits exactly,
+        // `trunc(a*C/hz) == (a/hz)*C + trunc((a%hz)*C/hz)` for a, hz > 0, and
+        // `sleep` here is positive and never more than one frame interval
+        // (one second at the slowest cap the setter accepts), so `sleep/hz`
+        // is a handful of seconds' worth of 100 ns units and `sleep%hz` is
+        // below `hz`, so both products stay far inside `i64` at any real
+        // counter frequency.
+        let hz = wow_shared::tsc::tsc_hz().cast_signed();
+        let mut delay = -((sleep / hz) * 10_000_000 + (sleep % hz) * 10_000_000 / hz);
         let nt_delay: extern "stdcall" fn(u8, *mut i64) -> i32 =
             // SAFETY: the export's published signature (alertable flag and a
             // relative 100 ns interval).
