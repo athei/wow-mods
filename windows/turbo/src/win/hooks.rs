@@ -16515,6 +16515,13 @@ pub extern "thiscall" fn c_world__link_entity_to_tiles__6a8ca0(
     const ROW_TABLE: *const *mut u8 =
         (crate::win::EXPECTED_IMAGE_BASE + 0x89_6318) as *const *mut u8;
 
+    // The x loop's entire body is the y loop, so an inverted y range leaves the
+    // outer loop counting to no purpose: every store, alloc and splice sits in
+    // the y body, and `touched` is still 0. Bail before the nest instead.
+    if iy_lo > iy_hi {
+        return 0;
+    }
+
     let mut touched = 0u32;
     let mut ix = ix_lo;
     while ix <= ix_hi {
@@ -20927,11 +20934,13 @@ fn storm_filecache() -> &'static std::sync::Mutex<crate::storm::filecache::FileC
     CACHE.get_or_init(|| std::sync::Mutex::new(crate::storm::filecache::FileCache::new()))
 }
 
-/// Copy the NUL-terminated lookup name into `buf`.
+/// Copy the NUL-terminated lookup name into `buf`, folded as it lands.
 ///
-/// Byte-by-byte so no read ever passes the terminator. Returns the length, or
-/// `None` when no NUL appears within the cacheable maximum (such names are legal
-/// — just uncacheable, and the caller delegates).
+/// Byte-by-byte so no read ever passes the terminator, and each byte is
+/// normalized on the way in, so `buf` is the cache key's own name array and the
+/// bytes are never re-walked or copied out of a scratch buffer. Returns the
+/// length, or `None` when no NUL appears within the cacheable maximum (such
+/// names are legal — just uncacheable, and the caller delegates).
 fn read_lookup_name(
     filename: *const u8,
     buf: &mut [u8; crate::storm::filecache::NAME_CAP],
@@ -20949,7 +20958,7 @@ fn read_lookup_name(
         if len == crate::storm::filecache::NAME_CAP {
             return None;
         }
-        buf[len] = b;
+        buf[len] = crate::storm::filecache::normalize_byte(b);
         len += 1;
     }
 }
@@ -21260,14 +21269,12 @@ pub extern "fastcall" fn storm_archive__find_file_entry__6549a0(
     if filename.is_null() {
         return delegate();
     }
-    let mut name_buf = [0u8; crate::storm::filecache::NAME_CAP];
-    let Some(len) = read_lookup_name(filename, &mut name_buf) else {
+    let mut key = crate::storm::filecache::Key::EMPTY;
+    if !key.populate(archive, search_scope, |name| {
+        read_lookup_name(filename, name)
+    }) {
         return delegate();
-    };
-    let Some(key) = crate::storm::filecache::Key::new(archive, search_scope, &name_buf[..len])
-    else {
-        return delegate();
-    };
+    }
 
     #[cfg(wow_turbo_diff)]
     {
@@ -37285,10 +37292,26 @@ pub extern "cdecl" fn c_map__load_wdl__6944a0() {
                 );
                 let (grid_vals, min_h, max_h) =
                     crate::math::world::c_map__load_wdl_mare_to_grid__6944a0(&mare, max_seed);
-                // The 545-float height grid at +0x3c (crash-faithful when
-                // `base` is null — see the doc above).
-                for (i, v) in grid_vals.iter().enumerate() {
-                    store_f32(base + 0x3c + i * 4, *v);
+                // The 545-float height grid at +0x3c. The first element keeps
+                // its own store because that is the one that faults when `base`
+                // is null, at address 0x3c, where stock's `FST float [EDX]`
+                // faults (see the doc above). The other 544 fill +0x40..+0x8c0,
+                // are never reached on that path, and no other store in this
+                // family lands in that window, so they go out as one block.
+                store_f32(base + 0x3c, grid_vals[0]);
+                // SAFETY: `grid_vals` holds 545 f32, so element 1 exists and
+                // 544 more follow it.
+                let tail = unsafe { grid_vals.as_ptr().add(1) };
+                // SAFETY: 0x880 bytes from a live stack array into the tile's
+                // own grid window, which cannot overlap it; byte-typed, so it
+                // assumes no more alignment than the `write_unaligned` stores
+                // around it, and on the null-alloc path it is unreachable.
+                unsafe {
+                    core::ptr::copy_nonoverlapping(
+                        tail.cast::<u8>(),
+                        (base + 0x40) as *mut u8,
+                        0x880,
+                    );
                 }
                 let b = crate::math::world::c_map__load_wdl_tile_bounds__6944a0(
                     min_h, max_h, outer, inner, consts,
@@ -38846,6 +38869,15 @@ pub fn minimap__project_blip_delta__4eaa30(
     out
 }
 
+/// The world up axis, handed to the two hooks that take it by pointer.
+///
+/// A `static` and not a `const` because both consumers want an address: a
+/// `const` is re-materialized into a fresh stack triple at every call site
+/// (the stock `XORPS` + `MOVSD` + `MOV imm` build), whereas this one is a
+/// `.rodata` address the argument push can name directly. Both consumers read
+/// through the pointer and never write, so the read-only placement is sound.
+static UP_Z: [f32; 3] = [0.0, 0.0, 1.0];
+
 /// `CGObject_C__UpdateSelectionCircleTransform`.
 ///
 /// `__thiscall(ECX = this, float dt)`, RET 0x4, void. Per-frame
@@ -38945,7 +38977,6 @@ pub extern "thiscall" fn cg_object_c__update_selection_circle_transform__614cd0(
     let f90 = unsafe { p_f90.cast::<f32>().read_unaligned() };
     let s = crate::math::object::selection_circle_scale__614cd0(scale_base, f94, f90);
     let scale = [s, s, s];
-    let up = [0.0f32, 0.0, 1.0];
 
     // Facing angle via vtable slot `+0x44`: `__thiscall(this)` -> f32 in ST0,
     // NO stack args (the wave-3 brief's 3-arg reading was wrong — those
@@ -38977,7 +39008,7 @@ pub extern "thiscall" fn cg_object_c__update_selection_circle_transform__614cd0(
         model,
         pos,
         facing,
-        up.as_ptr(),
+        UP_Z.as_ptr(),
         scale.as_ptr(),
         anchor_arg,
     );
@@ -44478,12 +44509,11 @@ pub extern "thiscall" fn c_movement__step_ground_move__6367b0(
             } else if !(f64::from(lift) < space) {
                 lift = crate::math::collision::swept_sub_wrap__6367b0(space);
             }
-            let up = [0.0f32, 0.0, 1.0];
             let lift_in = lift;
             if collision_sweep_volume_against_world_planes__632ba0(
                 this,
                 CTX as *const u8,
-                up.as_ptr(),
+                UP_Z.as_ptr(),
                 lift_in,
                 &raw mut hit_idx,
                 recs,
@@ -44595,6 +44625,11 @@ pub extern "thiscall" fn c_movement__step_movement__634040(
     let (speed, dir_opt) =
         crate::math::collision::step_speed_and_dir__634040(delta, delta_ms, ms2s, eps, one);
     let dir = dir_opt.unwrap_or([0.0, 0.0, 0.0]);
+    // The pointer-taking arms both want the same 2D prefix, and it is invariant
+    // over the substeps: `StepFallVertical` (0x635b00) only `FMUL`s through the
+    // pointer at 0x635b41/0x635b49, and our ground move copies out of it, so one
+    // buffer live for the whole loop is what both arms read.
+    let dir_pair = [dir[0], dir[1]];
 
     let mut consumed: u32 = 0;
     loop {
@@ -44657,12 +44692,10 @@ pub extern "thiscall" fn c_movement__step_movement__634040(
         let ret = if plat_free || flags & 0x20_0800 != 0 {
             free_move(this, timestamp, fv, step_dist, dir[0], dir[1], dir[2])
         } else if flags & 0x2000 != 0 {
-            let pair = [dir[0], dir[1]];
-            fall_vert(this, timestamp, fv, step_dist, pair.as_ptr())
+            fall_vert(this, timestamp, fv, step_dist, dir_pair.as_ptr())
         } else {
             // StepGroundMove (0x6367b0) is our own hook — direct call.
-            let pair = [dir[0], dir[1]];
-            c_movement__step_ground_move__6367b0(this, timestamp, fv, step_dist, pair.as_ptr())
+            c_movement__step_ground_move__6367b0(this, timestamp, fv, step_dist, dir_pair.as_ptr())
         };
         consumed = consumed.wrapping_add(ret);
         // SAFETY: the state pair, re-read for the changed test.

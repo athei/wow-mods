@@ -38,11 +38,12 @@ const WAYS: usize = 2;
 
 /// A fully-normalized cache key.
 ///
-/// `new` is the only constructor: it applies the same character folding the
-/// stock hasher applies (ASCII uppercase, `/` → `\`), so two spellings stock
-/// treats as the same file share one entry. ASCII-only folding merges strictly
-/// fewer names than stock's CRT `toupper` (which may also fold high-half bytes)
-/// — a spelling pair we fail to merge costs one extra miss, never a wrong hit.
+/// [`Key::populate`] is the only way to fill one, and the name reaches it
+/// already folded by [`normalize_byte`] the way the stock hasher folds it
+/// (ASCII uppercase, `/` → `\`), so two spellings stock treats as the same file
+/// share one entry. ASCII-only folding merges strictly fewer names than stock's
+/// CRT `toupper` (which may also fold high-half bytes), and a spelling pair we
+/// fail to merge costs one extra miss, never a wrong hit.
 pub struct Key {
     hash: u32,
     archive: u32,
@@ -52,32 +53,55 @@ pub struct Key {
 }
 
 impl Key {
-    /// Build a key from the raw (unnormalized) name bytes.
+    /// An unpopulated key: the storage [`Key::populate`] fills in place.
     ///
-    /// Returns `None` when the name is longer than [`NAME_CAP`] — such lookups
-    /// are valid but uncacheable, and the caller falls through to stock.
-    #[must_use]
-    pub fn new(archive: u32, scope: u32, raw: &[u8]) -> Option<Self> {
-        if raw.len() > NAME_CAP {
-            return None;
+    /// The caller owns the storage because a `-> Option<Self>` constructor is
+    /// built in a temporary and then moved into the caller's slot, and that
+    /// move is a 0x90-byte copy the optimizer keeps. Owning it means the whole
+    /// key, name included, is written exactly once.
+    pub const EMPTY: Self = Self {
+        hash: 0,
+        archive: 0,
+        scope: 0,
+        len: 0,
+        name: [0u8; NAME_CAP],
+    };
+
+    /// Populate the key from a name written straight into its own buffer.
+    ///
+    /// `write_name` receives the name array and writes the already
+    /// [`normalize_byte`]d bytes into it, answering how many it wrote, so the
+    /// normalized name lands in its final slot with no scratch buffer between.
+    /// Answers `false` when `write_name` declines or the name is longer than
+    /// [`NAME_CAP`], leaving the key unpopulated — such lookups are valid but
+    /// uncacheable, and the caller falls through to stock instead of touching
+    /// the key again.
+    pub fn populate(
+        &mut self,
+        archive: u32,
+        scope: u32,
+        write_name: impl FnOnce(&mut [u8; NAME_CAP]) -> Option<usize>,
+    ) -> bool {
+        let Some(len) = write_name(&mut self.name) else {
+            return false;
+        };
+        if len > NAME_CAP {
+            return false;
         }
-        let mut name = [0u8; NAME_CAP];
-        for (dst, &src) in name.iter_mut().zip(raw.iter()) {
-            *dst = normalize_byte(src);
-        }
-        let mut hash = fnv1a(0x811c_9dc5, &name[..raw.len()]);
+        let Ok(len_u8) = u8::try_from(len) else {
+            return false;
+        };
+        self.archive = archive;
+        self.scope = scope;
+        self.len = len_u8;
+        let mut hash = fnv1a(0x811c_9dc5, &self.name[..len]);
         // Mix the archive handle and scope into the bucket selector: the chain
         // fan-out issues the same name against every sub-archive, and without
         // this those queries would pile into one 2-way bucket and thrash.
         hash = fnv1a(hash, &archive.to_le_bytes());
         hash = fnv1a(hash, &scope.to_le_bytes());
-        Some(Self {
-            hash: hash ^ (hash >> 16),
-            archive,
-            scope,
-            len: u8::try_from(raw.len()).ok()?,
-            name,
-        })
+        self.hash = hash ^ (hash >> 16);
+        true
     }
 
     fn matches(&self, e: &Entry) -> bool {
@@ -91,9 +115,11 @@ impl Key {
 
 /// ASCII uppercase + path-separator folding.
 ///
-/// The normalization stock applies per character before hashing.
+/// The normalization stock applies per character before hashing. Public because
+/// the adapter folds each byte as its NUL scan copies it into the key's own
+/// buffer, which is what keeps the name from being walked a second time.
 #[inline]
-const fn normalize_byte(b: u8) -> u8 {
+pub const fn normalize_byte(b: u8) -> u8 {
     if b == b'/' {
         b'\\'
     } else {
@@ -321,6 +347,24 @@ impl Default for FileCache {
 mod tests_filecache {
     use super::*;
 
+    /// Build a key from a plain byte slice, the way the adapter's NUL scan does.
+    ///
+    /// The adapter folds each byte as it copies it out of the client's string;
+    /// a test starts from a slice, so it does the same fold over the slice.
+    fn key_of(archive: u32, scope: u32, raw: &[u8]) -> Option<Key> {
+        let mut key = Key::EMPTY;
+        key.populate(archive, scope, |name| {
+            if raw.len() > NAME_CAP {
+                return None;
+            }
+            for (dst, &src) in name.iter_mut().zip(raw.iter()) {
+                *dst = normalize_byte(src);
+            }
+            Some(raw.len())
+        })
+        .then_some(key)
+    }
+
     const POS: Hit = Hit {
         negative: false,
         found: 0x00d4_0000,
@@ -338,12 +382,12 @@ mod tests_filecache {
 
     #[test]
     fn normalization_folds_case_and_slashes() {
-        let a = Key::new(0, 1, b"Interface/GlueXML\\gLuEsTrInGs.lua").unwrap();
-        let b = Key::new(0, 1, b"INTERFACE\\GLUEXML\\GLUESTRINGS.LUA").unwrap();
+        let a = key_of(0, 1, b"Interface/GlueXML\\gLuEsTrInGs.lua").unwrap();
+        let b = key_of(0, 1, b"INTERFACE\\GLUEXML\\GLUESTRINGS.LUA").unwrap();
         assert_eq!(a.hash, b.hash);
         assert_eq!(a.name[..a.len as usize], b.name[..b.len as usize]);
         // High-half bytes are left alone (identity — never merged).
-        let c = Key::new(0, 1, &[0xe9, b'a']).unwrap();
+        let c = key_of(0, 1, &[0xe9, b'a']).unwrap();
         assert_eq!(c.name[0], 0xe9);
         assert_eq!(c.name[1], b'A');
     }
@@ -352,9 +396,9 @@ mod tests_filecache {
     fn key_dimensions_are_distinct() {
         let mut cache = FileCache::new();
         let name = b"DBFilesClient\\Spell.dbc";
-        let scoped = Key::new(0x1234, 0, name).unwrap();
-        let other_archive = Key::new(0x5678, 0, name).unwrap();
-        let other_scope = Key::new(0x1234, 1, name).unwrap();
+        let scoped = key_of(0x1234, 0, name).unwrap();
+        let other_archive = key_of(0x5678, 0, name).unwrap();
+        let other_scope = key_of(0x1234, 1, name).unwrap();
         cache.insert(&scoped, POS);
         assert_eq!(cache.probe(&scoped), Some(POS));
         assert_eq!(cache.probe(&other_archive), None);
@@ -364,7 +408,7 @@ mod tests_filecache {
     #[test]
     fn negative_roundtrip() {
         let mut cache = FileCache::new();
-        let key = Key::new(0, 0, b"World\\NoSuchFile.blp").unwrap();
+        let key = key_of(0, 0, b"World\\NoSuchFile.blp").unwrap();
         assert_eq!(cache.probe(&key), None);
         cache.insert(&key, NEG);
         assert_eq!(cache.probe(&key), Some(NEG));
@@ -373,7 +417,7 @@ mod tests_filecache {
     #[test]
     fn same_key_overwrites_in_place() {
         let mut cache = FileCache::new();
-        let key = Key::new(0x10, 0, b"a").unwrap();
+        let key = key_of(0x10, 0, b"a").unwrap();
         cache.insert(&key, POS);
         let newer = Hit {
             block_index: 9,
@@ -423,7 +467,7 @@ mod tests_filecache {
     #[test]
     fn alternating_shapes_accumulate_instead_of_evicting() {
         let mut cache = FileCache::new();
-        let key = Key::new(0, 0, b"World\\Shared.blp").unwrap();
+        let key = key_of(0, 0, b"World\\Shared.blp").unwrap();
         let open_path = KNOWN_FOUND | KNOWN_BLOCK;
         let exists_path = KNOWN_FOUND_IN;
 
@@ -485,8 +529,8 @@ mod tests_filecache {
     #[test]
     fn clear_drops_every_record() {
         let mut cache = FileCache::new();
-        let positive = Key::new(0, 0, b"World\\Real.blp").unwrap();
-        let negative = Key::new(0, 0, b"World\\NoSuchFile.blp").unwrap();
+        let positive = key_of(0, 0, b"World\\Real.blp").unwrap();
+        let negative = key_of(0, 0, b"World\\NoSuchFile.blp").unwrap();
         cache.insert(&positive, POS);
         cache.insert(&negative, NEG);
 
@@ -501,8 +545,8 @@ mod tests_filecache {
 
     #[test]
     fn long_names_are_uncacheable() {
-        assert!(Key::new(0, 0, &[b'x'; NAME_CAP]).is_some());
-        assert!(Key::new(0, 0, &[b'x'; NAME_CAP + 1]).is_none());
+        assert!(key_of(0, 0, &[b'x'; NAME_CAP]).is_some());
+        assert!(key_of(0, 0, &[b'x'; NAME_CAP + 1]).is_none());
     }
 
     /// Three same-bucket keys through a 2-way bucket.
@@ -512,11 +556,11 @@ mod tests_filecache {
     #[test]
     fn two_way_eviction_prefers_recently_used() {
         let mut cache = FileCache::new();
-        let base = Key::new(0, 0, b"collide").unwrap();
+        let base = key_of(0, 0, b"collide").unwrap();
         let target = FileCache::bucket_index(&base);
         // Brute-force two more archives whose keys land in the same bucket.
         let mut colliders = (1u32..).filter_map(|a| {
-            let k = Key::new(a, 0, b"collide").unwrap();
+            let k = key_of(a, 0, b"collide").unwrap();
             (FileCache::bucket_index(&k) == target).then_some(k)
         });
         let second = colliders.next().unwrap();
