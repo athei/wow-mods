@@ -9037,6 +9037,11 @@ pub extern "fastcall" fn c_world_view__compare_draw_list_opaque__70ae10(
 }
 
 /// Reads the sort-key fields of one 0x40-byte opaque draw element.
+///
+/// Eager on purpose. The comparator can decide on the `+0x14` pair alone and
+/// leave the other eleven values unread, but the key builder that carries the
+/// sort weight needs every one of them for every element, and splitting the
+/// read to suit the comparator would charge that builder a call per field.
 fn read_draw_elem(e: *const u8) -> crate::math::world::DrawElem {
     // `e` is a live, in-bounds 0x40-byte draw element; every offset below lands
     // inside it (the 0x2c sub-pointer is dereferenced only when used).
@@ -41058,10 +41063,11 @@ pub extern "thiscall" fn minimap__unit_blip_enum_callback__4eaa90(
 /// (`cur = this[2]`; payload at `cur+4`; the next handle is read from
 /// `base + cur + 4`; odd/null handle = end). Per flagged object: frame-stamp
 /// refresh, plane-depth sort key into `+0x78`, frustum sphere cull (stock's
-/// 0x682ef0 wrapper INLINED — active-frustum select plus our native
-/// `CWorldFrustum__TestSphere`), height-bucket test (our hook, direct), then
-/// either the visible-list head splice or the culled/near notification. The
-/// list surgery mirrors stock statement for statement; do not restructure it.
+/// 0x682ef0 wrapper INLINED, its active-frustum select hoisted above the walk,
+/// then our native `CWorldFrustum__TestSphere` over the object's own `+0x5c`
+/// sphere), height-bucket test (our hook, direct), then either the visible-list
+/// head splice or the culled/near notification. The list surgery mirrors stock
+/// statement for statement; do not restructure it.
 pub extern "thiscall" fn c_world_obj_list__update_visibility__6838f0(this: *mut core::ffi::c_void) {
     const B: usize = crate::win::EXPECTED_IMAGE_BASE;
     /// Camera depth plane `[nx,ny,nz,d]` (`0xc7bcb0..bc`).
@@ -41112,6 +41118,16 @@ pub extern "thiscall" fn c_world_obj_list__update_visibility__6838f0(this: *mut 
     let stamp = unsafe { FRAME_STAMP.read_unaligned() };
     // SAFETY: fixed node-offset global.
     let node_off = unsafe { NODE_OFFSET.read_unaligned() };
+
+    // The active-frustum select is hoisted out of the walk, which stock does
+    // per object inside its 0x682ef0 wrapper. Nothing the walk reaches can
+    // move the selection: both sphere tests are ours and only read host
+    // globals, and the two stock delegates are leaves that never touch
+    // `0xc7cfe0`: 0x6876b0 writes nothing at all, and 0x710b90 writes only
+    // through the list fields at its own receiver's `+0x2c`/`+0x44`/`+0x48`.
+    // SAFETY: fixed live active-frustum index.
+    let idx = unsafe { FRUSTUM_INDEX.read_unaligned() };
+    let frustum = (FRUSTUM_BASE + idx as usize * 0xfc) as *const core::ffi::c_void;
 
     // SAFETY: `this+8` is the list-head handle.
     let p2_cur = unsafe { list.add(8) };
@@ -41180,13 +41196,13 @@ pub extern "thiscall" fn c_world_obj_list__update_visibility__6838f0(this: *mut 
             // SAFETY: writable f32 of the live object.
             unsafe { p_key.cast::<f32>().write_unaligned(key) };
 
-            // Frustum sphere cull — stock's IsSphereCulled 0x682ef0 is a
-            // copy + active-frustum select around our native TestSphere.
-            let sphere = [center[0], center[1], center[2], radius];
-            // SAFETY: fixed live active-frustum index.
-            let idx = unsafe { FRUSTUM_INDEX.read_unaligned() };
-            let frustum = (FRUSTUM_BASE + idx as usize * 0xfc) as *const core::ffi::c_void;
-            let culled = c_world_frustum__test_sphere__686b80(frustum, sphere.as_ptr()) == 0;
+            // Frustum sphere cull. Stock's IsSphereCulled 0x682ef0 is a copy
+            // plus an active-frustum select around our native TestSphere, and
+            // neither is repeated here: `[center, radius]` is already four
+            // contiguous f32 at `obj+0x5c`, and TestSphere only reads its four
+            // operands, so the object's own bytes go over unchanged, the way
+            // the height-bucket test below already passes them.
+            let culled = c_world_frustum__test_sphere__686b80(frustum, p_center.cast::<f32>()) == 0;
 
             let treat_culled = if culled {
                 true

@@ -11,7 +11,7 @@
 //! structures, and only the raw array is indexed by the field numbers the
 //! write entry receives.
 
-use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{LazyLock, Mutex};
 
 use super::tally::SharedCounter;
@@ -75,6 +75,12 @@ static STATE: LazyLock<Mutex<Coalescer>> = LazyLock::new(|| Mutex::new(Coalescer
 
 /// The player object the mirrors were bound against, zero when unbound.
 static BOUND_PLAYER: AtomicUsize = AtomicUsize::new(0);
+
+/// The GUID that object carried when it was bound, zero when unbound.
+///
+/// Held beside [`BOUND_PLAYER`] so the two together identify the object, not
+/// just the address it happened to occupy.
+static BOUND_GUID: AtomicU64 = AtomicU64::new(0);
 
 /// Whether the coalescer may hold a pending entry, shadowing `idle()`.
 ///
@@ -174,38 +180,60 @@ fn write_field(this: usize, index: u32, value: u32) {
 /// reusable while that object is still the active player.
 fn rebind(player_guid: u64) {
     let Some(player) = super::objmgr::object_by_guid(player_guid) else {
-        BOUND_PLAYER.store(0, Ordering::Relaxed);
-        if let Ok(mut state) = STATE.lock() {
-            state.unbind();
-        }
+        unbind();
         return;
     };
     let Some(fields) = descriptor(player.raw() as *mut u8) else {
-        BOUND_PLAYER.store(0, Ordering::Relaxed);
-        if let Ok(mut state) = STATE.lock() {
-            state.unbind();
-        }
+        unbind();
         return;
     };
     let equip = equip_snapshot(fields);
     let values = core::array::from_fn(|slot| visible_field(fields, slot));
+    BOUND_GUID.store(player_guid, Ordering::Relaxed);
     BOUND_PLAYER.store(player.raw(), Ordering::Relaxed);
     if let Ok(mut state) = STATE.lock() {
         state.bind(equip, values);
     }
 }
 
+/// Drop the binding, so the next call resolves the token again.
+fn unbind() {
+    BOUND_PLAYER.store(0, Ordering::Relaxed);
+    BOUND_GUID.store(0, Ordering::Relaxed);
+    if let Ok(mut state) = STATE.lock() {
+        state.unbind();
+    }
+}
+
 /// Bind the mirrors to `this` when it is the active player, if not already.
 ///
-/// Returns whether `this` is the local player.
+/// Returns whether `this` is the local player. The token resolution is the
+/// expensive part (a name cascade through the client's own object manager),
+/// and it is skipped twice over: a receiver with no live descriptor cannot be
+/// any object, and a receiver that is still the bound one needs no answer.
+/// The already-bound test takes address and GUID together because an address
+/// alone is reusable once the object behind it is freed; together they are an
+/// identity, since GUIDs are unique and the client only replaces the player
+/// object by destroying it.
 fn ensure_bound(this: *mut u8) -> bool {
-    let player_guid = super::objmgr::guid_of_token(c"player");
-    if player_guid == 0 || guid_of(this) != player_guid {
+    let guid = guid_of(this);
+    if guid == 0 {
         return false;
     }
-    if BOUND_PLAYER.load(Ordering::Relaxed) != this.addr() {
-        rebind(player_guid);
+    if BOUND_PLAYER.load(Ordering::Relaxed) == this.addr()
+        && BOUND_GUID.load(Ordering::Relaxed) == guid
+    {
+        return true;
     }
+    let player_guid = super::objmgr::guid_of_token(c"player");
+    if player_guid == 0 || guid != player_guid {
+        return false;
+    }
+    // Reaching here means the binding does not already name this object, so
+    // it is rebuilt: either nothing was bound, or what was bound sat at a
+    // different address, or the address came back holding a different player,
+    // whose mirrors would otherwise still describe the previous one.
+    rebind(player_guid);
     true
 }
 

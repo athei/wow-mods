@@ -379,8 +379,11 @@ fn timer_command(lua: &super::lua::LuaState) -> i32 {
                 return 1;
             };
             // the command truncates its millisecond doubles to integers, as
-            // the reference does
-            let id = timer::arm(delay as u64, period as u64, &script);
+            // the reference does, and takes them 32 bits wide: the ceiling
+            // that puts on a delay is 49 days, past anything a session can
+            // reach, and it keeps the schedule's `now + delay` clear of the
+            // wrap a near-2^64 delay would otherwise fire immediately on
+            let id = timer::arm(u64::from(delay as u32), u64::from(period as u32), &script);
             lua.push_number(f64::from(id));
             1
         }

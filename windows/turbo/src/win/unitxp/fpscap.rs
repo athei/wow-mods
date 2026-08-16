@@ -143,10 +143,14 @@ fn set_interval(slot: &AtomicU64, fps: f64) -> f64 {
         hz / 500
     } else {
         // the command truncates its bounded positive double to an integer
-        // divisor, as the reference does
+        // divisor, as the reference does; the guards above leave 1.0..=500.0
+        // or a NaN, and both widths truncate that range identically and
+        // answer a NaN with zero, so taking the divisor 32 bits wide keeps
+        // the conversion a single register convert rather than a round trip
+        // through memory
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let divisor = fps as u64;
-        hz / divisor
+        let divisor = fps as u32;
+        hz / u64::from(divisor)
     };
     slot.store(interval, Ordering::Relaxed);
     current(slot)
