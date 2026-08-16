@@ -24240,14 +24240,21 @@ fn pq_capture(this: *const u8, parent_matrix: *const f32, cur: &[f32; 16]) -> Op
 /// family drifted (a [`super::seam_probe::pq_miss_validate`] index) so the
 /// seam line can name the failing prediction.
 fn pq_validate(snap: &PqSnapshot, this: *const u8) -> Result<(), u32> {
-    // SAFETY: the composed-matrix global, just written by Render.
-    let composed = unsafe { PQ_VIEW.cast::<[u32; 16]>().read_unaligned() };
-    if composed != snap.composed.map(f32::to_bits) {
+    // Each block folds `a ^ b` across its lanes and tests the accumulator once.
+    // An array `==` reaches `bcmp`, which wants an address per side, so the
+    // global was being copied onto the stack purely to have one; the fold reads
+    // the same bit patterns from the addresses both sides already have. The
+    // block order is the `Err` code order, which is what the seam-probe miss
+    // index names.
+    let snap_composed: *const u32 = snap.composed.as_ptr().cast();
+    // SAFETY: sixteen floats live at the composed-matrix global Render just
+    // wrote, and sixteen more in the snapshot; neither run is asserted aligned.
+    if !unsafe { wow_shared::blit::u32_lanes_eq::<16>(PQ_VIEW.cast(), snap_composed) } {
         return Err(0);
     }
-    // SAFETY: the vertex-normal global triple, just written by Render.
-    let normal = unsafe { PQ_NORMAL.cast::<[u32; 3]>().read_unaligned() };
-    if normal != snap.normal {
+    // SAFETY: three lanes live at the vertex-normal global Render just wrote,
+    // and three in the snapshot; neither run is asserted aligned.
+    if !unsafe { wow_shared::blit::u32_lanes_eq::<3>(PQ_NORMAL, snap.normal.as_ptr()) } {
         return Err(1);
     }
     // SAFETY: the emitter flag dword at +0x1ac.
@@ -24267,14 +24274,18 @@ fn pq_validate(snap: &PqSnapshot, this: *const u8) -> Result<(), u32> {
         return Err(3);
     }
     if flags & 0x2000 != 0 {
-        // SAFETY: the fixup-output block, just written by Render.
-        let fixup = unsafe { PQ_FIXUP_BLOCK.cast::<[u32; 12]>().read_unaligned() };
-        if fixup != snap.fixup_out.map(f32::to_bits) {
+        let snap_fixup: *const u32 = snap.fixup_out.as_ptr().cast();
+        // SAFETY: twelve floats live at the fixup-output block Render just
+        // wrote, and twelve more in the snapshot; neither run is asserted
+        // aligned.
+        if !unsafe { wow_shared::blit::u32_lanes_eq::<12>(PQ_FIXUP_BLOCK.cast(), snap_fixup) } {
             return Err(4);
         }
-        // SAFETY: the facing-axis triple at +0x284, just written by Render.
-        let axis = unsafe { this.wrapping_add(0x284).cast::<[u32; 3]>().read_unaligned() };
-        if axis != snap.axis {
+        let axis_slot = this.wrapping_add(0x284);
+        // SAFETY: the facing-axis triple Render just wrote sits at +0x284 of a
+        // live emitter, and three lanes in the snapshot answer it; neither run
+        // is asserted aligned.
+        if !unsafe { wow_shared::blit::u32_lanes_eq::<3>(axis_slot.cast(), snap.axis.as_ptr()) } {
             return Err(5);
         }
     }
@@ -26538,33 +26549,53 @@ pub extern "thiscall" fn c_particle_emitter__render__7b3d20(
     // SAFETY: as above.
     let atexit: extern "C" fn(usize) = unsafe { core::mem::transmute(ATEXIT_VA) };
 
+    /// A sixteen-float matrix slot raised to sixteen-byte alignment.
+    ///
+    /// The four matrix locals below are handed to `GetCurrentMatrix` (0x58b0b0)
+    /// and `C44Matrix::Multiply` (0x7bc6a0) as raw pointers and are copied whole
+    /// sixteen bytes at a time. At the natural `align(4)` they land at 12 mod 16
+    /// in this frame, so every one of those moves is unaligned and one in four
+    /// straddles a 64-byte line. The attribute raises the slot's start address
+    /// and nothing else: the sixteen floats keep their order and their bits,
+    /// and neither delegate's contract mentions the alignment of what it is
+    /// handed.
+    #[repr(align(16))]
+    struct Mat4([f32; 16]);
+
     // Current-matrix fetch (identity-seeded out) and the identity world push.
-    let mut cur = IDENT;
-    get_matrix(cur.as_mut_ptr());
+    let mut cur = Mat4(IDENT);
+    get_matrix(cur.0.as_mut_ptr());
     set_world(IDENT.as_ptr());
 
     // Local matrix: identity with the negated pivot as its translation row.
     // SAFETY: the emitter pivot triple at +0x23c.
     let pos = unsafe { this.wrapping_add(0x23c).cast::<[f32; 3]>().read_unaligned() };
     let neg = crate::math::particle::render_neg_translation__7b3d20(&pos);
-    let mut m_neg = IDENT;
-    m_neg[12] = neg[0];
-    m_neg[13] = neg[1];
-    m_neg[14] = neg[2];
+    let mut m_neg = Mat4(IDENT);
+    m_neg.0[12] = neg[0];
+    m_neg.0[13] = neg[1];
+    m_neg.0[14] = neg[2];
 
     // SAFETY: the emitter flag dword at +0x1ac.
     let flags = unsafe { this.wrapping_add(0x1ac).cast::<u32>().read_unaligned() };
     let emitter_mtx = this.wrapping_add(0x1fc).cast::<f32>().cast_const();
-    let mut tmp_a = [0f32; 16];
-    let mut tmp_b = [0f32; 16];
+    // Product scratch, left uninitialized on purpose: every path writes the slot
+    // it then reads, and it reads it through the pointer `Multiply` hands back,
+    // so no read is reached without all sixteen lanes stored first. 0x7bc6a0
+    // declines only on a null `out`, `a` or `b`, and no call site below can pass
+    // one: `this` is checked non-null at entry, and the rest are these locals, a
+    // previous product or the composed global. An early-out added to that
+    // delegate would break the guarantee and these two would need seeding again.
+    let mut tmp_a = core::mem::MaybeUninit::<Mat4>::uninit();
+    let mut tmp_b = core::mem::MaybeUninit::<Mat4>::uninit();
     let composed_src = if flags & 0x100 != 0 {
-        let t = multiply(tmp_a.as_mut_ptr(), emitter_mtx, m_neg.as_ptr());
-        multiply(tmp_b.as_mut_ptr(), t.cast_const(), cur.as_ptr())
+        let t = multiply(tmp_a.as_mut_ptr().cast(), emitter_mtx, m_neg.0.as_ptr());
+        multiply(tmp_b.as_mut_ptr().cast(), t.cast_const(), cur.0.as_ptr())
     } else if parent_matrix.is_null() {
-        multiply(tmp_b.as_mut_ptr(), m_neg.as_ptr(), cur.as_ptr())
+        multiply(tmp_b.as_mut_ptr().cast(), m_neg.0.as_ptr(), cur.0.as_ptr())
     } else {
-        let t = multiply(tmp_b.as_mut_ptr(), parent_matrix, m_neg.as_ptr());
-        multiply(tmp_a.as_mut_ptr(), t.cast_const(), cur.as_ptr())
+        let t = multiply(tmp_b.as_mut_ptr().cast(), parent_matrix, m_neg.0.as_ptr());
+        multiply(tmp_a.as_mut_ptr().cast(), t.cast_const(), cur.0.as_ptr())
     };
     // SAFETY: `composed_src` addresses the multiply result (our local).
     let composed = unsafe {
@@ -26579,7 +26610,7 @@ pub extern "thiscall" fn c_particle_emitter__render__7b3d20(
     unsafe {
         VIEW_ROW2
             .cast::<[f32; 3]>()
-            .write_unaligned([cur[8], cur[9], cur[10]])
+            .write_unaligned([cur.0[8], cur.0[9], cur.0[10]])
     };
 
     if flags & 0x2000 != 0 {
@@ -26612,7 +26643,11 @@ pub extern "thiscall" fn c_particle_emitter__render__7b3d20(
             // SAFETY: as above.
             unsafe { BILLBOARD.cast::<[f32; 16]>().write_unaligned(m) };
         } else {
-            let t = multiply(tmp_a.as_mut_ptr(), emitter_mtx, COMPOSED.cast_const());
+            let t = multiply(
+                tmp_a.as_mut_ptr().cast(),
+                emitter_mtx,
+                COMPOSED.cast_const(),
+            );
             // SAFETY: `t` addresses the multiply result (our local).
             let m = unsafe { t.cast_const().cast::<[f32; 16]>().read_unaligned() };
             // SAFETY: the fixed billboard-matrix global block.
@@ -26772,7 +26807,7 @@ pub extern "thiscall" fn c_particle_emitter__render__7b3d20(
         draw(block.as_ptr(), 1);
     }
     end();
-    set_world(cur.as_ptr());
+    set_world(cur.0.as_ptr());
 }
 
 /// `Node::DistributeScaledBudget` — `__fastcall(ecx = node)`, plain `RET`, void.
@@ -33423,7 +33458,7 @@ fn bdl_sort_by_tex_keyed(slice: &mut [u32], base: *mut u8) -> bool {
     if elem_base.is_null() {
         return false;
     }
-    let Some(&max_index) = slice.iter().max() else {
+    let Some(max_index) = slice.iter().copied().max() else {
         return false;
     };
     if max_index >= BDL_KEY_INDEX_CAP {
@@ -33432,15 +33467,19 @@ fn bdl_sort_by_tex_keyed(slice: &mut [u32], base: *mut u8) -> bool {
     BDL_TEX_KEYS.with(|cell| {
         let mut keys = cell.borrow_mut();
         keys.clear();
-        keys.reserve(slice.len());
-        for &index in slice.iter() {
+        // `slice::Iter` is `TrustedLen`, so `extend` reserves once and stores
+        // through a raw cursor, publishing the length at the end. The
+        // reserve-then-push loop it replaces re-tested the capacity and wrote
+        // the header's length back on every element, neither of which a run
+        // whose length is known up front can need.
+        keys.extend(slice.iter().map(|&index| {
             let offset = (index as usize).wrapping_mul(0x40).wrapping_add(0x24);
             let slot = elem_base.wrapping_add(offset);
             // SAFETY: `slot` addresses the element's texture-key dword, exactly
             // the dword the comparator loads with `MOV EAX,[ECX + 0x24]`.
             let key = unsafe { slot.cast::<u32>().read_unaligned() };
-            keys.push(u64::from(key) << 32 | u64::from(index));
-        }
+            u64::from(key) << 32 | u64::from(index)
+        }));
         crate::math::misc::intro_sort_by(&mut keys, |a, b| match a.cmp(b) {
             core::cmp::Ordering::Less => -1,
             core::cmp::Ordering::Greater => 1,
