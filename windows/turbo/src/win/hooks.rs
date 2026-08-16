@@ -8763,6 +8763,12 @@ fn texture_ptr_quarter_diff__41af70(a: u32, b: u32) -> i32 {
 /// the tag and `elem+0x34` compares are SIGNED (`JGE`/`JG`); every other key
 /// is UNSIGNED (`JC`/`JNC`/`JA` on dwords, words, and raw pointer bits), and
 /// the texture walks take the sign of the `(a-b)>>2` helper (0x41af70).
+///
+/// The body is monomorphized on the identity bit `*(worldView+0x148) & 1`,
+/// which is a constant for a whole sort. This entry reads it and dispatches, so
+/// every caller reached by name or through the patched prologue keeps the stock
+/// signature; `bdl_sort_transparent` reads it once per sort instead and calls
+/// the matching instance directly.
 pub extern "fastcall" fn c_world_view__compare_draw_list_extended__70aa30(
     index_a: u32,
     index_b: u32,
@@ -8772,7 +8778,27 @@ pub extern "fastcall" fn c_world_view__compare_draw_list_extended__70aa30(
         return 0;
     }
     let wv = world_view as u32;
+    // One dword read earlier than the stock body takes it (stock reads it in
+    // the tag-0 run), on the same live view whose `+0x34` the body reads next.
+    // SAFETY: `worldView+0x148` is the in-bounds sort-flags dword of the live,
+    // non-null view, the same dword the tag-0 identity run tests.
+    let flags = unsafe { (wv.wrapping_add(0x148) as usize as *const u32).read_unaligned() };
+    if flags & 1 == 0 {
+        cmp_draw_list_extended_body::<false>(index_a, index_b, wv)
+    } else {
+        cmp_draw_list_extended_body::<true>(index_a, index_b, wv)
+    }
+}
 
+/// The extended comparator's body, with the view's identity bit as a constant.
+///
+/// `IDENT` is `*(worldView+0x148) & 1`. It cannot change under a sort (the
+/// comparator writes nothing and calls nothing that does), so lifting it out of
+/// the callee removes a load and a branch from every comparison, and takes the
+/// second `elem+0x38` key with it in the `IDENT = true` instance: control only
+/// reaches that key with the two dwords already established equal by the run's
+/// leading test, and nothing between them writes memory.
+fn cmp_draw_list_extended_body<const IDENT: bool>(index_a: u32, index_b: u32, wv: u32) -> i32 {
     // All address math below is 32-bit and wraps exactly as the stock body's
     // (`SHL reg,6` / `IMUL reg,reg,0xdc` / scaled `LEA`); every load lands on
     // the same guest address the stock body computes.
@@ -8821,22 +8847,19 @@ pub extern "fastcall" fn c_world_view__compare_draw_list_extended__70aa30(
     }
 
     // Loaded unconditionally once the tags are equal, exactly as stock does
-    // (even for tag values that fall out to the unordered verdict below).
+    // (even for tag values that fall out to the unordered verdict below). The
+    // models the two blocks point at are not: see the `blk+0x130` chases below.
     let obj_a = rd32(ea, 0x4);
     let obj_b = rd32(eb, 0x4);
     let blk_a = rd32(obj_a, 0x30);
     let blk_b = rd32(obj_b, 0x30);
-    let mdl_a = rd32(blk_a, 0x130);
-    let mdl_b = rd32(blk_b, 0x130);
 
     if tag < 2 {
         let sub_a = rd32(ea, 0x2c);
         let sub_b = rd32(eb, 0x2c);
         if tag == 0 {
             // Leading identity-key run, tag 0 only.
-            if rd32(wv, 0x148) & 1 != 0
-                && let Some(o) = step_u(rd32(ea, 0x38), rd32(eb, 0x38))
-            {
+            if IDENT && let Some(o) = step_u(rd32(ea, 0x38), rd32(eb, 0x38)) {
                 return o;
             }
             if let Some(o) = step_u(blk_a, blk_b) {
@@ -8860,13 +8883,28 @@ pub extern "fastcall" fn c_world_view__compare_draw_list_extended__70aa30(
             ) {
                 return o;
             }
-            if let Some(o) = step_u(rd32(ea, 0x38), rd32(eb, 0x38)) {
+            // The run's second `elem+0x38` key, and the reason it is guarded:
+            // with the bit set the leading test above already established the
+            // two dwords are equal, and every tier between the two writes
+            // nothing and calls nothing, so this step could only fall through.
+            if !IDENT && let Some(o) = step_u(rd32(ea, 0x38), rd32(eb, 0x38)) {
                 return o;
             }
             if let Some(o) = step_u(rd32(ea, 0x3c), rd32(eb, 0x3c)) {
                 return o;
             }
         }
+
+        // The models. Stock chases `blk+0x130` for both sides above the tag
+        // dispatch; this reads them at their first use instead, since the
+        // identity run above and the tag-4/unordered arms below never consult a
+        // model. One behavioural difference follows, and it is the reason the
+        // eager form was transcribed in the first place: a call that returns
+        // inside the identity run no longer dereferences `blk+0x130`, so a
+        // block pointer that cannot be dereferenced yields a verdict here where
+        // stock faults.
+        let mdl_a = rd32(blk_a, 0x130);
+        let mdl_b = rd32(blk_b, 0x130);
 
         // Batch-key u16 pair from the models' `+0x88` tables, indexed by the
         // sub-records' `+0xa` slot.
@@ -8888,21 +8926,26 @@ pub extern "fastcall" fn c_world_view__compare_draw_list_extended__70aa30(
         let common = u32::from(len_a.min(len_b));
         let stream_a = rd32(mdl_a, 0x98).wrapping_add(u32::from(rd16(sub_a, 0x10)) * 2);
         let stream_b = rd32(mdl_b, 0x98).wrapping_add(u32::from(rd16(sub_b, 0x10)) * 2);
-        for i in 0..common {
-            let ia = u32::from(rd16(stream_a, i * 2));
-            let ib = u32::from(rd16(stream_b, i * 2));
-            let ta = if ia < rd32(mdl_a, 0x5c) {
-                rd32(rd32(obj_a, 0xa4), ia * 4)
-            } else {
-                0
-            };
-            let tb = if ib < rd32(mdl_b, 0x5c) {
-                rd32(rd32(obj_b, 0xa4), ib * 4)
-            } else {
-                0
-            };
-            if let Some(o) = tex_step(ta, tb) {
-                return o;
+        // The two bounds and the two table bases are loop-invariant: the body
+        // stores nothing and the comparator calls nothing. What keeps them
+        // being reloaded is the transcribed bound test, which leaves the table
+        // reads conditional. The guard is what keeps a call that walks nothing
+        // from reading any of the four; inside a walk the table bases are read
+        // even on an iteration whose index fails its bound, off objects this
+        // call has already chased `+0x30` through.
+        if common != 0 {
+            let bound_a = rd32(mdl_a, 0x5c);
+            let bound_b = rd32(mdl_b, 0x5c);
+            let tbl_a = rd32(obj_a, 0xa4);
+            let tbl_b = rd32(obj_b, 0xa4);
+            for i in 0..common {
+                let ia = u32::from(rd16(stream_a, i * 2));
+                let ib = u32::from(rd16(stream_b, i * 2));
+                let ta = if ia < bound_a { rd32(tbl_a, ia * 4) } else { 0 };
+                let tb = if ib < bound_b { rd32(tbl_b, ib * 4) } else { 0 };
+                if let Some(o) = tex_step(ta, tb) {
+                    return o;
+                }
             }
         }
         if let Some(o) = step_u(u32::from(len_a), u32::from(len_b)) {
@@ -8927,6 +8970,9 @@ pub extern "fastcall" fn c_world_view__compare_draw_list_extended__70aa30(
     } else if tag == 3 {
         let idx_a = rd32(ea, 0x1c);
         let idx_b = rd32(eb, 0x1c);
+        // The models, read at first use as in the tag<2 arm above.
+        let mdl_a = rd32(blk_a, 0x130);
+        let mdl_b = rd32(blk_b, 0x130);
         let rec_a = rd32(mdl_a, 0x138).wrapping_add(idx_a.wrapping_mul(0xdc));
         let rec_b = rd32(mdl_b, 0x138).wrapping_add(idx_b.wrapping_mul(0xdc));
         let cnt_a = rd32(rec_a, 0x14);
@@ -31961,13 +32007,14 @@ fn bdl_view_i32(base: *mut u8) -> i32 {
 /// phase, over 1577 elements per pass at 10.75 ns a comparison. The comparator
 /// (0x70aa30) is pairwise through and through (texture-pointer walks over
 /// variable-length streams), so this bucket has no precomputed-key form; the
-/// win is calling the hook directly through the shared kernel. A
-/// `wow_turbo_diff` build routes through the guest VA instead, on purpose:
-/// the patched prologue enters the thunk, which is the only comparator call
-/// site the thunk-level DIFF harness can observe (the sibling comparators are
-/// reached by name only). A production build has no harness to feed, and
-/// through the VA every comparison would just bounce off the patched prologue
-/// and detour back into the same Rust fn.
+/// win is calling the comparator body directly through the shared kernel, with
+/// the view's identity bit lifted into a const parameter so the sort reads it
+/// once instead of once per comparison. A `wow_turbo_diff` build routes through
+/// the guest VA instead, on purpose: the patched prologue enters the thunk,
+/// which is the only comparator call site the thunk-level DIFF harness can
+/// observe (the sibling comparators are reached by name only). A production
+/// build has no harness to feed, and through the VA every comparison would just
+/// bounce off the patched prologue and detour back into the same Rust fn.
 ///
 /// A partial key over the chain's leading tiers was built and measured and left
 /// out: it decided 99.4% of 124M comparisons and cut comparator time by 93%,
@@ -32007,25 +32054,52 @@ fn bdl_sort_transparent(
         // SAFETY: `data` is non-null and `count` elements of `u32` are valid
         // for the duration of the sort, exactly as the stock caller passes.
         let slice = unsafe { core::slice::from_raw_parts_mut(data, count as usize) };
-        let view = bdl_view_i32(base);
-        match tally {
-            // Armed: one branch per sort, not per comparison.
-            Some(t) => {
-                // SAFETY: `base` is the live view and `+0x34` is its element-array base slot,
-                // the same one the comparator loads on every call.
-                let elem_base = unsafe { bdl_rd32(base, 0x34) };
-                crate::math::misc::intro_sort_u_int32(slice, |a, b| {
-                    t.cmps = t.cmps.wrapping_add(1);
-                    if bdl_elem_tag(elem_base, a) != bdl_elem_tag(elem_base, b) {
-                        t.tag = t.tag.wrapping_add(1);
-                    }
-                    c_world_view__compare_draw_list_extended__70aa30(a, b, view)
-                });
-            }
-            None => crate::math::misc::intro_sort_u_int32(slice, |a, b| {
-                c_world_view__compare_draw_list_extended__70aa30(a, b, view)
-            }),
+        // The comparator's identity bit is a per-sort constant: the comparator
+        // writes nothing and the sort only permutes the index array, so nothing
+        // it runs can reach the view. Reading it here is what lets the callee
+        // carry it as a const parameter.
+        // SAFETY: `base` is the live `CWorldView` the draw-list builder
+        // null-checked on entry; `+0x148` is its sort-flags dword, the same one
+        // the keyed sibling bucket reads and the comparator tests.
+        let flags = unsafe { bdl_rd32(base, 0x148) };
+        if flags & 1 == 0 {
+            bdl_sort_transparent_ident::<false>(slice, base, tally);
+        } else {
+            bdl_sort_transparent_ident::<true>(slice, base, tally);
         }
+    }
+}
+
+/// One transparent-bucket sort, with the comparator's identity bit as a constant.
+///
+/// `IDENT` is `*(view+0x148) & 1`, which the caller read once for the whole
+/// sort; the comparator body is monomorphized on it, so its reload and its
+/// branch are gone from every comparison and the tag-0 run's second `elem+0x38`
+/// key with them.
+#[cfg(not(wow_turbo_diff))]
+fn bdl_sort_transparent_ident<const IDENT: bool>(
+    slice: &mut [u32],
+    base: *mut u8,
+    tally: Option<&mut BdlSortTally>,
+) {
+    let view = bdl_view_i32(base).cast_unsigned();
+    match tally {
+        // Armed: one branch per sort, not per comparison.
+        Some(t) => {
+            // SAFETY: `base` is the live view and `+0x34` is its element-array base slot,
+            // the same one the comparator loads on every call.
+            let elem_base = unsafe { bdl_rd32(base, 0x34) };
+            crate::math::misc::intro_sort_u_int32(slice, |a, b| {
+                t.cmps = t.cmps.wrapping_add(1);
+                if bdl_elem_tag(elem_base, a) != bdl_elem_tag(elem_base, b) {
+                    t.tag = t.tag.wrapping_add(1);
+                }
+                cmp_draw_list_extended_body::<IDENT>(a, b, view)
+            });
+        }
+        None => crate::math::misc::intro_sort_u_int32(slice, |a, b| {
+            cmp_draw_list_extended_body::<IDENT>(a, b, view)
+        }),
     }
 }
 
