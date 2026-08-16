@@ -718,31 +718,84 @@ pub fn frustum__cull_box__686940(
     box_min_max: &[f32; 6],
     threshold: f32,
 ) -> u32 {
-    let min = [box_min_max[0], box_min_max[1], box_min_max[2]];
-    let max = [box_min_max[3], box_min_max[4], box_min_max[5]];
+    #[cfg(target_arch = "x86")]
+    use core::arch::x86::{
+        _mm_and_ps, _mm_andnot_ps, _mm_castpd_ps, _mm_castps_si128, _mm_castsi128_ps,
+        _mm_cvtss_f32, _mm_load_sd, _mm_loadu_ps, _mm_movehl_ps, _mm_mul_ps, _mm_or_ps,
+        _mm_shuffle_ps, _mm_srai_epi32,
+    };
+    #[cfg(target_arch = "x86_64")]
+    use core::arch::x86_64::{
+        _mm_and_ps, _mm_andnot_ps, _mm_castpd_ps, _mm_castps_si128, _mm_castsi128_ps,
+        _mm_cvtss_f32, _mm_load_sd, _mm_loadu_ps, _mm_movehl_ps, _mm_mul_ps, _mm_or_ps,
+        _mm_shuffle_ps, _mm_srai_epi32,
+    };
+
+    // Every intrinsic below is SSE1 or SSE2, present on every ISA baseline this
+    // crate builds for. Written per component the x term lowers to a scalar
+    // multiply behind a data-dependent branch while y and z share a blend and a
+    // multiply; three lanes wide there is no branch left to mispredict. The
+    // reduction stays scalar and left to right, so no add is reassociated.
+    //
+    // The two corner reads split the 24-byte box record in two rather than
+    // overlapping: `min.xy` is its first 8 bytes and the remaining 16 hold
+    // `min.z` beside the whole max corner, so each corner is one shuffle away
+    // and neither read straddles the other. Lane 3 of both is a repeat of the
+    // lane below it and its product is never read.
+    // SAFETY: an 8-byte load of the record's first two floats; `_mm_load_sd`
+    // has no alignment requirement, which is why the f32 pointer may be read
+    // as one f64.
+    let xy = unsafe { _mm_load_sd(box_min_max.as_ptr().cast::<f64>()) };
+    // SAFETY: bitcast of an initialized vector; no memory access.
+    let lo = unsafe { _mm_castpd_ps(xy) };
+    // SAFETY: element 2 of six is inside the record.
+    let tail = unsafe { box_min_max.as_ptr().add(2) };
+    // SAFETY: a 16-byte load from element 2 of six covers elements 2..5, the
+    // record's last 16 bytes.
+    let hi = unsafe { _mm_loadu_ps(tail) };
+    // SAFETY: lane shuffle of two initialized vectors; no memory access.
+    let min = unsafe { _mm_shuffle_ps::<0b00_00_01_00>(lo, hi) };
+    // SAFETY: lane shuffle of an initialized vector; no memory access.
+    let max = unsafe { _mm_shuffle_ps::<0b11_11_10_01>(hi, hi) };
     for p in 0..6 {
-        let nx = planes[p * 4];
-        let ny = planes[p * 4 + 1];
-        let nz = planes[p * 4 + 2];
-        let d = planes[p * 4 + 3];
+        // SAFETY: `p <= 5`, so element `p * 4` is inside the 24-float block.
+        let row = unsafe { planes.as_ptr().add(p * 4) };
+        // SAFETY: the 16-byte load covers plane `p`'s four floats, elements
+        // `p * 4 ..= p * 4 + 3` of the same block.
+        let n = unsafe { _mm_loadu_ps(row) };
         // Sign bit of each normal component selects the positive vertex: clear
-        // (>= +0.0) -> max corner, set (< 0, incl. -0.0) -> min corner.
-        let px = if nx.to_bits() >> 31 == 0 {
-            max[0]
-        } else {
-            min[0]
-        };
-        let py = if ny.to_bits() >> 31 == 0 {
-            max[1]
-        } else {
-            min[1]
-        };
-        let pz = if nz.to_bits() >> 31 == 0 {
-            max[2]
-        } else {
-            min[2]
-        };
-        let dist = px * nx + py * ny + pz * nz + d;
+        // (>= +0.0) -> max corner, set (< 0, incl. -0.0) -> min corner. The
+        // arithmetic shift broadcasts that bit over its own lane, so the blend
+        // below picks on exactly the `bits >> 31` test, `-0.0` included.
+        // SAFETY: bitcast of an initialized vector; no memory access.
+        let bits = unsafe { _mm_castps_si128(n) };
+        // SAFETY: lane-wise shift of an initialized vector; no memory access.
+        let sign = unsafe { _mm_srai_epi32::<31>(bits) };
+        // SAFETY: bitcast of an initialized vector; no memory access.
+        let mask = unsafe { _mm_castsi128_ps(sign) };
+        // SAFETY: lane-wise AND of two initialized vectors; no memory access.
+        let from_min = unsafe { _mm_and_ps(mask, min) };
+        // SAFETY: lane-wise AND-NOT of two initialized vectors; no memory access.
+        let from_max = unsafe { _mm_andnot_ps(mask, max) };
+        // SAFETY: lane-wise OR of two initialized vectors; no memory access.
+        let corner = unsafe { _mm_or_ps(from_min, from_max) };
+        // SAFETY: lane-wise multiply of two initialized vectors; no memory access.
+        let prod = unsafe { _mm_mul_ps(corner, n) };
+        // SAFETY: reads lane 0 of an initialized vector; no memory access.
+        let px = unsafe { _mm_cvtss_f32(prod) };
+        // SAFETY: lane shuffle of an initialized vector; no memory access.
+        let prod_y = unsafe { _mm_shuffle_ps::<0b01_01_01_01>(prod, prod) };
+        // SAFETY: reads lane 0 of an initialized vector; no memory access.
+        let py = unsafe { _mm_cvtss_f32(prod_y) };
+        // SAFETY: lifts an initialized vector's upper half into its lower half;
+        // no memory access.
+        let prod_z = unsafe { _mm_movehl_ps(prod, prod) };
+        // SAFETY: reads lane 0 of an initialized vector; no memory access.
+        let pz = unsafe { _mm_cvtss_f32(prod_z) };
+        // Left to right, the order the original reduces in. `d` is read at its
+        // use rather than bound above the picks; the plane load already holds
+        // it, so it costs a lane lift and no second read.
+        let dist = ((px + py) + pz) + planes[p * 4 + 3];
         if dist < threshold {
             return 0;
         }
@@ -869,6 +922,96 @@ mod tests_frustum__cull_box__686940 {
         assert_eq!(cull(&planes, &b_keep, 0.0), 3);
         let b_cull = [0.0f32, 0.0, 0.0, 1.0, 0.0, 0.0]; // max_x 1 -> 1-2=-1 < 0
         assert_eq!(cull(&planes, &b_cull, 0.0), 0);
+    }
+
+    // The per-component transcription the packed body replaces, kept as the
+    // oracle the sweep below compares against.
+    fn oracle(planes: &[f32; 24], b: &[f32; 6], threshold: f32) -> u32 {
+        let min = [b[0], b[1], b[2]];
+        let max = [b[3], b[4], b[5]];
+        for p in 0..6 {
+            let nx = planes[p * 4];
+            let ny = planes[p * 4 + 1];
+            let nz = planes[p * 4 + 2];
+            let d = planes[p * 4 + 3];
+            let px = if nx.to_bits() >> 31 == 0 {
+                max[0]
+            } else {
+                min[0]
+            };
+            let py = if ny.to_bits() >> 31 == 0 {
+                max[1]
+            } else {
+                min[1]
+            };
+            let pz = if nz.to_bits() >> 31 == 0 {
+                max[2]
+            } else {
+                min[2]
+            };
+            if px * nx + py * ny + pz * nz + d < threshold {
+                return 0;
+            }
+        }
+        3
+    }
+
+    // The blend picks on the sign bit and the reduction stays left to right, so
+    // the packed body has to answer the per-component one on every input,
+    // including the ones the sign-bit rule turns on: both zeros, both
+    // infinities and a NaN normal.
+    #[test]
+    fn packed_form_matches_the_scalar_oracle() {
+        const POOL: [f32; 12] = [
+            0.0,
+            -0.0,
+            1.0,
+            -1.0,
+            0.5,
+            -37.25,
+            1e30,
+            -1e30,
+            1e-30,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::NAN,
+        ];
+        let mut state = 0x2545_f491_4f6c_dd1d_u64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            usize::try_from(state % 12).expect("the modulus is 12")
+        };
+        for _ in 0..20_000 {
+            let mut planes = [0.0f32; 24];
+            for slot in &mut planes {
+                *slot = POOL[next()];
+            }
+            let mut b = [0.0f32; 6];
+            for slot in &mut b {
+                *slot = POOL[next()];
+            }
+            let threshold = POOL[next()];
+            assert_eq!(
+                cull(&planes, &b, threshold),
+                oracle(&planes, &b, threshold),
+                "planes={planes:?} box={b:?} threshold={threshold}"
+            );
+        }
+    }
+
+    // The dead fourth lane is inert: `d` reaches the sum only, never the corner
+    // pick, so a non-finite one still decides the plane on its own.
+    #[test]
+    fn non_finite_plane_offset_only_reaches_the_sum() {
+        let mut planes = [0.0f32; 24];
+        planes[0] = 1.0; // plane 0 normal (1,0,0); planes 1..6 stay (0,0,0,0).
+        let b = aabb(0.0, 0.0, 0.0, 1.0);
+        planes[3] = f32::INFINITY; // dist +inf: not below threshold.
+        assert_eq!(cull(&planes, &b, 0.0), 3);
+        planes[3] = f32::NEG_INFINITY; // dist -inf: culled on plane 0.
+        assert_eq!(cull(&planes, &b, 0.0), 0);
     }
 }
 
