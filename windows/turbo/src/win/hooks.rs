@@ -22365,14 +22365,24 @@ struct GcChunkIndex {
 }
 
 thread_local! {
-    static GC_CHUNK_INDEX: core::cell::RefCell<GcChunkIndex> =
+    /// The index cell, wrapped so that it carries no destructor.
+    ///
+    /// A `thread_local!` whose type needs dropping is reached through a
+    /// lazy-init state machine, a state byte tested against alive and against
+    /// destroyed on every access, and this one is read on every allocator call.
+    /// `ManuallyDrop` takes the drop glue off the cell, leaving the plain
+    /// address of the TLS slot. What it gives up is the spans vector's buffer
+    /// at thread exit, which is what we want anyway: the index is
+    /// process-lifetime state on the Lua thread, and that thread outlives every
+    /// collect.
+    static GC_CHUNK_INDEX: core::cell::RefCell<core::mem::ManuallyDrop<GcChunkIndex>> =
         const {
-            core::cell::RefCell::new(GcChunkIndex {
+            core::cell::RefCell::new(core::mem::ManuallyDrop::new(GcChunkIndex {
                 spans: Vec::new(),
                 counts: [0; 6],
                 pools: [0; 6],
                 elem_sizes: [0; 6],
-            })
+            }))
         };
 }
 
@@ -22496,7 +22506,9 @@ pub extern "fastcall" fn small_block_pool__realloc__6fae90(
     // SAFETY: `fastcall(ecx = pool)` per the original; returns the block.
     let pool_grow: extern "fastcall" fn(usize) -> *mut u8 =
         unsafe { core::mem::transmute(POOL_GROW_VA) };
-    let original = super::symbols::originals::small_block_pool__realloc__6fae90();
+    // The trampoline is resolved at each delegate site rather than up here: the
+    // accessor is a global load and a panic edge, and the paths that take it
+    // are the rare ones. A call that never delegates no longer reaches it.
 
     if l == 0 {
         return smem_realloc(block, new_size, FILE_VA, 0x118, 0);
@@ -22506,15 +22518,19 @@ pub extern "fastcall" fn small_block_pool__realloc__6fae90(
     // SAFETY: see above.
     if g == 0 || unsafe { *(g as *const usize) } == 0 {
         // Lazy pool-table init (first allocation ever): stock builds it.
-        return original(l, block, new_size);
+        return super::symbols::originals::small_block_pool__realloc__6fae90()(l, block, new_size);
     }
     GC_CHUNK_INDEX.with(|cell| {
         let Ok(mut idx) = cell.try_borrow_mut() else {
             // The sweep holds the index (freeobj re-entry): stock path.
-            return original(l, block, new_size);
+            return super::symbols::originals::small_block_pool__realloc__6fae90()(
+                l, block, new_size,
+            );
         };
         if !gc_chunk_index_refresh(g, &mut idx) {
-            return original(l, block, new_size);
+            return super::symbols::originals::small_block_pool__realloc__6fae90()(
+                l, block, new_size,
+            );
         }
         let ptr = block as usize;
         // Free.
@@ -26748,11 +26764,16 @@ pub extern "thiscall" fn c_object_placement__set_relative_transform__7b5160(
         // SAFETY: `dst` is the in-bounds 16-float relative-transform slot.
         unsafe { dst.write_unaligned(m) };
     } else {
-        let mut inv = [0f32; 16];
+        // Neither scratch matrix is seeded: both callees write all sixteen of
+        // their floats, and the result leaves through the pointer they return.
+        // InvertWithScale returns without writing only for a null receiver or a
+        // null destination, and `parent` is non-null on this arm.
+        let mut inv = core::mem::MaybeUninit::<[f32; 16]>::uninit();
         // InvertWithScale (0x7bd820) is our own hook — direct call.
-        let invp = c44_matrix__invert_with_scale__7bd820(parent, inv.as_mut_ptr(), 1.0);
-        let mut out = [0f32; 16];
-        let outp = multiply(out.as_mut_ptr(), xform, invp.cast_const());
+        let invp =
+            c44_matrix__invert_with_scale__7bd820(parent, inv.as_mut_ptr().cast::<f32>(), 1.0);
+        let mut out = core::mem::MaybeUninit::<[f32; 16]>::uninit();
+        let outp = multiply(out.as_mut_ptr().cast::<f32>(), xform, invp.cast_const());
         // SAFETY: `outp` addresses the multiply result (our local).
         let m = unsafe { outp.cast::<[f32; 16]>().read_unaligned() };
         // SAFETY: `dst` is the in-bounds 16-float relative-transform slot.
@@ -39098,7 +39119,11 @@ pub extern "thiscall" fn collision_sweep_volume_against_world_planes__632ba0(
     }
     let mut best = dist;
 
-    let mut prism9 = [[0.0f32, 0.0, 1.0, 0.0]; 9];
+    // The plane buffer takes no seed: `BuildSweepPrism` writes all 36 of its
+    // floats below before anything reads one. A `[0,0,1,0]` pattern would cost
+    // nine independent 16-byte stores nothing observes, where the all-zero
+    // `verts27` beside it lowers to a memset the optimizer shortens away.
+    let mut prism9 = core::mem::MaybeUninit::<[[f32; 4]; 9]>::uninit();
     let mut verts27 = [0.0f32; 27];
     let mut edge = [0u8; 36];
 
@@ -39156,6 +39181,11 @@ pub extern "thiscall" fn collision_sweep_volume_against_world_planes__632ba0(
         verts27.as_mut_ptr(),
         edge.as_mut_ptr(),
     );
+    // SAFETY: the call above forwards to `Collision_BuildPrismPlanes`, whose one
+    // store writes all 36 contiguous f32 of the buffer, and whose null-pointer
+    // guard cannot fire here because the centre and the destination are both
+    // stack arrays.
+    let prism9 = unsafe { prism9.assume_init_ref() };
 
     if origin_override.is_null() {
         // Collision_GatherWorldTriangles is our own hook — direct Rust call
@@ -40331,13 +40361,16 @@ pub extern "stdcall" fn c_movement__compute_ground_normal__637140(
 
     // SAFETY: fixed global contact-record count.
     let n = unsafe { LIST_COUNT.read_unaligned() };
-    for i in 0..n as usize {
-        // SAFETY: fixed global contact-list base (lazily allocated —
-        // guarded; stock re-reads it around the clip call).
-        let base = unsafe { LIST_BASE.read_unaligned() };
-        if base.is_null() {
-            break;
-        }
+    // SAFETY: fixed global contact-list base (lazily allocated — guarded;
+    // stock re-reads it around the clip call).
+    let mut base = unsafe { LIST_BASE.read_unaligned() };
+    // The clip is the loop's only opaque call, so the base can only change
+    // across it, and the two places worth testing it are here and right after
+    // that call rather than once per record including the ones the facing test
+    // rejects. A null base at entry folds no record at all, so `hits` stays 0
+    // and the world-up fallback answers.
+    let n = if base.is_null() { 0 } else { n as usize };
+    for i in 0..n {
         // SAFETY: record `i` (stride 0x34) of the `n`-record list.
         let rec = unsafe { base.add(i * 0x34) };
         // SAFETY: `rec+8` is the record's facing value (normal.z).
@@ -40356,13 +40389,14 @@ pub extern "stdcall" fn c_movement__compute_ground_normal__637140(
         desc[46] = 0xffff_ffff;
         desc[47] = 0xffff_ffff;
         desc[60] = 3;
-        if clip(planes, plane_count, desc.as_mut_ptr()) == 0 {
-            continue;
-        }
+        let clipped = clip(planes, plane_count, desc.as_mut_ptr());
         // SAFETY: base re-read after the call like stock 0x6371eb.
-        let base = unsafe { LIST_BASE.read_unaligned() };
+        base = unsafe { LIST_BASE.read_unaligned() };
         if base.is_null() {
             break;
+        }
+        if clipped == 0 {
+            continue;
         }
         // SAFETY: record `i` of the re-read list base.
         let rec2 = unsafe { base.add(i * 0x34) };
