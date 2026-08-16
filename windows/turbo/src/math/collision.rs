@@ -402,12 +402,20 @@ mod tests_collide_box_box__7c3780 {
 /// stage three 12-byte stack copies whose only use was this call. The nine
 /// reads below come off the same addresses those copies were filled from, and
 /// they are read once at the top so the arithmetic underneath is unchanged.
+///
+/// `segment` is a view for the same reason and one more. The indexed adapter
+/// filled its 24-byte copy with a 16-byte store over `[0..4]` and an 8-byte
+/// store over `[4..6]`, so the direction's `+0xc` load straddled the boundary
+/// between the two and every call paid a store-forwarding stall for bytes that
+/// were already sitting in the caller's memory. Reading the lanes here also
+/// sinks the origin's three past the determinant reject, which needs the
+/// direction and the vertices but never the origin.
 // The band tests are ordered-negative — `v < lo`, `u + v > hi` — so a miss needs
 // an ordered compare and a NaN barycentric reaches the hit path, as in the
 // original: its `FCOM` + `TEST AH,5`/`JNP` and `TEST AH,0x41`/`JZ` pairs all
 // leave the unordered case falling through.
 pub fn collide_line_triangle_indexed16__7c29f0(
-    segment: &[f32; 6],
+    segment: F32s<'_, 6>,
     v0: F32s<'_, 3>,
     v1: F32s<'_, 3>,
     v2: F32s<'_, 3>,
@@ -421,7 +429,7 @@ pub fn collide_line_triangle_indexed16__7c29f0(
     let t_min = -edge_tol;
     let t_max = edge_tol + 1.0_f32;
 
-    let dir = [segment[3], segment[4], segment[5]];
+    let dir = [segment.at::<3>(), segment.at::<4>(), segment.at::<5>()];
 
     // edge1 = v1 - v0, edge2 = v2 - v0.
     let e1x = v1[0] - v0[0];
@@ -447,9 +455,9 @@ pub fn collide_line_triangle_indexed16__7c29f0(
     let inv_det = 1.0_f32 / det;
 
     // tvec = origin - v0.
-    let tx = segment[0] - v0[0];
-    let ty = segment[1] - v0[1];
-    let tz = segment[2] - v0[2];
+    let tx = segment.at::<0>() - v0[0];
+    let ty = segment.at::<1>() - v0[1];
+    let tz = segment.at::<2>() - v0[2];
 
     // u = dot(tvec, pvec) * invDet.
     let u = (tx * px + ty * py + tz * pz) * inv_det;
@@ -489,7 +497,7 @@ mod tests_collide_line_triangle_indexed16__7c29f0 {
         tol: f32,
     ) -> Option<[f32; 3]> {
         let seg = [o[0], o[1], o[2], d[0], d[1], d[2]];
-        f(&seg, (&v0).into(), (&v1).into(), (&v2).into(), tol)
+        f((&seg).into(), (&v0).into(), (&v1).into(), (&v2).into(), tol)
     }
 
     /// Law: a NaN barycentric reaches the hit path, not a miss.
@@ -502,7 +510,7 @@ mod tests_collide_line_triangle_indexed16__7c29f0 {
     fn nan_reaches_the_hit_path() {
         let seg = [0.25f32, 0.25, 1.0, 0.0, 0.0, -1.0];
         let r = f(
-            &seg,
+            (&seg).into(),
             (&[f32::NAN, 0.0, 0.0]).into(),
             (&[1.0, 0.0, 0.0]).into(),
             (&[0.0, 1.0, 0.0]).into(),

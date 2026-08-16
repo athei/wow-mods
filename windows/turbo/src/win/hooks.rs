@@ -2244,9 +2244,15 @@ pub extern "fastcall" fn collide_line_triangle_indexed16__7c29f0(
     if segment.is_null() || tri_indices.is_null() {
         return 0;
     }
-    // SAFETY: `segment` is a non-null caller-owned array of 6 contiguous f32
-    // (origin in [0..3], direction in [3..6]).
-    let seg = &unsafe { segment.cast::<[f32; 6]>().read_unaligned() };
+    // The four float inputs are handed over as views rather than snapshotted into
+    // this frame: the kernel only reads them, this body performs no store and
+    // makes no call between here and the call to it, and the two out-parameters
+    // are written after it has returned its result by value, so nothing can
+    // change any of the four runs while the kernel is reading them.
+    // SAFETY: `segment` is a non-null caller-owned run of 6 contiguous f32
+    // (origin in [0..3], direction in [3..6]), live for this call, and unwritten
+    // for its duration by the argument above.
+    let seg = unsafe { wow_shared::F32s::<6>::new(segment) };
     // SAFETY: `tri_indices` is a non-null caller-owned array of 3 contiguous u16.
     let idx = unsafe { &*tri_indices.cast::<[u16; 3]>() };
 
@@ -15833,7 +15839,11 @@ pub extern "thiscall" fn collide_leaf_ray_triangle_mesh__6b88e0(
         // SAFETY: `v2_ptr` is a live leaf vertex, as for `v0_ptr`.
         let v2 = unsafe { wow_shared::F32s::new(v2_ptr.cast()) };
         let Some([t, _, _]) = crate::math::collision::collide_line_triangle_indexed16__7c29f0(
-            ray, v0, v1, v2, EDGE_TOL,
+            ray.into(),
+            v0,
+            v1,
+            v2,
+            EDGE_TOL,
         ) else {
             continue;
         };

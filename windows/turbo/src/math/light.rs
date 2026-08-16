@@ -891,19 +891,27 @@ mod tests_light_animate_color_and_intensity__69e770 {
 #[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn encode_fog_color__71c730(channels: &[f32; 3]) -> u32 {
     // Per-channel clamp+remap+truncate matching the stock x87 path: the low
-    // clamp `!(0.0 < v)` (TEST AH,0x41/JP at 0x71c930) snaps to `0.0` on
+    // clamp `!(0.0 < v)` (TEST AH,0x41/JP at 0x71c930) snaps to `0` on
     // not-greater-or-unordered, the high clamp `v < 1.0` (TEST AH,0x1/JNE at
-    // 0x71c948) saturates to `255.0`, and the `__ftol` truncation is the
-    // `mapped as i32 as u32` round-toward-zero cast (matching `ftol__40a2b0`).
+    // 0x71c948) saturates to `255`, and the `__ftol` truncation is the
+    // round-toward-zero convert of the remapped lane (matching `ftol__40a2b0`).
     let byte = |v: f32| -> u32 {
         let mapped = if !(0.0 < v) {
-            0.0_f32
+            0
         } else if v < 1.0 {
-            v * 255.0 + 0.5
+            // SAFETY: the conversion is defined for a finite value whose
+            // truncation fits `i32`, and this arm is entered only when
+            // `0.0 < v` and `v < 1.0`, so `v * 255.0 + 0.5` lies in
+            // `(0.5, 255.5)`. An `as` cast emits a saturation clamp and a
+            // NaN-to-zero select on top of the same `cvttss2si`, and the two
+            // arms above are what make both of them unreachable: a `NaN`
+            // channel leaves through the `!(0.0 < v)` arm, and nothing here can
+            // reach the `i32` bound.
+            unsafe { (v * 255.0 + 0.5).to_int_unchecked::<i32>() }
         } else {
-            255.0_f32
+            255
         };
-        (mapped as i32 as u32) & 0xff
+        (mapped as u32) & 0xff
     };
     // Stock packs ascending source offsets into descending byte lanes (x87 FLD
     // order +0x198,+0x194,+0x190; the three `__ftol` pops reverse it): channels[0]
@@ -946,6 +954,21 @@ mod tests_encode_fog_color__71c730 {
         assert_eq!((p >> 16) & 0xff, ref_byte(0.125)); // channels[0]=0x190 -> high lane
         assert_eq!((p >> 8) & 0xff, ref_byte(0.25)); // channels[1]=0x194
         assert_eq!(p & 0xff, ref_byte(0.5)); // channels[2]=0x198 -> low lane
+    }
+
+    /// The in-range arm's unchecked truncation answers what the `as` cast did.
+    ///
+    /// The kernel converts `v * 255.0 + 0.5` with `to_int_unchecked` because the
+    /// two clamp arms hold the product inside `(0.5, 255.5)`, where neither the
+    /// saturation clamp nor the NaN select an `as` cast carries can fire.
+    /// `ref_byte` still spells the cast, so sweeping the arm's whole open
+    /// interval is what pins the two answering the same byte.
+    #[test]
+    fn in_range_arm_matches_the_saturating_cast() {
+        for i in 1..10_000_u32 {
+            let v = i as f32 / 10_000.0;
+            assert_eq!(encode(&[v, v, v]) & 0xff, ref_byte(v), "v={v}");
+        }
     }
 
     #[test]

@@ -104,13 +104,21 @@ pub fn gx_light_clamp_color_component_to_byte__71ca80(
 
     let byte = |v: f32| -> u32 {
         let mapped = if !(0.0 < v) {
-            0.0_f32
+            0
         } else if v < 1.0 {
-            v * 255.0 + 0.5
+            // SAFETY: the conversion is defined for a finite value whose
+            // truncation fits `i32`, and this arm is entered only when
+            // `0.0 < v` and `v < 1.0`, so `v * 255.0 + 0.5` lies in
+            // `(0.5, 255.5)`. An `as` cast emits a saturation clamp and a
+            // NaN-to-zero select on top of the same `cvttss2si`, and the two
+            // arms above are what make both of them unreachable: a `NaN` lane
+            // leaves through the `!(0.0 < v)` arm, and nothing here can reach
+            // the `i32` bound.
+            unsafe { (v * 255.0 + 0.5).to_int_unchecked::<i32>() }
         } else {
-            255.0_f32
+            255
         };
-        (mapped as i32 as u32) & 0xff
+        (mapped as u32) & 0xff
     };
 
     let packed = (byte(a) << 24) | (byte(r) << 16) | (byte(g) << 8) | byte(b);
@@ -170,6 +178,23 @@ mod tests_gx_light_clamp_color_component_to_byte__71ca80 {
         let (p, _m) = clamp(&[-1.0, 0.5, 1.0], 0.0, THRESH);
         let r = (p >> 16) & 0xff;
         assert_eq!(r, 0);
+    }
+
+    /// The in-range arm's unchecked truncation answers what the `as` cast did.
+    ///
+    /// The middle arm converts `v * 255.0 + 0.5` with `to_int_unchecked`, which
+    /// agrees with an `as` cast only because `0.0 < v` and `v < 1.0` hold the
+    /// product inside `(0.5, 255.5)`, where neither the saturation clamp nor the
+    /// NaN select an `as` cast carries can fire. A max of exactly `1.0` makes
+    /// the reciprocal exact, so the R lane sweeps that whole open interval.
+    #[test]
+    fn in_range_arm_matches_the_saturating_cast() {
+        for i in 1..10_000_u32 {
+            let v = i as f32 / 10_000.0;
+            let (p, _m) = clamp(&[v, 1.0, 0.0], 0.0, THRESH);
+            let want = ((v * 255.0 + 0.5) as i32 as u32) & 0xff;
+            assert_eq!((p >> 16) & 0xff, want, "v={v}");
+        }
     }
 
     #[test]
