@@ -334,6 +334,26 @@ pub fn after_update(camera_raw: u32) {
         return;
     }
     let original_pos = camera_vec3(camera, 0x8);
+    // All five settings are read before the subject lookup because the gate
+    // below needs them: with none of them configured every step that follows is
+    // a no-op on the camera record, down to a write-back of the bits just read,
+    // so the default configuration takes the same exit the no-subject arm does.
+    // The tolerance tests are spelled `<= TOLERANCE` rather than negated so a
+    // NaN setting falls through into the full body instead of into this exit.
+    let horizontal = super::settings::camera_horizontal();
+    let vertical = super::settings::camera_vertical();
+    let pitch = super::settings::camera_pitch();
+    let pin_on = super::settings::camera_pin_height();
+    let follow = super::settings::camera_follow_target();
+    if !pin_on
+        && !follow
+        && horizontal.abs() <= TOLERANCE
+        && vertical.abs() <= TOLERANCE
+        && pitch.abs() <= TOLERANCE
+    {
+        publish(original_pos, camera_vec3(camera, 0x14));
+        return;
+    }
     let Some(unit) = super::super::objmgr::object_by_guid(looking_at_guid(camera))
         .filter(|u| u.is_unit_or_player())
     else {
@@ -341,10 +361,6 @@ pub fn after_update(camera_raw: u32) {
         publish(original_pos, camera_vec3(camera, 0x14));
         return;
     };
-    let horizontal = super::settings::camera_horizontal();
-    let vertical = super::settings::camera_vertical();
-    let pitch = super::settings::camera_pitch();
-    let pin_on = super::settings::camera_pin_height();
     let pin = if pin_on && unit.mount_display_id() == 0 {
         Some(crate::math::editcamera::PinHeight {
             // The eye height is the camera target's height above the unit
@@ -387,7 +403,7 @@ pub fn after_update(camera_raw: u32) {
         // camera position this feature exists to rewrite.
         unsafe { *((camera + 0x8 + i * 4) as *mut f32) = v };
     }
-    if super::settings::camera_follow_target() {
+    if follow {
         follow_target(camera);
     }
     publish(translated, camera_vec3(camera, 0x14));

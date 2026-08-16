@@ -529,7 +529,11 @@ mod tests_bounds_fit__accumulate_moment__71bce0 {
 ///
 /// Each key is paired with an opaque object handle. Mirrors the in-struct heap a
 /// bounds-fit accumulator keeps in `objs`/`keys`/`count` for the `kind == 1`
-/// (far-object) path.
+/// (far-object) path. `repr(C)` because that mirror is literal: the three fields
+/// land at +0, +0x10 and +0x20, which is the accumulator's `this+0x160`,
+/// `this+0x170` and `this+0x180`, so the hook updates the client's own storage
+/// through this type instead of copying it in and back out.
+#[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct FarHeap {
     pub objs: [u32; 4],
@@ -537,20 +541,23 @@ pub struct FarHeap {
     pub count: u32,
 }
 
-/// Insert `(dist_sq, object)` into the fixed 4-slot max-heap.
+/// Insert `(dist_sq, object)` into the fixed 4-slot max-heap, in place.
 ///
 /// When the heap has free room (`count < 4`) the entry is appended and sifted up
 /// (a parent strictly less than `dist_sq` is pushed down). When full, the entry
 /// replaces the root only if `dist_sq` is strictly less than the current maximum
 /// (`keys[0]`), then sifts down toward the larger child while `dist_sq` is
-/// strictly less than that child. Returns the updated heap.
+/// strictly less than that child.
+///
+/// Updating `heap` rather than returning a fresh one is what lets the caller
+/// hand over the client's own heap fields: the sift already read and wrote one
+/// working copy in the original's slot order, and the rejecting path writes
+/// nothing where the by-value form stored every slot back over its own bits.
 // The sift-up guard is written `!(dist_sq > keys[parent])` to keep the
 // original's ordered test: a NaN key stops the loop, where `dist_sq <=
 // keys[parent]` would let it run on. The NaN polarity is load-bearing.
 #[allow(clippy::neg_cmp_op_on_partial_ord)]
-pub fn bounds_fit__add_object__71bf90(heap: &FarHeap, dist_sq: f32, object: u32) -> FarHeap {
-    let mut objs = heap.objs;
-    let mut keys = heap.keys;
+pub fn bounds_fit__add_object__71bf90(heap: &mut FarHeap, dist_sq: f32, object: u32) {
     let count = heap.count;
 
     if count < 4 {
@@ -561,31 +568,28 @@ pub fn bounds_fit__add_object__71bf90(heap: &FarHeap, dist_sq: f32, object: u32)
             let parent = (idx - 1) >> 1;
             // Continue only while `dist_sq > keys[parent]` (strict). Equality or
             // less stops, matching `FCOM; TEST AH,0x41; JNP`.
-            if !(dist_sq > keys[parent]) {
+            if !(dist_sq > heap.keys[parent]) {
                 break;
             }
-            objs[idx] = objs[parent];
-            keys[idx] = keys[parent];
+            heap.objs[idx] = heap.objs[parent];
+            heap.keys[idx] = heap.keys[parent];
             idx = parent;
         }
-        objs[idx] = object;
-        keys[idx] = dist_sq;
-        return FarHeap {
-            objs,
-            keys,
-            count: count + 1,
-        };
+        heap.objs[idx] = object;
+        heap.keys[idx] = dist_sq;
+        heap.count = count + 1;
+        return;
     }
 
     // Full: only displace the current maximum when strictly closer than it.
-    if dist_sq < keys[0] {
+    if dist_sq < heap.keys[0] {
         let mut idx = 0usize;
         loop {
             let right = idx * 2 + 2;
             let mut child = idx * 2 + 1;
             if right < 4 {
                 // Pick the larger child (`left <= right` selects right).
-                if keys[child] <= keys[right] {
+                if heap.keys[child] <= heap.keys[right] {
                     child = right;
                 }
             } else if child >= 4 {
@@ -593,18 +597,16 @@ pub fn bounds_fit__add_object__71bf90(heap: &FarHeap, dist_sq: f32, object: u32)
             }
             // Stop sifting once `dist_sq >= keys[child]` (place here); continue
             // only while strictly less than the chosen (larger) child.
-            if keys[child] <= dist_sq {
+            if heap.keys[child] <= dist_sq {
                 break;
             }
-            objs[idx] = objs[child];
-            keys[idx] = keys[child];
+            heap.objs[idx] = heap.objs[child];
+            heap.keys[idx] = heap.keys[child];
             idx = child;
         }
-        objs[idx] = object;
-        keys[idx] = dist_sq;
+        heap.objs[idx] = object;
+        heap.keys[idx] = dist_sq;
     }
-
-    FarHeap { objs, keys, count }
 }
 
 #[cfg(test)]
@@ -634,7 +636,7 @@ mod tests_bounds_fit__add_object__71bf90 {
     fn fills_then_root_is_max() {
         let mut h = empty();
         for (k, o) in [(3.0_f32, 30), (1.0, 10), (4.0, 40), (2.0, 20)] {
-            h = f(&h, k, o);
+            f(&mut h, k, o);
         }
         assert_eq!(h.count, 4);
         assert!(is_max_heap(&h));
@@ -646,10 +648,10 @@ mod tests_bounds_fit__add_object__71bf90 {
     fn full_keeps_four_smallest() {
         let mut h = empty();
         for (k, o) in [(5.0_f32, 1), (8.0, 2), (1.0, 3), (9.0, 4)] {
-            h = f(&h, k, o);
+            f(&mut h, k, o);
         }
         for (k, o) in [(2.0_f32, 5), (0.5, 6)] {
-            h = f(&h, k, o);
+            f(&mut h, k, o);
         }
         assert_eq!(h.count, 4);
         assert!(is_max_heap(&h));
@@ -662,19 +664,20 @@ mod tests_bounds_fit__add_object__71bf90 {
     fn full_rejects_value_not_smaller_than_max() {
         let mut h = empty();
         for (k, o) in [(5.0_f32, 1), (8.0, 2), (1.0, 3), (9.0, 4)] {
-            h = f(&h, k, o);
+            f(&mut h, k, o);
         }
         let before = h;
-        let after = f(&h, 9.0, 99);
-        assert_eq!(after, before);
-        assert_eq!(f(&h, 100.0, 99), before);
+        f(&mut h, 9.0, 99);
+        assert_eq!(h, before);
+        f(&mut h, 100.0, 99);
+        assert_eq!(h, before);
     }
 
     #[test]
     fn object_handle_tracks_its_key() {
         let mut h = empty();
         for (k, o) in [(7.0_f32, 70), (3.0, 30), (5.0, 50), (1.0, 10)] {
-            h = f(&h, k, o);
+            f(&mut h, k, o);
         }
         for (k, o) in [(7.0_f32, 70), (3.0, 30), (5.0, 50), (1.0, 10)] {
             let idx = h.keys.iter().position(|&v| v == k).unwrap();
@@ -687,7 +690,7 @@ mod tests_bounds_fit__add_object__71bf90 {
         let a = {
             let mut h = empty();
             for (k, o) in [(4.0_f32, 1), (2.0, 2), (6.0, 3), (1.0, 4), (3.0, 5)] {
-                h = f(&h, k, o);
+                f(&mut h, k, o);
             }
             let mut v = h.keys.to_vec();
             v.sort_by(|x, y| x.partial_cmp(y).unwrap());
@@ -696,7 +699,7 @@ mod tests_bounds_fit__add_object__71bf90 {
         let b = {
             let mut h = empty();
             for (k, o) in [(3.0_f32, 5), (1.0, 4), (6.0, 3), (2.0, 2), (4.0, 1)] {
-                h = f(&h, k, o);
+                f(&mut h, k, o);
             }
             let mut v = h.keys.to_vec();
             v.sort_by(|x, y| x.partial_cmp(y).unwrap());

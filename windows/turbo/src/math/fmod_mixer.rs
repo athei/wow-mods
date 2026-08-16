@@ -24,11 +24,12 @@
 ///
 /// Matches the original's `FISTP`→`CMP 0x7fff`/`CMP 0xffff8000` sequence: round
 /// to nearest (ties to even, the x87 default mode) then clamp into the int16
-/// range.
+/// range. The clamp is the `as` cast's own saturation, which is where the int16
+/// bounds and the NaN-to-zero rule both come from; writing a `clamp` in front of
+/// it named the same `max`/`min` pair a second time, on every stored sample.
 #[inline]
 fn pack_i16(sample: f64) -> i16 {
-    let rounded = sample.round_ties_even();
-    rounded.clamp(-32768.0, 32767.0) as i16
+    sample.round_ties_even() as i16
 }
 
 /// Reimplementation of `fmod__mixer_fpu` (fmod RVA `0x348e0`): the MPEG synthesis dewindow.

@@ -6019,9 +6019,9 @@ pub extern "thiscall" fn cm2_shared__get_bounds_center__713680(
 /// `AccumulateNormalSum`), each `__thiscall` by absolute VA. When kind == 1 it
 /// maintains a fixed 4-slot max-heap of squared distances from the fit origin
 /// (`this+4..0xc`) to the object centre (`object+0xc..0x14`): object pointers
-/// at `this+0x160`, keys at `this+0x170`, count at `this+0x180`. The squared
-/// distance and heap update are the pure kernel; the field reads/writes and the
-/// kind!=1 call-outs are here.
+/// at `this+0x160`, keys at `this+0x170`, count at `this+0x180`. Those three
+/// fields are the pure kernel's `FarHeap`, sifted in place; the squared
+/// distance, the remaining field reads and the kind!=1 call-outs are here.
 pub fn bounds_fit__add_object__71bf90(this: *mut u8, object: *mut u8) {
     if this.is_null() || object.is_null() {
         return;
@@ -6069,29 +6069,19 @@ pub fn bounds_fit__add_object__71bf90(this: *mut u8, object: *mut u8) {
     let dz = centre[2] - origin[2];
     let dist_sq = dx * dx + dy * dy + dz * dz;
 
-    // SAFETY: `this+0x160` holds four contiguous object-pointer dwords.
-    let objs_ptr = unsafe { this.add(0x160).cast::<[u32; 4]>() };
-    // SAFETY: `this+0x170` holds four contiguous key floats.
-    let keys_ptr = unsafe { this.add(0x170).cast::<[f32; 4]>() };
-    // SAFETY: `this+0x180` is the in-bounds, aligned heap count.
-    let count_ptr = unsafe { this.add(0x180).cast::<u32>() };
-    // SAFETY: `objs_ptr` is the initialized heap object-id slot array.
-    let objs = unsafe { objs_ptr.read() };
-    // SAFETY: `keys_ptr` is the initialized heap key-float slot array.
-    let keys = unsafe { keys_ptr.read() };
-    // SAFETY: `count_ptr` is the initialized heap count.
-    let count = unsafe { count_ptr.read() };
-    let heap = crate::math::boundsfit::FarHeap { objs, keys, count };
+    // The heap is sifted where it lives. `dist_sq` and the object handle are
+    // already values by this point and the kernel calls nothing, so no read can
+    // observe the slots between the first swap and the last.
+    // SAFETY: `this+0x160` starts the accumulator's 36-byte far-object heap —
+    // four object dwords, four key floats at `+0x10`, the count at `+0x20` —
+    // which is `FarHeap`'s `repr(C)` layout, so the offset stays in bounds of
+    // the record and lands on a 4-byte boundary.
+    let heap_ptr = unsafe { this.add(0x160).cast::<crate::math::boundsfit::FarHeap>() };
+    // SAFETY: those 36 bytes are initialized heap storage, and the origin
+    // borrow above has ended, so this is the only live reference to them.
+    let heap = unsafe { &mut *heap_ptr };
 
-    let updated =
-        crate::math::boundsfit::bounds_fit__add_object__71bf90(&heap, dist_sq, object as u32);
-
-    // SAFETY: `objs_ptr` addresses four writable contiguous dwords.
-    unsafe { objs_ptr.write(updated.objs) };
-    // SAFETY: `keys_ptr` addresses four writable contiguous floats.
-    unsafe { keys_ptr.write(updated.keys) };
-    // SAFETY: `count_ptr` addresses a writable dword.
-    unsafe { count_ptr.write(updated.count) };
+    crate::math::boundsfit::bounds_fit__add_object__71bf90(heap, dist_sq, object as u32);
 }
 
 /// `BoundsFit::FinalizePlanes` — `__fastcall(ecx = fit)`.

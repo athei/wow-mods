@@ -68,26 +68,31 @@ mod tests_aabb__min_less_than_max__6acb40 {
 ///
 /// (stride 3 floats) in `points`. Returns `[minX,minY,minZ,maxX,maxY,maxZ]`.
 /// With `count == 0` the box is all zeros (matching the original).
+///
+/// `count` caps the walk rather than `points.len()`: callers hand over exactly
+/// `count * 3` floats, but the tests below pass a longer slice deliberately.
+/// Capping once and walking `[f32; 3]` chunks is what keeps the per-point loop
+/// free of the three bounds checks an index-and-count walk cannot shed, since
+/// nothing ties `count` to the slice's length. `saturating_mul` leaves a `count`
+/// too large for the slice on the same out-of-range panic the indexed form took.
 pub fn c_aa_box__from_points__7c1450(points: &[f32], count: u32) -> [f32; 6] {
-    if count == 0 {
+    let (pts, _) = points[..(count as usize).saturating_mul(3)].as_chunks::<3>();
+    let Some((first, rest)) = pts.split_first() else {
         return [0.0; 6];
-    }
+    };
 
     // Seed min and max from the first point.
-    let mut min_x = points[0];
-    let mut min_y = points[1];
-    let mut min_z = points[2];
-    let mut max_x = points[0];
-    let mut max_y = points[1];
-    let mut max_z = points[2];
+    let mut min_x = first[0];
+    let mut min_y = first[1];
+    let mut min_z = first[2];
+    let mut max_x = first[0];
+    let mut max_y = first[1];
+    let mut max_z = first[2];
 
-    let mut i = 1usize;
-    let n = count as usize;
-    while i < n {
-        let base = i * 3;
-        let x = points[base];
-        let y = points[base + 1];
-        let z = points[base + 2];
+    for point in rest {
+        let x = point[0];
+        let y = point[1];
+        let z = point[2];
 
         if x < min_x {
             min_x = x;
@@ -107,7 +112,6 @@ pub fn c_aa_box__from_points__7c1450(points: &[f32], count: u32) -> [f32; 6] {
         if max_z < z {
             max_z = z;
         }
-        i += 1;
     }
 
     [min_x, min_y, min_z, max_x, max_y, max_z]

@@ -703,10 +703,10 @@ pub fn c_gx_device_d3d__i_xform_set_projection__5a11d0(
     let skip_near_one = (m23 - 1.0).abs() < eps; // ordered: NaN ⇒ false ⇒ proceed
     let skip_near_zero = m23.abs() < eps; // ordered: NaN ⇒ false ⇒ proceed
     if !skip_near_one && !skip_near_zero {
+        // The reciprocal stays inside the guard: hoisting it above would run a
+        // divide whose result the skip path never stores.
         let w = 1.0 / m23;
-        for v in &mut m {
-            *v = super::f64_to_f32(f64::from(*v) * w);
-        }
+        normalize_by_w(&mut m, w);
     }
 
     // (2) perspective/ortho depth-range remap of m22/m32 (post-normalize).
@@ -729,23 +729,51 @@ pub fn c_gx_device_d3d__i_xform_set_projection__5a11d0(
 
     // (3) conditional diag(0.2,0.2,0.2,1) right-multiply (full 4-term rows).
     if !caps_no_scale && m[15] != 1.0 {
-        let mc = m;
-        // 0.2 is the stock imm 0x3e4ccccd; 1.0 is 0x3f800000.
-        const S: [f32; 16] = [
-            0.2, 0.0, 0.0, 0.0, 0.0, 0.2, 0.0, 0.0, 0.0, 0.0, 0.2, 0.0, 0.0, 0.0, 0.0, 1.0,
-        ];
-        for r in 0..4 {
-            for c in 0..4 {
-                let mut acc = f64::from(S[12 + c]) * f64::from(mc[r * 4 + 3]);
-                acc += f64::from(S[c]) * f64::from(mc[r * 4]);
-                acc += f64::from(S[4 + c]) * f64::from(mc[r * 4 + 1]);
-                acc += f64::from(S[8 + c]) * f64::from(mc[r * 4 + 2]);
-                m[r * 4 + c] = super::f64_to_f32(acc);
-            }
-        }
+        scale_rows(&mut m);
     }
 
     m
+}
+
+/// Stage 1's w-normalize: scale every element by `w = 1/m23`.
+///
+/// Outlined behind its two eps guards, which the profile never sees taken, so
+/// the ~950 bytes of this arm and [`scale_rows`] stop sitting between the entry
+/// block and the depth remap. Every element is `f32`-typed and narrows through
+/// [`super::f64_to_f32`] exactly where stock stores, so passing the matrix by
+/// `&mut` changes only where it lives, not what it holds.
+#[cold]
+#[inline(never)]
+fn normalize_by_w(m: &mut [f32; 16], w: f64) {
+    for v in &mut *m {
+        *v = super::f64_to_f32(f64::from(*v) * w);
+    }
+}
+
+/// Stage 3's `diag(0.2,0.2,0.2,1)` right-multiply, all four terms per element.
+///
+/// Outlined for the same reason as [`normalize_by_w`]. `mc` is the whole-matrix
+/// snapshot the products read: taking each term from `m` in place instead would
+/// feed later elements the results of earlier ones. The accumulation keeps the
+/// stock `FADDP` order (the `k = 3` term first, then `k = 0,1,2`) and keeps the
+/// zero off-diagonal terms, so `0.0 × NaN/inf` propagates as stock.
+#[cold]
+#[inline(never)]
+fn scale_rows(m: &mut [f32; 16]) {
+    let mc = *m;
+    // 0.2 is the stock imm 0x3e4ccccd; 1.0 is 0x3f800000.
+    const S: [f32; 16] = [
+        0.2, 0.0, 0.0, 0.0, 0.0, 0.2, 0.0, 0.0, 0.0, 0.0, 0.2, 0.0, 0.0, 0.0, 0.0, 1.0,
+    ];
+    for r in 0..4 {
+        for c in 0..4 {
+            let mut acc = f64::from(S[12 + c]) * f64::from(mc[r * 4 + 3]);
+            acc += f64::from(S[c]) * f64::from(mc[r * 4]);
+            acc += f64::from(S[4 + c]) * f64::from(mc[r * 4 + 1]);
+            acc += f64::from(S[8 + c]) * f64::from(mc[r * 4 + 2]);
+            m[r * 4 + c] = super::f64_to_f32(acc);
+        }
+    }
 }
 
 #[cfg(test)]
