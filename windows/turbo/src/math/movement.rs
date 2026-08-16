@@ -356,9 +356,28 @@ mod tests_c_movement__resolve_turn_rate__7c5c90 {
 /// planar scales `s0`/`s1` (`+0x70`/`+0x74`), returns the local-space
 /// displacement `[dx, dy, dz]`.
 ///
-/// `versine = inv*(1 - cos)` where `inv = speed/rate`; the horizontal offset is
+/// `versine = inv - cos*inv` where `inv = speed/rate`; the horizontal offset is
 /// the planar arc chord rotated by facing and scaled by `s0`, and the vertical
 /// component is the straight-line `speed*s1*dt`.
+///
+/// The widths come from the stores, not from the operand types. `inv` and
+/// `theta` each narrow at an `FSTP m32` (`0x7c52f5`, `0x7c52fb`) and the
+/// `FSINCOS` pair narrows at `0x7c5309` / `0x7c530b`, so those four are `f32`.
+/// Between `0x7c530d` and the component stores at `0x7c532e` / `0x7c533d` there
+/// is no `FST`/`FSTP m32` at all: `sin*inv`, the versine, both rotated terms and
+/// the `+0x70` scale stay on the register stack, which at the client's 53-bit
+/// precision control carries an `f64` significand, so each horizontal component
+/// rounds exactly once. The vertical component has the same shape: `speed*s1`
+/// stays in the register across the `dt` multiply and narrows at `0x7c534a`.
+///
+/// That is observable rather than cosmetic, because the versine is `inv` minus a
+/// near-equal `cos*inv`. A per-step `f32` chain rounds that product before the
+/// subtraction and so discards the bits the subtraction was about to expose; at
+/// small `theta` the error is of the same order as the whole residue.
+///
+/// `inv` stays a plain `f32` divide even though the `FDIV` runs at 53 bits: a
+/// 53-bit intermediate is wide enough that re-rounding an `f32` quotient to
+/// `f32` gives the directly rounded quotient, so the two spellings agree.
 pub fn c_movement__integrate_arc_flat_turn__7c52c0(
     speed: f32,
     rate: f32,
@@ -371,10 +390,18 @@ pub fn c_movement__integrate_arc_flat_turn__7c52c0(
     let inv = speed / rate;
     let theta = rate * dt;
     let (s, c) = crate::math::trig::sin_cos(theta);
-    let versine = inv - c * inv;
-    let dx = (s * inv * cf - versine * sf) * s0;
-    let dy = (s * inv * sf + versine * cf) * s0;
-    let dz = speed * s1 * dt;
+
+    let inv_w = f64::from(inv);
+    let chord = f64::from(s) * inv_w;
+    let versine = inv_w - f64::from(c) * inv_w;
+    let cf_w = f64::from(cf);
+    let sf_w = f64::from(sf);
+    let s0_w = f64::from(s0);
+    // Term order from the bytes: `FSUBP` at 0x7c5329 leaves the chord term on
+    // the left, `FADDP` at 0x7c5338 the versine term.
+    let dx = super::f64_to_f32((chord * cf_w - versine * sf_w) * s0_w);
+    let dy = super::f64_to_f32((versine * cf_w + chord * sf_w) * s0_w);
+    let dz = super::f64_to_f32(f64::from(speed) * f64::from(s1) * f64::from(dt));
     [dx, dy, dz]
 }
 
@@ -384,6 +411,80 @@ mod tests_c_movement__integrate_arc_flat_turn__7c52c0 {
     fn close(a: f32, b: f32, tol: f32) -> bool {
         (a - b).abs() <= tol
     }
+
+    // A run speed, the client's default turn rate, a 60 Hz step, a 30-degree
+    // facing and a shallow pitch basis.
+    const SPEED: f32 = 7.0;
+    const RATE: f32 = 3.141_594;
+    const DT: f32 = 1.0 / 60.0;
+    const CF: f32 = 0.866_025_4;
+    const SF: f32 = 0.5;
+    const S0: f32 = 0.998_629_5;
+    const S1: f32 = 0.052_335_96;
+
+    /// The per-step `f32` chain, as the fixture oracle for what the stores rule out.
+    ///
+    /// Every intermediate rounds to `f32` here, including the `cos*inv` product
+    /// the versine subtracts and both rotated horizontal terms. The original
+    /// keeps all of them on the register stack, so a fixture that separates this
+    /// from the kernel is a fixture that can see the width.
+    fn per_step_f32(
+        speed: f32,
+        rate: f32,
+        dt: f32,
+        cf: f32,
+        sf: f32,
+        s0: f32,
+        s1: f32,
+    ) -> [f32; 3] {
+        let inv = speed / rate;
+        let theta = rate * dt;
+        let (s, c) = crate::math::trig::sin_cos(theta);
+        let versine = inv - c * inv;
+        [
+            (s * inv * cf - versine * sf) * s0,
+            (s * inv * sf + versine * cf) * s0,
+            speed * s1 * dt,
+        ]
+    }
+
+    #[test]
+    fn wide_chain_pinned_at_run_speed() {
+        let got = f(SPEED, RATE, DT, CF, SF, S0, S1);
+        let narrow = per_step_f32(SPEED, RATE, DT, CF, SF, S0, S1);
+        // The pins are only evidence while the fixture still separates the two
+        // chains; assert that first, on every lane it separates.
+        for i in 0..3 {
+            assert_ne!(
+                got[i].to_bits(),
+                narrow[i].to_bits(),
+                "lane {i} stopped separating"
+            );
+        }
+        assert_eq!(got[0].to_bits(), 0x3dcb_6bf2);
+        assert_eq!(got[1].to_bits(), 0x3d79_506e);
+        assert_eq!(got[2].to_bits(), 0x3bc8_13af);
+    }
+
+    #[test]
+    fn wide_chain_pinned_on_a_long_arc() {
+        // A large `speed/rate` puts the versine deep into its cancellation: the
+        // subtraction is the whole of the result and the product feeding it is
+        // where a narrow chain loses the bits.
+        const FAST: f32 = 56.0;
+        const SLOW_RATE: f32 = 0.75 * RATE;
+        const SHORT_DT: f32 = 1.0 / 200.0;
+        let got = f(FAST, SLOW_RATE, SHORT_DT, CF, SF, S0, S1);
+        let narrow = per_step_f32(FAST, SLOW_RATE, SHORT_DT, CF, SF, S0, S1);
+        // The vertical lane has no cancellation in it and agrees here, so only
+        // the two horizontal lanes carry the separation.
+        assert_ne!(got[0].to_bits(), narrow[0].to_bits());
+        assert_ne!(got[1].to_bits(), narrow[1].to_bits());
+        assert_eq!(got[0].to_bits(), 0x3e77_1e1e);
+        assert_eq!(got[1].to_bits(), 0x3e10_9eda);
+        assert_eq!(got[2].to_bits(), 0x3c70_179e);
+    }
+
     #[test]
     fn zero_dt_zero_delta() {
         let o = f(5.0, 2.0, 0.0, 1.0, 0.0, 1.0, 1.0);
@@ -427,6 +528,22 @@ mod tests_c_movement__integrate_arc_flat_turn__7c52c0 {
 /// cross-coupling scale. The pitch is advanced by `rate*dt` and clamped; when it
 /// crosses a bound the leftover `overshoot` is spliced back into the vertical
 /// component. Returns the local displacement `[dx, dy, dz]`.
+///
+/// The widths come from the stores. Two of them are `FST m32`, which narrows
+/// what it writes but leaves the wide value in the register: `0x7c5012` spills
+/// the inverse rate and `0x7c5015` then multiplies the *unnarrowed* quotient by
+/// the speed, and `0x7c501e` spills `dt_local` while `0x7c5021` advances the
+/// pitch from the *unnarrowed* `rate*dt`. The two clamp `FCOM`s therefore
+/// compare a wide pitch against `f32` bounds, while the overshoot multiplies at
+/// `0x7c5037` / `0x7c505e` read the narrowed `f32` slot.
+///
+/// Downstream, `scaled`, `turn`, `p_ver` (`0x7c50e6`) and `mix` (`0x7c50f5`)
+/// each narrow at an `FSTP m32`, and everything between those stores (the yaw
+/// sum and its `+0x7ffa24` scale, the radial versine, both rotated terms and
+/// the pitch-basis products) stays on the register stack at the client's
+/// 53-bit precision control. `dz` is an `FST` again (`0x7c5124`): the written
+/// component is narrow, but the splice below adds to the wide sum still in the
+/// register.
 // The fourteen parameters are the 0x7c4fd0 argument list: the receiver fields
 // the stock body reads one at a time (`+0x84`, `+0x54`, `+0x68`/`+0x6c`,
 // `+0x70`/`+0x74`) plus the constants it loads inline from 0x7ff9d8 and
@@ -449,42 +566,61 @@ pub fn c_movement__integrate_arc_fwd_turn_pitch__7c4fd0(
     kx: f32,
 ) -> [f32; 3] {
     let ratio = speed / fwd;
-    let inv_rate = num / rate;
-    let scaled = inv_rate * speed;
+    let inv_rate_w = f64::from(num) / f64::from(rate);
+    let inv_rate = super::f64_to_f32(inv_rate_w);
+    let scaled = super::f64_to_f32(inv_rate_w * f64::from(speed));
 
-    let mut dt_local = rate * dt;
-    let pitch_new = rate * dt + cur_pitch;
+    let step_w = f64::from(rate) * f64::from(dt);
+    let mut dt_local = super::f64_to_f32(step_w);
+    let pitch_new = step_w + f64::from(cur_pitch);
     let overshoot;
-    if pitch_new > upper {
-        overshoot = (pitch_new - upper) * inv_rate;
+    if pitch_new > f64::from(upper) {
+        overshoot = super::f64_to_f32((pitch_new - f64::from(upper)) * f64::from(inv_rate));
         dt_local = upper - cur_pitch;
-    } else if pitch_new < lower {
+    } else if pitch_new < f64::from(lower) {
         // the original adds `upper` (not `lower`) into the overshoot term.
-        overshoot = (pitch_new + upper) * inv_rate;
+        overshoot = super::f64_to_f32((pitch_new + f64::from(upper)) * f64::from(inv_rate));
         dt_local = lower - cur_pitch;
     } else {
         overshoot = 0.0;
     }
 
-    let turn = (dt - overshoot) * fwd;
+    let turn = super::f64_to_f32((f64::from(dt) - f64::from(overshoot)) * f64::from(fwd));
     let (s1, c1) = crate::math::trig::sin_cos(turn);
     let (s2, c2) = crate::math::trig::sin_cos(dt_local);
 
-    let yaw = (s1 * ratio + s2 * scaled) * kx;
-    let r_ver = c1 * ratio - ratio;
-    let p_ver = scaled - c2 * scaled;
+    let ratio_w = f64::from(ratio);
+    let scaled_w = f64::from(scaled);
+    let cf_w = f64::from(cf);
+    let sf_w = f64::from(sf);
+    // `FADDP` at 0x7c50cc puts the pitch term on the left of the yaw sum.
+    let yaw = (f64::from(s2) * scaled_w + f64::from(s1) * ratio_w) * f64::from(kx);
+    let r_ver = f64::from(c1) * ratio_w - ratio_w;
+    let p_ver = super::f64_to_f32(scaled_w - f64::from(c2) * scaled_w);
 
-    let mix = yaw * cf - r_ver * sf;
-    let dx = mix * p0 - p_ver * p1;
-    let dy = yaw * sf + r_ver * cf;
-    let mut dz = mix * p1 + p_ver * p0;
+    let mix = super::f64_to_f32(yaw * cf_w - r_ver * sf_w);
+    // `FADDP` at 0x7c5100 puts the radial term on the left; `dy` reaches its
+    // store at 0x7c5116 without narrowing, unlike `mix` just above it.
+    let dy = super::f64_to_f32(r_ver * cf_w + yaw * sf_w);
+
+    let p0_w = f64::from(p0);
+    let p1_w = f64::from(p1);
+    let mix_w = f64::from(mix);
+    let p_ver_w = f64::from(p_ver);
+    let dx = super::f64_to_f32(mix_w * p0_w - p_ver_w * p1_w);
+    let dz_w = p_ver_w * p0_w + mix_w * p1_w;
+    let mut dz = super::f64_to_f32(dz_w);
 
     if overshoot.abs() >= eps {
-        let ov = overshoot * speed;
-        if ((dt_local + cur_pitch) - upper).abs() < eps {
-            dz += ov;
+        let ov = f64::from(overshoot) * f64::from(speed);
+        // The bottom-out test is register-resident too (0x7c5139..0x7c5147): the
+        // `f32` `dt_local` widens, the pitch and the bound fold into it, and only
+        // the compare against `eps` is at `f32` width.
+        let bottom = (f64::from(dt_local) + f64::from(cur_pitch)) - f64::from(upper);
+        if bottom.abs() < f64::from(eps) {
+            dz = super::f64_to_f32(ov + dz_w);
         } else {
-            dz -= ov;
+            dz = super::f64_to_f32(dz_w - ov);
         }
     }
     [dx, dy, dz]
@@ -501,6 +637,101 @@ mod tests_c_movement__integrate_arc_fwd_turn_pitch__7c4fd0 {
     fn close(a: f32, b: f32, tol: f32) -> bool {
         (a - b).abs() <= tol
     }
+
+    // The host's own constants, for the pinned fixtures: the bottom-out epsilon
+    // at 0x8026bc is 2^-20 and the yaw cross-coupling scale at 0x7ffa24 is 0.5.
+    const EPS_HOST: f32 = 1.0 / 1_048_576.0;
+    const KX_HOST: f32 = 0.5;
+    const SPEED: f32 = 7.0;
+    const FWD: f32 = 4.5;
+    const RATE: f32 = 3.141_594;
+    const CF: f32 = 0.866_025_4;
+    const SF: f32 = 0.5;
+    const P0: f32 = 0.968_912_4;
+    const P1: f32 = 0.247_403_96;
+
+    /// The per-step `f32` chain, as the fixture oracle for what the stores rule out.
+    ///
+    /// Rounds every intermediate to `f32`: the pitch advance, the yaw sum, both
+    /// versines and all four basis products. The original narrows only where an
+    /// `FST`/`FSTP m32` says so, which is what a separating fixture detects.
+    ///
+    /// The fixtures vary only the rate, the step and the entry pitch; everything
+    /// else is a module constant, so the oracle takes those three.
+    fn per_step_f32(rate: f32, dt: f32, cur_pitch: f32) -> [f32; 3] {
+        let ratio = SPEED / FWD;
+        let inv_rate = NUM / rate;
+        let scaled = inv_rate * SPEED;
+        let mut dt_local = rate * dt;
+        let pitch_new = rate * dt + cur_pitch;
+        let overshoot;
+        if pitch_new > UP {
+            overshoot = (pitch_new - UP) * inv_rate;
+            dt_local = UP - cur_pitch;
+        } else if pitch_new < LO {
+            overshoot = (pitch_new + UP) * inv_rate;
+            dt_local = LO - cur_pitch;
+        } else {
+            overshoot = 0.0;
+        }
+        let turn = (dt - overshoot) * FWD;
+        let (s1, c1) = crate::math::trig::sin_cos(turn);
+        let (s2, c2) = crate::math::trig::sin_cos(dt_local);
+        let yaw = (s1 * ratio + s2 * scaled) * KX_HOST;
+        let r_ver = c1 * ratio - ratio;
+        let p_ver = scaled - c2 * scaled;
+        let mix = yaw * CF - r_ver * SF;
+        let mut dz = mix * P1 + p_ver * P0;
+        if overshoot.abs() >= EPS_HOST {
+            let ov = overshoot * SPEED;
+            if ((dt_local + cur_pitch) - UP).abs() < EPS_HOST {
+                dz += ov;
+            } else {
+                dz -= ov;
+            }
+        }
+        [mix * P0 - p_ver * P1, yaw * SF + r_ver * CF, dz]
+    }
+
+    fn pin(dt: f32, cur_pitch: f32, rate: f32, want: [u32; 3]) {
+        let got = f(
+            SPEED, FWD, rate, dt, cur_pitch, CF, SF, P0, P1, NUM, UP, LO, EPS_HOST, KX_HOST,
+        );
+        let narrow = per_step_f32(rate, dt, cur_pitch);
+        // The pins are only evidence while the fixture still separates the two
+        // chains, so that is asserted first.
+        for i in 0..3 {
+            assert_ne!(
+                got[i].to_bits(),
+                narrow[i].to_bits(),
+                "lane {i} stopped separating"
+            );
+            assert_eq!(got[i].to_bits(), want[i], "lane {i}");
+        }
+    }
+
+    #[test]
+    fn wide_chain_pinned_without_a_clamp() {
+        pin(
+            1.0 / 60.0,
+            0.25,
+            RATE,
+            [0x3dcb_242f, 0x3d5f_413c, 0x3ce9_4ce7],
+        );
+    }
+
+    #[test]
+    fn wide_chain_pinned_on_the_upper_clamp() {
+        // `rate*dt + cur_pitch` overshoots `+pi/2`, so the leftover is spliced
+        // back into the vertical component from the unnarrowed sum.
+        pin(0.5, 1.2, RATE, [0x3f3c_543d, 0x3e5a_5a54, 0x4041_25d9]);
+    }
+
+    #[test]
+    fn wide_chain_pinned_on_the_lower_clamp() {
+        pin(0.5, -1.2, -RATE, [0x3f4f_82b7, 0x3e5a_5a54, 0xc027_e115]);
+    }
+
     #[test]
     fn zero_dt_in_range_zero_delta() {
         let o = f(
@@ -562,6 +793,21 @@ mod tests_c_movement__integrate_arc_fwd_turn_pitch__7c4fd0 {
 /// pitch is advanced by `rate*dt` and clamped; the leftover `overshoot` is
 /// spliced back into the vertical component. Returns the local displacement
 /// `[dx, dy, dz]`.
+///
+/// The widths come from the stores, and the two that matter most are `FST m32`,
+/// which narrows what it writes and keeps the wide value in the register:
+/// `0x7c519f` spills the inverse rate while `0x7c51a2` scales the *unnarrowed*
+/// quotient by the speed, and `0x7c51ab` spills `dt_local` while `0x7c51ae`
+/// advances the pitch from the *unnarrowed* `rate*dt`. The clamp `FCOM`s
+/// compare that wide pitch against the `f32` bounds; the overshoot multiplies at
+/// `0x7c51c4` / `0x7c51eb` read the narrowed `f32` slot.
+///
+/// After the `FSINCOS` stores at `0x7c521f` / `0x7c5221` nothing narrows again
+/// until the three component stores: `sin*scaled`, the versine
+/// `scaled - cos*scaled`, the shared plane term and the `+0x70`/`+0x74`
+/// products all stay on the register stack at the client's 53-bit precision
+/// control. `dz` is an `FST` (`0x7c5262`), so the splice below adds to the wide
+/// sum rather than to the component that was written.
 // The twelve parameters are the 0x7c5180 argument list: the same receiver
 // fields and pitch-clamp bounds as the 0x7c4fd0 variant, less the forward speed
 // and the yaw cross-coupling scale this entry point does not take. The count
@@ -581,37 +827,51 @@ pub fn c_movement__integrate_arc_turn_pitch__7c5180(
     lower: f32,
     eps: f32,
 ) -> [f32; 3] {
-    let inv_rate = num / rate;
-    let scaled = inv_rate * speed;
+    let inv_rate_w = f64::from(num) / f64::from(rate);
+    let inv_rate = super::f64_to_f32(inv_rate_w);
+    let scaled = super::f64_to_f32(inv_rate_w * f64::from(speed));
 
-    let mut dt_local = rate * dt;
-    let pitch_new = rate * dt + cur_pitch;
+    let step_w = f64::from(rate) * f64::from(dt);
+    let mut dt_local = super::f64_to_f32(step_w);
+    let pitch_new = step_w + f64::from(cur_pitch);
     let overshoot;
-    if pitch_new > upper {
-        overshoot = (pitch_new - upper) * inv_rate;
+    if pitch_new > f64::from(upper) {
+        overshoot = super::f64_to_f32((pitch_new - f64::from(upper)) * f64::from(inv_rate));
         dt_local = upper - cur_pitch;
-    } else if pitch_new < lower {
+    } else if pitch_new < f64::from(lower) {
         // the original adds `upper` (not `lower`) into the overshoot term.
-        overshoot = (pitch_new + upper) * inv_rate;
+        overshoot = super::f64_to_f32((pitch_new + f64::from(upper)) * f64::from(inv_rate));
         dt_local = lower - cur_pitch;
     } else {
         overshoot = 0.0;
     }
 
     let (s, c) = crate::math::trig::sin_cos(dt_local);
-    let a = s * scaled;
-    let b = scaled - c * scaled;
+    let scaled_w = f64::from(scaled);
+    let a = f64::from(s) * scaled_w;
+    let b = scaled_w - f64::from(c) * scaled_w;
 
-    let dx = (a * p0 - b * p1) * cf;
-    let dy = (a * p0 - b * p1) * sf;
-    let mut dz = a * p1 + b * p0;
+    let p0_w = f64::from(p0);
+    let p1_w = f64::from(p1);
+    // The original rebuilds `a*p0 - b*p1` for the second component (0x7c5235 and
+    // again at 0x7c5246) out of the same two stack slots, same operand order, so
+    // one binding stands for both.
+    let plane = a * p0_w - b * p1_w;
+    let dx = super::f64_to_f32(plane * f64::from(cf));
+    let dy = super::f64_to_f32(plane * f64::from(sf));
+    // `FADDP` at 0x7c5260 puts the versine term on the left.
+    let dz_w = b * p0_w + a * p1_w;
+    let mut dz = super::f64_to_f32(dz_w);
 
     if overshoot.abs() >= eps {
-        let ov = overshoot * speed;
-        if ((dt_local + cur_pitch) - upper).abs() < eps {
-            dz += ov;
+        let ov = f64::from(overshoot) * f64::from(speed);
+        // Register-resident through 0x7c5277..0x7c5285; only the compare against
+        // `eps` happens at `f32` width.
+        let bottom = (f64::from(dt_local) + f64::from(cur_pitch)) - f64::from(upper);
+        if bottom.abs() < f64::from(eps) {
+            dz = super::f64_to_f32(ov + dz_w);
         } else {
-            dz -= ov;
+            dz = super::f64_to_f32(dz_w - ov);
         }
     }
     [dx, dy, dz]
@@ -627,6 +887,92 @@ mod tests_c_movement__integrate_arc_turn_pitch__7c5180 {
     fn close(a: f32, b: f32, tol: f32) -> bool {
         (a - b).abs() <= tol
     }
+
+    // The host's own bottom-out epsilon at 0x8026bc, 2^-20.
+    const EPS_HOST: f32 = 1.0 / 1_048_576.0;
+    const SPEED: f32 = 7.0;
+    const RATE: f32 = 3.141_594;
+    const CF: f32 = 0.866_025_4;
+    const SF: f32 = 0.5;
+    const P0: f32 = 0.968_912_4;
+    const P1: f32 = 0.247_403_96;
+
+    /// The per-step `f32` chain, as the fixture oracle for what the stores rule out.
+    ///
+    /// Rounds the pitch advance, the versine and every basis product to `f32`.
+    /// The original keeps all of them on the register stack between the
+    /// `FSINCOS` stores and the three component stores.
+    ///
+    /// The fixtures vary only the step and the entry pitch; everything else is a
+    /// module constant, so the oracle takes those two.
+    fn per_step_f32(dt: f32, cur_pitch: f32) -> [f32; 3] {
+        let inv_rate = NUM / RATE;
+        let scaled = inv_rate * SPEED;
+        let mut dt_local = RATE * dt;
+        let pitch_new = RATE * dt + cur_pitch;
+        let overshoot;
+        if pitch_new > UP {
+            overshoot = (pitch_new - UP) * inv_rate;
+            dt_local = UP - cur_pitch;
+        } else if pitch_new < LO {
+            overshoot = (pitch_new + UP) * inv_rate;
+            dt_local = LO - cur_pitch;
+        } else {
+            overshoot = 0.0;
+        }
+        let (s, c) = crate::math::trig::sin_cos(dt_local);
+        let a = s * scaled;
+        let b = scaled - c * scaled;
+        let mut dz = a * P1 + b * P0;
+        if overshoot.abs() >= EPS_HOST {
+            let ov = overshoot * SPEED;
+            if ((dt_local + cur_pitch) - UP).abs() < EPS_HOST {
+                dz += ov;
+            } else {
+                dz -= ov;
+            }
+        }
+        [(a * P0 - b * P1) * CF, (a * P0 - b * P1) * SF, dz]
+    }
+
+    #[test]
+    fn wide_chain_pinned_without_a_clamp() {
+        const DT: f32 = 1.0 / 80.0;
+        const CUR: f32 = -0.35;
+        let got = f(SPEED, RATE, DT, CUR, CF, SF, P0, P1, NUM, UP, LO, EPS_HOST);
+        let narrow = per_step_f32(DT, CUR);
+        // The pins are only evidence while the fixture still separates the two
+        // chains, so that is asserted first.
+        for i in 0..3 {
+            assert_ne!(
+                got[i].to_bits(),
+                narrow[i].to_bits(),
+                "lane {i} stopped separating"
+            );
+        }
+        assert_eq!(got[0].to_bits(), 0x3d95_9323);
+        assert_eq!(got[1].to_bits(), 0x3d2c_b6cc);
+        assert_eq!(got[2].to_bits(), 0x3cbe_edd4);
+    }
+
+    #[test]
+    fn wide_chain_pinned_on_the_upper_clamp() {
+        // `rate*dt + cur_pitch` overshoots `+pi/2`; the leftover splices into the
+        // vertical component from the unnarrowed sum the `FST` at 0x7c5262 left
+        // in the register.
+        const DT: f32 = 0.5;
+        const CUR: f32 = 1.2;
+        let got = f(SPEED, RATE, DT, CUR, CF, SF, P0, P1, NUM, UP, LO, EPS_HOST);
+        let narrow = per_step_f32(DT, CUR);
+        // The two chains agree on lane 0 at this fixture, so the separation is
+        // carried by the other two.
+        assert_ne!(got[1].to_bits(), narrow[1].to_bits());
+        assert_ne!(got[2].to_bits(), narrow[2].to_bits());
+        assert_eq!(got[0].to_bits(), 0x3f25_2176);
+        assert_eq!(got[1].to_bits(), 0x3ebe_ad31);
+        assert_eq!(got[2].to_bits(), 0x4041_4c36);
+    }
+
     #[test]
     fn zero_dt_zero_delta() {
         let o = f(5.0, 2.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, NUM, UP, LO, EPS);

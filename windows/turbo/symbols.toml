@@ -1647,13 +1647,54 @@ args = ["*mut u8", "f32", "*const f32", "*mut f32"]
 preserve = []
 
 
-# Golden-diff the written region, byte compare. Region covers everything the
-# adapter touches, reads included: the argument is swapped for a fixed-size
-# scratch buffer, so a read past the declared length reads past that buffer.
+# Golden-diff the written region. Region covers everything the adapter touches,
+# reads included: the argument is swapped for a fixed-size scratch buffer, so a
+# read past the declared length reads past that buffer.
+#
+# NOT a byte compare, and an armed session is why: 73,728 reports in two minutes,
+# every one of them a one-to-seven ulp spread in the low byte of a displacement
+# lane. Two causes were behind that, and only one of them was fixable.
+#
+# The fixable one was width. The original keeps `sin*inv`, the versine
+# `inv - cos*inv`, both rotated horizontal terms and the `+0x70` scale on the
+# x87 register stack from 0x7c530d through the stores at 0x7c532e/0x7c533d, and
+# does the same with `speed*s1` into the `dt` multiply, so each component rounds
+# exactly once; the reimplementation was rounding every step to `f32`. That is
+# now transcribed from the stores and is gone.
+#
+# What is left is the trig, and it cannot be removed. The original's angle goes
+# through the hardware `FSINCOS` at 0x7c5307 where this uses the shared
+# polynomial, so the sine and cosine differ by a few `f32` ulp before anything
+# else happens.
+#
+# Sizing that residual is an ABSOLUTE-error problem, not a ULP one, and the
+# reason is the versine: it is `inv` minus a near-equal `cos*inv`, so as the
+# step angle shrinks the result collapses toward zero while the error inherited
+# from `cos` does not move, and the ULP distance grows without bound. A searched
+# sweep over the range this entry sees (the resolved rate at `+0x9c` bracketed
+# down to 1.0 rad/s against the client's own ~pi default, speed up to the 60.148
+# cap the acceleration curve enforces, and a 4..500 Hz step) puts the worst
+# lane at 3.3e-6 absolute while the same lanes run to 15,568 ulp. The bound is
+# therefore carried by `abs`, and 5e-5 gives the measurement an order of
+# headroom while still sitting three orders below a per-frame displacement.
+#
+# `ulp = 4` is the second gate rather than a measured residual: a lane must
+# exceed BOTH, so it keeps a difference too small to matter from ever being
+# reported on a large lane. Every lane in the region is an `f32`, so no
+# `float_from`.
+#
+# One thing this table cannot do, stated rather than left to be assumed:
+# over the same sweep the OLD per-step `f32` chain peaked at 5.2e-6, the same
+# order as the trig residual, so no absolute bound can separate a return of the
+# width defect from the trig. What pins the width is
+# `wide_chain_pinned_at_run_speed` and `wide_chain_pinned_on_a_long_arc`, which
+# compare bit patterns against the narrow chain directly.
 [functions.CMovement__IntegrateArc_FlatTurn__7c52c0.diff]
 mode  = "inout"
 out   = { arg = 3, len = 12 }
-float = "bytes"
+float = "f32"
+ulp   = 4
+abs   = 5e-5
 
 [functions.CMovement__IntegrateArc_FwdTurnPitch__7c4fd0]
 rva  = 0x3c4fd0
@@ -1664,13 +1705,39 @@ args = ["*mut u8", "f32", "*const f32", "*mut f32"]
 preserve = []
 
 
-# Golden-diff the written region, byte compare. Region covers everything the
-# adapter touches, reads included: the argument is swapped for a fixed-size
-# scratch buffer, so a read past the declared length reads past that buffer.
+# Golden-diff the written region. Region covers everything the adapter touches,
+# reads included: the argument is swapped for a fixed-size scratch buffer, so a
+# read past the declared length reads past that buffer.
+#
+# NOT a byte compare, for the reasons written out on
+# `CMovement__IntegrateArc_FlatTurn__7c52c0`: this is the same family and the
+# same two causes. The width half was worse here, because two of this body's
+# spills are `FST m32` rather than `FSTP m32`: 0x7c5012 and 0x7c501e write a
+# narrowed slot but leave the wide value in the register, and the very next
+# instruction consumes the wide one. The pitch advance and the inverse-rate
+# scale were both being computed from the narrowed slot. That is transcribed
+# from the stores now.
+#
+# The trig residual that remains is `FSINCOS` at 0x7c509c and 0x7c50b7 against
+# the shared polynomial, twice per call, reaching the lanes through the pitch
+# versine `scaled - cos*scaled` and the radial versine `cos*ratio - ratio`, both
+# of them cancellations, so `abs` is the only ruler that can bound it. Over the
+# same searched sweep as the flat-turn entry (rate down to 1.0 rad/s, speed to
+# the 60.148 cap, a 4..500 Hz step) the worst lane is 6.7e-6 absolute at
+# 15,788 ulp. 5e-5 is that measurement with an
+# order of headroom, matched to its sibling because the residual has the same
+# `speed/rate` driver; `ulp = 4` is the second gate, not a measured number.
+#
+# As on the sibling: the old per-step `f32` chain peaked at 8.6e-6 over the same
+# sweep, the same order as the trig, so this table cannot tell a width
+# regression from the trig residual. `wide_chain_pinned_without_a_clamp` and the
+# two clamp fixtures next to it are what pin the width.
 [functions.CMovement__IntegrateArc_FwdTurnPitch__7c4fd0.diff]
 mode  = "inout"
 out   = { arg = 3, len = 12 }
-float = "bytes"
+float = "f32"
+ulp   = 4
+abs   = 5e-5
 
 [functions.CMovement__IntegrateArc_TurnPitch__7c5180]
 rva  = 0x3c5180
@@ -1681,13 +1748,35 @@ args = ["*mut u8", "f32", "*mut f32"]
 preserve = []
 
 
-# Golden-diff the written region, byte compare. Region covers everything the
-# adapter touches, reads included: the argument is swapped for a fixed-size
-# scratch buffer, so a read past the declared length reads past that buffer.
+# Golden-diff the written region. Region covers everything the adapter touches,
+# reads included: the argument is swapped for a fixed-size scratch buffer, so a
+# read past the declared length reads past that buffer.
+#
+# NOT a byte compare, same family and same two causes as
+# `CMovement__IntegrateArc_FlatTurn__7c52c0`. The width half here is the pair of
+# `FST m32` spills at 0x7c519f and 0x7c51ab (narrowed slot written, wide value
+# kept and immediately consumed by the next instruction), plus the whole run
+# from the `FSINCOS` stores at 0x7c521f/0x7c5221 to the three component stores,
+# which the reimplementation was stepping through in `f32`.
+#
+# The trig residual that remains is `FSINCOS` at 0x7c521d against the shared
+# polynomial, reaching the lanes through the versine `scaled - cos*scaled`.
+# That is a cancellation, so `abs` is the ruler: over the same searched sweep as
+# the sibling entries (rate down to 1.0 rad/s, speed to the 60.148 cap, a
+# 4..500 Hz step) the worst lane is 3.8e-6 absolute at 20,424 ulp. 5e-5 is that
+# with an order of headroom; `ulp = 4` is the second gate, not a measured
+# number.
+#
+# As on the siblings: the old per-step `f32` chain peaked at 5.7e-6 over the same
+# sweep, the same order as the trig, so a width regression is not separable here.
+# `wide_chain_pinned_without_a_clamp` and `wide_chain_pinned_on_the_upper_clamp`
+# are what pin it.
 [functions.CMovement__IntegrateArc_TurnPitch__7c5180.diff]
 mode  = "inout"
 out   = { arg = 2, len = 12 }
-float = "bytes"
+float = "f32"
+ulp   = 4
+abs   = 5e-5
 
 [functions.CParticleEmitter__UpdateParticlePhysics__7b2680]
 rva  = 0x3b2680
