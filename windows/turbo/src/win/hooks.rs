@@ -4265,7 +4265,8 @@ pub extern "thiscall" fn c_gx_font__sub_pixel_advance__5cb080(
 ///   ≤ 0), base advance from the float map, `base + kern×scale` fold, node
 ///   insert through the embedded hash object at `font+0x3c` (its vtable
 ///   slot 1 allocates the node — live-vtable delegate), flags |= 2, CRT-ceil
-///   (0x73fdf5), `FST` to `node+0x1c` and return the same value.
+///   (0x73fdf5), `FST` to `node+0x1c` and return the same value. Outlined
+///   `#[cold]`, so the probe above does not carry its frame.
 pub extern "thiscall" fn c_gx_font__get_kerned_advance__5ca2d0(
     font: *mut u8,
     glyph: u32,
@@ -4312,6 +4313,29 @@ pub extern "thiscall" fn c_gx_font__get_kerned_advance__5ca2d0(
             node = unsafe { elq_rd_u32(node.wrapping_add(linkoff).wrapping_add(4)) } as usize;
         }
     }
+
+    c_gx_font__get_kerned_advance__5ca2d0_miss(font, glyph, next_glyph, combined, found)
+}
+
+/// Miss/uncached arm of `CGxFont::GetKernedAdvance` (0x5ca305..0x5ca431).
+///
+/// Outlined `#[cold]` so the cached-hit probe in
+/// [`c_gx_font__get_kerned_advance__5ca2d0`] keeps a frame of its own: the pair
+/// key, the found-node slot and the font pointer stay in registers there
+/// instead of spilling, and the stack slot the `base + kern×scale` fold hands
+/// `0x5ca240`'s `ST0` through moves in here with the rest of the float chain.
+/// `found` is the node the probe stopped on with flag bit 1 clear, or 0 when
+/// the pair still has to be inserted.
+#[cold]
+#[inline(never)]
+fn c_gx_font__get_kerned_advance__5ca2d0_miss(
+    font: *mut u8,
+    glyph: u32,
+    next_glyph: u32,
+    combined: u32,
+    mut found: usize,
+) -> f32 {
+    let fontu = font as usize;
 
     // ---- miss / uncached path (0x5ca305..0x5ca431) ----
     // 0x5d0370 guarded getter: null -> Storm SetLastError(0x57) + 0, else
