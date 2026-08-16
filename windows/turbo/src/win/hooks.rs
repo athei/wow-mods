@@ -10314,8 +10314,14 @@ pub extern "fastcall" fn height_bucket__rasterize_edges__681b50(
     const COL_BIAS: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x46_861c) as *const f32;
     const HORIZON: *mut f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x47_b750) as *mut f32;
 
+    // The matrix is copied out of `0x87b700` once instead of borrowed in place: the
+    // loop below stores horizon columns through `0x87b750`, and neither address is
+    // one the compiler can prove disjoint from the other, so a borrowed matrix is
+    // re-loaded and re-packed on every vertex. A local whose address does not escape
+    // lifts that pair construction out of the loop. Nothing the loop calls writes
+    // `.data`, so the single read sees what every reload would have.
     // SAFETY: fixed, initialized view matrix (16 f32) in the live host image.
-    let view = unsafe { &*VIEW };
+    let view = unsafe { VIEW.read() };
     // SAFETY: fixed, initialized `.data` dword in the live host image.
     let focal = unsafe { FOCAL.read() };
     // SAFETY: fixed, initialized `.data` dword in the live host image.
@@ -10344,7 +10350,7 @@ pub extern "fastcall" fn height_bucket__rasterize_edges__681b50(
         let src_ptr = unsafe { verts_base.add(idx * 0xc) };
         // SAFETY: `src_ptr` addresses 3 contiguous, aligned source floats.
         let src = unsafe { *src_ptr.cast::<[f32; 3]>() };
-        crate::math::world::height_bucket__project_vert__681b50(src, off, view, focal)
+        crate::math::world::height_bucket__project_vert__681b50(src, off, &view, focal)
     };
 
     let n = count as usize;
@@ -10363,10 +10369,18 @@ pub extern "fastcall" fn height_bucket__rasterize_edges__681b50(
                 let slot = unsafe { HORIZON.add(c as usize) };
                 // SAFETY: `slot` is an initialized, writable horizon column.
                 let cur_h = unsafe { slot.read() };
-                if cur_h < raise {
-                    // SAFETY: `slot` is the same in-bounds writable horizon column.
-                    unsafe { slot.write(raise) };
-                }
+                // The store-back is unconditional so a run of columns lowers to a
+                // packed max instead of a branch per lane. On the not-raised side it
+                // writes back the bits it just read, which is equivalent only because
+                // the horizon buffer at `0x87b750` is game-thread private for the
+                // length of this loop (`HeightBucket::TestBox` is its other reader).
+                // The ternary is what keeps that exact: `MAXPS`/`MAXSS` answer with
+                // their second operand on a NaN and on a signed-zero tie, and the
+                // built code puts `raise` first and the column second, so an unraised
+                // column keeps its bytes as the stock `ja` left them. `f32::max` is
+                // not the same function — it drops the NaN.
+                // SAFETY: `slot` is the same in-bounds writable horizon column.
+                unsafe { slot.write(if cur_h < raise { raise } else { cur_h }) };
                 c += 1;
             }
         }
