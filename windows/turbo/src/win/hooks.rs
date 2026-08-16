@@ -1063,16 +1063,42 @@ pub fn c44_matrix__set_rotation_axis_angle__7bdb00(
         return out;
     }
     // SAFETY: the original is `__fastcall(out, axis, ...)`; `axis` addresses three
-    // contiguous, 4-byte-aligned `f32` (a `C3Vector`). Non-null checked above.
+    // contiguous, 4-byte-aligned `f32` (a `C3Vector`). Non-null checked above, and
+    // read before anything is stored to `out`, so the two may alias.
     let a = &unsafe { axis.cast::<[f32; 3]>().read_unaligned() };
-    let r = crate::math::matrix44::c44_matrix__set_rotation_axis_angle__7bdb00(
-        a,
-        angle,
-        skip_normalize != 0,
-    );
-    // SAFETY: `out` addresses a `C44Matrix` — 16 contiguous, aligned `f32`; this
-    // overload writes the entire matrix.
-    unsafe { out.cast::<[f32; 16]>().write_unaligned(r) };
+    // The layout is all this entry point adds to `0x7be490` (whose flag runs the
+    // other way round), so scatter that kernel's nine elements straight into `out`
+    // instead of staging a whole sixteen-float matrix to copy over them.
+    let r =
+        crate::math::matrix33::c33_matrix__from_axis_angle__7be490(a, angle, skip_normalize == 0);
+    // SAFETY: `out` addresses a `C44Matrix`, 16 contiguous, aligned `f32`; non-null
+    // checked above. Row 0 and its pad; all sixteen floats are written below, as the
+    // original writes them (`0x7bdb76`..`0x7bdb9a` for the six zeros and the `1.0`).
+    unsafe {
+        out.cast::<[f32; 4]>()
+            .write_unaligned([r[0], r[1], r[2], 0.0])
+    };
+    // SAFETY: the second row, one 4-float stride into the same matrix.
+    let row1 = unsafe { out.add(4) };
+    // SAFETY: `row1` addresses the writable second row and its pad.
+    unsafe {
+        row1.cast::<[f32; 4]>()
+            .write_unaligned([r[3], r[4], r[5], 0.0])
+    };
+    // SAFETY: the third row, two strides on, is in bounds for the same reason.
+    let row2 = unsafe { out.add(8) };
+    // SAFETY: `row2` addresses the writable third row and its pad.
+    unsafe {
+        row2.cast::<[f32; 4]>()
+            .write_unaligned([r[6], r[7], r[8], 0.0])
+    };
+    // SAFETY: the affine tail row, three strides on.
+    let row3 = unsafe { out.add(12) };
+    // SAFETY: `row3` addresses the writable translation row.
+    unsafe {
+        row3.cast::<[f32; 4]>()
+            .write_unaligned([0.0, 0.0, 0.0, 1.0])
+    };
     out
 }
 
@@ -42997,10 +43023,13 @@ pub extern "fastcall" fn cg_unit_c__update_facing_interpolation__600cd0(
 /// the stock Filtered collector, and pulls the returned planes into the context
 /// local frame.
 ///
-/// Direct calls into our hooks: `TransformVertexInPlace`, `CAaBox::Union` (×3),
+/// Direct calls into our hooks: `TransformVertexInPlace`,
 /// `C3Vector` Add/Subtract/AddInPlace/Negate/IsValid, `InvertWithScale` — the
 /// stock crossed the detour for every one of them (3+ per plane in the
-/// pull-back loop). `C3Vector::Set` (0x4549a0) is a trivial store pack,
+/// pull-back loop). `CAaBox::Union` (×3) is the one exception: our adapter for
+/// it only reads its two boxes and writes the merge back, so the union runs as
+/// the kernel with the global box read into a local, `a` side first.
+/// `C3Vector::Set` (0x4549a0) is a trivial store pack,
 /// inlined; the 0x61e9c0 stub is a bare RET, omitted. Delegates:
 /// `BuildWorldTransform` (0x630ac0), the falling drop getter (0x7c6140, ST0
 /// f32 return), `GetStateDependentScalar` (0x617430, ST0 — called TWICE in
@@ -43061,20 +43090,25 @@ pub extern "thiscall" fn c_movement__build_swept_bounds_and_query_world__633840(
     // SAFETY: the context origin triple at +0x10.
     let mut origin = unsafe { base.wrapping_add(0x10).cast::<[f32; 3]>().read_unaligned() };
     let mut dir = [dir_x, dir_y, dir_z];
-    let mut xform: [f32; 16] = [
-        1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
-    ];
     // SAFETY: the attached-object pair at +0x38/+0x3c.
     let obj38 = unsafe { base.wrapping_add(0x38).cast::<u32>().read_unaligned() };
     // SAFETY: as above.
     let obj3c = unsafe { base.wrapping_add(0x3c).cast::<u32>().read_unaligned() };
     let has_xform = obj38 | obj3c != 0;
+    // Both readers of the world transform (the build below and the plane pull-back
+    // at the tail) sit under `has_xform`, so the 64-byte identity is written on
+    // that arm rather than on every call. The initialiser itself stays: the stock
+    // build is not known to write all sixteen entries.
+    let mut xform: Option<[f32; 16]> = None;
     if has_xform {
+        let m = xform.insert([
+            1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+        ]);
         // SAFETY: image base verified at load; `__thiscall(xform, obj,
         // val) -> void`, `RET 0x8` per the 0x6338f0 call site.
         let build_xform: extern "thiscall" fn(*mut f32, u32, u32) =
             unsafe { core::mem::transmute(BUILD_XFORM_VA) };
-        build_xform(xform.as_mut_ptr(), obj38, obj3c);
+        build_xform(m.as_mut_ptr(), obj38, obj3c);
         // TransformVertexInPlace updates the origin LOCAL in place (its
         // `out` copy is scratch the stock immediately clobbers with the
         // rotated direction).
@@ -43082,9 +43116,9 @@ pub extern "thiscall" fn c_movement__build_swept_bounds_and_query_world__633840(
         c44_matrix__transform_vertex_in_place__7bcc60(
             scratch.as_mut_ptr(),
             origin.as_mut_ptr(),
-            xform.as_ptr(),
+            m.as_ptr(),
         );
-        dir = crate::math::collision::swept_rotate_dir__633840(&xform, dir);
+        dir = crate::math::collision::swept_rotate_dir__633840(m, dir);
     }
     // Stock validates the origin and drops the result.
     let _ = c3_vector__is_valid__6337d0(origin.as_ptr());
@@ -43115,11 +43149,14 @@ pub extern "thiscall" fn c_movement__build_swept_bounds_and_query_world__633840(
     // Step scalar getter — OUR hook, called directly (no ST0 bridge).
     let state_scalar =
         |t: *mut core::ffi::c_void| cg_unit_c__get_state_dependent_scalar__617430(t.cast::<u8>());
-    // Extends the global AABB by union-ing `bx` into it (our Union hook,
-    // stock copies the result back over the globals).
+    // Extends the global AABB by union-ing `bx` into it (the Union kernel
+    // our hook wraps; stock copies the result back over the globals).
     let union_into_globals = |bx: &[f32; 6]| {
-        let mut out = [0f32; 6];
-        c_aa_box__union__6373b0(out.as_mut_ptr(), BOX_MIN as *const f32, bx.as_ptr());
+        // SAFETY: the fixed swept-bounds global AABB, read as the union's `a` side.
+        let a = unsafe { (BOX_MIN as *const [f32; 6]).read_unaligned() };
+        // The globals stay the FIRST argument: each lane resolves unordered and
+        // equal to `b`, so swapping the two would move bits on a NaN lane.
+        let out = crate::math::aabb::c_aa_box__union__6373b0(&a, bx);
         // SAFETY: the fixed swept-bounds global AABB.
         unsafe { (BOX_MIN as *mut [f32; 6]).write_unaligned(out) };
     };
@@ -43307,7 +43344,7 @@ pub extern "thiscall" fn c_movement__build_swept_bounds_and_query_world__633840(
     }
 
     // Plane pull-back into the context local frame.
-    if has_xform {
+    if let Some(xform) = &xform {
         // SAFETY: the main-list count global (read BEFORE the invert).
         let count = unsafe { LIST_MAIN_COUNT.read() };
         let mut inv = [0f32; 16];
