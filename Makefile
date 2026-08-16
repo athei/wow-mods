@@ -32,6 +32,20 @@ export WOW_TURBO_PERF := 1
 $(info ==> PERF=1: wow_turbo diagnostic layer compiled in: seam counters, tripwires and the script gauge, reporting at info)
 endif
 
+# Frame pointers, which shipped builds do not carry: the default hands EBP to
+# the register allocator as an eighth GPR across the whole DLL. FP=1 puts the
+# frames back, which is what the guest-pc sampler needs to walk the guest EBP
+# chain and attribute a sample to its callers; without them a profile stops at
+# the leaf. It is a config overlay rather than an env because it changes
+# compiler flags on both the Rust and the C++ side (see .cargo/fp.toml), and it
+# composes with the three envs above, so a profiling session is
+# `FP=1 PERF=1 make install`. Only the `windows` target takes it; the AVX
+# variant is a shipping artifact and stays on the default.
+ifeq ($(FP),1)
+FP_CONFIG := --config .cargo/fp.toml
+$(info ==> FP=1: frame pointers forced on, EBP pinned for the sampler's stack walk)
+endif
+
 # WoW 1.12 is 32-bit only, so the PE side builds i686 exclusively (no x64).
 PE_i386     := i686-pc-windows-msvc
 # The unix `.so` must be x86_64 Mach-O (Wine's unix-call boundary), so shipped
@@ -79,7 +93,7 @@ require-wow-exe:
 all: windows unix
 
 windows: require-wine-sdk
-	cd windows && cargo build --profile $(PROFILE) --target $(PE_i386)
+	cd windows && cargo build --profile $(PROFILE) --target $(PE_i386) $(FP_CONFIG)
 	# Wine builtins: version.dll (the injector) and wow_mods.dll (the unixlib
 	# bridge that pairs wow_mods.so). The mods themselves (wow_turbo.dll,
 	# wow_translate.dll) are native and are NOT stamped.
@@ -125,7 +139,8 @@ install: all require-wow-exe
 	done
 	# Native game-side mods → the app bundle's game mods/ dir (loaded by path via
 	# dlls.txt), NOT the wine builtin dir. `DIFF=1 make install` builds wow_turbo
-	# with the differential harness. List both in `dlls.txt` next to WoW.exe:
+	# with the differential harness; `FP=1 PERF=1 make install` builds the one a
+	# profiling capture wants. List both in `dlls.txt` next to WoW.exe:
 	#   mods/wow_turbo.dll
 	#   mods/wow_translate.dll
 	mkdir -p $(GAME_MODS)

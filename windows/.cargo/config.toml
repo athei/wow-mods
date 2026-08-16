@@ -3,12 +3,18 @@ target = "i686-pc-windows-msvc"
 
 [target.i686-pc-windows-msvc]
 linker = "lld-link"
-# Frame pointers are part of the shipping configuration: the guest-pc sampler
-# recovers call stacks by walking the guest EBP chain, and a build without them
-# stops every walk at the leaf, so profiles captured on end-user machines
-# cannot attribute cost to callers. i686 pins EBP out of 8 GPRs to pay for
-# this, which is a real cost in register-pressure spills; stack-attributed
-# profiles from the field are worth more than the difference.
+# Frame pointers are opt-in and off here, which is a change of posture rather
+# than a detail. Forcing them pins EBP out of the eight GPRs for every function
+# in the DLL, and a static read of the shipped codegen found the resulting
+# pressure behind a long tail of spills and reloads in bodies that are one live
+# value over budget. None of that code wants a frame pointer for itself.
+#
+# What the frames buy is stack attribution in a profile: the guest-pc sampler
+# recovers call stacks by walking the guest EBP chain, and without them every
+# walk stops at the leaf. That is a capture-time need, not a shipping one, so
+# it sits behind a knob: `FP=1 make …` loads `fp.toml`, which puts the frames
+# back. Profiling and tripwire sessions build `FP=1 PERF=1 make install`;
+# everything else, the release bundle included, ships without them.
 #
 # The relocation model is pinned off PIC, which is this target's default and
 # which on i686 encodes every jump table as label differences against a base
@@ -35,7 +41,7 @@ rustflags = [
     "-C", "target-feature=-crt-static",
     "-C", "target-feature=+bmi1,+bmi2,+lzcnt",
     "-C", "relocation-model=dynamic-no-pic",
-    "-C", "force-frame-pointers=yes",
+    "-C", "force-frame-pointers=no",
     "-Lnative=/opt/xwin/crt/lib/x86",
     "-Lnative=/opt/xwin/sdk/lib/um/x86",
     "-Lnative=/opt/xwin/sdk/lib/ucrt/x86",
@@ -55,7 +61,12 @@ rustflags = [
 # unit) plus the AVX-independent GPR bit-manipulation features (BMI1/BMI2/LZCNT
 # via `-mbmi -mbmi2 -mlzcnt`). cc-rs invokes clang for this target (the
 # `-idirafter` flags here are clang-style), so these flags propagate without
-# needing an MSVC `/arch:` spelling.
-CFLAGS_i686-pc-windows-msvc   = "-march=nehalem -mbmi -mbmi2 -mlzcnt -fno-omit-frame-pointer -idirafter /opt/xwin/crt/include -idirafter /opt/xwin/sdk/include/ucrt -idirafter /opt/xwin/sdk/include/um -idirafter /opt/xwin/sdk/include/shared"
-CXXFLAGS_i686-pc-windows-msvc = "-march=nehalem -mbmi -mbmi2 -mlzcnt -fno-omit-frame-pointer -idirafter /opt/xwin/crt/include -idirafter /opt/xwin/sdk/include/ucrt -idirafter /opt/xwin/sdk/include/um -idirafter /opt/xwin/sdk/include/shared"
+# needing an MSVC `/arch:` spelling. `-fomit-frame-pointer` matches the
+# rustflags posture above so the C++ half of the DLL frees EBP too.
+#
+# Both overlay files (`avx.toml`, `fp.toml`) repeat these two lines in full,
+# because an overlay REPLACES an `[env]` string rather than adding to it. A
+# flag added here has to be added there as well.
+CFLAGS_i686-pc-windows-msvc   = "-march=nehalem -mbmi -mbmi2 -mlzcnt -fomit-frame-pointer -idirafter /opt/xwin/crt/include -idirafter /opt/xwin/sdk/include/ucrt -idirafter /opt/xwin/sdk/include/um -idirafter /opt/xwin/sdk/include/shared"
+CXXFLAGS_i686-pc-windows-msvc = "-march=nehalem -mbmi -mbmi2 -mlzcnt -fomit-frame-pointer -idirafter /opt/xwin/crt/include -idirafter /opt/xwin/sdk/include/ucrt -idirafter /opt/xwin/sdk/include/um -idirafter /opt/xwin/sdk/include/shared"
 AR_i686-pc-windows-msvc       = "/opt/homebrew/opt/llvm/bin/llvm-lib"

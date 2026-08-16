@@ -646,8 +646,9 @@ fn render(m: &Manifest) -> String {
         // nothing to capture (the value is already in scope) and the restore
         // feeds it back; where it is not, an empty-operand `asm!` reads it, and
         // that capture is the FIRST statement, so the only code the compiler emits
-        // before it is the prologue (`push ebp; mov ebp, esp`), which never writes
-        // a volatile. Everything else — arg forwarding, the call, the
+        // before it is the prologue: callee-saved pushes and a stack adjust,
+        // whichever of them this build's frame-pointer setting asks for, and none
+        // of them writes a volatile. Everything else — arg forwarding, the call, the
         // `abi`'s `ret` cleanup — is ordinary Rust the optimizer owns: it inlines the
         // reimpl into the thunk, so there is NO naked frame, NO manual arg re-push,
         // and NO extra call (unlike a naked shim, which forces a non-inlinable
