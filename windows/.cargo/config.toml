@@ -9,10 +9,32 @@ linker = "lld-link"
 # cannot attribute cost to callers. i686 pins EBP out of 8 GPRs to pay for
 # this, which is a real cost in register-pressure spills; stack-attributed
 # profiles from the field are worth more than the difference.
+#
+# The relocation model is pinned off PIC, which is this target's default and
+# which on i686 encodes every jump table as label differences against a base
+# the dispatching function has to materialize itself: a `call` to the next
+# instruction followed by a `pop`, costing a taken branch, a stack write, a
+# reload and a register held live across the whole dispatch, and, being a call
+# with no matching return, desynchronizing the return-address predictor for
+# every return above it. Non-PIC gets the same tables as absolute addresses
+# reached by one memory-indirect `jmp`, the way this DLL already reaches all of
+# its own data. It stays relocatable: those addresses carry ordinary base
+# relocations, so the image keeps a full `.reloc` section and the loader keeps
+# rebasing it, which it does on essentially every run because the preferred
+# base is rarely free.
+#
+# `dynamic-no-pic` and not `static`, and the difference is not cosmetic. Both
+# turn the tables absolute, but `static` additionally tells the backend that
+# every symbol is defined in this image, which is false for the Win32 imports:
+# it marks `dllimport` globals as local and the module then fails the
+# compiler's own IR verifier. Every one of this workspace's four `cdylib`s hits
+# it. `dynamic-no-pic` drops position independence and leaves imported symbols
+# indirect, which is exactly the split a DLL needs.
 rustflags = [
     "-C", "target-cpu=nehalem",
     "-C", "target-feature=-crt-static",
     "-C", "target-feature=+bmi1,+bmi2,+lzcnt",
+    "-C", "relocation-model=dynamic-no-pic",
     "-C", "force-frame-pointers=yes",
     "-Lnative=/opt/xwin/crt/lib/x86",
     "-Lnative=/opt/xwin/sdk/lib/um/x86",
