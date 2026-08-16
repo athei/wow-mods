@@ -6559,7 +6559,22 @@ pub extern "thiscall" fn cg_game_object_c__get_world_position__7c4b80(
         unsafe { out_pos.cast::<[f32; 3]>().write_unaligned(local) };
         return out_pos;
     }
+    get_world_position_parented(out_pos, local, guid_lo, guid_hi);
+    out_pos
+}
 
+/// The parented arm of `CGGameObject_C::GetWorldPosition` (0x7c4b80).
+///
+/// Outlined because it is the rare half and it is what makes the frame
+/// expensive: the identity-seeded 16-float scratch `BuildWorldTransform`
+/// (0x230ac0) fills wants a 16-byte-aligned home, which pins a realigned
+/// 0x110-byte frame and three callee-saved registers across the whole entry.
+/// All of that was paid before the parent-GUID test, on a path that only copies
+/// `this+0x24` out. `local` arrives by value, so the position is still read in
+/// source order ahead of the delegate call, as it is in the stock body.
+#[cold]
+#[inline(never)]
+fn get_world_position_parented(out_pos: *mut f32, local: [f32; 3], guid_lo: u32, guid_hi: i32) {
     // Build the parent transform into an identity-seeded 4x4 scratch (the stock
     // function fills the affine part); only the leading 12 floats are read.
     let mut transform = [
@@ -6580,7 +6595,6 @@ pub extern "thiscall" fn cg_game_object_c__get_world_position__7c4b80(
     trip_nonfinite("GetWorldPosition", block, &world);
     // SAFETY: `out_pos` addresses 3 writable, contiguous floats.
     unsafe { out_pos.cast::<[f32; 3]>().write_unaligned(world) };
-    out_pos
 }
 
 /// `CGObject::GatherRenderProxyByGuid` — render-proxy gather callback.
@@ -16640,6 +16654,48 @@ unsafe fn splice_link_node__6a8ca0(
     unsafe { tail_base_slot.cast::<*mut u8>().write(slot) };
 }
 
+/// The selected-entry depth-range arm of `Object::DrawColoredVector`.
+///
+/// Reached only when the host focus singleton (`0x8e9b60`) reports the entry
+/// the query at `0x69d490` found, so it is laid out of line: the gate stays a
+/// test and a call, and the arm's three colour lanes and the inlined
+/// `SetDepthRange` (`0x71c110`) leave the straight-line body. `inv255` crosses
+/// by value as the f32 the caller already holds. The gate compare keeps the
+/// ordered not-equal form of the original's `fcomp`, which a NaN passes.
+#[cold]
+#[inline(never)]
+fn draw_colored_vector_selected__6a7300(fit: *mut u8, inv255: f32, id: u32) {
+    /// The host focus/selection singleton (the `0x6d48b0` accessor's result).
+    const FOCUS: *const u8 = (crate::win::EXPECTED_IMAGE_BASE + 0x8e_9b60) as *const u8;
+    const FADE_DISABLED: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x3f_fd74) as *const f32;
+    const SELECTED: *const u32 = (crate::win::EXPECTED_IMAGE_BASE + 0x87_b748) as *const u32;
+    // SAFETY: `FOCUS+0x7c` is the in-bounds, aligned gate float.
+    let gate_ptr = unsafe { FOCUS.add(0x7c) };
+    // SAFETY: `gate_ptr` is the live gate float.
+    let gate = unsafe { gate_ptr.cast::<f32>().read() };
+    // SAFETY: fixed, initialized `.data` dword in the live host image.
+    let fade_disabled = unsafe { FADE_DISABLED.read() };
+    // SAFETY: fixed, initialized `.data` dword in the live host image.
+    let selected = unsafe { SELECTED.read() };
+    // Ordered not-equal as the original's `fcomp` (NaN gate passes).
+    if gate != fade_disabled && selected == id {
+        // SAFETY: `FOCUS+0x80` addresses the 4 selected-colour bytes.
+        let sel_ptr = unsafe { FOCUS.add(0x80) };
+        // SAFETY: `sel_ptr` is the live 4-byte selected colour.
+        let sel = unsafe { sel_ptr.cast::<[u8; 4]>().read() };
+        let sel_color = [
+            f32::from(sel[2]) * inv255,
+            f32::from(sel[1]) * inv255,
+            f32::from(sel[0]) * inv255,
+        ];
+        // SAFETY: `FOCUS+0x84` addresses the contiguous near/far floats.
+        let range_ptr = unsafe { FOCUS.add(0x84) };
+        // SAFETY: `range_ptr` is the live near/far pair.
+        let range = unsafe { range_ptr.cast::<[f32; 2]>().read_unaligned() };
+        bounds_fit__set_depth_range__71c110(fit, sel_color.as_ptr(), range[0], range[1]);
+    }
+}
+
 /// `Object::DrawColoredVector` — `__thiscall(ecx = this, stack = fit)`.
 ///
 /// Submits one coloured vector into a bounds-fit accumulator: optionally flushes
@@ -16747,35 +16803,7 @@ pub extern "thiscall" fn object_draw_colored_vector__6a7300(this: *mut u8, fit: 
         let query: extern "thiscall" fn(*mut u8, *mut u32) -> i32 =
             unsafe { core::mem::transmute(QUERY_VA) };
         if query(this, id_ptr) != 0 {
-            // SAFETY: `FOCUS+0x7c` is the in-bounds, aligned gate float.
-            let gate_ptr = unsafe { FOCUS.add(0x7c) };
-            // SAFETY: `gate_ptr` is the live gate float.
-            let gate = unsafe { gate_ptr.cast::<f32>().read() };
-            const FADE_DISABLED: *const f32 =
-                (crate::win::EXPECTED_IMAGE_BASE + 0x3f_fd74) as *const f32;
-            // SAFETY: fixed, initialized `.data` dword in the live host image.
-            let fade_disabled = unsafe { FADE_DISABLED.read() };
-            const SELECTED: *const u32 =
-                (crate::win::EXPECTED_IMAGE_BASE + 0x87_b748) as *const u32;
-            // SAFETY: fixed, initialized `.data` dword in the live host image.
-            let selected = unsafe { SELECTED.read() };
-            // Ordered not-equal as the original's `fcomp` (NaN gate passes).
-            if gate != fade_disabled && selected == id {
-                // SAFETY: `FOCUS+0x80` addresses the 4 selected-colour bytes.
-                let sel_ptr = unsafe { FOCUS.add(0x80) };
-                // SAFETY: `sel_ptr` is the live 4-byte selected colour.
-                let sel = unsafe { sel_ptr.cast::<[u8; 4]>().read() };
-                let sel_color = [
-                    f32::from(sel[2]) * inv255,
-                    f32::from(sel[1]) * inv255,
-                    f32::from(sel[0]) * inv255,
-                ];
-                // SAFETY: `FOCUS+0x84` addresses the contiguous near/far floats.
-                let range_ptr = unsafe { FOCUS.add(0x84) };
-                // SAFETY: `range_ptr` is the live near/far pair.
-                let range = unsafe { range_ptr.cast::<[f32; 2]>().read_unaligned() };
-                bounds_fit__set_depth_range__71c110(fit, sel_color.as_ptr(), range[0], range[1]);
-            }
+            draw_colored_vector_selected__6a7300(fit, inv255, id);
         }
         (dir, pos)
     };
@@ -25954,6 +25982,90 @@ fn emit_spawn_one__7b5550(this: *mut u8, arg2: u32, ctx: *mut u8) {
     birth(this, rec, arg2, ctx);
 }
 
+/// The flag-0x20 burst arm of `CParticleEmitter::EmitParticles` (0x7b5550).
+///
+/// `__ftol(rate)` spawns with birth arg2 = 0, leaves the accumulator alone and
+/// always clears the flag (the flag dword is re-read for the clear, like
+/// stock). Outlined because the flag is normally clear: `rate` crosses as the
+/// plain f32 the driver already materialised, so the arm's own spills stop
+/// sizing the driver's frame.
+#[cold]
+#[inline(never)]
+fn emit_burst__7b5550(this: *mut u8, ctx: *mut u8, rate: f32) {
+    let flags_ptr = this.wrapping_add(0x1ac).cast::<u32>();
+    let mut n = crate::math::misc::ftol__40a2b0(f64::from(rate)) as u32;
+    loop {
+        // SAFETY: the free-list count, re-read per iteration.
+        let free = unsafe { this.wrapping_add(0x78).cast::<u32>().read_unaligned() };
+        if free == 0 || n == 0 {
+            break;
+        }
+        n = n.wrapping_sub(1);
+        emit_spawn_one__7b5550(this, 0, ctx);
+    }
+    // SAFETY: the flag dword, cleared exactly like the stock AND.
+    let f = unsafe { flags_ptr.read_unaligned() };
+    // SAFETY: as above.
+    unsafe { flags_ptr.write_unaligned(f & !0x20) };
+}
+
+/// The flag-0x1000 path-interp arm of `CParticleEmitter::EmitParticles`.
+///
+/// Saves the ctx position raw, narrows the three deltas against the emitter
+/// base `+0x248`, then per spawn draws `SRand::AdvanceState` (0x4531e0),
+/// rewrites the ctx position with the interpolated point (base and the 1.0
+/// global re-read per spawn) and spawns with birth arg2 = the `dt` bits; the
+/// original position is restored after the loop. Returns the spawn count the
+/// driver settles the accumulator with. Outlined because the flag is normally
+/// clear and this arm owns the only 16-byte-aligned spill in the function (the
+/// loop-invariant widened delta pair), which alone forces the driver's frame to
+/// be realigned. Only `u32`s cross the boundary, so no float takes a Rust-ABI
+/// round trip.
+#[cold]
+#[inline(never)]
+fn emit_path_arm__7b5550(this: *mut u8, ctx: *mut u8, mut n: u32, dt_bits: u32) -> u32 {
+    const BASE: usize = crate::win::EXPECTED_IMAGE_BASE;
+    // The 1.0 module constant (0x7ff9d8), re-read per spawn like stock.
+    const ONE: *const f32 = (BASE + 0x3f_f9d8) as *const f32;
+    // 0x4531e0 SRand::AdvanceState — thiscall(state) -> u32, plain RET.
+    const RNG_VA: usize = BASE + 0x05_31e0;
+    // SAFETY: image base verified at load; the transmuted signature matches
+    // the declared prototype of the callee.
+    let rng: extern "thiscall" fn(*mut u8) -> u32 = unsafe { core::mem::transmute(RNG_VA) };
+
+    let mut emitted: u32 = 0;
+    let pos_ptr = ctx.wrapping_add(0x30);
+    // SAFETY: the ctx position triple (raw dwords — bit-exact save).
+    let orig = unsafe { pos_ptr.cast::<[u32; 3]>().read_unaligned() };
+    // SAFETY: as above, as floats for the delta kernel.
+    let pos = unsafe { pos_ptr.cast::<[f32; 3]>().read_unaligned() };
+    // SAFETY: the emitter base triple at +0x248.
+    let base0 = unsafe { this.wrapping_add(0x248).cast::<[f32; 3]>().read_unaligned() };
+    let d = crate::math::particle::emit_path_deltas__7b5550(&pos, &base0);
+    loop {
+        // SAFETY: the free-list count, re-read per iteration.
+        let free = unsafe { this.wrapping_add(0x78).cast::<u32>().read_unaligned() };
+        if free == 0 || n == 0 {
+            break;
+        }
+        n = n.wrapping_sub(1);
+        let bits = rng(this.wrapping_add(0x2c));
+        // SAFETY: the emitter base triple, re-read per spawn (stock
+        // FADDs the live fields inside the loop).
+        let base = unsafe { this.wrapping_add(0x248).cast::<[f32; 3]>().read_unaligned() };
+        // SAFETY: the 1.0 global, re-read per spawn like stock.
+        let one_live = unsafe { ONE.read() };
+        let p = crate::math::particle::emit_path_point__7b5550(&d, &base, bits, one_live);
+        // SAFETY: the ctx position triple, rewritten for this spawn.
+        unsafe { pos_ptr.cast::<[f32; 3]>().write_unaligned(p) };
+        emit_spawn_one__7b5550(this, dt_bits, ctx);
+        emitted = emitted.wrapping_add(1);
+    }
+    // SAFETY: the ctx position triple, restored bit-exact.
+    unsafe { pos_ptr.cast::<[u32; 3]>().write_unaligned(orig) };
+    emitted
+}
+
 /// `CParticleEmitter::EmitParticles`.
 ///
 /// `__thiscall(ecx = emitter, stack = [dt f32, ctx])`, `RET 0x8`, void. `ctx` is the caller's
@@ -26005,11 +26117,6 @@ pub extern "thiscall" fn c_particle_emitter__emit_particles__7b5550(
     const QUARTER: *const f32 = (BASE + 0x40_29b0) as *const f32;
     const HALF: *const f32 = (BASE + 0x3f_fa24) as *const f32;
     const EMIT_SCALE: *const f32 = (BASE + 0x47_d5fc) as *const f32;
-    // 0x4531e0 SRand::AdvanceState — thiscall(state) -> u32, plain RET.
-    const RNG_VA: usize = BASE + 0x05_31e0;
-    // SAFETY: image base verified at load; the transmuted signature matches
-    // the declared prototype of the callee.
-    let rng: extern "thiscall" fn(*mut u8) -> u32 = unsafe { core::mem::transmute(RNG_VA) };
 
     // SAFETY: fixed engine f32 globals; read by value.
     let cam = unsafe { CAM_DIST.read() };
@@ -26033,22 +26140,7 @@ pub extern "thiscall" fn c_particle_emitter__emit_particles__7b5550(
     // SAFETY: the emitter flag dword.
     let flags = unsafe { flags_ptr.read_unaligned() };
     if flags & 0x20 != 0 {
-        // Burst arm: __ftol of the narrowed rate; the accumulator is left
-        // alone and the flag always clears.
-        let mut n = crate::math::misc::ftol__40a2b0(f64::from(rate)) as u32;
-        loop {
-            // SAFETY: the free-list count, re-read per iteration.
-            let free = unsafe { this.wrapping_add(0x78).cast::<u32>().read_unaligned() };
-            if free == 0 || n == 0 {
-                break;
-            }
-            n = n.wrapping_sub(1);
-            emit_spawn_one__7b5550(this, 0, ctx);
-        }
-        // SAFETY: the flag dword, cleared exactly like the stock AND.
-        let f = unsafe { flags_ptr.read_unaligned() };
-        // SAFETY: as above.
-        unsafe { flags_ptr.write_unaligned(f & !0x20) };
+        emit_burst__7b5550(this, ctx, rate);
     }
 
     // SAFETY: the flag dword, RE-READ after the burst arm like stock.
@@ -26077,35 +26169,7 @@ pub extern "thiscall" fn c_particle_emitter__emit_particles__7b5550(
             emitted = emitted.wrapping_add(1);
         }
     } else {
-        let pos_ptr = ctx.wrapping_add(0x30);
-        // SAFETY: the ctx position triple (raw dwords — bit-exact save).
-        let orig = unsafe { pos_ptr.cast::<[u32; 3]>().read_unaligned() };
-        // SAFETY: as above, as floats for the delta kernel.
-        let pos = unsafe { pos_ptr.cast::<[f32; 3]>().read_unaligned() };
-        // SAFETY: the emitter base triple at +0x248.
-        let base0 = unsafe { this.wrapping_add(0x248).cast::<[f32; 3]>().read_unaligned() };
-        let d = crate::math::particle::emit_path_deltas__7b5550(&pos, &base0);
-        loop {
-            // SAFETY: the free-list count, re-read per iteration.
-            let free = unsafe { this.wrapping_add(0x78).cast::<u32>().read_unaligned() };
-            if free == 0 || n == 0 {
-                break;
-            }
-            n = n.wrapping_sub(1);
-            let bits = rng(this.wrapping_add(0x2c));
-            // SAFETY: the emitter base triple, re-read per spawn (stock
-            // FADDs the live fields inside the loop).
-            let base = unsafe { this.wrapping_add(0x248).cast::<[f32; 3]>().read_unaligned() };
-            // SAFETY: the 1.0 global, re-read per spawn like stock.
-            let one_live = unsafe { ONE.read() };
-            let p = crate::math::particle::emit_path_point__7b5550(&d, &base, bits, one_live);
-            // SAFETY: the ctx position triple, rewritten for this spawn.
-            unsafe { pos_ptr.cast::<[f32; 3]>().write_unaligned(p) };
-            emit_spawn_one__7b5550(this, dt_bits, ctx);
-            emitted = emitted.wrapping_add(1);
-        }
-        // SAFETY: the ctx position triple, restored bit-exact.
-        unsafe { pos_ptr.cast::<[u32; 3]>().write_unaligned(orig) };
+        emitted = emit_path_arm__7b5550(this, ctx, n, dt_bits);
     }
     // SAFETY: the accumulator, re-read like the stock FSUBR operand.
     let acc2 = unsafe { this.wrapping_add(8).cast::<f32>().read_unaligned() };
@@ -33183,21 +33247,33 @@ fn bdl_sort_by_tex(data: *mut u32, count: u32, base: *mut u8) {
     crate::math::misc::intro_sort_u_int32(slice, |a, b| bdl_cmp_by_tex(a, b, base));
 }
 
+/// The identity scale the draw list animates every root with.
+///
+/// Static rather than a frame local because the address is all the callee gets
+/// and it only ever reads three floats through it: `cm2_shared__animate_bones`
+/// takes it as `*const f32` and its single use is the `anim_vec3` that folds it
+/// into the instance's own scale, so nothing can write back through it. In a
+/// frame it was six constant stores per span, rebuilt on both walks, plus the
+/// re-materialisation after each call because XMM is caller-saved. Non-`mut` so
+/// a future writer faults in read-only storage instead of poisoning every later
+/// span, and so the animate fork's worker lanes share it safely.
+static ANIM_SCALE_ONE: [f32; 3] = [1.0, 1.0, 1.0];
+/// The identity translation beside [`ANIM_SCALE_ONE`], same argument.
+static ANIM_TRANSLATE_ZERO: [f32; 3] = [0.0, 0.0, 0.0];
+
 /// `CM2Shared::AnimateBones` (hooked) with the stock identity transform.
 ///
 /// Parent = the view camera matrix `this+0x9c`, scale = (1,1,1), translate =
 /// (0,0,0), alpha = 1.0. (0x70777c / 0x7077ea.)
 fn bdl_animate_bones_identity(base: *mut u8, node: *const u8) {
-    let scale: [f32; 3] = [1.0, 1.0, 1.0];
-    let translate: [f32; 3] = [0.0, 0.0, 0.0];
     cm2_shared__animate_bones__714260(
         node as *mut core::ffi::c_void,
         // SAFETY: `base` is the `CWorldView` `this` the draw-list build was entered with, and
         // `+0x9c` is its 4x4 camera matrix (rows `+0x9c..+0xc4`), so the offset stays inside
         // that object; `AnimateBones` only reads it as the parent matrix.
         unsafe { base.add(0x9c).cast::<f32>() },
-        scale.as_ptr(),
-        translate.as_ptr(),
+        ANIM_SCALE_ONE.as_ptr(),
+        ANIM_TRANSLATE_ZERO.as_ptr(),
         1.0,
     );
 }
@@ -33450,6 +33526,21 @@ impl BdlAnimPending {
         if bdl_anim_stamp(node) == stamp {
             return;
         }
+        self.await_node_slow(node, stamp, timed);
+    }
+
+    /// The wait half of [`Self::await_node`], outlined behind the stamp guard.
+    ///
+    /// Everything here belongs to the node that was not ready: the deadline
+    /// pair, the help/yield loop, the once-per-session log record and the two
+    /// counters. Kept out of line because the guard above answers for nearly
+    /// every node, and inlining this made that answer pay a frame, four
+    /// callee-saved registers and 0x74 of stack it never touches. `stamp` is
+    /// handed over rather than re-read, so the loop still races the workers
+    /// against the same value the guard compared.
+    #[cold]
+    #[inline(never)]
+    fn await_node_slow(&mut self, node: *const u8, stamp: u32, timed: bool) {
         let t0 = wow_shared::tsc::rdtsc();
         let deadline = t0.wrapping_add(wow_shared::tsc::secs_to_cycles(1) / 20);
         while bdl_anim_stamp(node) != stamp {
@@ -39787,6 +39878,34 @@ pub extern "thiscall" fn collision_sweep_box_faces__632280(
     }
 }
 
+/// Both corners of a query box against the cache box, one axis at a time.
+///
+/// The gather's frame-coherence gate is `CAaBox::ContainsPoint` (0x637350) run
+/// over `corners[0..3]` and `corners[3..6]`, which is twelve ordered compares
+/// against the same six cached floats. Testing corner by corner leaves all
+/// twelve operands live at once and spills three of them; testing axis by axis
+/// keeps four live and holds the axis pair in registers for both corners. The
+/// compares, their operand pairs and their polarity are the kernel's
+/// (`math::aabb::c_aa_box__contains_point__637350`): each is the ordered form,
+/// so a NaN operand makes it false and rejects, which is what the original's
+/// `C0` and parity branches do. A conjunction of pure predicates has the same
+/// value in any order, and nothing writes the cache box between them.
+fn gather_cache_contains_both__631e70(cache: *const f32, corners: &[f32; 6]) -> bool {
+    // SAFETY: `cache` is the fixed 6-f32 cache-box global of the live host
+    // image; read unaligned, as the kernel's caller reads a client `CAaBox`.
+    let bx = unsafe { cache.cast::<[f32; 6]>().read_unaligned() };
+    for i in 0..3 {
+        let lo = bx[i];
+        let hi = bx[i + 3];
+        let inside =
+            corners[i] >= lo && corners[i] <= hi && corners[i + 3] >= lo && corners[i + 3] <= hi;
+        if !inside {
+            return false;
+        }
+    }
+    true
+}
+
 /// `Collision_GatherWorldTriangles`.
 ///
 /// `__thiscall(ECX = this CMovement, stack = sweepX/Y/Z f32)`, RET 0xc, u32
@@ -39827,6 +39946,13 @@ pub extern "thiscall" fn collision_gather_world_triangles__631e70(
     const COLLECT_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x27_21b0;
     /// The 1/6 inflate immediate (stock `PUSH 0x3e2aaaab`).
     const INFLATE: f32 = f32::from_bits(0x3e2a_aaab);
+    /// The identity seed for the attachment transform.
+    ///
+    /// Stock lays it into the frame on every call; here it is written on the
+    /// paths that read it, which are the two attachment gates and nothing else.
+    const IDENT: [f32; 16] = [
+        1.0f32, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+    ];
 
     if this.is_null() {
         return 0;
@@ -39843,10 +39969,10 @@ pub extern "thiscall" fn collision_gather_world_triangles__631e70(
     let [attach_lo, attach_hi] = unsafe { p_attach.cast::<[u32; 2]>().read_unaligned() };
 
     let mut sweep = [sweep_x, sweep_y, sweep_z];
-    let mut xform = [
-        1.0f32, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
-    ];
-    if attach_lo != 0 || attach_hi != 0 {
+    let mut xform = [0.0f32; 16];
+    let attached = attach_lo != 0 || attach_hi != 0;
+    if attached {
+        xform = IDENT;
         // SAFETY: fixed `.text` entry of CGGameObject_C__BuildWorldTransform
         // (`__thiscall(ecx = outMatrix, stack = [attachLo, attachHi])`,
         // ret 0x8) — same delegate stanza as GetWorldPosition.
@@ -39873,9 +39999,7 @@ pub extern "thiscall" fn collision_gather_world_triangles__631e70(
 
     // Frame-coherence early-out: both corners inside the cached box =>
     // reuse last frame's gathered lists untouched.
-    if c_aa_box__contains_point__637350(CACHE_BOX, aabb.as_ptr()) != 0
-        && c_aa_box__contains_point__637350(CACHE_BOX, aabb[3..].as_ptr()) != 0
-    {
+    if gather_cache_contains_both__631e70(CACHE_BOX, &aabb) {
         return 1;
     }
 
@@ -39955,6 +40079,12 @@ pub extern "thiscall" fn collision_gather_world_triangles__631e70(
     // SAFETY: two contiguous dwords of the live object.
     let [attach_lo, attach_hi] = unsafe { p_attach.cast::<[u32; 2]>().read_unaligned() };
     if attach_lo != 0 || attach_hi != 0 {
+        if !attached {
+            // The attachment appeared between the two reads, so nothing has
+            // written `xform` yet and the invert below is its only reader.
+            // Stock hands it the identity here, and so do we.
+            xform = IDENT;
+        }
         // Stock reads the primary count BEFORE inverting, then inverts
         // unconditionally and only gates the loop on the count.
         // SAFETY: fixed global primary-list count.

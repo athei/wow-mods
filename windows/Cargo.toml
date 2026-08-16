@@ -75,7 +75,7 @@ pedantic = { level = "warn", priority = -1 }
 # Length is a poor proxy for complexity; allow long procedural functions
 # (per-opcode dispatchers, codegen templates) where the structural alternative
 # is fragmented helpers threading the same state.
-too_many_lines = "allow"                # 69
+too_many_lines = "allow"                # 68
 # A separate multiply and add is what the originals compiled to, and the
 # differential harness compares against that — fusing them changes the rounding
 # and the comparison fails. It is also faster on the default baseline: nehalem
@@ -113,8 +113,8 @@ undocumented_unsafe_blocks = "warn"
 # masks as literals grouped the way the source grouped them. Rewriting any of
 # it to suit a lint makes the reimplementation harder to check against the
 # behaviour it has to match.
-items_after_statements = "allow"        # 855
-cast_ptr_alignment = "allow"            # 929 — reads are already `read_unaligned`
+items_after_statements = "allow"        # 852
+cast_ptr_alignment = "allow"            # 930 — reads are already `read_unaligned`
 unreadable_literal = "allow"            # 391 — addresses and bit masks, verbatim
 similar_names = "allow"                 # 185
 semicolon_if_nothing_returned = "allow" # 55
