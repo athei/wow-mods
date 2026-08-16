@@ -3703,22 +3703,50 @@ mod tests_collision_ray_polygon_sweep_distance__632830 {
     }
 }
 
+/// Front-face gate of `Collision_SweepPolygonAgainstFaces` 0x632700.
+///
+/// The fold is register-resident: between the first `FMUL` at `0x63275c` and the
+/// `FCOMP` at `0x63276d` the original emits `FLD`/`FMUL`/`FADDP` only (no `FST`
+/// and no `FSTP m32`), so at the client's 53-bit precision control every product
+/// and partial sum carries an `f64` significand, and a product of two `f32` needs
+/// 48 bits and is exact. The `FADDP` pair at `0x632765`/`0x63276b` folds
+/// `(z + y) + x`, the z term first. That is the ray-plane association, NOT the
+/// `(z + x) + y` its own caller `Collision_SweepBoxFaces` 0x632280 uses in the
+/// back-face cull it runs immediately before this one.
+///
+/// Nothing stores the dot: `FCOMP` pops it against the `-1e-5` at `0x80c5c4`.
+/// The wide compare therefore *is* the observable, because the branch is all
+/// this value ever produces.
+///
+/// The polarity is `TEST AH,0x41` with **`JZ`** (`0x632775`), where the sibling
+/// cull at `0x6322ff` has `JNP`. Masking `C0`+`C3`, `JZ` is taken only on
+/// `ST(0) > src`, so the face is skipped on an ordered *greater* and processed on
+/// less, on equal **and on unordered**, which means a NaN dot processes the face.
+/// `!(dot > eps)` is that condition; `dot <= eps` is not, and differs on exactly
+/// the NaN.
+// The negation is the polarity documented above and must not be "normalized" to
+// `<=`: that spelling drops the unordered arm.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
+pub fn sweep_polygon_face_is_front__632700(normal: &[f32; 3], dir: &[f32; 3], eps: f32) -> bool {
+    let dot = (f64::from(normal[2]) * f64::from(dir[2]) + f64::from(normal[1]) * f64::from(dir[1]))
+        + f64::from(normal[0]) * f64::from(dir[0]);
+    !(dot > f64::from(eps))
+}
+
 /// Sweeps a clipped polygon against a set of world faces, recording the closest hit.
 ///
 /// `faces` packs each candidate face as 13 floats: the face plane `[nx, ny, nz,
 /// d]` (its normal feeds the front-face test) then a 9-float (3-vertex) polygon.
-/// For each *front* face (`normal . sweep_dir <= front_eps`) the 3-vertex polygon
-/// is clipped against the first `clip_plane_count` of `clip_planes`, then swept
-/// along `vert_array[vert_base]` from `sweep_dir`. The smallest swept distance
-/// `<= best` wins, updating `best` and writing that face's index to `out_face`.
-/// Returns `1` if any hit was recorded. All epsilons are the host band /
-/// separation constants.
+/// For each *front* face (`sweep_polygon_face_is_front__632700`) the 3-vertex
+/// polygon is clipped against the first `clip_plane_count` of `clip_planes`, then
+/// swept along `vert_array[vert_base]` from `sweep_dir`. The smallest swept
+/// distance `<= best` wins, updating `best` and writing that face's index to
+/// `out_face`. Returns `1` if any hit was recorded. All epsilons are the host
+/// band / separation constants.
 // The thirteen parameters are the original's calling convention: face set, clip
 // plane set, sweep basis, the two out-params and five band constants — an ABI
-// fact, not a signature that wants a params struct. The front-face test also
-// stays `!(dot <= front_eps)`, so a NaN dot processes the face as it does in
-// the original, where `dot > front_eps` would skip it.
-#[allow(clippy::too_many_arguments, clippy::neg_cmp_op_on_partial_ord)]
+// fact, not a signature that wants a params struct.
+#[allow(clippy::too_many_arguments)]
 pub fn collision_sweep_polygon_against_faces__632700(
     faces: &[[f32; 13]],
     sweep_dir: &[f32; 3],
@@ -3754,8 +3782,8 @@ pub fn collision_sweep_polygon_against_faces__632700(
     let mut verts = [0.0f32; 45];
     let mut tags = [0.0f32; 15];
     for (idx, face) in faces.iter().enumerate() {
-        let dot = face[0] * sweep_dir[0] + face[1] * sweep_dir[1] + face[2] * sweep_dir[2];
-        if !(dot <= front_eps) {
+        let normal = [face[0], face[1], face[2]];
+        if !sweep_polygon_face_is_front__632700(&normal, sweep_dir, front_eps) {
             #[cfg(target_arch = "x86")]
             crate::win::seam_probe::sweep_face_back_facing();
             continue;
@@ -3813,7 +3841,10 @@ pub fn collision_sweep_polygon_against_faces__632700(
 
 #[cfg(test)]
 mod tests_collision_sweep_polygon_against_faces__632700 {
-    use super::collision_sweep_polygon_against_faces__632700 as sweep_faces;
+    use super::{
+        collision_sweep_polygon_against_faces__632700 as sweep_faces,
+        sweep_polygon_face_is_front__632700 as gate,
+    };
 
     // The front-face epsilon repeats the host's stored constant at full precision;
     // trimming digits would change the value under test.
@@ -3905,6 +3936,261 @@ mod tests_collision_sweep_polygon_against_faces__632700 {
         assert_eq!(r, 1);
         assert!(best < 100.0, "best={best}");
         assert_eq!(of, 0);
+    }
+
+    /// The shipped shape: per-step `f32`, textual x, y, z, and `<=` for the gate.
+    ///
+    /// Not an oracle. This is the shape the kernel must NOT have, kept so the
+    /// fixtures can witness that the width and the polarity are observable
+    /// rather than assert it in prose.
+    fn shipped(normal: &[f32; 3], dir: &[f32; 3], eps: f32) -> bool {
+        narrow_dot(normal, dir) <= eps
+    }
+
+    /// The dot the shipped shape formed, on its own.
+    fn narrow_dot(normal: &[f32; 3], dir: &[f32; 3]) -> f32 {
+        normal[0] * dir[0] + normal[1] * dir[1] + normal[2] * dir[2]
+    }
+
+    /// The stock branch, over an already-folded dot: `TEST AH,0x41` then `JZ`.
+    ///
+    /// Spelled once here so every model below takes the same arm on an
+    /// unordered compare and only the arithmetic under test varies.
+    // The negation IS the branch under test: `partial_cmp` would spell the three
+    // ordered arms and leave `None` to be decided by hand, which is the decision
+    // this fixture exists to pin.
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
+    fn gate_of(dot: f64, eps: f32) -> bool {
+        !(dot > f64::from(eps))
+    }
+
+    /// The original's width and polarity with the wrong association: `(x + y) + z`.
+    ///
+    /// Also not an oracle. It isolates the fold order from the width, so a
+    /// fixture can pin one of the two without the other.
+    fn wide_wrong_order(normal: &[f32; 3], dir: &[f32; 3], eps: f32) -> bool {
+        let dot = (f64::from(normal[0]) * f64::from(dir[0])
+            + f64::from(normal[1]) * f64::from(dir[1]))
+            + f64::from(normal[2]) * f64::from(dir[2]);
+        gate_of(dot, eps)
+    }
+
+    /// A wide model whose fold order comes from an index table, not an expression.
+    ///
+    /// The kernel writes the fold as one nested expression, which is exactly the
+    /// shape a transposed index would survive. This reads the `2, 1, 0` order off
+    /// the `FADDP` pair once and drives the fold through it, so the sweep's
+    /// agreement leg checks the transcription and not only the arithmetic.
+    fn wide_model(normal: &[f32; 3], dir: &[f32; 3]) -> f64 {
+        const ORDER: [usize; 3] = [2, 1, 0];
+        let mut acc = f64::from(normal[ORDER[0]]) * f64::from(dir[ORDER[0]]);
+        for &k in &ORDER[1..] {
+            acc += f64::from(normal[k]) * f64::from(dir[k]);
+        }
+        acc
+    }
+
+    /// An unordered dot processes the face; the shipped `<=` dropped it.
+    ///
+    /// `TEST AH,0x41` with `JZ` at `0x632775` is taken only when `C0` and `C3`
+    /// are both clear, which is `ST(0) > src` alone. Unordered sets both, so the
+    /// jump is not taken and the face is swept. `dot <= eps` is false on a NaN,
+    /// so the shipped shape took the `continue` instead. That is the one input on
+    /// which the two spellings of this branch disagree, and the reason this is a
+    /// polarity fix and not only a width fix.
+    #[test]
+    fn unordered_dot_processes_the_face() {
+        let unit = [1.0f32, 0.0, 0.0];
+        // A NaN in any lane, including one the fold manufactures from
+        // `inf + -inf` rather than receives.
+        for (normal, dir) in [
+            ([f32::NAN, 0.0, 0.0], unit),
+            ([0.0, f32::NAN, 0.0], unit),
+            ([0.0, 0.0, f32::NAN], unit),
+            ([f32::INFINITY, f32::NEG_INFINITY, 0.0], [1.0, 1.0, 0.0]),
+        ] {
+            assert!(gate(&normal, &dir, FRONT), "normal={normal:?} dir={dir:?}");
+            assert!(
+                !shipped(&normal, &dir, FRONT),
+                "fixture must separate the polarity: normal={normal:?}"
+            );
+        }
+        // A NaN threshold is unordered the same way.
+        assert!(gate(&unit, &unit, f32::NAN));
+        assert!(!shipped(&unit, &unit, f32::NAN));
+        // Ordered infinities are not a special case: `+inf > eps` skips,
+        // `-inf` sweeps, and both spellings agree there.
+        assert!(!gate(&[f32::INFINITY, 0.0, 0.0], &unit, FRONT));
+        assert!(!shipped(&[f32::INFINITY, 0.0, 0.0], &unit, FRONT));
+        assert!(gate(&[f32::NEG_INFINITY, 0.0, 0.0], &unit, FRONT));
+        assert!(shipped(&[f32::NEG_INFINITY, 0.0, 0.0], &unit, FRONT));
+    }
+
+    /// The gate sweeps *at* the epsilon, not only below it.
+    ///
+    /// `JZ` fires on `ST(0) > src` alone, so equality falls through to the sweep.
+    /// A dot of exactly `-1e-5` processes; one `f32` ulp toward zero does not;
+    /// one ulp further from zero does.
+    ///
+    /// Alone among the fixtures here this one carries no companion assert,
+    /// because it cannot: `<=` and `!(>)` agree at equality, so the shipped shape
+    /// answers the same on all three. It pins the threshold against a misreading
+    /// of the mask as strict, not against the shape this commit replaced, and the
+    /// other four are what separate the two.
+    #[test]
+    fn gate_sweeps_at_the_epsilon() {
+        let unit = [1.0f32, 0.0, 0.0];
+        let at = [FRONT, 0.0, 0.0];
+        assert!(gate(&at, &unit, FRONT));
+        let toward_zero = [f32::from_bits(FRONT.to_bits() - 1), 0.0, 0.0];
+        assert!(!gate(&toward_zero, &unit, FRONT));
+        let away = [f32::from_bits(FRONT.to_bits() + 1), 0.0, 0.0];
+        assert!(gate(&away, &unit, FRONT));
+    }
+
+    /// The width alone decides which side of the front-face epsilon a face is on.
+    ///
+    /// The y and z terms are exactly zero, so both `f64` associations give the
+    /// same number and anything that separates here is the width. The x product
+    /// `-9.99982e-6 * 1.000018` is exact in `f64` at `-9.99999967e-6`, which is
+    /// *above* the `-1e-5` epsilon, so the original skips the face; rounded to
+    /// `f32` it lands exactly on the epsilon, and the shipped `<=` swept it. The
+    /// wrongly-associated wide chain lands on the kernel's answer, which is what
+    /// makes this a width fixture and not an order one.
+    #[test]
+    fn width_alone_flips_the_front_gate() {
+        let normal = [f32::from_bits(0xb727_c4e6), 0.0, 0.0];
+        let dir = [f32::from_bits(0x3f80_0097), 0.0, 0.0];
+        assert!(!gate(&normal, &dir, FRONT));
+        assert_eq!(
+            narrow_dot(&normal, &dir).to_bits(),
+            FRONT.to_bits(),
+            "fixture must round onto the epsilon"
+        );
+        assert!(
+            shipped(&normal, &dir, FRONT),
+            "fixture must separate the width"
+        );
+        assert_eq!(
+            wide_wrong_order(&normal, &dir, FRONT),
+            gate(&normal, &dir, FRONT),
+            "the association must not carry this fixture"
+        );
+    }
+
+    /// The fold order alone decides it too.
+    ///
+    /// The terms are `x = +2^60`, `y = -2^60` and `z = -1e-3`. Folded
+    /// `(z + y) + x` the `1e-3` is lost under the `2^60` before the cancel and
+    /// the dot is exactly zero, which is above the epsilon, so the original skips
+    /// the face. Folded from the left the two large terms cancel first and the
+    /// `-1e-3` survives, which is below the epsilon and sweeps. The width does
+    /// not carry this one: the per-step `f32` chain lands on the wrongly
+    /// associated wide answer.
+    #[test]
+    fn fold_order_alone_flips_the_front_gate() {
+        let two30 = f32::from_bits(0x4e80_0000);
+        let normal = [two30, -two30, -1.0e-3];
+        let dir = [two30, two30, 1.0];
+        assert!(!gate(&normal, &dir, FRONT));
+        assert!(
+            wide_wrong_order(&normal, &dir, FRONT),
+            "fixture must separate the association"
+        );
+        assert!(
+            shipped(&normal, &dir, FRONT),
+            "fixture must separate the association"
+        );
+    }
+
+    /// Seeded sweep across the front-face epsilon and over ordinary faces.
+    ///
+    /// Regime 0 walks the face normal's leading component in single `f32` ulps
+    /// across the point where the wide dot meets the epsilon, which is where the
+    /// branch can flip; regime 1 draws ordinary normals. The kernel must agree
+    /// with the index-driven wide model on every case. The counts are pinned
+    /// exactly rather than as floors, because the sweep is deterministic and a
+    /// drift either way means the chain changed shape.
+    ///
+    /// `value_sep` is the honest headline: the two shapes compute a different
+    /// number on **every** case in both regimes. What survives into the branch is
+    /// narrower (the gate flips on 29,403 of the 520,000 grazing cases and on
+    /// none of the ordinary ones), because the dot is consumed by a compare and
+    /// nothing else. The association separates on neither, which is why it is
+    /// pinned by construction above instead of by this sweep.
+    #[test]
+    fn differential_sweep_separates_the_width_at_the_gate() {
+        let mut state = 0x243f_6a88_85a3_08d3_u64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state >> 11) as f32 / (1_u64 << 53) as f32
+        };
+        let mut cases = [0_u32; 2];
+        let mut gate_sep = [0_u32; 2];
+        let mut order_sep = [0_u32; 2];
+        let mut value_sep = [0_u32; 2];
+
+        for _ in 0..40_000_u32 {
+            let (a, b, c) = (next() - 0.5, next() - 0.5, next() - 0.5);
+            let len = (a * a + b * b + c * c).sqrt().max(1e-3);
+            let n = [a / len, b / len, c / len];
+            let d = [
+                (next() - 0.5) * 20.0,
+                (next() - 0.5) * 20.0,
+                (next() - 0.5) * 20.0,
+            ];
+            if d[0] == 0.0 {
+                continue;
+            }
+            // The normal's leading component that puts the wide dot exactly on
+            // the epsilon; the walk straddles it.
+            let rest = f64::from(n[2]) * f64::from(d[2]) + f64::from(n[1]) * f64::from(d[1]);
+            let nx0 = ((f64::from(FRONT) - rest) / f64::from(d[0])) as f32;
+            if !nx0.is_finite() || nx0.abs() > 1.0e9 {
+                continue;
+            }
+            for step in 0..=12_u32 {
+                for regime in 0..2_usize {
+                    let nx = if regime == 0 {
+                        f32::from_bits(nx0.to_bits().wrapping_add(step).wrapping_sub(6))
+                    } else {
+                        next() - 0.5
+                    };
+                    let normal = [nx, n[1], n[2]];
+                    let model = wide_model(&normal, &d);
+                    if !model.is_finite() {
+                        continue;
+                    }
+                    cases[regime] += 1;
+                    assert_eq!(
+                        gate(&normal, &d, FRONT),
+                        gate_of(model, FRONT),
+                        "normal={normal:?} dir={d:?}"
+                    );
+                    if gate(&normal, &d, FRONT) != shipped(&normal, &d, FRONT) {
+                        gate_sep[regime] += 1;
+                    }
+                    if gate(&normal, &d, FRONT) != wide_wrong_order(&normal, &d, FRONT) {
+                        order_sep[regime] += 1;
+                    }
+                    if model != f64::from(narrow_dot(&normal, &d)) {
+                        value_sep[regime] += 1;
+                    }
+                }
+            }
+        }
+
+        let measured = [
+            [cases[0], gate_sep[0], order_sep[0], value_sep[0]],
+            [cases[1], gate_sep[1], order_sep[1], value_sep[1]],
+        ];
+        assert_eq!(
+            measured,
+            [[520_000, 29_403, 0, 520_000], [520_000, 0, 0, 520_000]],
+            "the sweep no longer separates the two shapes the way it did"
+        );
     }
 }
 

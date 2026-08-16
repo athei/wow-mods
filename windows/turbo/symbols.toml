@@ -2810,6 +2810,16 @@ ret  = "u32"
 args = ["*mut u8", "*const f32", "*const f32", "i32", "*mut f32"]
 preserve = []
 
+# Per-face polygon sweep, called directly by the box-face driver 0x632280.
+# Its front-face dot is NOT the caller's, and the difference is in the
+# bytes twice over: the FADDP pair at 0x632765/0x63276b folds (z + y) + x
+# where 0x632280's folds (z + x) + y, and the compare at 0x632775 is
+# TEST AH,0x41 / JZ against the -1e-5 at 0x80c5c4 where the sibling has
+# JNP against a 0.0. JZ fires on an ordered greater alone, so equality
+# and an unordered dot both sweep the face. Register-resident either way:
+# nothing stores the dot between the FMUL at 0x63275c and the FCOMP at
+# 0x63276d, so the wide compare IS the observable and no diff table can
+# reach it.
 [functions.Collision_SweepPolygonAgainstFaces__632700]
 rva  = 0x232700
 sig  = "55 8B EC 81 EC 0C 01 00 00 53 56 57 8B F1"
@@ -4281,8 +4291,14 @@ args = ["*const i16"]
 preserve = []
 
 # Narrowphase swept-prism box-face driver (wave-5 #2, 2.15%). Iterates the
-# 4 side faces of the swept prism: back-face cull (dot in stock FADDP
-# order, NaN => process), Collision_BuildFaceEdgePlanes 0x632460 +
+# 4 side faces of the swept prism: back-face cull (the dot at
+# 0x6322e6..0x6322f7 is register-resident, with no FST/FSTP m32 before the
+# FCOMP, and its FADDP pair folds (z + x) + y, which is what our kernel
+# does; the FCOMP is against the 0.0 at 0x7ffd74 and TEST AH,0x41 / JNP
+# skips only on an ordered <=, so a NaN dot processes the face. Read from
+# the bytes rather than inherited: this entry's own callee 0x632700 folds
+# (z + y) + x and jumps on JZ, and the two were conflated once already),
+# Collision_BuildFaceEdgePlanes 0x632460 +
 # Collision_SweepPolygonAgainstFaces 0x632700 — both OUR hooks, called
 # directly as Rust fns (no detour) — then the tied-contact epsilon band
 # (reset/append; NaN never resets, never appends) and the strict new-best

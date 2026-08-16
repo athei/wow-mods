@@ -10,7 +10,7 @@ windows/turbo/src/math/boundsfit.rs clippy::neg_cmp_op_on_partial_ord 1
 windows/turbo/src/math/boundsfit.rs clippy::too_many_arguments 2
 windows/turbo/src/math/boundsfit.rs non_snake_case 1
 windows/turbo/src/math/collision.rs clippy::excessive_precision 7
-windows/turbo/src/math/collision.rs clippy::neg_cmp_op_on_partial_ord 7
+windows/turbo/src/math/collision.rs clippy::neg_cmp_op_on_partial_ord 8
 windows/turbo/src/math/collision.rs clippy::too_many_arguments 3
 windows/turbo/src/math/collision.rs non_snake_case 1
 windows/turbo/src/math/fmod_mixer.rs non_snake_case 1
