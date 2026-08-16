@@ -263,18 +263,22 @@ pub fn fog_pack_color_argb__70baf0(c0: f32, c1: f32, c2: f32) -> u32 {
 /// tests, so a `NaN` lane snaps to `0`. The in-range remap runs in `f32` whereas
 /// the original keeps an 80-bit x87 intermediate before truncation, so the
 /// result can differ by at most one byte LSB — the project's beat-x87 design.
+///
+/// The truncation sits inside the in-range arm rather than below all three, so
+/// only that arm runs `__ftol`'s mantissa tail. The other two are folded to the
+/// byte the tail would have produced: truncating `0.0` toward zero is `0`, and
+/// truncating `255.0` is `255`, whose low byte is `255`.
 // `!(0.0 < v)` snaps a `NaN` lane to `0`, which is the `jp` polarity documented
 // above; `v <= 0.0` is false on `NaN` and would fall through to the remap arm.
 #[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn fog_clamp_byte__70baf0(v: f32) -> u32 {
-    let mapped = if !(0.0_f32 < v) {
-        0.0_f32
+    if !(0.0_f32 < v) {
+        0
     } else if v < 1.0_f32 {
-        v * 255.0_f32 + 0.5_f32
+        (crate::math::misc::ftol__40a2b0(f64::from(v * 255.0_f32 + 0.5_f32)) as u32) & 0xff
     } else {
-        255.0_f32
-    };
-    (crate::math::misc::ftol__40a2b0(f64::from(mapped)) as u32) & 0xff
+        255
+    }
 }
 
 #[cfg(test)]

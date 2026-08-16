@@ -28376,6 +28376,94 @@ fn fire_segment(
     );
 }
 
+/// `CGxBatch::UpdateFogState`'s clip-plane arm (`0x70baf0`), lifted out of line.
+///
+/// Reached only when the plane object at `this+0x3300` carries a non-zero gate
+/// dword at `+0xc`, which the caller tests. Reads the four floats at
+/// `light+0x1a0`, transforms them by `this+0x00`..`+0x40` taken as a 16-float
+/// matrix when `GetDepthConvention()` is non-zero and `this+0x32f0` is set,
+/// negates all four when `this+0x4c` is 2, then hands the plane to
+/// `SetFogPlane` and raises render state `0x15`.
+///
+/// `#[cold]` and `#[inline(never)]` because the arm runs only on a clip-plane
+/// change with that gate set, which is rare beside the fog cohorts above, and
+/// inline it lays a long run of never-executed code across the middle of them.
+/// The seam is `this` plus the three transmuted device leaves the caller
+/// declares, so nothing about the arithmetic moves.
+#[cold]
+#[inline(never)]
+fn update_fog_state_clip_plane__70baf0(
+    base: *mut u8,
+    get_depth_convention: unsafe extern "C" fn() -> i32,
+    set_fog_plane: unsafe extern "fastcall" fn(u32, *const f32),
+    set_render_state: unsafe extern "fastcall" fn(u32, u32),
+) {
+    // SAFETY: `base` is the non-null `CGxBatch` the caller checked on entry;
+    // `this+0x3320` is its scene-lighting pointer slot, which the fog cohorts
+    // above already load through.
+    let slot_3320 = unsafe { base.add(0x3320) };
+    // SAFETY: `slot_3320` addresses that pointer field; the stock body loads
+    // through it unconditionally on this arm.
+    let light = unsafe { slot_3320.cast::<*const u8>().read() };
+    // plane = light+0x1a0 .. +0x1ac (4 floats).
+    // SAFETY: `light+0x1a0` sits above the fog fields at `+0x184`..`+0x198`
+    // the fog-mode arms read from this same record.
+    let src = unsafe { light.add(0x1a0) };
+    // SAFETY: `light+0x1a4` is the second of the four floats the stock
+    // body hands to `SetFogPlane`.
+    let src_1 = unsafe { src.add(0x4) };
+    // SAFETY: `light+0x1a8` is the third of those four floats.
+    let src_2 = unsafe { src.add(0x8) };
+    // SAFETY: `light+0x1ac` is the fourth of those four floats.
+    let src_3 = unsafe { src.add(0xc) };
+    let mut plane = [
+        // SAFETY: `src` addresses the first of those four floats.
+        unsafe { src.cast::<f32>().read() },
+        // SAFETY: `src_1` addresses the second.
+        unsafe { src_1.cast::<f32>().read() },
+        // SAFETY: `src_2` addresses the third.
+        unsafe { src_2.cast::<f32>().read() },
+        // SAFETY: `src_3` addresses the fourth.
+        unsafe { src_3.cast::<f32>().read() },
+    ];
+    // SAFETY: `this+0x32f0` is the dword the caller's cohorts read as `f_far`;
+    // forming the address performs no load, so the `&&` below still
+    // short-circuits before the read.
+    let slot_32f0 = unsafe { base.add(0x32f0) };
+    // Conditional transform: GetDepthConvention()!=0 AND this+0x32f0!=0.
+    // SAFETY: `get_depth_convention` is the transmuted `0x589ca0` leaf the
+    // caller declares — no arguments, `i32` result, loads its own device
+    // singleton.
+    if unsafe { get_depth_convention() } != 0
+        // SAFETY: `slot_32f0` addresses that dword.
+        && unsafe { slot_32f0.cast::<u32>().read() } != 0
+    {
+        // SAFETY: the stock body passes `this` itself as the 16-float
+        // matrix operand of `C44Matrix::TransformVector4`, so `+0x00`
+        // ..`+0x40` is what is read here; unaligned because nothing
+        // establishes the instance's alignment.
+        let mat = &unsafe { base.cast::<[f32; 16]>().read_unaligned() };
+        let inv = [plane[0], plane[1], plane[2], plane[3]];
+        let out = crate::math::matrix44::c44_matrix__transform_vector4__7bcb40(&inv, mat);
+        plane = out;
+    }
+    // Depth-convention sign flip: when this+0x4c == 2, negate all 4.
+    // SAFETY: `this+0x4c` is a dword of the same instance, the depth
+    // convention selector the stock body tests here.
+    let slot_4c = unsafe { base.add(0x4c) };
+    // SAFETY: `slot_4c` addresses that dword.
+    if unsafe { slot_4c.cast::<u32>().read() } == 2 {
+        plane = [-plane[0], -plane[1], -plane[2], -plane[3]];
+    }
+    // SAFETY: `set_fog_plane` is the transmuted `0x58b2a0` leaf the caller
+    // declares, `fastcall(ecx = 0, edx = plane)`; `plane` is a live local
+    // that outlives the call, matching the stack buffer the stock passes.
+    unsafe { set_fog_plane(0, plane.as_ptr()) };
+    // SAFETY: `set_render_state` is the transmuted `0x589e60` leaf the caller
+    // declares, `fastcall(ecx = state, edx = value)`, void.
+    unsafe { set_render_state(0x15, 1) };
+}
+
 /// `CGxBatch::UpdateFogState` — `__thiscall(ecx = this)`, no stack args, `ret` (void).
 ///
 /// Recomputes and commits fog + clip-plane render state for one batch: resolves the enable/mode
@@ -28726,16 +28814,20 @@ pub extern "thiscall" fn c_gx_batch__update_fog_state__70baf0(this: *mut u8) {
                     }
                     filled = count;
                 }
-                if filled < 4 {
-                    // Zero-fill remaining slots (color rows only) up to 4.
-                    for i in filled..4 {
-                        let row = unsafe { base.add(0x160).add(i * 0x10) };
-                        unsafe { row.cast::<u32>().write(0) };
-                        unsafe { row.add(0x4).cast::<u32>().write(0) };
-                        unsafe { row.add(0x8).cast::<u32>().write(0) };
-                        unsafe { row.add(0xc).cast::<u32>().write(0) };
-                    }
-                }
+                // Zero-fill remaining slots (color rows only) up to 4. The trip
+                // count is the four rows and `filled` is a per-row predicate,
+                // never a loop bound: a `for i in filled..4` fill has a runtime
+                // extent, which LLVM hands to the CRT as
+                // `memset(this + 0x160 + filled*0x10, 0, 0x40 - filled*0x10)` —
+                // a call for at most four 16-byte stores.
+                // SAFETY: `this+0x160` is the base of those four 16-byte color
+                // rows, the same address the copy loop above writes through.
+                let rows = unsafe { base.add(0x160) };
+                // SAFETY: `rows` addresses 16 writable dwords of the batch, the
+                // four rows the copy loop fills; the helper writes rows
+                // `filled..4` low offset first, lane by lane, which is the
+                // order that loop used, and writes nothing once `filled >= 4`.
+                unsafe { wow_shared::blit::zero_rows_from::<4, 4>(rows.cast::<u32>(), filled) };
 
                 // SAFETY: `this` is non-null (checked on entry) and the object
                 // reaches at least `+0x3348`, read unconditionally at the top of
@@ -29023,66 +29115,12 @@ pub extern "thiscall" fn c_gx_batch__update_fog_state__70baf0(this: *mut u8) {
         let gate = unsafe { plane_obj.add(0xc) };
         // SAFETY: `gate` addresses that gate dword.
         if unsafe { gate.cast::<u32>().read() } != 0 {
-            // SAFETY: `slot_3320` is `this+0x3320`, the scene-lighting pointer
-            // slot; the stock body loads through it unconditionally on this arm.
-            let light = unsafe { slot_3320.cast::<*const u8>().read() };
-            // plane = light+0x1a0 .. +0x1ac (4 floats).
-            // SAFETY: `light+0x1a0` sits above the fog fields at `+0x184`..`+0x198`
-            // the fog-mode arms read from this same record.
-            let src = unsafe { light.add(0x1a0) };
-            // SAFETY: `light+0x1a4` is the second of the four floats the stock
-            // body hands to `SetFogPlane`.
-            let src_1 = unsafe { src.add(0x4) };
-            // SAFETY: `light+0x1a8` is the third of those four floats.
-            let src_2 = unsafe { src.add(0x8) };
-            // SAFETY: `light+0x1ac` is the fourth of those four floats.
-            let src_3 = unsafe { src.add(0xc) };
-            let mut plane = [
-                // SAFETY: `src` addresses the first of those four floats.
-                unsafe { src.cast::<f32>().read() },
-                // SAFETY: `src_1` addresses the second.
-                unsafe { src_1.cast::<f32>().read() },
-                // SAFETY: `src_2` addresses the third.
-                unsafe { src_2.cast::<f32>().read() },
-                // SAFETY: `src_3` addresses the fourth.
-                unsafe { src_3.cast::<f32>().read() },
-            ];
-            // SAFETY: `this+0x32f0` is the dword `f_far` was read from above;
-            // forming the address performs no load, so the `&&` below still
-            // short-circuits before the read.
-            let slot_32f0 = unsafe { base.add(0x32f0) };
-            // Conditional transform: GetDepthConvention()!=0 AND this+0x32f0!=0.
-            // SAFETY: `get_depth_convention` is the transmuted `0x589ca0` leaf
-            // declared at the top of this function — no arguments, `i32` result,
-            // loads its own device singleton.
-            if unsafe { get_depth_convention() } != 0
-                // SAFETY: `slot_32f0` addresses that dword.
-                && unsafe { slot_32f0.cast::<u32>().read() } != 0
-            {
-                // SAFETY: the stock body passes `this` itself as the 16-float
-                // matrix operand of `C44Matrix::TransformVector4`, so `+0x00`
-                // ..`+0x40` is what is read here; unaligned because nothing
-                // establishes the instance's alignment.
-                let mat = &unsafe { base.cast::<[f32; 16]>().read_unaligned() };
-                let inv = [plane[0], plane[1], plane[2], plane[3]];
-                let out = crate::math::matrix44::c44_matrix__transform_vector4__7bcb40(&inv, mat);
-                plane = out;
-            }
-            // Depth-convention sign flip: when this+0x4c == 2, negate all 4.
-            // SAFETY: `this+0x4c` is a dword of the same instance, the depth
-            // convention selector the stock body tests here.
-            let slot_4c = unsafe { base.add(0x4c) };
-            // SAFETY: `slot_4c` addresses that dword.
-            if unsafe { slot_4c.cast::<u32>().read() } == 2 {
-                plane = [-plane[0], -plane[1], -plane[2], -plane[3]];
-            }
-            // SAFETY: `set_fog_plane` is the transmuted `0x58b2a0` leaf declared
-            // above, `fastcall(ecx = 0, edx = plane)`; `plane` is a live local
-            // that outlives the call, matching the stack buffer the stock passes.
-            unsafe { set_fog_plane(0, plane.as_ptr()) };
-            // SAFETY: `set_render_state` is the transmuted `0x589e60` leaf
-            // declared above, `fastcall(ecx = state, edx = value)`, void.
-            unsafe { set_render_state(0x15, 1) };
+            update_fog_state_clip_plane__70baf0(
+                base,
+                get_depth_convention,
+                set_fog_plane,
+                set_render_state,
+            );
             return;
         }
         // SAFETY: `set_render_state` as above — clears the clip-plane state.
