@@ -99,6 +99,11 @@ pub fn c3_vector__normalize(v: *mut f32) {
 /// `C44Matrix::Multiply` — `__fastcall(ecx = out, edx = a, stack = b)`.
 ///
 /// Computes the 4×4 row-major product `out = a · b` and returns `out`.
+///
+/// Both inputs are read where the caller holds them rather than copied into
+/// locals first. Every read of `a` and `b` completes inside the kernel call,
+/// above the single write to `out` in the epilogue, so a caller that aliases
+/// `out` over an input still gets the product of the original operands.
 pub extern "fastcall" fn c44_matrix__multiply__7bc6a0(
     out: *mut f32,
     a: *const f32,
@@ -108,11 +113,12 @@ pub extern "fastcall" fn c44_matrix__multiply__7bc6a0(
         return out;
     }
     // SAFETY: the hooked original is `__fastcall(out, a, b)` where `a` addresses a
-    // `C44Matrix` — 16 contiguous, 4-byte-aligned `f32`. Non-null is checked
-    // above; transform/camera callers always pass a valid matrix.
-    let am = &unsafe { a.cast::<[f32; 16]>().read_unaligned() };
+    // `C44Matrix` — 16 contiguous `f32` at the 4-byte alignment this borrow
+    // asserts. Non-null is checked above; transform/camera callers always pass a
+    // valid matrix, and nothing on the path below mutates it.
+    let am: &[f32; 16] = unsafe { &*a.cast::<[f32; 16]>() };
     // SAFETY: as for `a` — `b` addresses 16 contiguous, 4-byte-aligned `f32`.
-    let bm = &unsafe { b.cast::<[f32; 16]>().read_unaligned() };
+    let bm: &[f32; 16] = unsafe { &*b.cast::<[f32; 16]>() };
 
     let product = crate::math::matrix44::c44_matrix__multiply__7bc6a0(am, bm);
     // Build the verbose input dump only on a non-finite product, so the hot path
@@ -124,8 +130,9 @@ pub extern "fastcall" fn c44_matrix__multiply__7bc6a0(
         trip_nonfinite("C44Matrix.Multiply", &io, &product);
     }
 
-    // SAFETY: `out` addresses 16 contiguous, aligned `f32`; the original's
-    // contract guarantees `out` aliases neither `a` nor `b`.
+    // SAFETY: `out` addresses 16 contiguous, aligned `f32`, and the borrows of `a`
+    // and `b` end above this line, so this write is the only live access to the
+    // matrix even where a caller aliases `out` over an input.
     unsafe { out.cast::<[f32; 16]>().write_unaligned(product) };
     out
 }
