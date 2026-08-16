@@ -9535,13 +9535,22 @@ pub struct HbPlane {
 impl HbPlane {
     #[inline]
     pub fn read() -> Self {
-        const COEFF: *const [f32; 4] =
-            (crate::win::EXPECTED_IMAGE_BASE + 0x87_cfb8) as *const [f32; 4];
+        const COEFF: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x87_cfb8) as *const f32;
         const SCALE: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x41_0174) as *const f32;
         const BIAS: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x46_861c) as *const f32;
+        // The row moves as one 16-byte value. Asked for as an aggregate read it
+        // comes back as four dword loads plus a stack home apiece, and every
+        // insert site that wants the first two coefficients packed then rebuilds
+        // the pair a lane at a time. `0x87cfb8` is 8 mod 16, so the load is the
+        // unaligned form, and the 16 bytes stay inside the `.data` mapping.
+        // SAFETY: fixed, initialized `.data` plane coefficients in the live host
+        // image; the unaligned load carries no alignment requirement of its own.
+        let row = unsafe { core::arch::x86::_mm_loadu_ps(COEFF) };
+        let mut coeff = [0.0f32; 4];
+        // SAFETY: `coeff` is a live 4-float local, exactly the 16 bytes written.
+        unsafe { core::arch::x86::_mm_storeu_ps(coeff.as_mut_ptr(), row) };
         Self {
-            // SAFETY: fixed, initialized `.data` plane coefficients in the live host image.
-            coeff: unsafe { COEFF.read() },
+            coeff,
             // SAFETY: fixed, initialized `.data` plane scale in the live host image.
             scale: unsafe { SCALE.read() },
             // SAFETY: fixed, initialized `.data` plane bias in the live host image.
@@ -9551,10 +9560,20 @@ impl HbPlane {
 
     #[inline]
     pub fn same_bits(&self, other: &Self) -> bool {
-        self.coeff
-            .iter()
-            .zip(other.coeff.iter())
-            .all(|(a, b)| a.to_bits() == b.to_bits())
+        // The row is compared as one four-lane block rather than lane at a time.
+        // `u32_lanes_eq` folds the four XORs with no early exit and states the
+        // same bit equality `f32::to_bits` did: a NaN equals itself and `-0.0`
+        // does not equal `0.0`.
+        // SAFETY: both rows are four contiguous, initialized `f32` lanes, so
+        // four `u32` lanes are readable at each pointer, and neither side has
+        // to be aligned.
+        let row_eq = unsafe {
+            wow_shared::blit::u32_lanes_eq::<4>(
+                self.coeff.as_ptr().cast::<u32>(),
+                other.coeff.as_ptr().cast::<u32>(),
+            )
+        };
+        row_eq
             && self.scale.to_bits() == other.scale.to_bits()
             && self.bias.to_bits() == other.bias.to_bits()
     }
@@ -9827,26 +9846,18 @@ pub fn height_bucket_insert_node_from_object_with(object_node: i32, hb: &HbPlane
     }
     let node = object_node as usize as *const u8;
 
-    // SAFETY: `node+0x5c` is in-bounds for the 3 contiguous world-pos floats.
-    let pos_ptr = unsafe { node.add(0x5c) }.cast::<[f32; 3]>();
-    // SAFETY: `pos_ptr` addresses the 3 aligned, initialized world-pos floats.
-    let pos = unsafe { &*pos_ptr };
-    // SAFETY: `node+0x68` is the in-bounds base-height float.
-    let base_ptr = unsafe { node.add(0x68) }.cast::<f32>();
-    // SAFETY: `base_ptr` is aligned and initialized.
-    let base = unsafe { base_ptr.read() };
+    // The world triple at `+0x5c` and the base height at `+0x68` are four
+    // contiguous floats: one 16-byte read covers the same bytes the separate
+    // triple and scalar reads did, and hands the packed kernel its lane 3.
+    // SAFETY: `node+0x5c..+0x6c` is in-bounds for the 3 world-pos floats and
+    // the base height that follows them.
+    let pos_ptr = unsafe { node.add(0x5c) }.cast::<[f32; 4]>();
+    // SAFETY: `pos_ptr` addresses those 4 initialized floats; the unaligned
+    // read carries no alignment requirement of its own.
+    let pos4 = unsafe { pos_ptr.read_unaligned() };
 
-    let Some(bucket) = crate::math::world::height_bucket_insert_node_from_object__6816f0(
-        pos[0],
-        pos[1],
-        pos[2],
-        base,
-        hb.coeff[0],
-        hb.coeff[1],
-        hb.coeff[2],
-        hb.coeff[3],
-        hb.scale,
-        hb.bias,
+    let Some(bucket) = crate::math::world::height_bucket_insert_node_from_object4__6816f0(
+        pos4, hb.coeff, hb.scale, hb.bias,
     ) else {
         return;
     };

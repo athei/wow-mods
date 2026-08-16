@@ -1270,9 +1270,12 @@ mod tests_height_bucket_insert_node_at_pos__6818b0 {
 /// Projects an object world position onto the bucket axis and rounds+clamps to a bucket index.
 ///
 /// `Some(0..=31)` is the destination bucket; `None` means the node projects past
-/// the far bucket and must be dropped (no relink).
+/// the far bucket and must be dropped (no relink). The shipped body runs the
+/// 4-lane form below; this scalar transcription is the oracle that form is
+/// pinned against, and compiles only into test builds.
 // The ten scalars are the object position, the plane row, the base, the scale
 // and the bias the reference passes individually.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub fn height_bucket_insert_node_from_object__6816f0(
     px: f32,
@@ -1289,7 +1292,62 @@ pub fn height_bucket_insert_node_from_object__6816f0(
     let plane = cx * px + cy * py + cz * pz + cw;
     let projected = scale * (plane - base) - bias;
     // `FISTP` rounds to nearest, ties-to-even (the FPU default rounding mode).
-    let idx = f64::from(projected).round_ties_even() as i32;
+    let idx = projected.round_ties_even() as i32;
+    if idx < 0 {
+        return Some(0);
+    }
+    if idx > 0x1f {
+        return None;
+    }
+    Some(idx as usize)
+}
+
+/// 4-lane SSE form of `height_bucket_insert_node_from_object__6816f0`.
+///
+/// `pos4` is the node's `+0x5c` world triple with the `+0x68` base height in
+/// lane 3, `coeff` the plane row at `0x87cfb8`. One `mulps` replaces the three
+/// `mulss`, lane for lane and pair for pair, and the lanes are folded in the
+/// reference's serial order, `(x*c0 + y*c1) + z*c2`, rather than as a tree, so
+/// every rounding stays where the scalar kernel put it. Lane 3 of the product
+/// (`base*c3`) is computed and dropped: the plane constant is added and the
+/// base subtracted as scalars exactly as the reference does, and folding them
+/// into the reduction would put `base*c3` in their place and move the bucket.
+/// The property test pins the two kernels together.
+pub fn height_bucket_insert_node_from_object4__6816f0(
+    pos4: [f32; 4],
+    coeff: [f32; 4],
+    scale: f32,
+    bias: f32,
+) -> Option<usize> {
+    #[cfg(target_arch = "x86")]
+    use core::arch::x86::{
+        _mm_add_ss, _mm_cvtss_f32, _mm_loadu_ps, _mm_movehl_ps, _mm_mul_ps, _mm_shuffle_ps,
+    };
+    #[cfg(target_arch = "x86_64")]
+    use core::arch::x86_64::{
+        _mm_add_ss, _mm_cvtss_f32, _mm_loadu_ps, _mm_movehl_ps, _mm_mul_ps, _mm_shuffle_ps,
+    };
+    // Every intrinsic below is SSE1, available on every ISA baseline this
+    // crate builds for.
+    // SAFETY: the load covers the 16 in-bounds bytes of its `[f32; 4]` argument.
+    let pos = unsafe { _mm_loadu_ps(pos4.as_ptr()) };
+    // SAFETY: as above.
+    let row = unsafe { _mm_loadu_ps(coeff.as_ptr()) };
+    // SAFETY: lane-wise multiply of two initialized vectors.
+    let prod = unsafe { _mm_mul_ps(pos, row) };
+    // SAFETY: lane 1 of an initialized vector selected into lane 0.
+    let lane1 = unsafe { _mm_shuffle_ps::<0b01_01_01_01>(prod, prod) };
+    // SAFETY: scalar add of lane 0 of two initialized vectors.
+    let xy = unsafe { _mm_add_ss(lane1, prod) };
+    // SAFETY: the upper half of an initialized vector moved into the lower.
+    let lane2 = unsafe { _mm_movehl_ps(prod, prod) };
+    // SAFETY: scalar add of lane 0 of two initialized vectors.
+    let xyz = unsafe { _mm_add_ss(lane2, xy) };
+    // SAFETY: lane 0 of an initialized vector.
+    let plane = unsafe { _mm_cvtss_f32(xyz) } + coeff[3];
+    let projected = scale * (plane - pos4[3]) - bias;
+    // `FISTP` rounds to nearest, ties-to-even (the FPU default rounding mode).
+    let idx = projected.round_ties_even() as i32;
     if idx < 0 {
         return Some(0);
     }
@@ -1301,7 +1359,10 @@ pub fn height_bucket_insert_node_from_object__6816f0(
 
 #[cfg(test)]
 mod tests_height_bucket_insert_node_from_object__6816f0 {
-    use super::height_bucket_insert_node_from_object__6816f0 as bucket;
+    use super::{
+        height_bucket_insert_node_from_object__6816f0 as bucket,
+        height_bucket_insert_node_from_object4__6816f0 as bucket4,
+    };
 
     /// Drives the projection so the kernel sees exactly `projected` along `px`.
     ///
@@ -1403,6 +1464,44 @@ mod tests_height_bucket_insert_node_from_object__6816f0 {
         // projected = 0.5*(9 - 2) - 0.5 = 3.5 - 0.5 = 3.0 -> bucket 3.
         let got = bucket(3.0, 1.0, 2.0, 2.0, 2.0, 4.0, -1.0, 1.0, 0.5, 0.5);
         assert_eq!(got, Some(3));
+    }
+
+    /// The 4-lane kernel must agree with the scalar one on every input class.
+    ///
+    /// The sweep drives the x coefficient, the x coordinate and the base
+    /// height across ordinary values, both zeroes, both infinities and a NaN,
+    /// holding the rest of the plane row at values that keep all four lanes
+    /// live, the lane-3 product the packed form computes and drops included.
+    #[test]
+    fn packed_matches_scalar_kernel() {
+        let vals = [
+            -1.0f32,
+            0.0,
+            -0.0,
+            0.5,
+            2.5,
+            3.5,
+            31.5,
+            40.0,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::NAN,
+            1.0e9,
+        ];
+        for &px in &vals {
+            for &cx in &vals {
+                for &base in &vals {
+                    let (py, pz) = (1.0f32, 2.0f32);
+                    let (cy, cz, cw) = (0.5f32, -0.25f32, 1.5f32);
+                    let (scale, bias) = (0.75f32, 0.25f32);
+                    assert_eq!(
+                        bucket(px, py, pz, base, cx, cy, cz, cw, scale, bias),
+                        bucket4([px, py, pz, base], [cx, cy, cz, cw], scale, bias),
+                        "px={px} cx={cx} base={base}"
+                    );
+                }
+            }
+        }
     }
 }
 
