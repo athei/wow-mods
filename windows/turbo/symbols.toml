@@ -1429,9 +1429,34 @@ args = ["*const f32", "*const f32", "i32"]
 preserve = ["ecx", "edx"]
 
 
-# Integer return, compared exactly. No region: the return is the observable.
+# Integer return, compared over its low byte. No region: the return is the
+# observable.
+#
+# The contract is one byte. All three `ret` paths define AL and nothing above it
+# -- `XOR AL, AL` at 0x7c21a2, `MOV AL, 1` at 0x7c2231 and 0x7c2290 -- and no
+# instruction in the body writes AH on purpose. The rest of EAX is whatever the
+# lane left there: `MOV EAX, [EDX+0xc]` at 0x7c2046 (the radius bits), `LEA EAX,
+# [ECX+0xc]` at 0x7c205e (the cell max corner), `MOV EAX, [EBP+8]` at 0x7c218a
+# (a loop counter), and the eighteen `FNSTSW AX` that carry the x87 compares.
+# That accounts for the reported values exactly: in 0x00220101 the 0x0022 is the
+# high half of the caller's stack address that `LEA` put there, the 0x01 in AH is
+# the C0 bit of the last `FCOMP` written by `FNSTSW AX` at 0x7c2283, and only AL
+# is the answer. There is no packed per-axis result to reproduce.
+#
+# The image holds exactly one reference to 0x7c2040: the `CALL` at 0x68b075 in
+# `CMap__QueryLiquidSounds` (0x68af10), which does `TEST AL, AL` and branches.
+# The address appears nowhere in the file as a dword, so no table or vtable
+# reaches it either, and that one call site passes `dir` 3.
+#
+# Comparing the full word reported ~68k times in one in-world session, which is
+# also why this was quiet until then: nothing on the character screen calls it,
+# so every soak before had zero calls to disagree about. The mask is argued from
+# the enumerated call site above; if a second caller appears that reads the high
+# bits, this is wrong and the answer is to reproduce the status word rather than
+# to widen the mask back.
 [functions.Sphere_TestCellDirection__7c2040.diff]
-mode = "out"
+mode     = "out"
+ret_mask = 0xff
 
 [functions.SqDistPointTriangleEdges__6dc900]
 rva  = 0x2dc900
