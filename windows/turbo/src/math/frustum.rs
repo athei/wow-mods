@@ -15,17 +15,41 @@ const FRUSTUM_PLANE_EPS: f32 = -0.019_444_443_3;
 /// that plane: the plane's bit `1 << p` is OR-ed into the mask. Returns
 /// `(last_failing_bit, mask)` — the bit of the last failing plane (0 if fully
 /// inside) plus the full outcode mask.
+///
+/// The distance chain is register-resident in the original: between the first
+/// `FMUL` at `0x686c43` and the `FCOMP` at `0x686c57` there is no `FST`/`FSTP
+/// m32`, so nothing narrows to `f32` on the way. At the client's 53-bit
+/// precision control that register carries an `f64` significand, and a product
+/// of two `f32` needs 48 bits and is therefore exact, which leaves the three
+/// adds as the whole of the rounding. Their order is the one the `FADDP` pair at
+/// `0x686c4b` and `0x686c52` gives: `(a*x + c*z) + b*y`, the z term ahead of the
+/// y term, then `+ d` at `0x686c54`.
+///
+/// Both facts are observable, and the fixtures pin them separately. A per-step
+/// `f32` chain decides a plane the other way whenever the point sits within an
+/// `f32` ulp of that plane's epsilon, which is reachable at world scale by
+/// walking `d`. The association only shows once the x and y terms cancel far
+/// enough that the z term would fall off the end of the wider sum, so it needs a
+/// constructed plane rather than a swept one, but it is a real difference in the
+/// answer and not a rounding preference.
+///
+/// The epsilon widens once, above the loop: the original's `FCOMP` reads it as
+/// an `f32` memory operand and the compare happens at register width, so
+/// widening it is exact and hoisting it changes nothing.
 pub fn c_world_frustum__classify_point__686c20(planes: &[f32; 24], point: &[f32; 3]) -> (u32, u32) {
-    let x = point[0];
-    let y = point[1];
-    let z = point[2];
+    let x = f64::from(point[0]);
+    let y = f64::from(point[1]);
+    let z = f64::from(point[2]);
+    let eps = f64::from(FRUSTUM_PLANE_EPS);
 
     let mut out_mask: u32 = 0;
     for p in 0..6u32 {
         let base = (p as usize) * 4;
-        let dist =
-            planes[base] * x + planes[base + 1] * y + planes[base + 2] * z + planes[base + 3];
-        if dist < FRUSTUM_PLANE_EPS {
+        let ax = f64::from(planes[base]) * x;
+        let cz = f64::from(planes[base + 2]) * z;
+        let by = f64::from(planes[base + 1]) * y;
+        let dist = ((ax + cz) + by) + f64::from(planes[base + 3]);
+        if dist < eps {
             out_mask |= 1u32 << p;
         }
     }
@@ -43,7 +67,72 @@ pub fn c_world_frustum__classify_point__686c20(planes: &[f32; 24], point: &[f32;
 
 #[cfg(test)]
 mod tests_c_world_frustum__classify_point__686c20 {
-    use super::c_world_frustum__classify_point__686c20;
+    use super::{FRUSTUM_PLANE_EPS, c_world_frustum__classify_point__686c20};
+
+    /// The per-step `f32` chain in textual `a*x + b*y + c*z + d` order.
+    ///
+    /// Not an oracle: this is the form the kernel must NOT have, and it is kept
+    /// so the pinned fixtures below can witness that the width is observable
+    /// rather than assert it in prose.
+    fn narrow_mask(planes: &[f32; 24], point: &[f32; 3]) -> u32 {
+        let x = point[0];
+        let y = point[1];
+        let z = point[2];
+        let mut mask = 0u32;
+        for p in 0..6u32 {
+            let base = (p as usize) * 4;
+            let dist =
+                planes[base] * x + planes[base + 1] * y + planes[base + 2] * z + planes[base + 3];
+            if dist < FRUSTUM_PLANE_EPS {
+                mask |= 1u32 << p;
+            }
+        }
+        mask
+    }
+
+    /// The chain at the original's width but in textual order.
+    ///
+    /// Also not an oracle. It differs from the kernel in the association alone,
+    /// which is what lets the cancelling fixture below hold the `(a*x + c*z) +
+    /// b*y` order in place on its own.
+    fn wide_textual_mask(planes: &[f32; 24], point: &[f32; 3]) -> u32 {
+        let x = f64::from(point[0]);
+        let y = f64::from(point[1]);
+        let z = f64::from(point[2]);
+        let mut mask = 0u32;
+        for p in 0..6u32 {
+            let base = (p as usize) * 4;
+            let dist = f64::from(planes[base]) * x
+                + f64::from(planes[base + 1]) * y
+                + f64::from(planes[base + 2]) * z
+                + f64::from(planes[base + 3]);
+            if dist < f64::from(FRUSTUM_PLANE_EPS) {
+                mask |= 1u32 << p;
+            }
+        }
+        mask
+    }
+
+    /// The original's chain: exact products, `f64` adds, `(a*x + c*z) + b*y + d`.
+    ///
+    /// The mask is the whole observable here; the returned bit is a function of
+    /// the mask and is pinned separately over all 64 of them.
+    fn wide_mask(planes: &[f32; 24], point: &[f32; 3]) -> u32 {
+        let x = f64::from(point[0]);
+        let y = f64::from(point[1]);
+        let z = f64::from(point[2]);
+        let mut mask = 0u32;
+        for p in 0..6u32 {
+            let base = (p as usize) * 4;
+            let dist = ((f64::from(planes[base]) * x + f64::from(planes[base + 2]) * z)
+                + f64::from(planes[base + 1]) * y)
+                + f64::from(planes[base + 3]);
+            if dist < f64::from(FRUSTUM_PLANE_EPS) {
+                mask |= 1u32 << p;
+            }
+        }
+        mask
+    }
 
     fn box_frustum() -> [f32; 24] {
         [
@@ -125,6 +214,143 @@ mod tests_c_world_frustum__classify_point__686c20 {
             assert_eq!(got, mask, "mask={mask:#04x}");
             assert_eq!(ret, want, "mask={mask:#04x}");
         }
+    }
+
+    /// A NaN distance sets no bit.
+    ///
+    /// `FCOMP` leaves the unordered case falling through the `C0|C2` parity test
+    /// at `0x686c5f`, so a NaN plane leaves the point classified as inside it
+    /// rather than behind it, which is what `<` does on an unordered pair.
+    #[test]
+    fn nan_plane_sets_no_bit() {
+        let mut planes = box_frustum();
+        planes[4] = f32::NAN;
+        let point = [0.0f32, 0.0, 0.0];
+        assert_eq!(
+            c_world_frustum__classify_point__686c20(&planes, &point),
+            (0, 0)
+        );
+        assert_eq!(wide_mask(&planes, &point), 0);
+    }
+
+    /// The kernel answers the original's chain on every input class.
+    ///
+    /// Sweeps seeded plane sets against points at world-scale magnitudes, with
+    /// unit-ish normals and plane constants sized to the coordinates they cancel
+    /// against, poisoning one coefficient every fourth case with a NaN, an
+    /// infinity or a signed zero so the ordered compare is exercised on
+    /// unordered and saturating operands as well as ordinary ones.
+    #[test]
+    fn matches_the_wide_oracle() {
+        let mut state = 0x2545_f491_4f6c_dd1d_u64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let odd = [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -0.0f32, 0.0];
+        let unit = |v: u64| (v >> 11) as f32 / (1_u64 << 53) as f32 - 0.5;
+        for case in 0..20_000u32 {
+            let mut planes = [0.0f32; 24];
+            for (slot, cell) in planes.iter_mut().enumerate() {
+                *cell = if slot % 4 == 3 {
+                    unit(next()) * 10_000.0
+                } else {
+                    unit(next()) * 2.0
+                };
+            }
+            let mut point = [0.0f32; 3];
+            for cell in &mut point {
+                *cell = unit(next()) * 34_000.0;
+            }
+            if case % 4 == 0 {
+                planes[(next() % 24) as usize] = odd[(next() % 5) as usize];
+            }
+            assert_eq!(
+                c_world_frustum__classify_point__686c20(&planes, &point).1,
+                wide_mask(&planes, &point),
+                "case {case}"
+            );
+        }
+    }
+
+    /// Two points a per-step `f32` chain classifies the other way round.
+    ///
+    /// Both sit at world-scale coordinates against a unit normal, the regime the
+    /// visibility walk feeds this function, and each carries a companion assert
+    /// that the narrow chain really does disagree: a fixture that stopped
+    /// separating the two forms would leave the test passing under either one.
+    /// Plane 0 carries the first case and plane 5 the second, so the loop's
+    /// first and last iterations are both pinned; the other planes are all-zero,
+    /// whose distance is 0 and never below a negative epsilon.
+    #[test]
+    fn narrow_chain_classifies_two_real_points_the_other_way() {
+        // Narrow sets the bit, the original leaves it clear: the f32 sum rounds
+        // below the epsilon while the f64 sum stays above it.
+        let mut planes = [0.0f32; 24];
+        planes[0] = f32::from_bits(0xbe6b_7fe2);
+        planes[1] = f32::from_bits(0x3f66_f655);
+        planes[2] = f32::from_bits(0x3eba_d406);
+        planes[3] = f32::from_bits(0xc47d_b963);
+        let point = [
+            f32::from_bits(0x44ed_eefc),
+            f32::from_bits(0x452d_c0b5),
+            f32::from_bits(0xc534_c9af),
+        ];
+        assert_eq!(
+            c_world_frustum__classify_point__686c20(&planes, &point),
+            (0, 0)
+        );
+        assert_eq!(narrow_mask(&planes, &point), 0b1, "fixture must separate");
+
+        // The original sets the bit, narrow leaves it clear.
+        let mut planes = [0.0f32; 24];
+        planes[20] = f32::from_bits(0x3e4f_70ff);
+        planes[21] = f32::from_bits(0x3f2d_5b96);
+        planes[22] = f32::from_bits(0x3f35_170b);
+        planes[23] = f32::from_bits(0x45a4_c7f3);
+        let point = [
+            f32::from_bits(0x4417_ed32),
+            f32::from_bits(0xc591_5197),
+            f32::from_bits(0xc546_8a5e),
+        ];
+        assert_eq!(
+            c_world_frustum__classify_point__686c20(&planes, &point),
+            (1 << 5, 1 << 5)
+        );
+        assert_eq!(narrow_mask(&planes, &point), 0, "fixture must separate");
+    }
+
+    /// One plane the textual association classifies the other way round.
+    ///
+    /// The x and y terms are equal and opposite, so `(a*x + c*z) + b*y` adds the
+    /// z term to `a*x` only to lose it there, while `(a*x + b*y) + c*z` cancels
+    /// first and the z term survives into a sum that is already sitting exactly
+    /// at the epsilon. The z term is `-2^-45`, a sixty-fourth of an ulp of `a*x`
+    /// at this magnitude and 2^13 ulps of the epsilon, which is what lets the
+    /// two associations answer differently on the same plane. The narrow chain
+    /// answers as the original does here, and that is the point: what this
+    /// fixture rejects is the wrong association at the right width, which is the
+    /// one thing a sweep does not reach.
+    #[test]
+    fn textual_association_classifies_a_cancelling_plane_the_other_way() {
+        let mut planes = [0.0f32; 24];
+        planes[12] = 1.0;
+        planes[13] = -1.0;
+        planes[14] = f32::from_bits(0xa900_0000);
+        planes[15] = FRUSTUM_PLANE_EPS;
+        let point = [8192.0f32, 8192.0, 1.0];
+        assert_eq!(
+            c_world_frustum__classify_point__686c20(&planes, &point),
+            (0, 0)
+        );
+        assert_eq!(
+            wide_textual_mask(&planes, &point),
+            1 << 3,
+            "fixture must separate"
+        );
+        assert_eq!(narrow_mask(&planes, &point), 0);
     }
 }
 
