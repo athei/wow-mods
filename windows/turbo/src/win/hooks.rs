@@ -9160,8 +9160,15 @@ pub extern "fastcall" fn collision_clip_polygon_by_plane__6318c0(
     if plane.is_null() || polygon.is_null() {
         return;
     }
-    // SAFETY: `plane` is a non-null caller-owned 16-byte C4Plane (`[nx,ny,nz,d]`).
-    let pl = &unsafe { plane.cast::<[f32; 4]>().read_unaligned() };
+    // SAFETY: `plane` is a non-null caller-owned 16-byte C4Plane (`[nx,ny,nz,d]`)
+    // of four contiguous f32, so `[f32; 4]` reads exactly what the parameter type
+    // already promises, at the same 4-byte alignment. Nothing writes through it
+    // while the borrow lives: the two copies below read the polygon and write
+    // this frame's own buffers, the kernel is handed only those buffers and this
+    // plane, and the write-back through `verts_base` happens after the borrow is
+    // dead. Borrowing the guest plane rather than mirroring its sixteen bytes
+    // onto our stack drops a load/store pair the kernel then reads narrow anyway.
+    let pl = unsafe { &*plane.cast::<[f32; 4]>() };
 
     // SAFETY: `polygon+0xf0` is the in-bounds, aligned vertex-count field — a raw
     // 32-bit integer in stock (loaded, incremented and compared with integer ops).

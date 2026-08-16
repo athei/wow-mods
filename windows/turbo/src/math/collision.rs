@@ -2352,6 +2352,16 @@ pub fn collision_clip_polygon_by_plane__6318c0(
     if count == 0 {
         return 0;
     }
+    // The header's 15-vertex ceiling, stated where the compiler can use it.
+    // `i < count <= 15` puts both subscripts of the distance loop below in
+    // range statically: `dist_buf[i]` against 15 slots and `verts[i * 3..i * 3
+    // + 3]` against 45 floats are the same predicate, so they had merged into
+    // one compare and one branch per vertex. This is the same overflow
+    // surfaced the same way, named at the entry and paid once per call rather
+    // than once per vertex as an opaque slice-index failure. It is not a new
+    // constraint: the guest adapter clamps its count to this bound, and both
+    // sibling kernels drive the clip from these same 15-slot buffers.
+    assert!(count <= 15);
     // A math kernel reaching into the counter module, and the reason is that
     // there is no other honest place to put it: this is the hottest function in
     // the process by a factor of two, and it is entered from three directions —
@@ -2415,17 +2425,27 @@ pub fn collision_clip_polygon_by_plane__6318c0(
     let saved_verts = saved_vert_buf[..live].write_copy_of_slice(&verts[..live]);
     let saved_tags = saved_tag_buf[..count].write_copy_of_slice(&tags[..count]);
     let mut out = 0usize;
-    // `prev` walks the polygon one step behind `cur`, wrapping once at the
-    // start. It reads `(cur + count - 1) % count`, and it was written that way
-    // until the sampler put this function at the top of the profile: `count` is
-    // a runtime value, so the remainder lowered to an integer division — twenty
-    // cycles and change on i686 — once per vertex of every clip. Carrying the
-    // index is the same sequence of indices, so the float work is untouched.
-    let mut prev = count - 1;
+    // The previous vertex walks one step behind `cur`, wrapping once at the
+    // start. It was addressed as `(cur + count - 1) % count` until the sampler
+    // put this function at the top of the profile: `count` is a runtime value,
+    // so the remainder lowered to an integer division, twenty cycles and change
+    // on i686, once per vertex of every clip. Carrying an index removed that;
+    // carrying the two things the index selected removes what was left. The
+    // trailing distance and the trailing vertex were the only reads whose
+    // subscript the compiler could not prove in range, and both folded into one
+    // check and one panic edge per iteration, so both go with the index.
+    //
+    // Carrying cannot diverge from re-reading here: the carried value is the
+    // slot the previous iteration read as `dist[cur]`, the seed is the same
+    // `count - 1` slot the index started on, and `dist`/`saved_verts` are
+    // function-local. Every store the loop makes goes through
+    // `clip_emit_vertex` into the caller's `verts`/`tags`, which a local stack
+    // array cannot alias, so no iteration can change what an earlier one read.
+    // The float work is untouched either way.
+    let mut d_prev = dist[count - 1];
+    let mut p: &[f32] = &saved_verts[(count - 1) * 3..count * 3];
     for cur in 0..count {
-        let d_prev = dist[prev];
         let d_cur = dist[cur];
-        let p = &saved_verts[prev * 3..prev * 3 + 3];
         let c = &saved_verts[cur * 3..cur * 3 + 3];
         if d_prev >= 0.0 {
             if d_cur >= 0.0 {
@@ -2447,7 +2467,8 @@ pub fn collision_clip_polygon_by_plane__6318c0(
             }
             clip_emit_vertex(verts, tags, &mut out, c, saved_tags[cur]);
         }
-        prev = cur;
+        d_prev = d_cur;
+        p = c;
     }
     if out > 2 { out } else { 0 }
 }
