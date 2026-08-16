@@ -2858,54 +2858,64 @@ pub fn bounds_fit__accumulate_moment__71bce0(this: *mut u8, weight: *const f32, 
         [0.0f32; 9]
     };
 
+    // The direction basis is everything the five accumulator blocks share, and
+    // it closes over the weight, the direction and the rotation before any
+    // block is written back. Each block is then read, folded and stored in
+    // turn: the five are disjoint, each is read once and written once, and
+    // nothing else in this body reaches them, so folding them one at a time
+    // writes the same bytes as folding them together while keeping the 42
+    // floats out of stack temporaries.
+    let consts = crate::math::boundsfit::MomentConsts {
+        sh_dc: SH_DC,
+        k: [k2, k3, k4, k5, k6, k7],
+        c3,
+        one,
+        k1,
+        wq_c: [wq0, wq1, wq2],
+    };
+    let basis =
+        crate::math::boundsfit::bounds_fit__moment_basis__71bce0(w, v, rotate, &rot, &consts);
+
     // SAFETY: the 3x4 moment block is 12 contiguous, aligned `f32` at this+0x18.
     let moment_p = unsafe { this.add(0x18) };
     // SAFETY: `moment_p` addresses 12 contiguous, aligned `f32`.
     let moment = unsafe { *moment_p.cast::<[f32; 12]>() };
+    let new_moment = crate::math::boundsfit::bounds_fit__moment_block__71bce0(&basis, &moment);
+    // SAFETY: `moment_p` addresses 12 writable, aligned `f32`.
+    unsafe { moment_p.cast::<[f32; 12]>().write_unaligned(new_moment) };
+
     // SAFETY: the weight sums are 3 contiguous, aligned `f32` at this+0x48.
     let wsum_p = unsafe { this.add(0x48) };
     // SAFETY: `wsum_p` addresses 3 contiguous, aligned `f32`.
     let wsum = unsafe { *wsum_p.cast::<[f32; 3]>() };
+    let new_wsum = crate::math::boundsfit::bounds_fit__weight_sums__71bce0(w, &wsum);
+    // SAFETY: `wsum_p` addresses 3 writable, aligned `f32`.
+    unsafe { wsum_p.cast::<[f32; 3]>().write_unaligned(new_wsum) };
+
     // SAFETY: SH band X is 9 contiguous, aligned `f32` at this+0x84.
     let shx_p = unsafe { this.add(0x84) };
     // SAFETY: `shx_p` addresses 9 contiguous, aligned `f32`.
     let sh_x = unsafe { *shx_p.cast::<[f32; 9]>() };
+    let new_sh_x =
+        crate::math::boundsfit::bounds_fit__sh_band__71bce0(&basis, &sh_x, basis.sh_w[0]);
+    // SAFETY: `shx_p` addresses 9 writable, aligned `f32`.
+    unsafe { shx_p.cast::<[f32; 9]>().write_unaligned(new_sh_x) };
+
     // SAFETY: SH band Y is 9 contiguous, aligned `f32` at this+0xa8.
     let shy_p = unsafe { this.add(0xa8) };
     // SAFETY: `shy_p` addresses 9 contiguous, aligned `f32`.
     let sh_y = unsafe { *shy_p.cast::<[f32; 9]>() };
+    let new_sh_y =
+        crate::math::boundsfit::bounds_fit__sh_band__71bce0(&basis, &sh_y, basis.sh_w[1]);
+    // SAFETY: `shy_p` addresses 9 writable, aligned `f32`.
+    unsafe { shy_p.cast::<[f32; 9]>().write_unaligned(new_sh_y) };
+
     // SAFETY: SH band Z is 9 contiguous, aligned `f32` at this+0xcc.
     let shz_p = unsafe { this.add(0xcc) };
     // SAFETY: `shz_p` addresses 9 contiguous, aligned `f32`.
     let sh_z = unsafe { *shz_p.cast::<[f32; 9]>() };
-
-    let (new_moment, new_wsum, new_sh_x, new_sh_y, new_sh_z) =
-        crate::math::boundsfit::bounds_fit__accumulate_moment__71bce0(
-            w,
-            v,
-            rotate,
-            &rot,
-            &moment,
-            &wsum,
-            &sh_x,
-            &sh_y,
-            &sh_z,
-            SH_DC,
-            &[k2, k3, k4, k5, k6, k7],
-            c3,
-            one,
-            k1,
-            &[wq0, wq1, wq2],
-        );
-
-    // SAFETY: `moment_p` addresses 12 writable, aligned `f32`.
-    unsafe { moment_p.cast::<[f32; 12]>().write_unaligned(new_moment) };
-    // SAFETY: `wsum_p` addresses 3 writable, aligned `f32`.
-    unsafe { wsum_p.cast::<[f32; 3]>().write_unaligned(new_wsum) };
-    // SAFETY: `shx_p` addresses 9 writable, aligned `f32`.
-    unsafe { shx_p.cast::<[f32; 9]>().write_unaligned(new_sh_x) };
-    // SAFETY: `shy_p` addresses 9 writable, aligned `f32`.
-    unsafe { shy_p.cast::<[f32; 9]>().write_unaligned(new_sh_y) };
+    let new_sh_z =
+        crate::math::boundsfit::bounds_fit__sh_band__71bce0(&basis, &sh_z, basis.sh_w[2]);
     // SAFETY: `shz_p` addresses 9 writable, aligned `f32`.
     unsafe { shz_p.cast::<[f32; 9]>().write_unaligned(new_sh_z) };
 }
@@ -7914,21 +7924,18 @@ pub fn obj__reinsert_into_projected_depth_bucket__681a40(this: *mut u8) {
 /// `AnimRecordTable::GetScrolledParamsById`.
 ///
 /// thiscall(ecx = this; id, outBlock u32*[7]), RET 0x8, void. Lazily
-/// initializes the table (delegate when `this+0x10` is null), resolves the id
-/// to a slot via the u16 hash lookup (sentinel `0xffffffff` selects slot 0),
-/// then fills seven dwords from the `0x118`-byte record at
-/// `this+0x90 + slot*0x118`: two raw fields, the scrolled coordinate
-/// `ftol((counter − base) × scale) + offset`, and four more raw fields. Only
-/// the scroll term is float math.
+/// initializes the table (delegate when `this+0x10` is null), then resolves the
+/// id and fills the out block. The body below the test is
+/// `scrolled_params_inited__711fe0`, which a caller holding `this+0x10`
+/// non-zero enters directly.
 pub extern "thiscall" fn anim_record_table__get_scrolled_params_by_id__711fe0(
     this: *mut u8,
     id: u32,
     out_block: *mut u32,
 ) {
-    let thisu = this as usize;
     const BASE: usize = crate::win::EXPECTED_IMAGE_BASE;
     // SAFETY: live table; +0x10 is the init flag.
-    if unsafe { ((thisu + 0x10) as *const u32).read() } == 0 {
+    if unsafe { ((this as usize + 0x10) as *const u32).read() } == 0 {
         // 0x710520 lazy init (ReleaseSlot30) — thiscall(this, 0), RET 4.
         const INIT_VA: usize = BASE + 0x31_0520;
         // SAFETY: image base verified at load; signature matches the callee.
@@ -7936,6 +7943,21 @@ pub extern "thiscall" fn anim_record_table__get_scrolled_params_by_id__711fe0(
             unsafe { core::mem::transmute(INIT_VA) };
         lazy_init(this, 0);
     }
+    scrolled_params_inited__711fe0(this, id, out_block);
+}
+
+/// The rest of `0x711fe0`, for a table whose `this+0x10` is already non-zero.
+///
+/// Resolves the id to a slot via the u16 hash lookup (sentinel `0xffffffff`
+/// selects slot 0), then fills seven dwords from the `0x118`-byte record at
+/// `this+0x90 + slot*0x118`: two raw fields, the scrolled coordinate
+/// `ftol((counter − base) × scale) + offset`, and four more raw fields. Only
+/// the scroll term is float math. The lazy-init test stays in the hook entry
+/// above, so a caller that has already read the flag does not repeat it and
+/// carries no unreachable init call.
+fn scrolled_params_inited__711fe0(this: *mut u8, id: u32, out_block: *mut u32) {
+    let thisu = this as usize;
+    const BASE: usize = crate::win::EXPECTED_IMAGE_BASE;
     let slot: u16 = if id == u32::MAX {
         0
     } else {
@@ -13259,13 +13281,11 @@ pub extern "thiscall" fn cm2_model__build_emitter_transform__7106c0(
     let mut anim: Option<[u32; 5]> = None;
     if inited != 0 && !data.is_null() {
         // Sequence/track timing query — OUR hook, fills seven dwords
-        // {track id, chain, elapsed, duration, start, end, fired}.
+        // {track id, chain, elapsed, duration, start, end, fired}. `inited` is
+        // that hook's own `this+0x10` test, already read above and unchanged
+        // since, so this enters below it: the table cannot need lazy init here.
         let mut info7 = [0u32; 7];
-        anim_record_table__get_scrolled_params_by_id__711fe0(
-            this.cast::<u8>(),
-            u32::MAX,
-            info7.as_mut_ptr(),
-        );
+        scrolled_params_inited__711fe0(this.cast::<u8>(), u32::MAX, info7.as_mut_ptr());
 
         if info7[0] != u32::MAX {
             // `CM2Model::GetAnimationInfo` — `__thiscall(this, animation_id,

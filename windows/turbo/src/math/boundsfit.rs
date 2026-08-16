@@ -127,7 +127,126 @@ mod tests_bounds_fit__set_depth_range__71c110 {
 }
 
 /// Per-object moment accumulation deltas: (moment[12], wsum[3], shX[9], shY[9], shZ[9]).
+#[cfg(test)]
 type MomentAccum = ([f32; 12], [f32; 3], [f32; 9], [f32; 9], [f32; 9]);
+
+/// The host constants one moment accumulation folds in, gathered once per call.
+///
+/// `sh_dc` is the band-0 DC term, `k` the band-2 scales K2..K7, `c3` and `one`
+/// the band-2 zonal pair, `k1` the per-sample weight scale, and `wq_c` the
+/// fourth moment row's recombination weights. They are grouped because the
+/// caller reads all six from fixed `.rdata` addresses before any block is
+/// touched, and the basis below consumes them together.
+pub struct MomentConsts {
+    pub sh_dc: f32,
+    pub k: [f32; 6],
+    pub c3: f32,
+    pub one: f32,
+    pub k1: f32,
+    pub wq_c: [f32; 3],
+}
+
+/// The per-sample direction basis every accumulator block folds against.
+///
+/// `v` is the optionally rotated direction, `row_w` the four moment row weights
+/// (`weight` plus the recombined `wq`), `band` the nine real SH basis values of
+/// `v`, and `sh_w` the three per-axis band scales `w{x,y,z}*k1`.
+pub struct MomentBasis {
+    pub v: [f32; 3],
+    pub row_w: [f32; 4],
+    pub band: [f32; 9],
+    pub sh_w: [f32; 3],
+}
+
+/// The direction basis for one weighted sample of the SH9 moment accumulator.
+///
+/// Optionally rotates `vec` by the column-major 3x3 `rot` (rows
+/// `(rot[0],rot[3],rot[6])`, `(rot[1],rot[4],rot[7])`,
+/// `(rot[2],rot[5],rot[8])`), recombines the fourth moment row's weight
+/// `wq = w2*c0 + w0*c1 + w1*c2`, and evaluates the nine real SH basis values of
+/// the rotated direction in the original's negated-component form (index 0 is
+/// the band-0 DC constant, 1..3 band-1, 4..8 band-2). It is split from the fold
+/// so a caller can build it once and then read, combine and write back each
+/// accumulator block in turn, rather than copying all five blocks in up front.
+pub fn bounds_fit__moment_basis__71bce0(
+    weight: &[f32; 3],
+    vec: &[f32; 3],
+    rotate: bool,
+    rot: &[f32; 9],
+    consts: &MomentConsts,
+) -> MomentBasis {
+    // Optional 3x3 rotation: v = rot * vec (rot column-major, so each output row
+    // dots a strided row of `rot` with `vec`).
+    let v = if rotate {
+        [
+            rot[0] * vec[0] + rot[3] * vec[1] + rot[6] * vec[2],
+            rot[1] * vec[0] + rot[4] * vec[1] + rot[7] * vec[2],
+            rot[2] * vec[0] + rot[5] * vec[1] + rot[8] * vec[2],
+        ]
+    } else {
+        *vec
+    };
+    let [vx, vy, vz] = v;
+
+    // Fourth moment row uses a recombined weight wq = w2*c0 + w0*c1 + w1*c2.
+    let wq = weight[2] * consts.wq_c[0] + weight[0] * consts.wq_c[1] + weight[1] * consts.wq_c[2];
+
+    let [k2, k3, k4, k5, k6, k7] = consts.k;
+    let band = [
+        consts.sh_dc,
+        (-vy) * k7,
+        k6 * (-vz),
+        (-vx) * k7,
+        (-vy) * (-vx) * k5,
+        (-vz) * (-vy) * k4,
+        ((-vz) * (-vz) * consts.c3 - consts.one) * k3,
+        (-vz) * (-vx) * k4,
+        (vx * vx - vy * vy) * k2,
+    ];
+
+    MomentBasis {
+        v,
+        row_w: [weight[0], weight[1], weight[2], wq],
+        band,
+        sh_w: [
+            weight[0] * consts.k1,
+            weight[1] * consts.k1,
+            weight[2] * consts.k1,
+        ],
+    }
+}
+
+/// Folds one weighted sample into the 3x4 moment block.
+///
+/// Each of the four rows accumulates `row_w[r] * (vx,vy,vz)` onto the matching
+/// row of `prior`; the multiply and the add stay separate operations.
+pub fn bounds_fit__moment_block__71bce0(basis: &MomentBasis, prior: &[f32; 12]) -> [f32; 12] {
+    let [vx, vy, vz] = basis.v;
+    let mut out = [0.0f32; 12];
+    for ((dst, w), src) in out
+        .chunks_exact_mut(3)
+        .zip(basis.row_w)
+        .zip(prior.chunks_exact(3))
+    {
+        dst[0] = w * vx + src[0];
+        dst[1] = w * vy + src[1];
+        dst[2] = w * vz + src[2];
+    }
+    out
+}
+
+/// Folds the sample weights into the running per-axis weight sums.
+pub fn bounds_fit__weight_sums__71bce0(weight: &[f32; 3], prior: &[f32; 3]) -> [f32; 3] {
+    core::array::from_fn(|i| prior[i] + weight[i])
+}
+
+/// Folds one 9-coefficient SH band against the sample's basis.
+///
+/// Each coefficient takes `scale * band[j]` onto its prior value, the multiply
+/// and the add left as separate operations.
+pub fn bounds_fit__sh_band__71bce0(basis: &MomentBasis, prior: &[f32; 9], scale: f32) -> [f32; 9] {
+    core::array::from_fn(|j| scale * basis.band[j] + prior[j])
+}
 
 /// Spherical-harmonics (SH9) second-moment accumulator for an ambient/bounds-fit accumulator.
 ///
@@ -140,9 +259,17 @@ type MomentAccum = ([f32; 12], [f32; 3], [f32; 9], [f32; 9], [f32; 9]);
 /// w{x,y,z}*k1 * band[k]` over the 9 real SH basis values of `v`). Returns the
 /// updated blocks. `sh_dc`, `k` (band-2 scales K2..K7), `c3`, `one`, `k1`, and
 /// `wq_c` are host constants.
+///
+/// This is the composition the four pieces above make, in one call and taking
+/// all five accumulator blocks at once. The shipped caller does not use it: it
+/// builds the basis and then reads, folds and writes back one block at a time,
+/// which is what keeps the blocks out of stack temporaries. What is left is the
+/// oracle the pinned-value tests below compare against, so it is scoped to test
+/// builds rather than shipped with no caller.
 // The parameters enumerate the accumulator blocks and the host constants the
 // original reached through its object pointer and static data. The count is
 // set by what the original touches, not by a design choice here.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub fn bounds_fit__accumulate_moment__71bce0(
     weight: &[f32; 3],
@@ -161,65 +288,22 @@ pub fn bounds_fit__accumulate_moment__71bce0(
     k1: f32,
     wq_c: &[f32; 3],
 ) -> MomentAccum {
-    // Optional 3x3 rotation: v = rot * vec (rot column-major, so each output row
-    // dots a strided row of `rot` with `vec`).
-    let v = if rotate {
-        [
-            rot[0] * vec[0] + rot[3] * vec[1] + rot[6] * vec[2],
-            rot[1] * vec[0] + rot[4] * vec[1] + rot[7] * vec[2],
-            rot[2] * vec[0] + rot[5] * vec[1] + rot[8] * vec[2],
-        ]
-    } else {
-        *vec
-    };
-    let [vx, vy, vz] = v;
-
-    // Fourth moment row uses a recombined weight wq = w2*c0 + w0*c1 + w1*c2.
-    let wq = weight[2] * wq_c[0] + weight[0] * wq_c[1] + weight[1] * wq_c[2];
-    let row_w = [weight[0], weight[1], weight[2], wq];
-
-    // 3x4 moment block: each of the four rows accumulates row_w[r] * (vx,vy,vz).
-    let mut new_moment = [0.0f32; 12];
-    for ((dst, w), src) in new_moment
-        .chunks_exact_mut(3)
-        .zip(row_w)
-        .zip(moment.chunks_exact(3))
-    {
-        dst[0] = w * vx + src[0];
-        dst[1] = w * vy + src[1];
-        dst[2] = w * vz + src[2];
-    }
-
-    // Running per-axis weight sums.
-    let new_wsum = core::array::from_fn(|i| wsum[i] + weight[i]);
-
-    // The 9 real SH basis values of v (negated-component form of the original):
-    // index 0 is the band-0 DC constant, 1..3 band-1, 4..8 band-2.
-    let [k2, k3, k4, k5, k6, k7] = *k;
-    let band = [
+    let consts = MomentConsts {
         sh_dc,
-        (-vy) * k7,
-        k6 * (-vz),
-        (-vx) * k7,
-        (-vy) * (-vx) * k5,
-        (-vz) * (-vy) * k4,
-        ((-vz) * (-vz) * c3 - one) * k3,
-        (-vz) * (-vx) * k4,
-        (vx * vx - vy * vy) * k2,
-    ];
-
-    // Each SH band accumulates w{x,y,z} * k1 * band[k] onto its prior value.
-    let wx = weight[0] * k1;
-    let wy = weight[1] * k1;
-    let wz = weight[2] * k1;
-    let accumulate = |scale: f32, prior: &[f32; 9]| -> [f32; 9] {
-        core::array::from_fn(|j| scale * band[j] + prior[j])
+        k: *k,
+        c3,
+        one,
+        k1,
+        wq_c: *wq_c,
     };
-    let new_sh_x = accumulate(wx, sh_x);
-    let new_sh_y = accumulate(wy, sh_y);
-    let new_sh_z = accumulate(wz, sh_z);
-
-    (new_moment, new_wsum, new_sh_x, new_sh_y, new_sh_z)
+    let basis = bounds_fit__moment_basis__71bce0(weight, vec, rotate, rot, &consts);
+    (
+        bounds_fit__moment_block__71bce0(&basis, moment),
+        bounds_fit__weight_sums__71bce0(weight, wsum),
+        bounds_fit__sh_band__71bce0(&basis, sh_x, basis.sh_w[0]),
+        bounds_fit__sh_band__71bce0(&basis, sh_y, basis.sh_w[1]),
+        bounds_fit__sh_band__71bce0(&basis, sh_z, basis.sh_w[2]),
+    )
 }
 
 #[cfg(test)]
