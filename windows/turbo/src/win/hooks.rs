@@ -649,12 +649,11 @@ pub fn build_rotation_matrix2x2__7c42f0(this: *mut f32, angle: f32) -> *mut f32 
     this
 }
 
-/// `C33Matrix::FromEulerAngles` — `__thiscall(ecx = this, stack = angle_x, angle_y, angle_z)`.
+/// `C33Matrix::FromEulerAngles` — `__thiscall(ecx = this, stack = angle_z, angle_y, angle_x)`.
 ///
 /// `this` is the out matrix. Writes the 3x3 rotation built from the three Euler
-/// angles (default composition; row-major 9 floats). The angle parameters are
-/// the raw ABI stack order; the `angle_z/angle_y/angle_x` labels are a guess and
-/// do not match this layout.
+/// angles (row-major 9 floats). The stack order is Z, Y, X, read off which of
+/// the three matrices each `FSINCOS` block feeds.
 pub extern "thiscall" fn c33_matrix__from_euler_angles__7bf4b0(
     this: *mut f32,
     angle_z: f32,
@@ -693,20 +692,21 @@ pub extern "thiscall" fn c33_matrix__from_euler_xyz__7bed30(
     unsafe { this.cast::<[f32; 9]>().write_unaligned(m) };
 }
 
-/// `C33Matrix::FromEulerXZY` — `__thiscall(ecx = this, stack = angle_x, angle_y, angle_z)`.
+/// `C33Matrix::FromEulerXZY` — `__thiscall(ecx = this, stack = angle_x, angle_z, angle_y)`.
 ///
 /// `this` is the out matrix. Writes the 3x3 rotation built from the three Euler
-/// angles in axis order XZY (row-major 9 floats).
+/// angles in axis order XZY (row-major 9 floats). The stack order follows the
+/// name, so the second argument is the Z angle.
 pub extern "thiscall" fn c33_matrix__from_euler_xzy__7beeb0(
     this: *mut f32,
     angle_x: f32,
-    angle_y: f32,
     angle_z: f32,
+    angle_y: f32,
 ) {
     if this.is_null() {
         return;
     }
-    let m = crate::math::matrix33::c33_matrix__from_euler_xzy__7beeb0(angle_x, angle_y, angle_z);
+    let m = crate::math::matrix33::c33_matrix__from_euler_xzy__7beeb0(angle_x, angle_z, angle_y);
 
     // SAFETY: the hooked original is `__thiscall(ecx = this)` where `this`
     // addresses 9 contiguous, 4-byte-aligned `f32` (a 3x3 matrix); non-null
@@ -714,20 +714,21 @@ pub extern "thiscall" fn c33_matrix__from_euler_xzy__7beeb0(
     unsafe { this.cast::<[f32; 9]>().write_unaligned(m) };
 }
 
-/// `C33Matrix::FromEulerYXZ` — `__thiscall(ecx = this, stack = angle_x, angle_y, angle_z)`.
+/// `C33Matrix::FromEulerYXZ` — `__thiscall(ecx = this, stack = angle_y, angle_x, angle_z)`.
 ///
 /// `this` is the out matrix. Writes the 3x3 rotation built from the three Euler
-/// angles in axis order YXZ (row-major 9 floats).
+/// angles in axis order YXZ (row-major 9 floats). The stack order follows the
+/// name, so the first argument is the Y angle.
 pub extern "thiscall" fn c33_matrix__from_euler_yxz__7bf030(
     this: *mut f32,
-    angle_x: f32,
     angle_y: f32,
+    angle_x: f32,
     angle_z: f32,
 ) {
     if this.is_null() {
         return;
     }
-    let m = crate::math::matrix33::c33_matrix__from_euler_yxz__7bf030(angle_x, angle_y, angle_z);
+    let m = crate::math::matrix33::c33_matrix__from_euler_yxz__7bf030(angle_y, angle_x, angle_z);
 
     // SAFETY: the hooked original is `__thiscall(ecx = this)` where `this`
     // addresses 9 contiguous, 4-byte-aligned `f32` (a 3x3 matrix); non-null
@@ -735,20 +736,21 @@ pub extern "thiscall" fn c33_matrix__from_euler_yxz__7bf030(
     unsafe { this.cast::<[f32; 9]>().write_unaligned(m) };
 }
 
-/// `C33Matrix::FromEulerYZX` — `__thiscall(ecx = this, stack = angle_x, angle_y, angle_z)`.
+/// `C33Matrix::FromEulerYZX` — `__thiscall(ecx = this, stack = angle_y, angle_z, angle_x)`.
 ///
 /// `this` is the out matrix. Writes the 3x3 rotation built from the three Euler
-/// angles in axis order YZX (row-major 9 floats).
+/// angles in axis order YZX (row-major 9 floats). The stack order follows the
+/// name, so the first argument is the Y angle.
 pub extern "thiscall" fn c33_matrix__from_euler_yzx__7bf1b0(
     this: *mut f32,
-    angle_x: f32,
     angle_y: f32,
     angle_z: f32,
+    angle_x: f32,
 ) {
     if this.is_null() {
         return;
     }
-    let m = crate::math::matrix33::c33_matrix__from_euler_yzx__7bf1b0(angle_x, angle_y, angle_z);
+    let m = crate::math::matrix33::c33_matrix__from_euler_yzx__7bf1b0(angle_y, angle_z, angle_x);
 
     // SAFETY: the hooked original is `__thiscall(ecx = this)` where `this`
     // addresses 9 contiguous, 4-byte-aligned `f32` (a 3x3 matrix); non-null
@@ -756,20 +758,21 @@ pub extern "thiscall" fn c33_matrix__from_euler_yzx__7bf1b0(
     unsafe { this.cast::<[f32; 9]>().write_unaligned(m) };
 }
 
-/// `C33Matrix::FromEulerZXY` — `__thiscall(ecx = this, stack = angle_x, angle_y, angle_z)`.
+/// `C33Matrix::FromEulerZXY` — `__thiscall(ecx = this, stack = angle_z, angle_x, angle_y)`.
 ///
 /// `this` is the out matrix. Writes the 3x3 rotation built from the three Euler
-/// angles in axis order ZXY (row-major 9 floats).
+/// angles in axis order ZXY (row-major 9 floats). The stack order follows the
+/// name, so the first argument is the Z angle.
 pub extern "thiscall" fn c33_matrix__from_euler_zxy__7bf330(
     this: *mut f32,
+    angle_z: f32,
     angle_x: f32,
     angle_y: f32,
-    angle_z: f32,
 ) {
     if this.is_null() {
         return;
     }
-    let m = crate::math::matrix33::c33_matrix__from_euler_zxy__7bf330(angle_x, angle_y, angle_z);
+    let m = crate::math::matrix33::c33_matrix__from_euler_zxy__7bf330(angle_z, angle_x, angle_y);
 
     // SAFETY: the hooked original is `__thiscall(ecx = this)` where `this`
     // addresses 9 contiguous, 4-byte-aligned `f32` (a 3x3 matrix); non-null

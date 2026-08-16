@@ -3,17 +3,28 @@
 // standing in for the `::`, so the whole module is non-snake-case by construction.
 #![allow(non_snake_case)]
 
-// --- Euler composition helpers (per-axis row-major rotations; the host builds
-// three single-axis matrices, multiplies them in the named order, and stores
-// the transpose). ---
-fn rx3(c: f32, s: f32) -> [f32; 9] {
-    [1.0, 0.0, 0.0, 0.0, c, s, 0.0, -s, c]
+// --- Euler composition helpers ---
+//
+// All six Euler builders share one body: three inline `FSINCOS`, three
+// single-axis matrices written to stack slots, two `call C33Matrix::Multiply`,
+// and a nine-argument transposing copy. The three matrices below are the ones
+// the originals actually store, read off the `FSTP m32` stream rather than
+// inferred from a convention. For the ZYX entry at 0x7bf4b0 the Z block writes
+// `cos` at 0x7bf4db, `-sin` after the `FCHS` at 0x7bf4e9, `sin` at 0x7bf4f6 and
+// `cos` at 0x7bf503 into consecutive slots, giving [c,-s,0, s,c,0, 0,0,1], and
+// the five siblings write the same three layouts. The X and Z helpers this
+// replaces were the TRANSPOSE of these, which is one of the two ways five of
+// the six builders came out a whole sign wrong on their off-diagonal lanes; the
+// other was reading argument 0 as the X angle in entries whose first FSINCOS
+// feeds a Y or Z matrix.
+fn euler_x3(c: f32, s: f32) -> [f32; 9] {
+    [1.0, 0.0, 0.0, 0.0, c, -s, 0.0, s, c]
 }
-fn ry3(c: f32, s: f32) -> [f32; 9] {
+fn euler_y3(c: f32, s: f32) -> [f32; 9] {
     [c, 0.0, s, 0.0, 1.0, 0.0, -s, 0.0, c]
 }
-fn rz3(c: f32, s: f32) -> [f32; 9] {
-    [c, s, 0.0, -s, c, 0.0, 0.0, 0.0, 1.0]
+fn euler_z3(c: f32, s: f32) -> [f32; 9] {
+    [c, -s, 0.0, s, c, 0.0, 0.0, 0.0, 1.0]
 }
 fn mul3(a: &[f32; 9], b: &[f32; 9]) -> [f32; 9] {
     // The Euler builders do not inline a product of their own: each one `call`s
@@ -24,6 +35,19 @@ fn mul3(a: &[f32; 9], b: &[f32; 9]) -> [f32; 9] {
 }
 fn transpose3(m: &[f32; 9]) -> [f32; 9] {
     [m[0], m[3], m[6], m[1], m[4], m[7], m[2], m[5], m[8]]
+}
+
+/// The composition every Euler builder ends in: `transpose(m1 * (m2 * m3))`.
+///
+/// The grouping is not a choice. The first `call` takes the second and third
+/// matrices (`edx` = the second slot, the stack argument = the third) and the
+/// second `call` takes the first against that result, so the product is
+/// right-associated; the nine arguments then handed to the transposing copy at
+/// 0x5f8d20 are pushed in the order that reads the result column by column.
+/// `m1`, `m2`, `m3` are the axes in the entry's NAME order, each built from the
+/// stack argument in the same position.
+fn euler3(m1: &[f32; 9], m2: &[f32; 9], m3: &[f32; 9]) -> [f32; 9] {
+    transpose3(&mul3(m1, &mul3(m2, m3)))
 }
 
 /// 3x3 matrix determinant (rule of Sarrus) of row-major elements `m00..m22`.
@@ -653,97 +677,106 @@ mod tests_c33_matrix__scale_rows__7be6d0 {
     }
 }
 
-/// `C33Matrix::FromEulerAngles` — stack args in order `(angle_z, angle_y, angle_x)`.
+/// `C33Matrix::FromEulerAngles` — stores `transpose(Z(a0) * (Y(a1) * X(a2)))`.
 ///
-/// Builds the per-axis rotations `Z(z)`, `Y(y)`, `X(x)`, forms the product
-/// `Z · Y · X`, and stores its transpose — exactly the construction the 1.12
-/// client emits (two 3x3 multiplies then a column-major copy). The first stack
-/// arg drives the Z rotation, the third drives X.
+/// The only entry of the six whose name does not spell its axis order, and the
+/// only one with live callers (0x50ab62 and 0x60a184). Its first stack argument
+/// drives the Z-shaped matrix at `[ebp-0x7c]` (0x7bf4db..0x7bf503), the second
+/// the Y-shaped one and the third the X-shaped one.
 pub fn c33_matrix__from_euler_angles__7bf4b0(angle_z: f32, angle_y: f32, angle_x: f32) -> [f32; 9] {
     let ([sz, sy, sx], [cz, cy, cx]) = crate::math::trig::sin_cos3([angle_z, angle_y, angle_x]);
-    let mz = [cz, -sz, 0.0, sz, cz, 0.0, 0.0, 0.0, 1.0];
-    let my = [cy, 0.0, sy, 0.0, 1.0, 0.0, -sy, 0.0, cy];
-    let mx = [1.0, 0.0, 0.0, 0.0, cx, -sx, 0.0, sx, cx];
-    transpose3(&mul3(&mz, &mul3(&my, &mx)))
+    euler3(&euler_z3(cz, sz), &euler_y3(cy, sy), &euler_x3(cx, sx))
 }
 
-#[cfg(test)]
-mod tests_c33_matrix__from_euler_angles__7bf4b0 {
-    use super::c33_matrix__from_euler_angles__7bf4b0 as f;
-    fn eq9(m: &[f32; 9], exp: &[f32; 9]) {
-        for i in 0..9 {
-            assert!(
-                (m[i] - exp[i]).abs() < 5e-6,
-                "idx {i}: {} vs {}",
-                m[i],
-                exp[i]
-            );
-        }
-    }
-    #[test]
-    fn first_arg_is_transposed_z() {
-        let a = 0.5f32;
-        let (c, s) = (a.cos(), a.sin());
-        eq9(&f(a, 0.0, 0.0), &[c, s, 0.0, -s, c, 0.0, 0.0, 0.0, 1.0]);
-    }
-    #[test]
-    fn second_arg_is_transposed_y() {
-        let a = 0.5f32;
-        let (c, s) = (a.cos(), a.sin());
-        eq9(&f(0.0, a, 0.0), &[c, 0.0, -s, 0.0, 1.0, 0.0, s, 0.0, c]);
-    }
-    #[test]
-    fn third_arg_is_transposed_x() {
-        let a = 0.5f32;
-        let (c, s) = (a.cos(), a.sin());
-        eq9(&f(0.0, 0.0, a), &[1.0, 0.0, 0.0, 0.0, c, s, 0.0, -s, c]);
-    }
-    #[test]
-    fn z_and_x_compose_in_order() {
-        // Two non-identity axes catch a swapped multiply order; `Y = I`, so the
-        // result is `transpose(Z · X)`, hand-derived below.
-        let (z, x) = (0.4f32, 0.9f32);
-        let (cz, sz) = (z.cos(), z.sin());
-        let (cx, sx) = (x.cos(), x.sin());
-        eq9(
-            &f(z, 0.0, x),
-            &[cz, sz, 0.0, -sz * cx, cz * cx, sx, sz * sx, -cz * sx, cx],
-        );
-    }
-    #[test]
-    fn rows_orthonormal() {
-        let m = f(0.3, -0.7, 1.1);
-        for i in 0..3 {
-            for j in 0..3 {
-                let dot =
-                    m[i * 3] * m[j * 3] + m[i * 3 + 1] * m[j * 3 + 1] + m[i * 3 + 2] * m[j * 3 + 2];
-                let want = if i == j { 1.0 } else { 0.0 };
-                assert!((dot - want).abs() < 1e-5, "row {i}·{j}");
-            }
-        }
-    }
-}
-
-/// 3x3 rotation matrix from Euler angles, intrinsic axis order XYZ (row-major 9 floats).
+/// `C33Matrix::FromEulerXYZ` — stores `transpose(X(a0) * (Y(a1) * Z(a2)))`.
+///
+/// The stack arguments are the axes in the name's order, which is what the three
+/// `FSINCOS` blocks at 0x7bed52, 0x7bedaa and 0x7bee02 say: the first argument
+/// feeds the X-shaped matrix, the second the Y-shaped one, the third the
+/// Z-shaped one.
 pub fn c33_matrix__from_euler_xyz__7bed30(angle_x: f32, angle_y: f32, angle_z: f32) -> [f32; 9] {
     let ([sx, sy, sz], [cx, cy, cz]) = crate::math::trig::sin_cos3([angle_x, angle_y, angle_z]);
-    [
-        cy * cz,
-        -cx * sz - sx * sy * cz,
-        -cx * sy * cz + sx * sz,
-        cy * sz,
-        cx * cz - sx * sy * sz,
-        -cx * sy * sz - sx * cz,
-        sy,
-        sx * cy,
-        cx * cy,
-    ]
+    euler3(&euler_x3(cx, sx), &euler_y3(cy, sy), &euler_z3(cz, sz))
+}
+
+/// `C33Matrix::FromEulerXZY` — stores `transpose(X(a0) * (Z(a1) * Y(a2)))`.
+///
+/// The SECOND stack argument is the Z angle and the third the Y angle: the
+/// matrix at `[ebp-0x34]` gets the Z layout (0x7bef33..0x7bef5b) and the one at
+/// `[ebp-0x58]` the Y layout (0x7bef8b..0x7befac).
+pub fn c33_matrix__from_euler_xzy__7beeb0(angle_x: f32, angle_z: f32, angle_y: f32) -> [f32; 9] {
+    let ([sx, sz, sy], [cx, cz, cy]) = crate::math::trig::sin_cos3([angle_x, angle_z, angle_y]);
+    euler3(&euler_x3(cx, sx), &euler_z3(cz, sz), &euler_y3(cy, sy))
+}
+
+/// `C33Matrix::FromEulerYXZ` — stores `transpose(Y(a0) * (X(a1) * Z(a2)))`.
+///
+/// The FIRST stack argument is the Y angle: `[ebp-0x7c]` takes the Y layout
+/// (0x7bf05b..0x7bf083), `[ebp-0x34]` the X layout and `[ebp-0x58]` the Z one.
+pub fn c33_matrix__from_euler_yxz__7bf030(angle_y: f32, angle_x: f32, angle_z: f32) -> [f32; 9] {
+    let ([sy, sx, sz], [cy, cx, cz]) = crate::math::trig::sin_cos3([angle_y, angle_x, angle_z]);
+    euler3(&euler_y3(cy, sy), &euler_x3(cx, sx), &euler_z3(cz, sz))
+}
+
+/// `C33Matrix::FromEulerYZX` — stores `transpose(Y(a0) * (Z(a1) * X(a2)))`.
+///
+/// Argument order follows the name: `[ebp-0x7c]` takes the Y layout
+/// (0x7bf1db..0x7bf203), `[ebp-0x34]` the Z one and `[ebp-0x58]` the X one.
+pub fn c33_matrix__from_euler_yzx__7bf1b0(angle_y: f32, angle_z: f32, angle_x: f32) -> [f32; 9] {
+    let ([sy, sz, sx], [cy, cz, cx]) = crate::math::trig::sin_cos3([angle_y, angle_z, angle_x]);
+    euler3(&euler_y3(cy, sy), &euler_z3(cz, sz), &euler_x3(cx, sx))
+}
+
+/// `C33Matrix::FromEulerZXY` — stores `transpose(Z(a0) * (X(a1) * Y(a2)))`.
+///
+/// Argument order follows the name: `[ebp-0x7c]` takes the Z layout
+/// (0x7bf35b..0x7bf383), `[ebp-0x34]` the X one and `[ebp-0x58]` the Y one.
+pub fn c33_matrix__from_euler_zxy__7bf330(angle_z: f32, angle_x: f32, angle_y: f32) -> [f32; 9] {
+    let ([sz, sx, sy], [cz, cx, cy]) = crate::math::trig::sin_cos3([angle_z, angle_x, angle_y]);
+    euler3(&euler_z3(cz, sz), &euler_x3(cx, sx), &euler_y3(cy, sy))
 }
 
 #[cfg(test)]
-mod tests_c33_matrix__from_euler_xyz__7bed30 {
-    use super::c33_matrix__from_euler_xyz__7bed30 as f;
-    fn mul(a: &[f32; 9], b: &[f32; 9]) -> [f32; 9] {
+mod tests_euler_builders {
+    use super::{
+        c33_matrix__from_euler_angles__7bf4b0, c33_matrix__from_euler_xyz__7bed30,
+        c33_matrix__from_euler_xzy__7beeb0, c33_matrix__from_euler_yxz__7bf030,
+        c33_matrix__from_euler_yzx__7bf1b0, c33_matrix__from_euler_zxy__7bf330, euler_x3, euler_y3,
+        euler_z3, mul3, transpose3,
+    };
+    use crate::math::trig::sin_cos;
+
+    /// One builder: its address, its entry point, and its three axis letters.
+    type Entry = (&'static str, fn(f32, f32, f32) -> [f32; 9], [u8; 3]);
+
+    /// The six builders, each with the axis letters its stack arguments carry.
+    ///
+    /// The letters are read off the store stream of each original, not off the
+    /// symbol name: they agree, but only because the name orders the axes the
+    /// way the arguments do, and that is the fact under test.
+    const ENTRIES: [Entry; 6] = [
+        ("7bf4b0", c33_matrix__from_euler_angles__7bf4b0, *b"zyx"),
+        ("7bed30", c33_matrix__from_euler_xyz__7bed30, *b"xyz"),
+        ("7beeb0", c33_matrix__from_euler_xzy__7beeb0, *b"xzy"),
+        ("7bf030", c33_matrix__from_euler_yxz__7bf030, *b"yxz"),
+        ("7bf1b0", c33_matrix__from_euler_yzx__7bf1b0, *b"yzx"),
+        ("7bf330", c33_matrix__from_euler_zxy__7bf330, *b"zxy"),
+    ];
+
+    fn axis(letter: u8, angle: f32) -> [f32; 9] {
+        let (s, c) = sin_cos(angle);
+        match letter {
+            b'x' => euler_x3(c, s),
+            b'y' => euler_y3(c, s),
+            _ => euler_z3(c, s),
+        }
+    }
+
+    /// Per-step `f32` expansion of a 3x3 product, the closed-form alternative.
+    ///
+    /// Two of these builders used to be written this way instead of calling the
+    /// multiply kernel twice, and the difference survives to the stored lane.
+    fn expand_f32(a: &[f32; 9], b: &[f32; 9]) -> [f32; 9] {
         let mut out = [0.0f32; 9];
         for r in 0..3 {
             for c in 0..3 {
@@ -753,333 +786,138 @@ mod tests_c33_matrix__from_euler_xyz__7bed30 {
         }
         out
     }
-    fn transpose(m: &[f32; 9]) -> [f32; 9] {
-        let mut t = [0.0f32; 9];
+
+    fn eq9(name: &str, what: &str, got: &[f32; 9], want: &[f32; 9]) {
         for i in 0..9 {
-            t[i] = m[(i % 3) * 3 + i / 3];
+            assert_eq!(
+                got[i].to_bits(),
+                want[i].to_bits(),
+                "{name} {what} lane {i}: {} vs {}",
+                got[i],
+                want[i]
+            );
         }
-        t
     }
-    // Literal host construction for XYZ: transpose(b1 * (b2 * b3)) using the captured per-axis layouts.
-    fn reference(ax: f32, ay: f32, az: f32) -> [f32; 9] {
-        let (cx, sx) = (ax.cos(), ax.sin());
-        let (cy, sy) = (ay.cos(), ay.sin());
-        let (cz, sz) = (az.cos(), az.sin());
-        let b1 = [1.0, 0.0, 0.0, 0.0, cx, sx, 0.0, -sx, cx];
-        let b2 = [cy, 0.0, sy, 0.0, 1.0, 0.0, -sy, 0.0, cy];
-        let b3 = [cz, sz, 0.0, -sz, cz, 0.0, 0.0, 0.0, 1.0];
-        transpose(&mul(&b1, &mul(&b2, &b3)))
+
+    #[test]
+    fn each_argument_drives_the_axis_the_original_gives_it() {
+        // One non-zero argument at a time: the other two matrices are exact
+        // identities, so the product narrows to the single axis matrix and the
+        // compare can be on bits. This is the pin that five of the six entries
+        // were failing: they read argument 0 as the X angle whatever the name
+        // said, and built two of the three axes transposed.
+        let a = 0.5f32;
+        assert!(
+            sin_cos(a).0 != 0.0,
+            "a degenerate fixture would not separate a layout from its transpose"
+        );
+        for (name, f, letters) in ENTRIES {
+            for pos in 0..3 {
+                let mut args = [0.0f32; 3];
+                args[pos] = a;
+                let want = transpose3(&axis(letters[pos], a));
+                eq9(name, "axis", &f(args[0], args[1], args[2]), &want);
+            }
+        }
     }
-    const ANGLES: [(f32, f32, f32); 6] = [
-        (0.0, 0.0, 0.0),
-        (0.31, -0.72, 1.13),
-        (1.7, 0.4, -0.9),
-        (-2.1, 1.05, 0.33),
-        (2.0, -2.0, 2.0),
-        (3.0, 1.0, -1.5),
+
+    /// Angle triples separating the right-associated product from the left one.
+    ///
+    /// Searched rather than chosen: the two groupings agree on most inputs, and
+    /// a rounded decimal literal is a different `f32` that may stop separating
+    /// them, so these are bit patterns.
+    const ASSOC: [[u32; 3]; 6] = [
+        [0xbfb4_d600, 0x3eb4_ada7, 0x3fbb_5a0d],
+        [0xbf3d_e08d, 0xc01e_6a1b, 0x3e58_e61a],
+        [0xbed9_2a33, 0xbfab_a91d, 0x4041_ea60],
+        [0xbf54_a61a, 0xbe7c_1700, 0xbfe4_23d0],
+        [0x3e78_cf33, 0x4015_54b5, 0xc000_2faa],
+        [0xbf9c_56c3, 0x3fb7_daed, 0x3f9a_55ad],
     ];
-    #[test]
-    fn matches_literal_reference() {
-        for &(ax, ay, az) in &ANGLES {
-            let got = f(ax, ay, az);
-            let exp = reference(ax, ay, az);
-            for i in 0..9 {
-                assert!(
-                    (got[i] - exp[i]).abs() < 1e-5,
-                    "i={i} {} vs {}",
-                    got[i],
-                    exp[i]
-                );
-            }
-        }
-    }
-    #[test]
-    fn orthonormal() {
-        for &(ax, ay, az) in &ANGLES {
-            let m = f(ax, ay, az);
-            let p = mul(&m, &transpose(&m));
-            let id = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
-            for i in 0..9 {
-                assert!((p[i] - id[i]).abs() < 2e-5, "i={i}");
-            }
-        }
-    }
-    #[test]
-    fn zero_is_identity() {
-        let m = f(0.0, 0.0, 0.0);
-        let id = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
-        for i in 0..9 {
-            assert!((m[i] - id[i]).abs() < 5e-6, "i={i}");
-        }
-    }
-    #[test]
-    fn x_only_is_transposed_rx() {
-        let a = 0.5f32;
-        let (c, s) = (a.cos(), a.sin());
-        let m = f(a, 0.0, 0.0);
-        let exp = [1.0, 0.0, 0.0, 0.0, c, -s, 0.0, s, c];
-        for i in 0..9 {
-            assert!((m[i] - exp[i]).abs() < 5e-6, "i={i}");
-        }
-    }
-}
 
-/// 3x3 rotation matrix from Euler angles, intrinsic axis order XZY (row-major 9 floats).
-pub fn c33_matrix__from_euler_xzy__7beeb0(angle_x: f32, angle_y: f32, angle_z: f32) -> [f32; 9] {
-    let ([sx, sy, sz], [cx, cy, cz]) = crate::math::trig::sin_cos3([angle_x, angle_y, angle_z]);
-    [
-        cy * cz,
-        cx * sy * cz - sx * sz,
-        -cx * sz - sx * sy * cz,
-        -sy,
-        cx * cy,
-        -sx * cy,
-        cy * sz,
-        cx * sy * sz + sx * cz,
-        cx * cz - sx * sy * sz,
-    ]
-}
+    #[test]
+    fn the_product_is_right_associated() {
+        // The first `call C33Matrix::Multiply` takes the second and third
+        // matrices and the second takes the first against that result, so the
+        // grouping is `m1 * (m2 * m3)`. Regrouping perturbs the chain by about
+        // 2^-53 and the f32 store is granular to 2^-24, so only a searched
+        // fixture separates the two; each assert carries its own separation
+        // check so a fixture that stops separating fails loudly instead of
+        // passing under either form.
+        for (k, (name, f, letters)) in ENTRIES.iter().enumerate() {
+            let a = ASSOC[k].map(f32::from_bits);
+            let m = [
+                axis(letters[0], a[0]),
+                axis(letters[1], a[1]),
+                axis(letters[2], a[2]),
+            ];
+            let right = transpose3(&mul3(&m[0], &mul3(&m[1], &m[2])));
+            let left = transpose3(&mul3(&mul3(&m[0], &m[1]), &m[2]));
+            assert_ne!(right, left, "{name}: fixture stopped separating groupings");
+            eq9(name, "assoc", &f(a[0], a[1], a[2]), &right);
+        }
+    }
 
-#[cfg(test)]
-mod tests_c33_matrix__from_euler_xzy__7beeb0 {
-    use super::c33_matrix__from_euler_xzy__7beeb0 as f;
-    fn mul(a: &[f32; 9], b: &[f32; 9]) -> [f32; 9] {
-        let mut out = [0.0f32; 9];
-        for r in 0..3 {
-            for c in 0..3 {
-                out[r * 3 + c] =
-                    a[r * 3] * b[c] + a[r * 3 + 1] * b[3 + c] + a[r * 3 + 2] * b[6 + c];
-            }
-        }
-        out
-    }
-    fn transpose(m: &[f32; 9]) -> [f32; 9] {
-        let mut t = [0.0f32; 9];
-        for i in 0..9 {
-            t[i] = m[(i % 3) * 3 + i / 3];
-        }
-        t
-    }
-    fn reference(ax: f32, ay: f32, az: f32) -> [f32; 9] {
-        let (cx, sx) = (ax.cos(), ax.sin());
-        let (cy, sy) = (ay.cos(), ay.sin());
-        let (cz, sz) = (az.cos(), az.sin());
-        let b1 = [1.0, 0.0, 0.0, 0.0, cx, sx, 0.0, -sx, cx];
-        let b2 = [cy, -sy, 0.0, sy, cy, 0.0, 0.0, 0.0, 1.0];
-        let b3 = [cz, 0.0, sz, 0.0, 1.0, 0.0, -sz, 0.0, cz];
-        transpose(&mul(&b1, &mul(&b2, &b3)))
-    }
-    const ANGLES: [(f32, f32, f32); 6] = [
-        (0.0, 0.0, 0.0),
-        (0.31, -0.72, 1.13),
-        (1.7, 0.4, -0.9),
-        (-2.1, 1.05, 0.33),
-        (2.0, -2.0, 2.0),
-        (3.0, 1.0, -1.5),
+    /// Angle triples separating the multiply kernel from an algebraic expansion.
+    ///
+    /// Same reasoning as [`ASSOC`]: the kernel keeps each three-term dot on the
+    /// x87 stack and narrows once, an expansion rounds every step, and only
+    /// some inputs carry that difference to a stored lane.
+    const EXPAND: [[u32; 3]; 6] = [
+        [0xbfb4_d600, 0x3eb4_ada7, 0x3fbb_5a0d],
+        [0x404b_0080, 0xbf19_3fed, 0x3f69_f167],
+        [0xbed9_2a33, 0xbfab_a91d, 0x4041_ea60],
+        [0xbf36_8ac7, 0xc04a_c588, 0x3f06_11ad],
+        [0x3e78_cf33, 0x4015_54b5, 0xc000_2faa],
+        [0xbf9c_56c3, 0x3fb7_daed, 0x3f9a_55ad],
     ];
-    #[test]
-    fn matches_literal_reference() {
-        for &(ax, ay, az) in &ANGLES {
-            let got = f(ax, ay, az);
-            let exp = reference(ax, ay, az);
-            for i in 0..9 {
-                assert!(
-                    (got[i] - exp[i]).abs() < 1e-5,
-                    "i={i} {} vs {}",
-                    got[i],
-                    exp[i]
-                );
-            }
-        }
-    }
-    #[test]
-    fn orthonormal() {
-        for &(ax, ay, az) in &ANGLES {
-            let m = f(ax, ay, az);
-            let p = mul(&m, &transpose(&m));
-            let id = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
-            for i in 0..9 {
-                assert!((p[i] - id[i]).abs() < 2e-5, "i={i}");
-            }
-        }
-    }
-    #[test]
-    fn zero_is_identity() {
-        let m = f(0.0, 0.0, 0.0);
-        let id = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
-        for i in 0..9 {
-            assert!((m[i] - id[i]).abs() < 5e-6, "i={i}");
-        }
-    }
-    #[test]
-    fn x_only_is_transposed_rx() {
-        let a = 0.5f32;
-        let (c, s) = (a.cos(), a.sin());
-        let m = f(a, 0.0, 0.0);
-        let exp = [1.0, 0.0, 0.0, 0.0, c, -s, 0.0, s, c];
-        for i in 0..9 {
-            assert!((m[i] - exp[i]).abs() < 5e-6, "i={i}");
-        }
-    }
-}
 
-/// `C33Matrix::from_euler_yxz` — Euler order YXZ: stores `transpose(Rz · Rx · Ry)`.
-pub fn c33_matrix__from_euler_yxz__7bf030(angle_x: f32, angle_y: f32, angle_z: f32) -> [f32; 9] {
-    let ([sx, sy, sz], [cx, cy, cz]) = crate::math::trig::sin_cos3([angle_x, angle_y, angle_z]);
-    let rx = rx3(cx, sx);
-    let ry = ry3(cy, sy);
-    let rz = rz3(cz, sz);
-    transpose3(&mul3(&rz, &mul3(&rx, &ry)))
-}
-
-#[cfg(test)]
-mod tests_c33_matrix__from_euler_yxz__7bf030 {
-    use super::c33_matrix__from_euler_yxz__7bf030 as f;
-    fn eq9(m: &[f32; 9], exp: &[f32; 9]) {
-        for i in 0..9 {
-            assert!(
-                (m[i] - exp[i]).abs() < 5e-6,
-                "idx {i}: {} vs {}",
-                m[i],
-                exp[i]
+    #[test]
+    fn the_product_runs_through_the_multiply_kernel() {
+        for (k, (name, f, letters)) in ENTRIES.iter().enumerate() {
+            let a = EXPAND[k].map(f32::from_bits);
+            let m = [
+                axis(letters[0], a[0]),
+                axis(letters[1], a[1]),
+                axis(letters[2], a[2]),
+            ];
+            let kernel = transpose3(&mul3(&m[0], &mul3(&m[1], &m[2])));
+            let expanded = transpose3(&expand_f32(&m[0], &expand_f32(&m[1], &m[2])));
+            assert_ne!(
+                kernel, expanded,
+                "{name}: fixture stopped separating shapes"
             );
+            eq9(name, "kernel", &f(a[0], a[1], a[2]), &kernel);
         }
     }
-    #[test]
-    fn x_only_is_transposed_rx() {
-        let a = 0.5f32;
-        let (c, s) = (a.cos(), a.sin());
-        eq9(&f(a, 0.0, 0.0), &[1.0, 0.0, 0.0, 0.0, c, -s, 0.0, s, c]);
-    }
-    #[test]
-    fn y_only_is_transposed_ry() {
-        let a = 0.5f32;
-        let (c, s) = (a.cos(), a.sin());
-        eq9(&f(0.0, a, 0.0), &[c, 0.0, -s, 0.0, 1.0, 0.0, s, 0.0, c]);
-    }
-    #[test]
-    fn z_only_is_transposed_rz() {
-        let a = 0.5f32;
-        let (c, s) = (a.cos(), a.sin());
-        eq9(&f(0.0, 0.0, a), &[c, -s, 0.0, s, c, 0.0, 0.0, 0.0, 1.0]);
-    }
-    #[test]
-    fn rows_orthonormal() {
-        let m = f(0.3, -0.7, 1.1);
-        for i in 0..3 {
-            for j in 0..3 {
-                let dot =
-                    m[i * 3] * m[j * 3] + m[i * 3 + 1] * m[j * 3 + 1] + m[i * 3 + 2] * m[j * 3 + 2];
-                let want = if i == j { 1.0 } else { 0.0 };
-                assert!((dot - want).abs() < 1e-5, "row {i}·{j}");
-            }
-        }
-    }
-}
 
-/// `C33Matrix::from_euler_yzx` — Euler order YZX: stores `transpose(Rx · Rz · Ry)`.
-pub fn c33_matrix__from_euler_yzx__7bf1b0(angle_x: f32, angle_y: f32, angle_z: f32) -> [f32; 9] {
-    let ([sx, sy, sz], [cx, cy, cz]) = crate::math::trig::sin_cos3([angle_x, angle_y, angle_z]);
-    let rx = rx3(cx, sx);
-    let ry = ry3(cy, sy);
-    let rz = rz3(cz, sz);
-    transpose3(&mul3(&rx, &mul3(&rz, &ry)))
-}
-
-#[cfg(test)]
-mod tests_c33_matrix__from_euler_yzx__7bf1b0 {
-    use super::c33_matrix__from_euler_yzx__7bf1b0 as f;
-    fn eq9(m: &[f32; 9], exp: &[f32; 9]) {
-        for i in 0..9 {
-            assert!(
-                (m[i] - exp[i]).abs() < 5e-6,
-                "idx {i}: {} vs {}",
-                m[i],
-                exp[i]
-            );
+    #[test]
+    fn all_zero_angles_give_the_identity() {
+        let id = [1.0f32, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
+        for (name, f, _) in ENTRIES {
+            eq9(name, "identity", &f(0.0, 0.0, 0.0), &id);
         }
     }
-    #[test]
-    fn x_only_is_transposed_rx() {
-        let a = 0.5f32;
-        let (c, s) = (a.cos(), a.sin());
-        eq9(&f(a, 0.0, 0.0), &[1.0, 0.0, 0.0, 0.0, c, -s, 0.0, s, c]);
-    }
-    #[test]
-    fn y_only_is_transposed_ry() {
-        let a = 0.5f32;
-        let (c, s) = (a.cos(), a.sin());
-        eq9(&f(0.0, a, 0.0), &[c, 0.0, -s, 0.0, 1.0, 0.0, s, 0.0, c]);
-    }
-    #[test]
-    fn z_only_is_transposed_rz() {
-        let a = 0.5f32;
-        let (c, s) = (a.cos(), a.sin());
-        eq9(&f(0.0, 0.0, a), &[c, -s, 0.0, s, c, 0.0, 0.0, 0.0, 1.0]);
-    }
-    #[test]
-    fn rows_orthonormal() {
-        let m = f(0.3, -0.7, 1.1);
-        for i in 0..3 {
-            for j in 0..3 {
-                let dot =
-                    m[i * 3] * m[j * 3] + m[i * 3 + 1] * m[j * 3 + 1] + m[i * 3 + 2] * m[j * 3 + 2];
-                let want = if i == j { 1.0 } else { 0.0 };
-                assert!((dot - want).abs() < 1e-5, "row {i}·{j}");
-            }
-        }
-    }
-}
 
-/// `C33Matrix::from_euler_zxy` — Euler order ZXY: stores `transpose(Ry · Rx · Rz)`.
-pub fn c33_matrix__from_euler_zxy__7bf330(angle_x: f32, angle_y: f32, angle_z: f32) -> [f32; 9] {
-    let ([sx, sy, sz], [cx, cy, cz]) = crate::math::trig::sin_cos3([angle_x, angle_y, angle_z]);
-    let rx = rx3(cx, sx);
-    let ry = ry3(cy, sy);
-    let rz = rz3(cz, sz);
-    transpose3(&mul3(&ry, &mul3(&rx, &rz)))
-}
-
-#[cfg(test)]
-mod tests_c33_matrix__from_euler_zxy__7bf330 {
-    use super::c33_matrix__from_euler_zxy__7bf330 as f;
-    fn eq9(m: &[f32; 9], exp: &[f32; 9]) {
-        for i in 0..9 {
-            assert!(
-                (m[i] - exp[i]).abs() < 5e-6,
-                "idx {i}: {} vs {}",
-                m[i],
-                exp[i]
-            );
-        }
-    }
     #[test]
-    fn x_only_is_transposed_rx() {
-        let a = 0.5f32;
-        let (c, s) = (a.cos(), a.sin());
-        eq9(&f(a, 0.0, 0.0), &[1.0, 0.0, 0.0, 0.0, c, -s, 0.0, s, c]);
-    }
-    #[test]
-    fn y_only_is_transposed_ry() {
-        let a = 0.5f32;
-        let (c, s) = (a.cos(), a.sin());
-        eq9(&f(0.0, a, 0.0), &[c, 0.0, -s, 0.0, 1.0, 0.0, s, 0.0, c]);
-    }
-    #[test]
-    fn z_only_is_transposed_rz() {
-        let a = 0.5f32;
-        let (c, s) = (a.cos(), a.sin());
-        eq9(&f(0.0, 0.0, a), &[c, -s, 0.0, s, c, 0.0, 0.0, 0.0, 1.0]);
-    }
-    #[test]
-    fn rows_orthonormal() {
-        let m = f(0.3, -0.7, 1.1);
-        for i in 0..3 {
-            for j in 0..3 {
-                let dot =
-                    m[i * 3] * m[j * 3] + m[i * 3 + 1] * m[j * 3 + 1] + m[i * 3 + 2] * m[j * 3 + 2];
-                let want = if i == j { 1.0 } else { 0.0 };
-                assert!((dot - want).abs() < 1e-5, "row {i}·{j}");
+    fn rows_stay_orthonormal() {
+        for (name, f, _) in ENTRIES {
+            for &(a0, a1, a2) in &[
+                (0.31f32, -0.72f32, 1.13f32),
+                (1.7, 0.4, -0.9),
+                (-2.1, 1.05, 0.33),
+                (3.0, 1.0, -1.5),
+            ] {
+                let m = f(a0, a1, a2);
+                for i in 0..3 {
+                    for j in 0..3 {
+                        let dot = m[i * 3] * m[j * 3]
+                            + m[i * 3 + 1] * m[j * 3 + 1]
+                            + m[i * 3 + 2] * m[j * 3 + 2];
+                        let want = if i == j { 1.0 } else { 0.0 };
+                        assert!((dot - want).abs() < 1e-5, "{name} row {i}.{j}");
+                    }
+                }
             }
         }
     }

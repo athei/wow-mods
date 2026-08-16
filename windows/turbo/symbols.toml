@@ -475,21 +475,44 @@ preserve = []
 # reads included: the argument is swapped for a fixed-size scratch buffer, so a
 # read past the declared length reads past that buffer.
 #
-# Lane compare with a 2-ulp bound, and the bound is measured rather than
-# assumed. The region is nine whole f32 with nothing else in it, so it needs no
-# `float_from` split. The original builds its three per-axis matrices from the
-# hardware FSINCOS; we use the branchless polynomial the surrounding kernels
-# need in order to vectorize, and the two cannot agree to the bit. What pins the
-# residual to the trig is that it did not move when the 3x3 product underneath
-# it was rebuilt from the bytes: one lane, one ulp, same count, before and
-# after. The polynomial is within 1 ulp of a correctly-rounded reference over
-# this input range, so 2 leaves a single ulp of headroom and anything larger
-# still reports.
+# Lane compare on the `ulp`/`abs` pair, and `abs` is the ruler that carries it.
+# The region is nine whole f32 with nothing else in it, so it needs no
+# `float_from` split.
+#
+# The arithmetic under the residual is settled. The three inline FSINCOS at
+# 0x7bf4d2, 0x7bf52a and 0x7bf582 each FSTP m32 both results, so sine and cosine
+# enter the three axis matrices as f32 exactly as ours do; the two
+# `call C33Matrix::Multiply` at 0x7bf5d2 and 0x7bf5de keep every three-term dot
+# on the x87 stack and narrow it once; and the nine arguments pushed to 0x5f8d20
+# transpose the product. Rebuilt straight from those byte-derived layouts the
+# construction agrees with ours to the bit, nine lanes of nine, over every range
+# swept below. What is left is the polynomial against the hardware instruction.
+#
+# Four of the nine lanes are differences of products of sines and cosines, so
+# they collapse toward zero and their ULP distance grows without bound while the
+# absolute error stays put. Over a sweep of dense octant boundaries and their
+# neighbourhoods plus pseudo-random triples at |angle| <= pi, 2pi, 8, 100 and
+# 400 rad, the worst lane is 2.09e-7 absolute inside 2pi and 2.38e-7 out at 400,
+# both at about 1.7e9 ulp. The live caller at 0x60a184 forms its angles as 2pi
+# minus a value (the constant at 0x80295c), so 2pi is the operative range and
+# 400 is headroom. abs = 5e-6 is the 400-rad measurement with an order of
+# headroom; ulp = 4 is the second gate rather than a measured number, since even
+# the lanes that never cancel reach 22 ulp inside 2pi.
+#
+# A bound sized from "the polynomial is within 1 ulp of a correctly-rounded
+# reference" does not hold here: that is a statement about a sine, and every
+# lane is built from six of them.
+#
+# The table cannot police the arithmetic: regrouping the product or narrowing an
+# intermediate moves a lane by the same order the trig does. `tests_euler_builders`
+# is what pins the axis layouts, the argument order, the right association and
+# the multiply kernel.
 [functions.C33Matrix__FromEulerAngles__7bf4b0.diff]
 mode  = "inout"
 out   = { arg = 0, len = 36 }
 float = "f32"
-ulp   = 2
+ulp   = 4
+abs   = 5e-6
 
 [functions.C33Matrix__FromEulerXYZ__7bed30]
 rva  = 0x3bed30
@@ -508,13 +531,31 @@ args = ["*mut f32", "f32", "f32", "f32"]
 preserve = []
 
 
-# Golden-diff the written region, byte compare. Region covers everything the
-# adapter touches, reads included: the argument is swapped for a fixed-size
-# scratch buffer, so a read past the declared length reads past that buffer.
+# Golden-diff the written region. Region covers everything the adapter touches,
+# reads included: the argument is swapped for a fixed-size scratch buffer, so a
+# read past the declared length reads past that buffer.
+#
+# NOT a byte compare any more, and the byte compare it replaces was never
+# reachable: this entry has no caller anywhere in the image, so no soak has ever
+# exercised it and the table stayed green while the reimplementation read
+# argument 1 as the Y angle. The bytes say otherwise. `[ebp-0x34]` takes the Z
+# layout at 0x7bef33..0x7bef5b and `[ebp-0x58]` the Y layout at
+# 0x7bef8b..0x7befac, so the stack order is X, Z, Y, following the name. That is
+# fixed here, and so is the shape: the entry was an algebraic expansion of the
+# product where the original calls the multiply kernel twice.
+#
+# What remains is the same residual as `C33Matrix__FromEulerAngles__7bf4b0`,
+# whose table carries the measurement and the reasoning: same three inline
+# FSINCOS, same two `call C33Matrix::Multiply`, same transposing copy, so the
+# polynomial-against-hardware difference reaches the lanes the same way. Swept
+# the same five ranges, the worst lane here is 2.09e-7 absolute inside 2pi and
+# 2.38e-7 at 400 rad.
 [functions.C33Matrix__FromEulerXZY__7beeb0.diff]
 mode  = "inout"
 out   = { arg = 0, len = 36 }
-float = "bytes"
+float = "f32"
+ulp   = 4
+abs   = 5e-6
 
 [functions.C33Matrix__FromEulerYXZ__7bf030]
 rva  = 0x3bf030
@@ -3592,29 +3633,57 @@ preserve = []
 # Inert in normal builds; the `*_diff` compare path is compiled only with
 # `WOW_TURBO_DIFF=1` and armed at runtime via `WOW_TURBO_DIFF_ARM=all|Name,...`.
 # Each target's output is a pointer arg, so the live original and the reimpl can
-# be compared on real in-game inputs. The Euler builders were flagged by the
-# static audit (off-diagonal sign divergence, unverified by hand); this proves or
-# refutes them at runtime instead of guessing the transpose convention.
+# be compared on real in-game inputs.
+#
+# The four tables below were added to settle the static audit's off-diagonal sign
+# finding on the Euler builders at runtime. They could not: none of these four
+# has a caller anywhere in the image (nor does `C33Matrix__FromEulerXZY__7beeb0`),
+# so an armed soak never reaches them and a green run says nothing. The finding
+# was real, and reading the stores settled it instead. Each original's stack
+# arguments are the axes in its NAME's order, not X, Y, Z: `[ebp-0x7c]` takes the
+# first letter's layout, `[ebp-0x34]` the second's and `[ebp-0x58]` the third's.
+# On top of that, `C33Matrix__FromEulerXYZ__7bed30` expanded the product
+# algebraically where the original calls the multiply kernel twice, and the other
+# three built their X and Z matrices transposed. All of it is fixed;
+# `tests_euler_builders` pins the layouts, the argument order, the right
+# association and the kernel.
+#
+# The bounds are `C33Matrix__FromEulerAngles__7bf4b0`'s, which carries the
+# measurement and the reasoning. Same body shape in all six (three inline
+# FSINCOS, two `call C33Matrix::Multiply`, one transposing copy), so the
+# polynomial-against-hardware residual reaches the lanes the same way: over the
+# same five swept ranges the worst lane is 2.09e-7 absolute inside 2pi and
+# 2.38e-7 out at 400 rad, on lanes whose ULP distance is unbounded because they
+# cancel. `abs` carries the bound with an order of headroom; `ulp = 4` is the
+# second gate.
 
 [functions.C33Matrix__FromEulerXYZ__7bed30.diff]
 mode  = "out"
 out   = { arg = 0, len = 36 }
 float = "f32"
+ulp   = 4
+abs   = 5e-6
 
 [functions.C33Matrix__FromEulerYXZ__7bf030.diff]
 mode  = "out"
 out   = { arg = 0, len = 36 }
 float = "f32"
+ulp   = 4
+abs   = 5e-6
 
 [functions.C33Matrix__FromEulerYZX__7bf1b0.diff]
 mode  = "out"
 out   = { arg = 0, len = 36 }
 float = "f32"
+ulp   = 4
+abs   = 5e-6
 
 [functions.C33Matrix__FromEulerZXY__7bf330.diff]
 mode  = "out"
 out   = { arg = 0, len = 36 }
 float = "f32"
+ulp   = 4
+abs   = 5e-6
 
 [functions.CGGameObject_C__GetWorldPosition__7c4b80.diff]
 mode  = "out"

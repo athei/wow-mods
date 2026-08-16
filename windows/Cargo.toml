@@ -82,7 +82,7 @@ too_many_lines = "allow"                # 69
 # has no hardware FMA, so `mul_add` lowers to an `fmaf` libcall. (The AVX2
 # native-Windows variant does have FMA, which is why the faithfulness argument
 # is the one that carries this and not the ISA.)
-suboptimal_flops = "allow"              # 1221
+suboptimal_flops = "allow"              # 1209
 # Stricter unsafe discipline.
 missing_safety_doc = "warn"
 not_unsafe_ptr_arg_deref = "warn"
@@ -130,7 +130,7 @@ cast_sign_loss = "allow"                # 243
 cast_possible_wrap = "allow"            # 102
 cast_precision_loss = "allow"           # 133
 cast_lossless = "allow"                 # 59
-float_cmp = "allow"                     # 43
+float_cmp = "allow"                     # 44
 
 # Pointer casts in the transcription — these convert no numbers, so the
 # narrowing/rounding argument above does not reach them. The client's records
