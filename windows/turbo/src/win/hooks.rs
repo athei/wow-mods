@@ -3148,30 +3148,38 @@ pub fn c_map_chunk__build_grid_vertices__68d540(this: *mut core::ffi::c_void) {
     if heights_base.is_null() {
         return;
     }
-    let mut heights = [0.0f32; 81];
-    for (i, slot) in heights.iter_mut().enumerate() {
+    // Built by `from_fn` rather than zeroed and refilled: every one of the 81
+    // slots is written before the kernel reads any of them, so the zero fill was
+    // dead on arrival. The read expression and its ascending order are unchanged.
+    let heights: [f32; 81] = core::array::from_fn(|i| {
         // SAFETY: entry `i` lives at `heights_base + i*8`; its sampled height is the
         // f32 at +4, in bounds for the 81-cell array the chunk owns.
         let entry = unsafe { heights_base.add(i * 8 + 4) };
         // SAFETY: `entry` addresses an initialized, 4-byte-aligned f32.
-        *slot = unsafe { entry.cast::<f32>().read() };
-    }
+        unsafe { entry.cast::<f32>().read() }
+    });
 
-    let grid = crate::math::world::c_map_chunk__build_grid_vertices__68d540(
-        count_a,
-        count_b,
+    let geom = crate::math::world::GridGeometry {
         cell,
         origin,
         divisor,
+    };
+    // SAFETY: `this+0x34` is the in-bounds, 4-byte-aligned output grid base.
+    let out_base = unsafe { base.add(0x34) };
+    // SAFETY: `out_base` addresses the writable 81-vertex (243-float, 972-byte,
+    // 12-byte-stride) grid the original fills, which `[[f32; 3]; 81]` matches. It
+    // is disjoint from every input: `heights` is the stack snapshot above, and
+    // the fields the other operands were read from sit at `this+0xc` and
+    // `this+0x1c`, below the grid.
+    let out = unsafe { &mut *out_base.cast::<[[f32; 3]; 81]>() };
+    crate::math::world::c_map_chunk__build_grid_vertices__68d540(
+        count_a,
+        count_b,
+        &geom,
         base_height,
         &heights,
+        out,
     );
-
-    // SAFETY: `this+0x34` is the in-bounds, 4-byte-aligned output grid base.
-    let out = unsafe { base.add(0x34) };
-    // SAFETY: `out` addresses the writable 81-vertex (243-float, 12-byte-stride)
-    // grid the original fills; `[[f32; 3]; 81]` matches that contiguous layout.
-    unsafe { out.cast::<[[f32; 3]; 81]>().write(grid) };
 }
 
 /// `CMapChunk::DecompressVertexNormals` — `__fastcall(ecx = this)`.
@@ -3193,17 +3201,20 @@ pub extern "fastcall" fn c_map_chunk__decompress_vertex_normals__6aff10(
     if packed_base.is_null() {
         return;
     }
-    // SAFETY: `packed_base` addresses 145*3 = 435 contiguous signed bytes (align 1);
-    // `[[i8; 3]; 145]` matches that layout exactly.
-    let packed = unsafe { packed_base.cast::<[[i8; 3]; 145]>().read() };
+    // SAFETY: `packed_base` addresses 145*3 = 435 contiguous signed bytes (align 1,
+    // so no alignment obligation); `[[i8; 3]; 145]` matches that layout exactly.
+    // Borrowed rather than copied in: the array is a separate allocation from the
+    // chunk's inline normals below, which is what lets the stock body at
+    // 0x6aff26 read it while it writes `this+0x170`.
+    let packed = unsafe { &*packed_base.cast::<[[i8; 3]; 145]>() };
 
-    let normals = crate::math::world::c_map_chunk__decompress_vertex_normals__6aff10(&packed);
-
-    // SAFETY: `this+0x170` is the in-bounds, writable inline normal array — 145
-    // vertices * 3 f32 (435 floats, 12-byte stride); `[[f32; 3]; 145]` matches it.
-    let out = unsafe { base.add(0x170) };
-    // SAFETY: `out` addresses the 435-float (1740-byte) output region the original fills.
-    unsafe { out.cast::<[[f32; 3]; 145]>().write(normals) };
+    // SAFETY: `this+0x170` is the in-bounds base of the inline normal array.
+    let out_base = unsafe { base.add(0x170) };
+    // SAFETY: `out_base` addresses the writable 435-float (1740-byte, 12-byte
+    // stride) output region the original fills, which `[[f32; 3]; 145]` matches;
+    // it is disjoint from the packed source borrowed above.
+    let out = unsafe { &mut *out_base.cast::<[[f32; 3]; 145]>() };
+    crate::math::world::c_map_chunk__decompress_vertex_normals__6aff10(packed, out);
 }
 
 /// `CMovement::GetActiveSplineSource` — `__fastcall(ecx = this)`.
@@ -40718,9 +40729,10 @@ fn ts_link_unlink(link: *mut u32) {
 /// handle = end; node = `*(handle+4)`), and per unskipped node writes the
 /// plane-depth key into `+0x78` (REUSES the 0x6838f0 kernel — same 0xc7bcb0
 /// plane globals, same fold), then frustum-culls (stock's `IsSphereCulled`
-/// 0x682ef0 wrapper INLINED — sphere copy + active-frustum select over our
-/// native `TestSphere`) and height-bucket tests (our hook, direct; flags=0,
-/// culled iff nonzero). Survivors are spliced into the global VISIBLE bucket
+/// 0x682ef0 wrapper INLINED — the node's own `+0x5c` sphere window handed
+/// straight to our native `TestSphere`, active frustum selected once per call)
+/// and height-bucket tests (our hook, direct; flags=0, culled iff nonzero).
+/// Survivors are spliced into the global VISIBLE bucket
 /// (`link = *0xc7cb08 + node`, head 0xc7cb0c), culled nodes into the DEFERRED
 /// bucket (`link = *0xc7cb44 + node` — `TSList__GetLinkAddress` 0x687a00
 /// inlined — head 0xc7cb48) plus a squared-distance LOD notify through the
@@ -40777,6 +40789,16 @@ pub extern "fastcall" fn world_scene__cull_and_bucket_nodes__6834e0(
     let vis_off = unsafe { VIS_LINK_OFF.read_unaligned() };
     // SAFETY: fixed deferred-bucket link-offset global.
     let def_off = unsafe { DEF_LINK_OFF.read_unaligned() };
+    // The active-frustum select is loop-invariant, so it joins the other globals
+    // here instead of being rebuilt per node: nothing in the walk writes
+    // `0xc7cfe0`. Both sphere tests are our own reimpls and only read host
+    // globals, and the third call (the stock `LinkedListNode__SetLinked` at
+    // 0x710b90) is a leaf with no call-out at all whose every store goes through
+    // its own receiver's link fields at `+0x44`/`+0x48`, never an absolute
+    // address.
+    // SAFETY: fixed live active-frustum index.
+    let idx = unsafe { FRUSTUM_INDEX.read_unaligned() };
+    let frustum = (FRUSTUM_BASE + idx as usize * 0xfc) as *const core::ffi::c_void;
 
     // SAFETY: `container+0xbc` is the list-head handle.
     let p_head = unsafe { cont.add(0xbc) };
@@ -40825,13 +40847,15 @@ pub extern "fastcall" fn world_scene__cull_and_bucket_nodes__6834e0(
             // SAFETY: writable f32 of the live node.
             unsafe { p_key.cast::<f32>().write_unaligned(key) };
 
-            // Frustum sphere cull — stock's IsSphereCulled 0x682ef0 is a
-            // copy + active-frustum select around our native TestSphere.
-            let sphere = [center[0], center[1], center[2], radius];
-            // SAFETY: fixed live active-frustum index.
-            let idx = unsafe { FRUSTUM_INDEX.read_unaligned() };
-            let frustum = (FRUSTUM_BASE + idx as usize * 0xfc) as *const core::ffi::c_void;
-            let culled = c_world_frustum__test_sphere__686b80(frustum, sphere.as_ptr()) == 0
+            // Frustum sphere cull — stock's IsSphereCulled 0x682ef0 is a copy +
+            // active-frustum select around our native TestSphere. The copy is
+            // elided: `node+0x5c` already holds the four floats contiguously
+            // (centre at +0x5c, radius at +0x68), the callee only
+            // `read_unaligned`s them and never writes through the pointer, and
+            // the one store since they were read is the sort key at `node+0x78`,
+            // outside that window. The height-bucket call below already passed
+            // `node+0x5c` the same way.
+            let culled = c_world_frustum__test_sphere__686b80(frustum, p_center.cast::<f32>()) == 0
                 || height_bucket__test_sphere__686000(p_center.cast::<f32>(), 0, radius) != 0;
 
             // The node's own TSLink pair at +0xfc (both paths unlink it

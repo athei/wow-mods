@@ -2,38 +2,54 @@
 // standing in for the `::`, so the whole module is non-snake-case by construction.
 #![allow(non_snake_case)]
 
+/// The three host-image constants a chunk's grid spacing is derived from.
+///
+/// `cell` is the cell size at `0x80fee4`, `origin` the world origin at
+/// `0x7ffab4`, and `divisor` the spacing divisor at `0x807b10`. They travel
+/// together because the reference reads all three for each axis.
+pub struct GridGeometry {
+    /// Cell size (`0x80fee4`).
+    pub cell: f32,
+    /// World origin the spacing is anchored to (`0x7ffab4`).
+    pub origin: f32,
+    /// Spacing divisor (`0x807b10`).
+    pub divisor: f32,
+}
+
 /// Builds a 9x9 grid of vertex positions for a terrain chunk cell block.
 ///
 /// X is the row index scaled by `row_scale`, Y the column index scaled by
 /// `col_scale`, and Z the per-vertex sampled height minus a chunk base height.
-/// The row/column scales are derived from `cell`, `origin`, and `divisor` exactly
-/// as the reference does (an `origin`-anchored difference rather than the
-/// algebraically-equal `cell` directly), preserving the f32 rounding of the large
-/// `origin` constant. The 81 height samples are supplied one per vertex in
-/// row-major order.
+/// The row/column scales are derived from `geom` exactly as the reference does
+/// (an `origin`-anchored difference rather than the algebraically-equal `cell`
+/// directly), preserving the f32 rounding of the large `origin` constant. The 81
+/// height samples are supplied one per vertex in row-major order.
+///
+/// The finished vertices are written through `out` in that same order rather
+/// than returned by value, so the caller can point the kernel at the chunk's own
+/// `this+0x34` grid instead of copying 972 bytes out of a temporary.
 pub fn c_map_chunk__build_grid_vertices__68d540(
     count_a: i32,
     count_b: i32,
-    cell: f32,
-    origin: f32,
-    divisor: f32,
+    geom: &GridGeometry,
     base_height: f32,
     heights: &[f32; 81],
-) -> [[f32; 3]; 81] {
+    out: &mut [[f32; 3]; 81],
+) {
     // row_scale from count_a, col_scale from count_b — each is
     // -((origin - i*cell) - (origin - (i+1)*cell)) / divisor, computed via the
     // origin-anchored intermediates to match the reference's f32 rounding.
-    let row_scale = grid_scale(count_a, cell, origin, divisor);
-    let col_scale = grid_scale(count_b, cell, origin, divisor);
+    let row_scale = grid_scale(count_a, geom.cell, geom.origin, geom.divisor);
+    let col_scale = grid_scale(count_b, geom.cell, geom.origin, geom.divisor);
 
-    core::array::from_fn(|i| {
+    for (i, (slot, height)) in out.iter_mut().zip(heights.iter()).enumerate() {
         let row = (i / 9) as i32;
         let col = (i % 9) as i32;
         let x = (row as f32) * row_scale;
         let y = (col as f32) * col_scale;
-        let z = heights[i] - base_height;
-        [x, y, z]
-    })
+        let z = *height - base_height;
+        *slot = [x, y, z];
+    }
 }
 
 /// Per-axis grid spacing: `-((origin - i*cell) - (origin - (i+1)*cell)) / divisor`.
@@ -45,10 +61,37 @@ fn grid_scale(i: i32, cell: f32, origin: f32, divisor: f32) -> f32 {
 
 #[cfg(test)]
 mod tests_c_map_chunk__build_grid_vertices__68d540 {
-    use super::{c_map_chunk__build_grid_vertices__68d540 as build, grid_scale};
+    use super::{GridGeometry, c_map_chunk__build_grid_vertices__68d540, grid_scale};
 
     fn flat_heights(v: f32) -> [f32; 81] {
         [v; 81]
+    }
+
+    /// By-value form of the kernel, the shape the assertions below read against.
+    fn build(
+        count_a: i32,
+        count_b: i32,
+        cell: f32,
+        origin: f32,
+        divisor: f32,
+        base_height: f32,
+        heights: &[f32; 81],
+    ) -> [[f32; 3]; 81] {
+        let geom = GridGeometry {
+            cell,
+            origin,
+            divisor,
+        };
+        let mut out = [[0.0_f32; 3]; 81];
+        c_map_chunk__build_grid_vertices__68d540(
+            count_a,
+            count_b,
+            &geom,
+            base_height,
+            heights,
+            &mut out,
+        );
+        out
     }
 
     #[test]
@@ -1622,12 +1665,68 @@ const HB_COLUMN_ORIGIN: i32 = 0xa0;
 /// Transforms a point by a column-major 4x4 with implied `w = 1`.
 ///
 /// The translation row is at indices 12/13/14, matching
-/// `C44Matrix::TransformPoint` at `0x7bca80`.
+/// `C44Matrix::TransformPoint` at `0x7bca80`. Each output lane accumulates
+/// across the four 16-byte matrix rows, so the shipped body loads the rows whole
+/// and broadcasts the point components rather than reading one dword per lane;
+/// the scalar fallback below is the same operand pairs in the same grouping and
+/// is what non-x86 builds compile.
 fn hb_transform_point(p: [f32; 3], mat: &[f32; 16]) -> [f32; 3] {
-    let x = p[0] * mat[0] + p[1] * mat[4] + p[2] * mat[8] + mat[12];
-    let y = p[0] * mat[1] + p[1] * mat[5] + p[2] * mat[9] + mat[13];
-    let z = p[0] * mat[2] + p[1] * mat[6] + p[2] * mat[10] + mat[14];
-    [x, y, z]
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    {
+        #[cfg(target_arch = "x86")]
+        use core::arch::x86::{_mm_add_ps, _mm_loadu_ps, _mm_mul_ps, _mm_set1_ps, _mm_storeu_ps};
+        #[cfg(target_arch = "x86_64")]
+        use core::arch::x86_64::{
+            _mm_add_ps, _mm_loadu_ps, _mm_mul_ps, _mm_set1_ps, _mm_storeu_ps,
+        };
+
+        // Every intrinsic below is SSE1, available on every ISA baseline this
+        // crate builds for. Lane `i` computes
+        // `((mat[i]*p[0] + mat[4+i]*p[1]) + mat[8+i]*p[2]) + mat[12+i]`, which is
+        // the scalar expression's left-to-right grouping with each multiply's two
+        // operands commuted, and commuting a multiply is exact. Lane 3 (matrix
+        // indices 3/7/11/15) is computed and dropped; it stores nothing and can
+        // only set masked `MXCSR` flags.
+        // SAFETY: the load covers 16 in-bounds bytes of the `[f32; 16]` argument.
+        let row0 = unsafe { _mm_loadu_ps(mat.as_ptr()) };
+        // SAFETY: 16 in-bounds bytes of the same `[f32; 16]`, from index 4.
+        let row1 = unsafe { _mm_loadu_ps(mat[4..].as_ptr()) };
+        // SAFETY: 16 in-bounds bytes of the same `[f32; 16]`, from index 8.
+        let row2 = unsafe { _mm_loadu_ps(mat[8..].as_ptr()) };
+        // SAFETY: 16 in-bounds bytes of the same `[f32; 16]`, from index 12.
+        let row3 = unsafe { _mm_loadu_ps(mat[12..].as_ptr()) };
+        // SAFETY: register broadcast of an initialized f32; no memory operand.
+        // A 16-byte load of `p` would read past the 12-byte array, so the
+        // component is broadcast rather than shuffled out of a vector.
+        let px = unsafe { _mm_set1_ps(p[0]) };
+        // SAFETY: as for `px`.
+        let py = unsafe { _mm_set1_ps(p[1]) };
+        // SAFETY: as for `px`.
+        let pz = unsafe { _mm_set1_ps(p[2]) };
+        // SAFETY: lane-wise multiply of two initialized vectors.
+        let t0 = unsafe { _mm_mul_ps(row0, px) };
+        // SAFETY: as for `t0`.
+        let t1 = unsafe { _mm_mul_ps(row1, py) };
+        // SAFETY: as for `t0`.
+        let t2 = unsafe { _mm_mul_ps(row2, pz) };
+        // SAFETY: lane-wise add of two initialized vectors.
+        let s0 = unsafe { _mm_add_ps(t0, t1) };
+        // SAFETY: as for `s0`.
+        let s1 = unsafe { _mm_add_ps(s0, t2) };
+        // SAFETY: as for `s0`.
+        let s2 = unsafe { _mm_add_ps(s1, row3) };
+        let mut out = [0.0_f32; 4];
+        // SAFETY: the store writes 16 bytes into a local `[f32; 4]`, its exact size.
+        unsafe { _mm_storeu_ps(out.as_mut_ptr(), s2) };
+        [out[0], out[1], out[2]]
+    }
+    #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+    {
+        let x = p[0] * mat[0] + p[1] * mat[4] + p[2] * mat[8] + mat[12];
+        let y = p[0] * mat[1] + p[1] * mat[5] + p[2] * mat[9] + mat[13];
+        let z = p[0] * mat[2] + p[1] * mat[6] + p[2] * mat[10] + mat[14];
+        [x, y, z]
+    }
 }
 
 /// Round-half-to-even to i32 matching x87 `FISTP` under the default rounding mode.
@@ -3766,25 +3865,39 @@ mod tests_world_sample_surface_height__6b7070 {
 /// rounded f32 at a 12-byte stride; component order is straight 0,1,2. The
 /// `i8 -> f32` widening is exact, so the lone multiply rounds once — bit-exact to
 /// the x87 original.
-pub fn c_map_chunk__decompress_vertex_normals__6aff10(packed: &[[i8; 3]; 145]) -> [[f32; 3]; 145] {
+///
+/// Written through the caller's array rather than returned by value: the stock
+/// body at 0x6aff26..0x6aff65 decodes straight from `*(this+0xf18)` into the
+/// inline array at `this+0x170`, one component at a time, with no temporary in
+/// between, so the destination is the chunk's own array here too.
+pub fn c_map_chunk__decompress_vertex_normals__6aff10(
+    packed: &[[i8; 3]; 145],
+    out: &mut [[f32; 3]; 145],
+) {
     // Stock `.rdata` reciprocal at 0x810c08 (closest f32 to 1.0/127.0); multiply,
     // never divide, to match the original's `FMUL dword`.
     const RECIP_127: f32 = f32::from_bits(0x3c01_0204);
-    core::array::from_fn(|i| {
-        let n = packed[i];
-        [
+    for (slot, n) in out.iter_mut().zip(packed.iter()) {
+        *slot = [
             f32::from(n[0]) * RECIP_127,
             f32::from(n[1]) * RECIP_127,
             f32::from(n[2]) * RECIP_127,
-        ]
-    })
+        ];
+    }
 }
 
 #[cfg(test)]
 mod tests_c_map_chunk__decompress_vertex_normals__6aff10 {
-    use super::c_map_chunk__decompress_vertex_normals__6aff10 as decode;
+    use super::c_map_chunk__decompress_vertex_normals__6aff10;
 
     const RECIP_127: f32 = f32::from_bits(0x3c01_0204);
+
+    /// By-value form of the kernel, kept as the shape the assertions read against.
+    fn decode(packed: &[[i8; 3]; 145]) -> [[f32; 3]; 145] {
+        let mut out = [[0.0_f32; 3]; 145];
+        c_map_chunk__decompress_vertex_normals__6aff10(packed, &mut out);
+        out
+    }
 
     #[test]
     fn recip_constant_is_one_over_127() {
