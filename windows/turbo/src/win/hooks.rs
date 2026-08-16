@@ -28246,12 +28246,21 @@ fn advance_event_track_seq(inst: *mut u8, hdr: *const u8, seq_idx: u32, delta: u
     }
     // SAFETY: `hdr+0x118` event-track array base.
     let track_base = unsafe { anim_ptr(hdr, 0x118) };
-    for i in 0..track_count {
-        // SAFETY: track block at i*0x2c in-bounds.
-        let track = unsafe { track_base.add(i as usize * 0x2c) };
+    // The sweep is handed the record address and never the index, so the walk
+    // strides the pointer rather than re-deriving `track_base + i*0x2c` and
+    // reloading the base every iteration; it visits the same addresses in the
+    // same order.
+    // SAFETY: one past the last record of the `hdr+0x118` array, which holds
+    // the `hdr+0x114` records read into `track_count` above at stride 0x2c.
+    let track_end = unsafe { track_base.add(track_count as usize * 0x2c) };
+    let mut track = track_base;
+    while track < track_end {
         sweep_event_track(
             inst, hdr, state, seqrec, track, seq_idx, cur_seq, window_lo, window_hi,
         );
+        // SAFETY: `track` is still below `track_end`, so the next record starts
+        // at most one past the end of that same array.
+        track = unsafe { track.add(0x2c) };
     }
 }
 
@@ -28340,6 +28349,12 @@ fn sweep_event_track(
     // base computation (0x719649..0x71966c): if [seqrec+8] > [seqrec+4] (signed)
     //   base = window_lo % ([seqrec+8]-[seqrec+4]) + [seqrec+4];
     // else base = [seqrec+4].
+    // The two ticks are read here, per track, as the stock range does, and not
+    // once in the caller ahead of its track loop. `window_lo` is fixed for the
+    // whole loop, so the divide looks hoistable, but the segment fires below
+    // re-enter the client (0x714000, 0x70a400) between one track and the next:
+    // a hoisted copy would assert that neither of them writes this sequence
+    // record, which is a claim about the emitter path, not about this body.
     // SAFETY: `seqrec+4` is the span's low tick; `seqrec` is the 0x44-byte
     // sequence record the caller resolved as `[hdr+0x20] + cur_seq*0x44` and
     // read the same two ticks from when normalizing the window seam.
