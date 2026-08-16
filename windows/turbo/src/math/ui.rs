@@ -157,19 +157,29 @@ mod tests_snap_coord_to_pixel_y__5c7010 {
 /// Scans an obstacle-rectangle list for one that overlaps `rect`.
 ///
 /// On the first overlap, returns the clearance gap along `direction` (0..3).
-/// Returns `None` when nothing overlaps (or the direction is out of range for
-/// every overlapping rectangle).
+/// Returns `None` when nothing overlaps, and `None` without scanning at all when
+/// the direction is out of range.
 ///
 /// Each rectangle is four floats `[a, b, c, d]`. Two rectangles overlap when
 /// `rect[3] > obs[1]`, `rect[1] < obs[3]`, `rect[0] > obs[2]`, and
 /// `rect[2] < obs[0]` (the bound-touching equality cases are NOT overlaps).
 /// The clearance for each direction is: 0 -> `obs[0] - rect[2]`,
 /// 1 -> `rect[3] - obs[1]`, 2 -> `obs[3] - rect[1]`, 3 -> `rect[0] - obs[2]`.
+///
+/// `direction` does not change across the scan, so the range test is answered
+/// once at the entry rather than at each overlapping rectangle. Out of range,
+/// the only exit stock's jump table leaves open is the `None` below: the scan
+/// stores nothing on the way there (`out_distance` is written by the caller only
+/// on the `Some` arm), so skipping it returns the same value with the same set
+/// of stores.
 pub fn ui_frame_rect_overlap_distance__509220(
     rect: &[f32; 4],
     obstacles: &[[f32; 4]],
     direction: u32,
 ) -> Option<f32> {
+    if direction > 3 {
+        return None;
+    }
     for obs in obstacles {
         let overlaps = rect[3] > obs[1] && rect[1] < obs[3] && rect[0] > obs[2] && rect[2] < obs[0];
         if !overlaps {
@@ -179,8 +189,8 @@ pub fn ui_frame_rect_overlap_distance__509220(
             0 => return Some(obs[0] - rect[2]),
             1 => return Some(rect[3] - obs[1]),
             2 => return Some(obs[3] - rect[1]),
-            3 => return Some(rect[0] - obs[2]),
-            _ => {}
+            // The guard above leaves 3 as the only remaining direction.
+            _ => return Some(rect[0] - obs[2]),
         }
     }
     None

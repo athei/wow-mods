@@ -19,10 +19,28 @@ use memchr::memmem;
 /// (matching stock's `SPECIALS`).
 const MAGIC: &[u8] = b"^$*+?.()[%-";
 
+/// [`MAGIC`] as a 256-bit membership bitmap, one bit per byte value.
+///
+/// Derived from `MAGIC` at compile time, so it is the same set by construction.
+/// Testing a byte is then a shift and a mask instead of a scan of the 11-byte
+/// set, which the search below pays for every byte of every pattern.
+const MAGIC_BITMAP: [u64; 4] = {
+    let mut map = [0u64; 4];
+    let mut i = 0;
+    while i < MAGIC.len() {
+        let b = MAGIC[i] as usize;
+        map[b >> 6] |= 1 << (b & 63);
+        i += 1;
+    }
+    map
+};
+
 /// Returns `true` if `pattern` contains any Lua pattern magic character.
 #[must_use]
 pub fn pattern_has_magic(pattern: &[u8]) -> bool {
-    pattern.iter().any(|b| MAGIC.contains(b))
+    pattern
+        .iter()
+        .any(|b| (MAGIC_BITMAP[(b >> 6) as usize] >> (b & 63)) & 1 != 0)
 }
 
 /// Literal `string.gsub`.
@@ -107,6 +125,22 @@ mod tests {
             assert!(
                 pattern_has_magic(&[b'a', *m, b'b']),
                 "magic {m:#x} not flagged"
+            );
+        }
+    }
+
+    /// The bitmap decides the same set as `MAGIC`, for every byte value.
+    ///
+    /// Membership reads a bitmap derived from `MAGIC` rather than scanning the
+    /// set, so the derivation is pinned over all 256 values and not only over
+    /// the eleven that are in it.
+    #[test]
+    fn bitmap_agrees_with_the_magic_set_on_every_byte() {
+        for b in 0..=u8::MAX {
+            assert_eq!(
+                pattern_has_magic(&[b]),
+                super::MAGIC.contains(&b),
+                "byte {b:#x}"
             );
         }
     }

@@ -1598,7 +1598,11 @@ pub extern "thiscall" fn c_cubic_spline__eval_basis_quadratic__453640(
     let cp = unsafe { &*cp_ptr };
     // SAFETY: `basis_coeffs` addresses four contiguous rows of four f32 (stride
     // 0x10), supplied by the caller (the segment-tangent basis matrix).
-    let basis = &unsafe { basis_coeffs.cast::<[f32; 16]>().read_unaligned() };
+    // `[f32; 16]` needs 4-byte alignment, which the incoming `*const f32`
+    // already carries, so this borrows the caller's rows instead of copying
+    // them: the kernel only reads `basis`, and its two stores go to the local
+    // tangent it returns, which cannot alias the caller's matrix.
+    let basis = unsafe { &*basis_coeffs.cast::<[f32; 16]>() };
     let r = crate::math::spline::c_cubic_spline__eval_basis_quadratic__453640(cp, basis, t);
     // SAFETY: `out` is non-null and addresses three writable contiguous f32.
     unsafe {
@@ -36150,6 +36154,14 @@ pub extern "fastcall" fn rasterizer_emit_sloped_line_dda__69c600(
     let scale = unsafe { SCALE.read() };
     // SAFETY: as above.
     let bias = unsafe { BIAS.read() };
+    // The list base is read once for the whole walk. The walk's only stores are
+    // the cursor at 0xc89f40 and the list body, the proc calls nothing that
+    // could store to 0xc962c8, and the caller's buffer-sizing contract (stated
+    // above) is what keeps the appended body clear of both globals. The cursor
+    // keeps its per-value read-modify-write, exactly as stock re-reads it around
+    // each INC.
+    // SAFETY: the global list-base pointer at fixed VA 0xc962c8.
+    let list = unsafe { LIST.read() };
     crate::math::world::rasterizer_emit_sloped_line_dda__69c600(
         a,
         b,
@@ -36164,8 +36176,6 @@ pub extern "fastcall" fn rasterizer_emit_sloped_line_dda__69c600(
                 // SAFETY: as above; stock-faithful raw bump (wrapping, no
                 // bounds check, exactly like the original's INC).
                 unsafe { CURSOR.write(c.wrapping_add(1)) };
-                // SAFETY: the global list-base pointer at fixed VA 0xc962c8.
-                let list = unsafe { LIST.read() };
                 // SAFETY: appends at `list[cursor]` exactly as stock — the
                 // caller sizes the buffer, no added guard; raw wrapping offset
                 // (never a slice) + unaligned store for game memory.
@@ -37673,16 +37683,22 @@ pub extern "thiscall" fn c_map_chunk__build_vertices_and_bounds__6b0e50(this: *m
     );
 
     // Vertex buffer: 145 × {x, y, z} f32 at stride 0xc in the kernel's emit
-    // order; z is the raw height dword exactly as stock MOV-copies it.
-    let mut verts = [[0u32; 3]; 145];
-    for (dst, (xy, h)) in verts.iter_mut().zip(out.xy.iter().zip(heights.iter())) {
-        *dst = [xy[0].to_bits(), xy[1].to_bits(), *h];
-    }
+    // order; z is the raw height dword exactly as stock MOV-copies it. Written
+    // entry by entry straight into the chunk, so there is no zero-initialised
+    // 1740-byte local for the same 145 entries to overwrite. Both sources are
+    // locals (`out` is the kernel's return, `heights` a snapshot of the MCVT
+    // stream), so a host height pointer aliasing the vertex buffer cannot
+    // disturb the walk.
     // SAFETY: `this+0x83c` is the in-bounds vertex-buffer base.
-    let verts_ptr = unsafe { this.add(0x83c) };
-    // SAFETY: `verts_ptr` addresses the chunk's writable inline 145-vertex
-    // (1740-byte) buffer stock fills; `[[u32; 3]; 145]` matches its layout.
-    unsafe { verts_ptr.cast::<[[u32; 3]; 145]>().write_unaligned(verts) };
+    let verts_ptr = unsafe { this.add(0x83c) }.cast::<[u32; 3]>();
+    for (k, (xy, h)) in out.xy.iter().zip(heights.iter()).enumerate() {
+        // SAFETY: the zip yields exactly the 145 entries the buffer holds, so
+        // `k` stays inside the chunk's inline 1740-byte vertex buffer.
+        let slot = unsafe { verts_ptr.add(k) };
+        // SAFETY: `slot` addresses writable chunk memory stock fills itself, and
+        // `[u32; 3]` matches one vertex's layout.
+        unsafe { slot.write_unaligned([xy[0].to_bits(), xy[1].to_bits(), *h]) };
+    }
     // SAFETY: `this+0x44` is the in-bounds AABB-min field.
     let min_ptr = unsafe { this.add(0x44) };
     // SAFETY: `min_ptr` addresses the chunk's writable AABB-min C3Vector.
@@ -41384,6 +41400,64 @@ pub extern "thiscall" fn cg_object_c__update_selection_circle_and_visuals__614a9
     }
 }
 
+/// Storm crossfade arm of `DayNight_BlendNearbyLights` (0x6d2f8d–0x6d2fe1).
+///
+/// Outlined and `#[cold]` so the second 0x90-byte record, its `ClearLightRecord`
+/// and sampler calls, and the second biased-FISTP time index all leave the pop
+/// loop's straight-line path. The arm carries 8 of the family's 349 city
+/// samples. The `storm > lo` gate stays at the call site: it is an ordered
+/// strict compare and its polarity is what sends an unordered storm value past
+/// the arm.
+///
+/// The time/scale/bias globals are re-read here rather than taken from the
+/// caller's earlier loads, because stock re-reads them at 0x6d2f98 and the
+/// second time index is derived from those fresh values.
+#[cold]
+#[inline(never)]
+fn day_night_storm_crossfade__6d2d00(sp: *mut u8, rec: u32, use_water_set: i32) {
+    const BASE: usize = crate::win::EXPECTED_IMAGE_BASE;
+    const TIME: *const f32 = (BASE + 0x8e_9b64) as *const f32;
+    const STORM: *const f32 = (BASE + 0x8e_9bcc) as *const f32;
+    const TIME_SCALE: *const f32 = (BASE + 0x41_1630) as *const f32;
+    const FISTP_BIAS: *const f32 = (BASE + 0x46_f2c8) as *const f32;
+    const CLEAR_RECORD_VA: usize = BASE + 0x2d_3080;
+    const RESOLVE_COLOR_VA: usize = BASE + 0x2d_6ab0;
+    const SAMPLE_RECORD_VA: usize = BASE + 0x2d_64d0;
+    const BLEND_COLORS_VA: usize = BASE + 0x2d_67c0;
+
+    // SAFETY: image base verified at load; `__thiscall(record) -> void` per the
+    // 0x6d2f93 call site.
+    let clear_record: extern "thiscall" fn(*mut u8) =
+        unsafe { core::mem::transmute(CLEAR_RECORD_VA) };
+    // SAFETY: `__fastcall(rec, setIdx) -> *color` per the 0x6d2f66 site.
+    let resolve_color: extern "fastcall" fn(usize, u32) -> usize =
+        unsafe { core::mem::transmute(RESOLVE_COLOR_VA) };
+    // SAFETY: `__fastcall(timeIdx, out) + stack(colorPtr)`, `RET 0x4`.
+    let sample_record: extern "fastcall" fn(i32, *mut u8, usize) =
+        unsafe { core::mem::transmute(SAMPLE_RECORD_VA) };
+    // SAFETY: `__fastcall(dst, src) + stack(intensity dword)`, `RET 0x4`.
+    let blend_colors: extern "fastcall" fn(*mut u8, *mut u8, u32) =
+        unsafe { core::mem::transmute(BLEND_COLORS_VA) };
+
+    let mut storm_rec = [0u8; 0x90];
+    let stp = storm_rec.as_mut_ptr();
+    clear_record(stp);
+    // SAFETY: re-reads of the time/scale globals (stock 0x6d2f98).
+    let time = unsafe { TIME.read() };
+    // SAFETY: as above.
+    let scale = unsafe { TIME_SCALE.read() };
+    // SAFETY: as above.
+    let bias = unsafe { FISTP_BIAS.read() };
+    let idx2 = crate::math::light::light_time_index__6d2d00(time, scale, bias);
+    let color2 = resolve_color(rec as usize, u32::from(use_water_set != 0) + 2);
+    sample_record(idx2, stp, color2);
+    // SAFETY: the storm intensity, re-read as the raw dword the stock PUSH
+    // forwards (0x6d2fd6).
+    let intensity = unsafe { STORM.cast::<u32>().read() };
+    blend_colors(sp, stp, intensity);
+    // The 0x6d3070 record 'dtor' is a bare RET — omitted.
+}
+
 /// `DayNight_BlendNearbyLights`.
 ///
 /// `__fastcall(ecx = outParams: *mut u8, edx = useWaterSet: i32)`, plain `RET`,
@@ -41453,10 +41527,8 @@ pub extern "fastcall" fn day_night_blend_nearby_lights__6d2d00(
     const CTOR_LOOP_VA: usize = BASE + 0x00_4130;
     const ELEM_CTOR_A_VA: usize = BASE + 0x1a_6980;
     const ELEM_CTOR_B_VA: usize = BASE + 0x2d_5440;
-    const CLEAR_RECORD_VA: usize = BASE + 0x2d_3080;
     const RESOLVE_COLOR_VA: usize = BASE + 0x2d_6ab0;
     const SAMPLE_RECORD_VA: usize = BASE + 0x2d_64d0;
-    const BLEND_COLORS_VA: usize = BASE + 0x2d_67c0;
     const LERP_PARAMS_VA: usize = BASE + 0x2d_30e0;
 
     // SAFETY: image base verified at load; `__thiscall(arr, param, 0, 0,
@@ -41475,18 +41547,12 @@ pub extern "fastcall" fn day_night_blend_nearby_lights__6d2d00(
     // 0x10` — no caller ADD ESP) per the 0x6d2ef9 call sites.
     let ctor_loop: extern "stdcall" fn(*mut u8, u32, u32, usize) =
         unsafe { core::mem::transmute(CTOR_LOOP_VA) };
-    // SAFETY: `__thiscall(record) -> void` per the 0x6d2f93 call site.
-    let clear_record: extern "thiscall" fn(*mut u8) =
-        unsafe { core::mem::transmute(CLEAR_RECORD_VA) };
     // SAFETY: `__fastcall(rec, setIdx) -> *color` per the 0x6d2f66 site.
     let resolve_color: extern "fastcall" fn(usize, u32) -> usize =
         unsafe { core::mem::transmute(RESOLVE_COLOR_VA) };
     // SAFETY: `__fastcall(timeIdx, out) + stack(colorPtr)`, `RET 0x4`.
     let sample_record: extern "fastcall" fn(i32, *mut u8, usize) =
         unsafe { core::mem::transmute(SAMPLE_RECORD_VA) };
-    // SAFETY: `__fastcall(dst, src) + stack(intensity dword)`, `RET 0x4`.
-    let blend_colors: extern "fastcall" fn(*mut u8, *mut u8, u32) =
-        unsafe { core::mem::transmute(BLEND_COLORS_VA) };
     // SAFETY: `__fastcall(out, params) + stack(weight f32)`, `RET 0x4`.
     let lerp_params: extern "fastcall" fn(*mut u8, *mut u8, f32) =
         unsafe { core::mem::transmute(LERP_PARAMS_VA) };
@@ -41503,6 +41569,14 @@ pub extern "fastcall" fn day_night_blend_nearby_lights__6d2d00(
     let heap_data = |arr: &[u32; 8]| arr[3] as usize;
     let heap_count = |arr: &[u32; 8]| arr[7];
 
+    // The camera triple is loop-invariant, so it is loaded and widened once for
+    // the whole scan. Only the count and table base at 0xce98dc/0xce98e0 are
+    // stock per-iteration re-reads. The single opaque call in the loop is the
+    // stock `DynArray8::PushN` at 0x6d5ad0, an allocator-side grow that cannot
+    // store to the camera globals at 0xce9b78, and `GetPosition` is our own hook
+    // and only reads.
+    // SAFETY: the camera position globals.
+    let cam = unsafe { CAM.read() };
     // Scan: table[1..count], keeping in-range lights in the max-heap.
     let mut i: u32 = 1;
     loop {
@@ -41523,8 +41597,6 @@ pub extern "fastcall" fn day_night_blend_nearby_lights__6d2d00(
         );
         // SAFETY: the position triple behind the returned pointer.
         let pos = unsafe { pos_ptr.cast::<[f32; 3]>().read_unaligned() };
-        // SAFETY: the camera position globals.
-        let cam = unsafe { CAM.read() };
         let dist = crate::math::light::light_camera_distance__6d2d00(cam, pos);
         // SAFETY: the light record pointer (slot payload).
         let rec = unsafe { (slot as *const u32).read_unaligned() };
@@ -41663,23 +41735,7 @@ pub extern "fastcall" fn day_night_blend_nearby_lights__6d2d00(
         // SAFETY: the low threshold global.
         let lo = unsafe { LO.read() };
         if storm > lo {
-            let mut storm_rec = [0u8; 0x90];
-            let stp = storm_rec.as_mut_ptr();
-            clear_record(stp);
-            // SAFETY: re-reads of the time/scale globals (stock 0x6d2f98).
-            let time = unsafe { TIME.read() };
-            // SAFETY: as above.
-            let scale = unsafe { TIME_SCALE.read() };
-            // SAFETY: as above.
-            let bias = unsafe { FISTP_BIAS.read() };
-            let idx2 = crate::math::light::light_time_index__6d2d00(time, scale, bias);
-            let color2 = resolve_color(rec as usize, u32::from(use_water_set != 0) + 2);
-            sample_record(idx2, stp, color2);
-            // SAFETY: the storm intensity, re-read as the raw dword the
-            // stock PUSH forwards (0x6d2fd6).
-            let intensity = unsafe { STORM.cast::<u32>().read() };
-            blend_colors(sp, stp, intensity);
-            // The 0x6d3070 record 'dtor' is a bare RET — omitted.
+            day_night_storm_crossfade__6d2d00(sp, rec, use_water_set);
         }
 
         // SAFETY: falloffStart/private span floats of the light record.

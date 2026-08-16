@@ -5249,13 +5249,52 @@ mod tests_c_world_view__compute_sort_hash_fold4__70a600 {
 /// Round-to-nearest-even to a 32-bit integer, storing the integer-indefinite
 /// pattern (`0x8000_0000`) for NaN, ±Inf, and every value whose rounded result
 /// falls outside `i32` — unlike Rust's saturating `as` cast (NaN → 0, clamp to
-/// `MAX`/`MIN`). Built from the raw f64 bits with no float rounding intrinsic
-/// (which may lower through x87 `FRNDINT` on i686) and no FPU arithmetic at all,
+/// `MAX`/`MIN`). On x86 that is one `cvtsd2si`, which produces those bits on
+/// every input; `fistp_round_ties_even_bits` below is the portable equivalent
+/// and stays the oracle the unit tests compare this against.
+///
+/// Two conditions the SSE2 form carries that the bit fold did not. `cvtsd2si`
+/// follows `MXCSR.RC`, so the two agree only while rounding is
+/// round-to-nearest: the client's `_controlfp` use is precision control
+/// (`PC=53`) and leaves `RC` alone on both units, but code that set a rounding
+/// mode would split them. And NaN reaches this conversion routinely rather than
+/// exceptionally (a vertical or zero-slope segment arrives as ±Inf or NaN on
+/// every step), so the invalid-operation mask must stay masked in `MXCSR`, or
+/// `cvtsd2si` traps where the fold silently returned `i32::MIN`.
+///
+/// Shared by the sibling biased-FISTP idioms in other kernel families (e.g.
+/// `light`).
+#[inline]
+pub fn fistp_round_ties_even(x: f64) -> i32 {
+    #[cfg(target_arch = "x86")]
+    use core::arch::x86::{_mm_cvtsd_si32, _mm_set_sd};
+    #[cfg(target_arch = "x86_64")]
+    use core::arch::x86_64::{_mm_cvtsd_si32, _mm_set_sd};
+
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    {
+        // SAFETY: `_mm_set_sd` is SSE2, statically available on both supported
+        // targets; it moves a register value and has no memory precondition.
+        let v = unsafe { _mm_set_sd(x) };
+        // SAFETY: `_mm_cvtsd_si32` is SSE2 for the same reason, and takes its
+        // operand from the register `v` already holds.
+        unsafe { _mm_cvtsd_si32(v) }
+    }
+    #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+    {
+        fistp_round_ties_even_bits(x)
+    }
+}
+
+/// Portable [`fistp_round_ties_even`], folded out of the raw f64 bits.
+///
+/// The non-x86 fallback, and the oracle the unit tests compare the `cvtsd2si`
+/// arm against on the targets that have one. No float rounding intrinsic (which
+/// may lower through x87 `FRNDINT` on i686) and no FPU arithmetic at all,
 /// mirroring the pure-integer discipline of `misc::ftol__40a2b0` (that one
 /// truncates toward zero; this one rounds to nearest, ties to even).
-/// `pub(crate)`: shared by the sibling biased-FISTP idioms in other kernel
-/// families (e.g. `light`).
-pub fn fistp_round_ties_even(x: f64) -> i32 {
+#[cfg(any(test, not(any(target_arch = "x86", target_arch = "x86_64"))))]
+fn fistp_round_ties_even_bits(x: f64) -> i32 {
     let bits = x.to_bits();
     let exp = ((bits >> 52) & 0x7ff) as i32;
     if exp == 0x7ff {
@@ -5546,9 +5585,63 @@ mod tests_world_rasterize_trace_line_cells__69c780 {
         assert_eq!(fistp(-0.75), -1);
     }
 
+    /// The `cvtsd2si` arm agrees with the bit fold on every class.
+    ///
+    /// Specials come first because the indefinite result is a routine outcome
+    /// here rather than an edge case: a degenerate segment reaches the
+    /// conversion as ±Inf or NaN on every step, so a mistranslated out-of-range
+    /// case would land on live geometry. Quiet and signalling NaN of both signs,
+    /// both infinities, magnitudes past ±2^31, the subnormals DAZ would flush,
+    /// and the ties either side of the i32 boundary.
+    #[test]
+    fn fistp_matches_bitwise_reference() {
+        let specials = [
+            f64::NAN,
+            f64::from_bits(0xfff8_0000_0000_0000),
+            f64::from_bits(0x7ff0_0000_0000_0001),
+            f64::from_bits(0xfff0_0000_0000_0001),
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::MAX,
+            -f64::MAX,
+            f64::MIN_POSITIVE,
+            -f64::MIN_POSITIVE,
+            5e-324,
+            -5e-324,
+            0.0,
+            -0.0,
+            0.5,
+            -0.5,
+            1.5,
+            2.5,
+            3.5,
+            -1.5,
+            -2.5,
+            0.75,
+            -0.75,
+            0.499_999_999,
+            2_147_483_646.5,
+            2_147_483_647.0,
+            2_147_483_647.5,
+            2_147_483_648.0,
+            -2_147_483_648.0,
+            -2_147_483_648.5,
+            -2_147_483_649.0,
+        ];
+        for x in specials {
+            assert_eq!(fistp(x), super::fistp_round_ties_even_bits(x), "x={x:e}");
+        }
+        for i in -100_000_i64..=100_000 {
+            let x = i as f64 / 16.0;
+            assert_eq!(fistp(x), super::fistp_round_ties_even_bits(x), "x={x}");
+            let y = i as f64 * 12_345.678_9;
+            assert_eq!(fistp(y), super::fistp_round_ties_even_bits(y), "y={y}");
+        }
+    }
+
     /// Sweep oracle.
     ///
-    /// The pure-integer helper agrees with the host's `round_ties_even` (SSE2 on
+    /// The conversion agrees with the host's `round_ties_even` (SSE2 on
     /// `x86_64`) across a dense in-range sweep including every x.5 tie and non-tie
     /// fractions at several magnitudes.
     #[test]
@@ -6121,7 +6214,13 @@ pub fn c_map_chunk__build_vertices_and_bounds__6b0e50(
     // half_row, y = c*step_col + half_col), heights streamed strictly
     // sequentially across both sub-rows. Min/max accumulate per vertex with
     // the callees' exact tie/unordered polarity (vertex wins on both).
-    let mut xy = [[0.0f32; 2]; 145];
+    // The two sub-loops below assign all 145 slots between them (9x9 outer plus
+    // 8x8 inner, `k` reaching 145 with no early exit), so declaring the buffer
+    // initialised only buys 1160 bytes of zero stores that the build then
+    // overwrites. The writes stay inside the existing loops rather than moving
+    // to a second pass, because `bmin`/`bmax` accumulate in the same k-ascending
+    // order and that order is part of the tie/unordered polarity.
+    let mut xy_slots = [core::mem::MaybeUninit::<[f32; 2]>::uninit(); 145];
     let mut bmin = [f32::MAX; 3];
     let mut bmax = [f32::MIN; 3];
     let mut k = 0usize;
@@ -6130,7 +6229,7 @@ pub fn c_map_chunk__build_vertices_and_bounds__6b0e50(
         for c in 0..9i32 {
             let y = super::f64_to_f32(f64::from(c as f32) * f64::from(step_col));
             let v = [outer_x, y, f32::from_bits(heights[k])];
-            xy[k] = [v[0], v[1]];
+            xy_slots[k].write([v[0], v[1]]);
             bmin = super::frustum::frustum_compute_c3_vector__699250(&bmin, &v);
             max_in_place_stock(&mut bmax, &v);
             k += 1;
@@ -6144,13 +6243,19 @@ pub fn c_map_chunk__build_vertices_and_bounds__6b0e50(
                     f64::from(c as f32) * f64::from(step_col) + f64::from(half_col),
                 );
                 let v = [inner_x, y, f32::from_bits(heights[k])];
-                xy[k] = [v[0], v[1]];
+                xy_slots[k].write([v[0], v[1]]);
                 bmin = super::frustum::frustum_compute_c3_vector__699250(&bmin, &v);
                 max_in_place_stock(&mut bmax, &v);
                 k += 1;
             }
         }
     }
+    // SAFETY: the build above wrote slots 0..145 (81 outer plus 64 inner, `k`
+    // stepping one per write), and `MaybeUninit<[f32; 2]>` has the size and
+    // alignment of `[f32; 2]`, so the array has the layout of `[[f32; 2]; 145]`.
+    let xy = unsafe {
+        core::mem::transmute::<[core::mem::MaybeUninit<[f32; 2]>; 145], [[f32; 2]; 145]>(xy_slots)
+    };
 
     // Tail: translate both corners by the chunk origin (min lanes add
     // `origin + min`, max.x adds `max + origin`, max.y/z `origin + max` — the
