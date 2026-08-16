@@ -2,6 +2,8 @@
 // standing in for the `::`, so the whole module is non-snake-case by construction.
 #![allow(non_snake_case)]
 
+use wow_shared::F32s;
+
 /// `CWorldBsp::AabbTriangleOverlap` separating-axis test along the three coordinate axes.
 ///
 /// `aabb` is `[min_x, min_y, min_z, max_x, max_y, max_z]`; `v0`/`v1`/`v2` are
@@ -384,25 +386,37 @@ mod tests_collide_box_box__7c3780 {
 
 /// Möller-Trumbore line-segment vs triangle test, returning `[t, u, v]` on a hit.
 ///
-/// `segment` packs the ray origin in `[0..3]` and direction in `[3..6]`; `v0`,
-/// `v1`, `v2` are the triangle's three vertices. `edge_tol` widens the accepted
-/// barycentric band to `[-edge_tol, 1 + edge_tol]`. The reconstructed arithmetic
-/// mirrors the reference exactly: `pvec = edge2 × dir`, `qvec = tvec × edge1`,
-/// the determinant must lie outside the near-zero band `(-1e-6, 1e-6)`, the
+/// `segment` packs the ray origin in `[0..3]` and direction in `[3..6]`, and
+/// `v0`, `v1`, `v2` view the triangle's three vertices where their owner holds
+/// them. `edge_tol` widens the accepted barycentric band to
+/// `[-edge_tol, 1 + edge_tol]`. The reconstructed arithmetic mirrors the
+/// reference exactly: `pvec = edge2 × dir`, `qvec = tvec × edge1`, the
+/// determinant must lie outside the near-zero band `(-1e-6, 1e-6)`, the
 /// barycentrics `u` and `u + v` (not the ray parameter `t`) stay within the
 /// tolerance band, and the returned `t = dot(qvec, edge2) / det` is left
 /// unclamped. Returns `None` on a miss.
+///
+/// The vertices arrive as views because both seams already hold the address of
+/// the record: the indexed adapter has `vertexBase + index * 0xc`, and the leaf
+/// walk has `leaf + 0x8 + index * 0xc`. Taking `&[f32; 3]` made each of them
+/// stage three 12-byte stack copies whose only use was this call. The nine
+/// reads below come off the same addresses those copies were filled from, and
+/// they are read once at the top so the arithmetic underneath is unchanged.
 // The band tests are ordered-negative — `v < lo`, `u + v > hi` — so a miss needs
 // an ordered compare and a NaN barycentric reaches the hit path, as in the
 // original: its `FCOM` + `TEST AH,5`/`JNP` and `TEST AH,0x41`/`JZ` pairs all
 // leave the unordered case falling through.
 pub fn collide_line_triangle_indexed16__7c29f0(
     segment: &[f32; 6],
-    v0: &[f32; 3],
-    v1: &[f32; 3],
-    v2: &[f32; 3],
+    v0: F32s<'_, 3>,
+    v1: F32s<'_, 3>,
+    v2: F32s<'_, 3>,
     edge_tol: f32,
 ) -> Option<[f32; 3]> {
+    let v0 = [v0.at::<0>(), v0.at::<1>(), v0.at::<2>()];
+    let v1 = [v1.at::<0>(), v1.at::<1>(), v1.at::<2>()];
+    let v2 = [v2.at::<0>(), v2.at::<1>(), v2.at::<2>()];
+
     // Acceptance band for the barycentrics (triangle u/v widened by the tol).
     let t_min = -edge_tol;
     let t_max = edge_tol + 1.0_f32;
@@ -475,7 +489,7 @@ mod tests_collide_line_triangle_indexed16__7c29f0 {
         tol: f32,
     ) -> Option<[f32; 3]> {
         let seg = [o[0], o[1], o[2], d[0], d[1], d[2]];
-        f(&seg, &v0, &v1, &v2, tol)
+        f(&seg, (&v0).into(), (&v1).into(), (&v2).into(), tol)
     }
 
     /// Law: a NaN barycentric reaches the hit path, not a miss.
@@ -489,9 +503,9 @@ mod tests_collide_line_triangle_indexed16__7c29f0 {
         let seg = [0.25f32, 0.25, 1.0, 0.0, 0.0, -1.0];
         let r = f(
             &seg,
-            &[f32::NAN, 0.0, 0.0],
-            &[1.0, 0.0, 0.0],
-            &[0.0, 1.0, 0.0],
+            (&[f32::NAN, 0.0, 0.0]).into(),
+            (&[1.0, 0.0, 0.0]).into(),
+            (&[0.0, 1.0, 0.0]).into(),
             0.0,
         )
         .expect("NaN must not miss");
@@ -3526,9 +3540,111 @@ pub fn collide_leaf_ray_triangle_mesh__6b88e0(a: &[f32; 3], b: &[f32; 3], v: &[f
     code
 }
 
+/// The box [`collide_leaf_ray_triangle_mesh__6b88e0`] tests a vertex against.
+///
+/// Returns `(lo, hi)` per axis, picked from the segment endpoints `a` and `b`
+/// with the reference's single ordered `>` test, so an unordered (NaN) endpoint
+/// pair keeps `(a, b)` unswapped. It is a leaf-wide quantity, so lifting it out
+/// of the per-vertex loop lets [`collide_leaf_outcode_x4`] broadcast six values
+/// once instead of re-deriving them per group. Deliberately not shared with the
+/// scalar kernel, which keeps its own inline swap so it stays an independent
+/// oracle for the vector path.
+pub fn collide_leaf_outcode_bounds(a: &[f32; 3], b: &[f32; 3]) -> ([f32; 3], [f32; 3]) {
+    // Swap only on an ordered `pa > pb`; NaN keeps the original order.
+    let (lo_x, hi_x) = if a[0] > b[0] {
+        (b[0], a[0])
+    } else {
+        (a[0], b[0])
+    };
+    let (lo_y, hi_y) = if a[1] > b[1] {
+        (b[1], a[1])
+    } else {
+        (a[1], b[1])
+    };
+    let (lo_z, hi_z) = if a[2] > b[2] {
+        (b[2], a[2])
+    } else {
+        (a[2], b[2])
+    };
+    ([lo_x, lo_y, lo_z], [hi_x, hi_y, hi_z])
+}
+
+/// 4-lane form of [`collide_leaf_ray_triangle_mesh__6b88e0`].
+///
+/// `v` views four consecutive leaf vertices — the vertex stride is `0xc`, so
+/// four of them are twelve contiguous `f32` — and the returned bytes are their
+/// outcodes in the same order. `lo` and `hi` come from
+/// [`collide_leaf_outcode_bounds`] and are broadcast per group.
+///
+/// `cmpltps` is the same ordered predicate as the scalar `<`, and `vc > hi` is
+/// `hi < vc`, so a NaN component still sets no bit. Every lane of a compare is
+/// `0` or `-1`, so doubling the running total and adding the next mask lays the
+/// six bits down in the order the scalar kernel declares them and leaves the
+/// negated outcode behind; one subtract from zero turns it right way up. Values
+/// never exceed `0x3f`, so neither pack saturates and the four low bytes of the
+/// result are the four outcodes.
+pub fn collide_leaf_outcode_x4(lo: &[f32; 3], hi: &[f32; 3], v: F32s<'_, 12>) -> [u8; 4] {
+    // SAFETY: the body is SSE2 and nothing else, and SSE2 is in the ISA
+    // baseline of both targets this crate builds for — architectural on x86_64,
+    // and several generations below the 32-bit build's `target-cpu`.
+    unsafe { collide_leaf_outcode_x4_sse2(lo, hi, v) }
+}
+
+/// The SSE2 body of [`collide_leaf_outcode_x4`], with the feature stated.
+///
+/// Naming the feature on the function rather than wrapping every intrinsic
+/// call below in a block of its own is what keeps the six compares readable
+/// side by side, and their polarity is the only thing that can be wrong here.
+/// The one obligation it moves to the caller is that the ISA has SSE2, which
+/// is asserted once above.
+#[target_feature(enable = "sse2")]
+fn collide_leaf_outcode_x4_sse2(lo: &[f32; 3], hi: &[f32; 3], v: F32s<'_, 12>) -> [u8; 4] {
+    #[cfg(target_arch = "x86")]
+    use core::arch::x86::{
+        _mm_add_epi32, _mm_castps_si128, _mm_cmplt_ps, _mm_cvtsi128_si32, _mm_packs_epi16,
+        _mm_packs_epi32, _mm_set_ps, _mm_set1_ps, _mm_setzero_si128, _mm_sub_epi32,
+    };
+    #[cfg(target_arch = "x86_64")]
+    use core::arch::x86_64::{
+        _mm_add_epi32, _mm_castps_si128, _mm_cmplt_ps, _mm_cvtsi128_si32, _mm_packs_epi16,
+        _mm_packs_epi32, _mm_set_ps, _mm_set1_ps, _mm_setzero_si128, _mm_sub_epi32,
+    };
+
+    // Transpose the four `C3Vector` into one register per axis.
+    let x = _mm_set_ps(v.at::<9>(), v.at::<6>(), v.at::<3>(), v.at::<0>());
+    let y = _mm_set_ps(v.at::<10>(), v.at::<7>(), v.at::<4>(), v.at::<1>());
+    let z = _mm_set_ps(v.at::<11>(), v.at::<8>(), v.at::<5>(), v.at::<2>());
+
+    // Bit 0x20: below the low x bound.
+    let mut neg = _mm_castps_si128(_mm_cmplt_ps(x, _mm_set1_ps(lo[0])));
+    // Bit 0x10: above the high x bound.
+    let above_x = _mm_castps_si128(_mm_cmplt_ps(_mm_set1_ps(hi[0]), x));
+    neg = _mm_add_epi32(_mm_add_epi32(neg, neg), above_x);
+    // Bit 0x08: below the low y bound.
+    let below_y = _mm_castps_si128(_mm_cmplt_ps(y, _mm_set1_ps(lo[1])));
+    neg = _mm_add_epi32(_mm_add_epi32(neg, neg), below_y);
+    // Bit 0x04: above the high y bound.
+    let above_y = _mm_castps_si128(_mm_cmplt_ps(_mm_set1_ps(hi[1]), y));
+    neg = _mm_add_epi32(_mm_add_epi32(neg, neg), above_y);
+    // Bit 0x02: below the low z bound.
+    let below_z = _mm_castps_si128(_mm_cmplt_ps(z, _mm_set1_ps(lo[2])));
+    neg = _mm_add_epi32(_mm_add_epi32(neg, neg), below_z);
+    // Bit 0x01: above the high z bound.
+    let above_z = _mm_castps_si128(_mm_cmplt_ps(_mm_set1_ps(hi[2]), z));
+    neg = _mm_add_epi32(_mm_add_epi32(neg, neg), above_z);
+
+    let code = _mm_sub_epi32(_mm_setzero_si128(), neg);
+    let words = _mm_packs_epi32(code, code);
+    let bytes = _mm_packs_epi16(words, words);
+    _mm_cvtsi128_si32(bytes).to_le_bytes()
+}
+
 #[cfg(test)]
 mod tests_collide_leaf_ray_triangle_mesh__6b88e0 {
-    use super::collide_leaf_ray_triangle_mesh__6b88e0 as outcode;
+    use super::{
+        collide_leaf_outcode_bounds as bounds, collide_leaf_outcode_x4 as outcode4,
+        collide_leaf_ray_triangle_mesh__6b88e0 as outcode,
+    };
 
     const A: [f32; 3] = [-1.0, -2.0, -3.0];
     const B: [f32; 3] = [1.0, 2.0, 3.0];
@@ -3594,6 +3710,56 @@ mod tests_collide_leaf_ray_triangle_mesh__6b88e0 {
         let a = [f32::NAN, -2.0, -3.0];
         assert_eq!(outcode(&a, &B, &[2.0, 0.0, 0.0]), 0x10);
         assert_eq!(outcode(&a, &B, &[-5.0, 0.0, 0.0]), 0);
+    }
+
+    /// The 4-lane form agrees with the scalar kernel lane for lane.
+    ///
+    /// This is the whole verification route for the vector path: the family
+    /// carries no differential table, so the scalar kernel above is the oracle.
+    /// The value pool is the set the two disagree on if a compare polarity, a
+    /// bit position or a lane order is wrong — signed zeroes (which compare
+    /// equal, so neither strict test fires), both infinities, NaN in a vertex
+    /// component and NaN in an endpoint (which must keep the pair unswapped),
+    /// and values that land exactly on a bound.
+    #[test]
+    fn four_lane_form_matches_the_scalar_kernel() {
+        const POOL: [f32; 10] = [
+            -3.0,
+            -1.0,
+            -0.0,
+            0.0,
+            1.0,
+            3.0,
+            f32::MIN_POSITIVE,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::NAN,
+        ];
+        // A cheap linear congruential walk over the pool: reproducible, and the
+        // point is coverage of the value classes rather than of the reals.
+        let mut state = 0x2545_f491_u32;
+        let mut pick = || {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            POOL[(state >> 13) as usize % POOL.len()]
+        };
+        for case in 0..8192 {
+            let a = [pick(), pick(), pick()];
+            let b = [pick(), pick(), pick()];
+            let mut block = [0.0_f32; 12];
+            for lane in &mut block {
+                *lane = pick();
+            }
+            let (lo, hi) = bounds(&a, &b);
+            let got = outcode4(&lo, &hi, (&block).into());
+            for (k, want) in got.iter().enumerate() {
+                let vert = [block[k * 3], block[k * 3 + 1], block[k * 3 + 2]];
+                assert_eq!(
+                    *want,
+                    outcode(&a, &b, &vert),
+                    "case {case} lane {k}: a={a:?} b={b:?} v={vert:?}"
+                );
+            }
+        }
     }
 }
 

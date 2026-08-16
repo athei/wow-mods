@@ -2164,12 +2164,13 @@ pub extern "fastcall" fn collide_line_triangle_indexed16__7c29f0(
         return 0;
     }
     // SAFETY: `p0` addresses the triangle's first vertex — 3 contiguous f32 within
-    // the caller's vertex array, indexed by a valid 16-bit triangle index.
-    let v0 = &unsafe { p0.cast::<[f32; 3]>().read_unaligned() };
+    // the caller's vertex array, indexed by a valid 16-bit triangle index, and
+    // this call is the only thing touching that array while the view is live.
+    let v0 = unsafe { wow_shared::F32s::new(p0) };
     // SAFETY: `p1` addresses the second vertex — 3 contiguous f32, as for `p0`.
-    let v1 = &unsafe { p1.cast::<[f32; 3]>().read_unaligned() };
+    let v1 = unsafe { wow_shared::F32s::new(p1) };
     // SAFETY: `p2` addresses the third vertex — 3 contiguous f32, as for `p0`.
-    let v2 = &unsafe { p2.cast::<[f32; 3]>().read_unaligned() };
+    let v2 = unsafe { wow_shared::F32s::new(p2) };
 
     match crate::math::collision::collide_line_triangle_indexed16__7c29f0(seg, v0, v1, v2, edge_tol)
     {
@@ -15203,15 +15204,44 @@ pub extern "thiscall" fn collide_leaf_ray_triangle_mesh__6b88e0(
     let vert_count_ptr = unsafe { leaf.add(0x6) };
     // SAFETY: `vert_count_ptr` is the initialized vertex count.
     let vert_count = usize::from(unsafe { vert_count_ptr.cast::<u16>().read() });
-    let mut outcodes = [0_u8; 452];
+    // Left uninitialized rather than zeroed: the fill below writes exactly
+    // `0..stored`, and the only reader (`code_of`) answers 0 for every index at
+    // or above `stored`, so no byte outside that range is ever observed. A
+    // zeroed declaration costs a 452-byte fill on every call for nothing.
+    let mut outcodes = [core::mem::MaybeUninit::<u8>::uninit(); 452];
     let stored = vert_count.min(outcodes.len());
-    for (i, code) in outcodes.iter_mut().enumerate().take(stored) {
+    let (lo, hi) = crate::math::collision::collide_leaf_outcode_bounds(seg_a, seg_b);
+    // Four vertices at a time; the vertex stride is 0xc, so a group is 12
+    // contiguous f32 and its four outcodes land as one dword store.
+    let grouped = stored & !3;
+    for i in (0..grouped).step_by(4) {
+        // SAFETY: `leaf+0x8 + i*0xc` starts four leaf vertices — 12 contiguous
+        // f32 within the leaf block (`i + 4 <= stored <= vert_count`).
+        let group_ptr = unsafe { leaf.add(0x8 + i * 0xc) };
+        // SAFETY: 12 f32 are readable at `group_ptr` per the bound above, and
+        // nothing writes the leaf vertex array while the view is live.
+        let group = unsafe { wow_shared::F32s::<12>::new(group_ptr.cast()) };
+        let codes = crate::math::collision::collide_leaf_outcode_x4(&lo, &hi, group);
+        // SAFETY: `i + 4 <= stored <= 452`, so byte `i` of the scratch buffer
+        // is in bounds and three more follow it.
+        let slot = unsafe { outcodes.as_mut_ptr().add(i) };
+        // SAFETY: four in-bounds bytes start at `slot` per the bound above, and
+        // `MaybeUninit<u8>` has `u8`'s layout.
+        unsafe { slot.cast::<[u8; 4]>().write_unaligned(codes) };
+    }
+    // The tail is the sub-slice rather than a `skip` over the whole buffer:
+    // `skip` carries its own state and reaches the first element through
+    // `nth`, which lands as a call on a path that runs at most three times.
+    for (n, code) in outcodes[grouped..stored].iter_mut().enumerate() {
+        let i = grouped + n;
         // SAFETY: `leaf+0x8 + i*0xc` addresses leaf vertex `i` — 3 contiguous
         // f32 within the leaf block (`i < vert_count`).
         let vert_ptr = unsafe { leaf.add(0x8 + i * 0xc) };
         // SAFETY: `vert_ptr` is a live, aligned leaf vertex.
         let vert = &unsafe { vert_ptr.cast::<[f32; 3]>().read_unaligned() };
-        *code = crate::math::collision::collide_leaf_ray_triangle_mesh__6b88e0(seg_a, seg_b, vert);
+        code.write(
+            crate::math::collision::collide_leaf_ray_triangle_mesh__6b88e0(seg_a, seg_b, vert),
+        );
     }
 
     // SAFETY: `leaf+0x18a4` is the in-bounds, aligned leaf triangle-count word.
@@ -15278,7 +15308,9 @@ pub extern "thiscall" fn collide_leaf_ray_triangle_mesh__6b88e0(
         let idx = unsafe { &*idx_ptr.cast::<[u16; 3]>() };
         let code_of = |k: u16| -> u8 {
             if usize::from(k) < stored {
-                outcodes[usize::from(k)]
+                // SAFETY: the guard admits only indices the fill loop above
+                // wrote, which is exactly `0..stored`.
+                unsafe { outcodes[usize::from(k)].assume_init() }
             } else {
                 0
             }
@@ -15288,16 +15320,18 @@ pub extern "thiscall" fn collide_leaf_ray_triangle_mesh__6b88e0(
         }
         // SAFETY: vertex `idx[0]` lives in the leaf vertex array (stride 0xc).
         let v0_ptr = unsafe { leaf.add(0x8 + usize::from(idx[0]) * 0xc) };
-        // SAFETY: `v0_ptr` is a live, aligned leaf vertex.
-        let v0 = &unsafe { v0_ptr.cast::<[f32; 3]>().read_unaligned() };
+        // SAFETY: `v0_ptr` is a live leaf vertex — 3 contiguous f32. The only
+        // writes this loop makes go to the visited ring and the shared flag
+        // byte, neither of which is inside the leaf vertex array.
+        let v0 = unsafe { wow_shared::F32s::new(v0_ptr.cast()) };
         // SAFETY: vertex `idx[1]` lives in the leaf vertex array (stride 0xc).
         let v1_ptr = unsafe { leaf.add(0x8 + usize::from(idx[1]) * 0xc) };
-        // SAFETY: `v1_ptr` is a live, aligned leaf vertex.
-        let v1 = &unsafe { v1_ptr.cast::<[f32; 3]>().read_unaligned() };
+        // SAFETY: `v1_ptr` is a live leaf vertex, as for `v0_ptr`.
+        let v1 = unsafe { wow_shared::F32s::new(v1_ptr.cast()) };
         // SAFETY: vertex `idx[2]` lives in the leaf vertex array (stride 0xc).
         let v2_ptr = unsafe { leaf.add(0x8 + usize::from(idx[2]) * 0xc) };
-        // SAFETY: `v2_ptr` is a live, aligned leaf vertex.
-        let v2 = &unsafe { v2_ptr.cast::<[f32; 3]>().read_unaligned() };
+        // SAFETY: `v2_ptr` is a live leaf vertex, as for `v0_ptr`.
+        let v2 = unsafe { wow_shared::F32s::new(v2_ptr.cast()) };
         let Some([t, _, _]) = crate::math::collision::collide_line_triangle_indexed16__7c29f0(
             ray, v0, v1, v2, EDGE_TOL,
         ) else {
