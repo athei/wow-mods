@@ -21,17 +21,23 @@ pub fn c_world_frustum__classify_point__686c20(planes: &[f32; 24], point: &[f32;
     let z = point[2];
 
     let mut out_mask: u32 = 0;
-    let mut last_bit: u32 = 0;
     for p in 0..6u32 {
         let base = (p as usize) * 4;
         let dist =
             planes[base] * x + planes[base + 1] * y + planes[base + 2] * z + planes[base + 3];
         if dist < FRUSTUM_PLANE_EPS {
-            let bit = 1u32 << p;
-            out_mask |= bit;
-            last_bit = bit;
+            out_mask |= 1u32 << p;
         }
     }
+    // `p` ascends, so the plane that failed last is the highest one that failed
+    // at all, and its bit is the top set bit of the finished mask. Reading it
+    // back off the mask costs one leading-zero count instead of carrying a
+    // second accumulator (and a lane extract per plane) through the loop.
+    let last_bit = if out_mask == 0 {
+        0
+    } else {
+        0x8000_0000u32 >> out_mask.leading_zeros()
+    };
     (last_bit, out_mask)
 }
 
@@ -96,6 +102,29 @@ mod tests_c_world_frustum__classify_point__686c20 {
             c_world_frustum__classify_point__686c20(&box_frustum(), &[10.5, 0.0, 0.0]);
         assert_eq!(mask, 1);
         assert_eq!(ret, 1);
+    }
+
+    /// Every one of the 64 outcodes returns the highest failing plane's bit.
+    ///
+    /// Each plane is made degenerate (`n = 0`) so its constant `d` alone decides
+    /// whether it fails, which is what makes all 64 masks reachable from a
+    /// single point. The per-plane carry the loop used to keep is the oracle.
+    #[test]
+    fn last_bit_is_the_top_set_bit_for_every_mask() {
+        for mask in 0..64u32 {
+            let mut planes = [0.0f32; 24];
+            let mut want: u32 = 0;
+            for p in 0..6u32 {
+                let fails = mask & (1 << p) != 0;
+                planes[p as usize * 4 + 3] = if fails { -1.0 } else { 1.0 };
+                if fails {
+                    want = 1 << p;
+                }
+            }
+            let (ret, got) = c_world_frustum__classify_point__686c20(&planes, &[0.0, 0.0, 0.0]);
+            assert_eq!(got, mask, "mask={mask:#04x}");
+            assert_eq!(ret, want, "mask={mask:#04x}");
+        }
     }
 }
 

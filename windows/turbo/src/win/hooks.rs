@@ -44280,6 +44280,33 @@ impl GxLightRec {
         // SAFETY: `off` is a stock-transcribed offset inside the live record.
         unsafe { self.0.wrapping_offset(off).cast::<u32>().read_unaligned() }
     }
+
+    /// Reads a contiguous run of `N` dwords starting at `off`.
+    ///
+    /// Every run read this way is one the dword-at-a-time form already read in
+    /// full, so widening the load reaches no byte outside the record.
+    fn rd_run<const N: usize>(self, off: isize) -> [u32; N] {
+        // SAFETY: `off` starts a stock-transcribed run of `N` dwords inside the
+        // live record.
+        unsafe {
+            self.0
+                .wrapping_offset(off)
+                .cast::<[u32; N]>()
+                .read_unaligned()
+        }
+    }
+}
+
+/// Writes a contiguous run of `N` dwords to an absolute host address.
+///
+/// The staging block is a fixed `.data` address in the host image while the
+/// light records live inside the heap-allocated `CGxDeviceD3d`, so the two
+/// cannot overlap and a run's load is free to be issued ahead of its store,
+/// which is what collapses each pair into one wide move. The store stays
+/// unaligned: `0xc0f4e4`, `0xc0f4f4` and `0xc0f504` are all 4 mod 16.
+fn wr_run_a<const N: usize>(addr: u32, v: [u32; N]) {
+    // SAFETY: a stock-transcribed writable run inside the host staging block.
+    unsafe { ((addr as usize) as *mut [u32; N]).write_unaligned(v) };
 }
 
 /// `CM2Scene::ApplyLightingState`.
@@ -44393,7 +44420,11 @@ pub extern "fastcall" fn cm2_scene__apply_lighting_state__5a1b60(device: *mut u8
             continue;
         }
 
-        // Stage the D3DLIGHT9 exactly as stock (dword-for-dword).
+        // Stage the D3DLIGHT9 exactly as stock. The three 16-byte colour runs
+        // and the 12-byte attenuation tail land on the same dwords they always
+        // did, in the same order, but move a run at a time: the tail stays 12
+        // bytes wide because a 16-byte store at `+0x54` would run four bytes
+        // past the end of the 0x60-byte block, at `0xc0f540`.
         if rec.rd32(-0x40) == 0x3f80_0000 {
             wr32a(STAGING, 1);
             wr32a(STAGING + 0x34, rec.rd32(-0x4c));
@@ -44405,23 +44436,12 @@ pub extern "fastcall" fn cm2_scene__apply_lighting_state__5a1b60(device: *mut u8
             wr32a(STAGING + 0x44, rec.rd32(-0x48));
             wr32a(STAGING + 0x48, rec.rd32(-0x44));
         }
-        wr32a(STAGING + 0x04, rec.rd32(-0x2c));
-        wr32a(STAGING + 0x08, rec.rd32(-0x28));
-        wr32a(STAGING + 0x0c, rec.rd32(-0x24));
-        wr32a(STAGING + 0x10, rec.rd32(-0x20));
-        wr32a(STAGING + 0x24, rec.rd32(-0x3c));
-        wr32a(STAGING + 0x28, rec.rd32(-0x38));
-        wr32a(STAGING + 0x2c, rec.rd32(-0x34));
-        wr32a(STAGING + 0x30, rec.rd32(-0x30));
-        wr32a(STAGING + 0x14, rec.rd32(-0x1c));
-        wr32a(STAGING + 0x18, rec.rd32(-0x18));
-        wr32a(STAGING + 0x1c, rec.rd32(-0x14));
-        wr32a(STAGING + 0x20, rec.rd32(-0x10));
+        wr_run_a(STAGING + 0x04, rec.rd_run::<4>(-0x2c));
+        wr_run_a(STAGING + 0x24, rec.rd_run::<4>(-0x3c));
+        wr_run_a(STAGING + 0x14, rec.rd_run::<4>(-0x1c));
         wr32a(STAGING + 0x4c, rd32a(0x0080_a1f4));
         wr32a(STAGING + 0x50, 0x3f80_0000);
-        wr32a(STAGING + 0x54, rec.rd32(-0xc));
-        wr32a(STAGING + 0x58, rec.rd32(-0x8));
-        wr32a(STAGING + 0x5c, rec.rd32(-0x4));
+        wr_run_a(STAGING + 0x54, rec.rd_run::<3>(-0xc));
 
         let Some((dev, vtbl)) = gx_backend_device(device) else {
             return;
