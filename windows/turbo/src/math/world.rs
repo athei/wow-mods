@@ -1569,10 +1569,15 @@ pub fn height_bucket__rasterize_cell_occluder__6c15d0(
     let row_offset = if row_far { 8 } else { 0 };
     let row_step = stride * 0x11;
     let mut row = [0i32; 9];
-    let mut val = row_offset;
+    // Same shape as the column loop above (cursor from zero, seed added at the
+    // store), because only that form gives each element an independent
+    // `acc + offset` the vectoriser can pack; stepping the stored value itself
+    // is a serial chain. The two forms agree elementwise, `row[i] = row_offset
+    // + i*row_step`, since i32 addition is associative.
+    let mut acc = 0i32;
     for slot in &mut row {
-        *slot = val;
-        val += row_step;
+        *slot = acc + row_offset;
+        acc += row_step;
     }
     (col, row)
 }
@@ -2589,13 +2594,51 @@ pub fn c_map_chunk_grid__query_radius__68b0d0(
     }
 }
 
+/// The eight `dy` lanes a cell's sub-grid can produce, and their squares.
+///
+/// `sub_col` only ever runs `0..8`, and `cell_y`, `sub_spacing` and `world[1]`
+/// are fixed for the whole cell, so the column term of the candidate kernel has
+/// eight values per cell rather than one per surviving sub-grid byte. Each lane
+/// is that kernel's `(cell_y - sub_col * sub_spacing) - world[1]` and its
+/// square, in that order, so the pair is bit-identical to what the per-candidate
+/// form computed, the `k = 0` lane included (where `0.0 * sub_spacing` keeps its
+/// sign) and `k = 1` (where `1.0 * sub_spacing` is exactly `sub_spacing`).
+pub fn query_radius_dy_lanes(cell_y: f32, sub_spacing: f32, world_y: f32) -> ([f32; 8], [f32; 8]) {
+    let dy: [f32; 8] = core::array::from_fn(|k| (cell_y - k as f32 * sub_spacing) - world_y);
+    let dy2: [f32; 8] = core::array::from_fn(|k| dy[k] * dy[k]);
+    (dy, dy2)
+}
+
+/// Offset vector and squared distance for a candidate whose `dy` lane is in hand.
+///
+/// `dy` is `[dy, dy*dy]` for this candidate's column, taken from
+/// `query_radius_dy_lanes`; `z` is the candidate's `[lo, hi]` Z extent averaged
+/// by `z_mid`. `dx`, `dz` and the `(dx*dx + dy*dy) + dz*dz` grouping are the
+/// scalar kernel's, unchanged. Returns `[dx, dy, dz, dist2]`.
+pub fn query_radius_candidate_dy(
+    cell_x: f32,
+    sub_row: i32,
+    sub_spacing: f32,
+    z: [f32; 2],
+    z_mid: f32,
+    world: &[f32; 3],
+    dy: [f32; 2],
+) -> [f32; 4] {
+    let dx = (cell_x - sub_row as f32 * sub_spacing) - world[0];
+    let dz = (z[1] + z[0]) * z_mid - world[2];
+    let dist2 = (dx * dx + dy[1]) + dz * dz;
+    [dx, dy[0], dz, dist2]
+}
+
 /// Offset vector and squared distance from a 16x16 sub-grid candidate to the query point.
 ///
 /// `cell_x`/`cell_y` are the cell's world base; `sub_row`/`sub_col` index the 8x8
 /// sub-grid at `sub_spacing`; `lo`/`hi` are the candidate's Z extent averaged by
-/// `z_mid`. Returns `[dx, dy, dz, dist2]`.
+/// `z_mid`. Returns `[dx, dy, dz, dist2]`. The shipped body runs the lane form
+/// above; this stays as its test oracle.
 // The nine values are what the enclosing routine passes positionally at the
 // candidate site; the count is a fact about that call, not a design choice.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub fn query_radius_candidate(
     cell_x: f32,
@@ -2617,7 +2660,10 @@ pub fn query_radius_candidate(
 
 #[cfg(test)]
 mod tests_c_map_chunk_grid__query_radius__68b0d0 {
-    use super::{c_map_chunk_grid__query_radius__68b0d0 as rect, query_radius_candidate};
+    use super::{
+        c_map_chunk_grid__query_radius__68b0d0 as rect, query_radius_candidate,
+        query_radius_candidate_dy, query_radius_dy_lanes,
+    };
 
     const ORIGIN: f32 = 17066.666;
     // Written as the decimal expansion of the constant the client stores, so it
@@ -2681,6 +2727,56 @@ mod tests_c_map_chunk_grid__query_radius__68b0d0 {
         let v = query_radius_candidate(0.0, 0.0, 1, 2, SUB_SPACING, 0.0, 0.0, Z_MID, &world);
         assert_eq!(v[0], -SUB_SPACING);
         assert_eq!(v[1], -2.0 * SUB_SPACING);
+    }
+
+    /// The lane form answers the scalar candidate kernel bit for bit.
+    ///
+    /// Sweeps every `sub_row`/`sub_col` of the sub-grid against cell bases,
+    /// spacings and query points that put the column term either side of zero,
+    /// and compares all four returned floats by bit pattern rather than value,
+    /// so a swapped signed zero would fail too.
+    #[test]
+    fn dy_lanes_match_the_scalar_candidate() {
+        const CELLS: [(f32, f32); 3] = [(0.0, 0.0), (17066.666, -533.333), (-1.5, 2.25)];
+        const SPACINGS: [f32; 3] = [SUB_SPACING, 0.0, -3.25];
+        const POINTS: [[f32; 3]; 3] =
+            [[0.0, 0.0, 0.0], [12.5, -7.75, 3.0], [-1000.0, 1000.0, -0.5]];
+        const Z: [(f32, f32); 2] = [(0.0, 0.0), (-4.5, 11.25)];
+
+        for &(cell_x, cell_y) in &CELLS {
+            for &spacing in &SPACINGS {
+                for world in &POINTS {
+                    let (dy, dy2) = query_radius_dy_lanes(cell_y, spacing, world[1]);
+                    for &(lo, hi) in &Z {
+                        for sub_row in 0..8i32 {
+                            for sub_col in 0..8i32 {
+                                let lane = sub_col as usize;
+                                let want = query_radius_candidate(
+                                    cell_x, cell_y, sub_row, sub_col, spacing, lo, hi, Z_MID, world,
+                                );
+                                let got = query_radius_candidate_dy(
+                                    cell_x,
+                                    sub_row,
+                                    spacing,
+                                    [lo, hi],
+                                    Z_MID,
+                                    world,
+                                    [dy[lane], dy2[lane]],
+                                );
+                                for (w, g) in want.iter().zip(got.iter()) {
+                                    assert_eq!(
+                                        w.to_bits(),
+                                        g.to_bits(),
+                                        "cell ({cell_x}, {cell_y}) spacing {spacing} \
+                                         world {world:?} z ({lo}, {hi}) sub ({sub_row}, {sub_col})"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -6677,13 +6773,19 @@ mod tests_c_map_chunk__build_vertices_and_bounds__6b0e50 {
 /// (unordered takes the skip arm in all three boxes), so plain ordered `<=`
 /// reproduces each one exactly.
 ///
+/// All four gate sites are one AABB-vs-AABB overlap with ordered `<=`, so the
+/// shipped body runs [`map_chunk_box_overlaps_view4`] at each of them; these
+/// three scalar transcriptions stay as its test oracles.
+///
 /// Near-box half-gate: `viewMin[i] <= objMax[i]` per axis (the other half is
 /// the already-native `C3Vector__GreaterEqualAll(viewMax, objMin)`).
+#[cfg(test)]
 pub fn map_obj_view_gate__698720(view_min: &[f32; 3], obj_max: &[f32; 3]) -> bool {
     view_min[0] <= obj_max[0] && view_min[1] <= obj_max[1] && view_min[2] <= obj_max[2]
 }
 
 /// Tight-box full test (6 compares in stock order: the three max-side, then the three min-side).
+#[cfg(test)]
 pub fn map_obj_tight_gate__698720(
     tight: &[f32; 6],
     node_min: &[f32; 3],
@@ -6698,6 +6800,7 @@ pub fn map_obj_tight_gate__698720(
 }
 
 /// Flagged far-pass test: `defMin[i] <= farHi[i]` then `farLo[i] <= defMax[i]`.
+#[cfg(test)]
 pub fn map_obj_far_gate__698720(
     far_lo: &[f32; 3],
     far_hi: &[f32; 3],
@@ -6714,7 +6817,11 @@ pub fn map_obj_far_gate__698720(
 
 #[cfg(test)]
 mod tests_map_obj_gates__698720 {
-    use super::{map_obj_far_gate__698720, map_obj_tight_gate__698720, map_obj_view_gate__698720};
+    use super::{
+        map_chunk_box_overlaps_view4, map_obj_far_gate__698720, map_obj_tight_gate__698720,
+        map_obj_view_gate__698720,
+    };
+    use crate::math::vector::c3_vector__greater_equal_all__699330;
 
     /// Overlap passes, separation fails, boundary equality PASSES.
     ///
@@ -6770,6 +6877,58 @@ mod tests_map_obj_gates__698720 {
             &[1.0; 3],
             &[2.0, f32::NAN, 2.0]
         ));
+    }
+
+    /// The packed kernel the shipped body runs answers every oracle exactly.
+    ///
+    /// All four gate sites are the same predicate. `map_chunk_box_overlaps_view4`
+    /// tests `lo[i] <= view_hi[i] && view_lo[i] <= hi[i]`, so the near gate
+    /// routes as `(def_min, def_max, near_min, near_max)`, the tight gate as
+    /// `(tight_lo, tight_hi, node_min, node_max)` and the far gate as
+    /// `(def_min, def_max, far_lo, far_hi)`. Lane 3 is masked off by the
+    /// `& 0b111`, so the sweep fills it with values the adapter would never pad
+    /// with (a NaN among them) and still demands the oracle's answer.
+    #[test]
+    fn packed_kernel_answers_every_oracle() {
+        const AXIS: [f32; 5] = [-1.0, 0.0, 1.0, 2.0, f32::NAN];
+        const PAD: [f32; 4] = [0.0, -3.0, 7.0, f32::NAN];
+
+        let mut boxes: Vec<([f32; 3], [f32; 3])> = Vec::new();
+        for &a in &AXIS {
+            for &b in &AXIS {
+                boxes.push(([a, 0.0, -1.0], [b, 1.0, 3.0]));
+                boxes.push(([0.0, a, 1.0], [2.0, b, 4.0]));
+                boxes.push(([-1.0, 2.0, a], [1.0, 3.0, b]));
+            }
+        }
+
+        for (i, (lo, hi)) in boxes.iter().enumerate() {
+            for (j, (vlo, vhi)) in boxes.iter().enumerate() {
+                let lo4 = [lo[0], lo[1], lo[2], PAD[i % PAD.len()]];
+                let hi4 = [hi[0], hi[1], hi[2], PAD[(i + 1) % PAD.len()]];
+                let vlo4 = [vlo[0], vlo[1], vlo[2], PAD[j % PAD.len()]];
+                let vhi4 = [vhi[0], vhi[1], vhi[2], PAD[(j + 2) % PAD.len()]];
+                let packed = map_chunk_box_overlaps_view4(lo4, hi4, vlo4, vhi4);
+                // Near-box gate: the half-gate plus its `GreaterEqualAll` partner.
+                assert_eq!(
+                    packed,
+                    map_obj_view_gate__698720(vlo, hi)
+                        && c3_vector__greater_equal_all__699330(vhi, lo) != 0,
+                    "near gate {lo:?} {hi:?} vs {vlo:?} {vhi:?}"
+                );
+                assert_eq!(
+                    packed,
+                    map_obj_far_gate__698720(vlo, vhi, lo, hi),
+                    "far gate {lo:?} {hi:?} vs {vlo:?} {vhi:?}"
+                );
+                let tight = [lo[0], lo[1], lo[2], hi[0], hi[1], hi[2]];
+                assert_eq!(
+                    packed,
+                    map_obj_tight_gate__698720(&tight, vlo, vhi),
+                    "tight gate {tight:?} vs {vlo:?} {vhi:?}"
+                );
+            }
+        }
     }
 }
 

@@ -43,8 +43,16 @@ impl Face {
     }
 
     /// The line's pixel width and cell height at `px`, without rasterizing.
+    ///
+    /// `kern` and `h_advance` each re-derive the scale factor `px / (ascender -
+    /// descender)` from a fresh pair of metric-table reads, so it is taken once
+    /// for the line and the `*_unscaled` metrics are scaled here. `sf *
+    /// unscaled` is the library's own operand order, so every product keeps its
+    /// bits. The cell height stays `height()`, which is the pixel size by
+    /// definition and must not be re-derived through the factor.
     pub fn measure(&self, text: &str, px: f32) -> (i32, i32) {
         let scaled = self.font.as_scaled(px);
+        let sf = scaled.h_scale_factor();
         let mut pen = 0.0f32;
         let mut previous = None;
         for c in text.chars() {
@@ -53,9 +61,9 @@ impl Face {
             }
             let id = self.font.glyph_id(c);
             if let Some(prev) = previous {
-                pen += scaled.kern(prev, id);
+                pen += sf * self.font.kern_unscaled(prev, id);
             }
-            pen += scaled.h_advance(id);
+            pen += sf * self.font.h_advance_unscaled(id);
             previous = Some(id);
         }
         (ceil_px(pen), ceil_px(scaled.height()))
@@ -66,6 +74,8 @@ impl Face {
     /// Glyphs overhanging the advance box (italic tails, tight kerns) are
     /// clipped by one padding pixel each side rather than measured exactly;
     /// the shadow offset under every drawn line hides more than that.
+    ///
+    /// The scale factor is taken once for the line, as in `measure`.
     pub fn rasterize(&self, text: &str, px: f32) -> Raster {
         let scaled = self.font.as_scaled(px);
         let (text_w, text_h) = self.measure(text, px);
@@ -75,6 +85,7 @@ impl Face {
         let mut coverage = vec![0u8; (width as usize) * (height as usize)];
 
         let ascent = scaled.ascent();
+        let sf = scaled.h_scale_factor();
         let mut pen = to_px_f32(pad);
         let mut previous = None;
         for c in text.chars() {
@@ -83,11 +94,11 @@ impl Face {
             }
             let id = self.font.glyph_id(c);
             if let Some(prev) = previous {
-                pen += scaled.kern(prev, id);
+                pen += sf * self.font.kern_unscaled(prev, id);
             }
             let glyph =
                 id.with_scale_and_position(px, ab_glyph::point(pen, ascent + to_px_f32(pad)));
-            pen += scaled.h_advance(id);
+            pen += sf * self.font.h_advance_unscaled(id);
             previous = Some(id);
 
             let Some(outlined) = self.font.outline_glyph(glyph) else {
@@ -222,6 +233,36 @@ mod tests {
         );
         // Something was actually inked.
         assert!(raster.coverage.iter().any(|&c| c > 0));
+    }
+
+    /// The hoisted factor reproduces the per-call accessors bit for bit.
+    ///
+    /// `kern`/`h_advance` are `h_scale_factor() * unscaled`, so taking the
+    /// factor once for the line and writing the product in the same operand
+    /// order has to give the identical `f32` for every glyph and pair.
+    #[test]
+    fn hoisted_scale_factor_matches_the_accessors() {
+        let Some(face) = system_face() else {
+            return;
+        };
+        let scaled = face.font.as_scaled(36.0f32);
+        let sf = scaled.h_scale_factor();
+        let ids: Vec<_> = "1234 critAVWy."
+            .chars()
+            .map(|c| face.font.glyph_id(c))
+            .collect();
+        for &id in &ids {
+            assert_eq!(
+                (sf * face.font.h_advance_unscaled(id)).to_bits(),
+                scaled.h_advance(id).to_bits()
+            );
+            for &prev in &ids {
+                assert_eq!(
+                    (sf * face.font.kern_unscaled(prev, id)).to_bits(),
+                    scaled.kern(prev, id).to_bits()
+                );
+            }
+        }
     }
 
     #[test]

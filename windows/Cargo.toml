@@ -82,7 +82,7 @@ too_many_lines = "allow"                # 69
 # has no hardware FMA, so `mul_add` lowers to an `fmaf` libcall. (The AVX2
 # native-Windows variant does have FMA, which is why the faithfulness argument
 # is the one that carries this and not the ISA.)
-suboptimal_flops = "allow"              # 1189
+suboptimal_flops = "allow"              # 1197
 # Stricter unsafe discipline.
 missing_safety_doc = "warn"
 not_unsafe_ptr_arg_deref = "warn"
@@ -126,9 +126,9 @@ many_single_char_names = "allow"        # 42
 # it is a crash. Float comparison is exact on purpose: the differential harness
 # compares bit patterns.
 cast_possible_truncation = "allow"      # 397
-cast_sign_loss = "allow"                # 240
+cast_sign_loss = "allow"                # 242
 cast_possible_wrap = "allow"            # 102
-cast_precision_loss = "allow"           # 125
+cast_precision_loss = "allow"           # 127
 cast_lossless = "allow"                 # 60
 float_cmp = "allow"                     # 43
 

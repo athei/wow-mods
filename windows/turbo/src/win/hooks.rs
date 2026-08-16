@@ -13426,6 +13426,10 @@ pub extern "thiscall" fn cm2_model__build_emitter_transform__7106c0(
 /// per-candidate squared distance are the pure kernel; the grid/list/sub-grid
 /// traversal and the global grid constants are here. Returns the reference's
 /// leftover scalar (`0` for a non-empty row span).
+///
+/// The candidate's column term depends only on `sub_col` and the cell, so its
+/// eight lanes are computed once per cell rather than once per surviving
+/// sub-grid byte; the values are the scalar kernel's, bit for bit.
 pub extern "thiscall" fn c_map_chunk_grid__query_radius__68b0d0(
     this: *mut core::ffi::c_void,
     world_pos: *mut f32,
@@ -13479,8 +13483,15 @@ pub extern "thiscall" fn c_map_chunk_grid__query_radius__68b0d0(
         bias,
     );
 
-    for row in rect.row_lo..=rect.row_hi {
-        for col in rect.col_lo..=rect.col_hi {
+    // Half-open bounds: an inclusive range carries an exhausted flag through
+    // every iteration of both loops, a counted one does not. `row_hi`/`col_hi`
+    // are capped at 15 by the rect kernel, so the `+ 1` cannot overflow under
+    // any profile, and `lo..hi + 1` enumerates exactly what `lo..=hi` did,
+    // empty span included.
+    let row_end = rect.row_hi + 1;
+    let col_end = rect.col_hi + 1;
+    for row in rect.row_lo..row_end {
+        for col in rect.col_lo..col_end {
             let cell_index = (row * 16 + col) as usize;
             // SAFETY: `this+0x278 + cell_index*4` is in bounds (cell_index < 256).
             let cell_slot = unsafe { this.add(0x278 + cell_index * 4) };
@@ -13493,6 +13504,12 @@ pub extern "thiscall" fn c_map_chunk_grid__query_radius__68b0d0(
             let base_slot = unsafe { cell.add(0x6c) };
             // SAFETY: `base_slot` is the live cell's X/Y world base.
             let cell_base = &unsafe { base_slot.cast::<[f32; 2]>().read_unaligned() };
+            // The candidate site's column term has eight values per cell, one
+            // per `sub_col`, and nothing below writes the cell base, the
+            // spacing or the query point. Computed once here instead of once
+            // per surviving sub-grid byte.
+            let (dy, dy2) =
+                crate::math::world::query_radius_dy_lanes(cell_base[1], sub_spacing, world[1]);
             // SAFETY: `cell+0x118` addresses the 4-entry object-pointer list.
             let list_slot = unsafe { cell.add(0x118) };
             // SAFETY: `list_slot` addresses 4 contiguous object pointers.
@@ -13528,16 +13545,15 @@ pub extern "thiscall" fn c_map_chunk_grid__query_radius__68b0d0(
                         let flag_ptr = unsafe { flags_out.add(bucket) };
                         // SAFETY: `flag_ptr` is a writable bucket flag slot.
                         unsafe { flag_ptr.write(1) };
-                        let cand = crate::math::world::query_radius_candidate(
+                        let lane = sub_col as usize;
+                        let cand = crate::math::world::query_radius_candidate_dy(
                             cell_base[0],
-                            cell_base[1],
                             sub_row,
-                            sub_col,
                             sub_spacing,
-                            z_lohi[0],
-                            z_lohi[1],
+                            *z_lohi,
                             z_mid,
                             world,
+                            [dy[lane], dy2[lane]],
                         );
                         // SAFETY: `dists_out + bucket` is in bounds (bucket < 15).
                         let dist_ptr = unsafe { dists_out.add(bucket) };
@@ -39247,21 +39263,25 @@ pub extern "thiscall" fn sky_dome__compute_vertex_colors__6d0f50(dome: *mut core
 /// bounds init on pass), walks its group list culling and loading groups
 /// (tight-box gates the load kick; lights/doodads created per flag bits), and
 /// optionally re-inserts flagged defs overlapping the far box into the depth
-/// bucket. Every AABB compare CULLS on NaN (kernels in math/world.rs);
-/// `GreaterEqualAll` runs as native Rust; all nine stateful callees are
-/// delegated by VA.
+/// bucket. Every AABB compare CULLS on NaN (kernels in math/world.rs); all nine
+/// stateful callees are delegated by VA.
+///
+/// All four box gates are one predicate, AABB-vs-AABB overlap with ordered
+/// `<=`, so each runs the 4-lane `map_chunk_box_overlaps_view4`, including the
+/// near-box half that stock split across `C3Vector__GreaterEqualAll`. The
+/// packed form reads all six operand triples unconditionally where the stock
+/// compare chain short-circuited; the booleans are identical on every input
+/// (see the kernel's doc and the oracle sweep beside it).
 pub extern "fastcall" fn c_map__update_map_objs__698720(enable_flagged_pass: u32) {
     const BASE: usize = crate::win::EXPECTED_IMAGE_BASE;
     const DEF_LIST_HEAD: *const u32 = (BASE + 0x8a_7da4) as *const u32;
     const DEF_LIST_BASE: *const u32 = (BASE + 0x8a_7d9c) as *const u32;
-    /// Near view box: min xyz @0xc63240, max xyz @0xc6324c.
-    const NEAR_MIN: *const [f32; 3] = (BASE + 0x86_3240) as *const [f32; 3];
-    const NEAR_MAX: *const [f32; 3] = (BASE + 0x86_324c) as *const [f32; 3];
+    /// Near view box: 6 f32 (min xyz @0xc63240, max xyz @0xc6324c).
+    const NEAR_BOX: *const [f32; 6] = (BASE + 0x86_3240) as *const [f32; 6];
     /// Tight box: 6 f32 (min xyz, max xyz) @0xc62520.
     const TIGHT_BOX: *const [f32; 6] = (BASE + 0x86_2520) as *const [f32; 6];
-    /// Far/flagged box: lo xyz @0xc7cb5c, hi xyz @0xc7cb68.
-    const FAR_LO: *const [f32; 3] = (BASE + 0x87_cb5c) as *const [f32; 3];
-    const FAR_HI: *const [f32; 3] = (BASE + 0x87_cb68) as *const [f32; 3];
+    /// Far/flagged box: 6 f32 (lo xyz @0xc7cb5c, hi xyz @0xc7cb68).
+    const FAR_BOX: *const [f32; 6] = (BASE + 0x87_cb5c) as *const [f32; 6];
     const DRAIN_ASYNC_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x2a_4a50;
     const INIT_BOUNDS_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x29_8a30;
     const GET_LOADED_GROUP_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x2a_4a00;
@@ -39271,10 +39291,6 @@ pub extern "fastcall" fn c_map__update_map_objs__698720(enable_flagged_pass: u32
     const CREATE_DOODADS_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x29_5aa0;
     const FREE_DOODADS_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x2a_8730;
     const REINSERT_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x28_17c0;
-
-    use crate::math::world::{
-        map_obj_far_gate__698720, map_obj_tight_gate__698720, map_obj_view_gate__698720,
-    };
 
     type DrainAsyncFn = extern "thiscall" fn(*mut u8);
     // SAFETY: fixed code VA of CMapObj__DrainAsyncList_1d0 (stock).
@@ -39304,15 +39320,23 @@ pub extern "fastcall" fn c_map__update_map_objs__698720(enable_flagged_pass: u32
     let reinsert: ReinsertFn = unsafe { core::mem::transmute(REINSERT_VA) };
 
     // SAFETY: fixed global view boxes (engine-owned, stable this frame).
-    let near_min = unsafe { NEAR_MIN.read_unaligned() };
+    let near_box = unsafe { NEAR_BOX.read_unaligned() };
     // SAFETY: see above.
-    let near_max = unsafe { NEAR_MAX.read_unaligned() };
+    let tight_box = unsafe { TIGHT_BOX.read_unaligned() };
     // SAFETY: see above.
-    let tight = unsafe { TIGHT_BOX.read_unaligned() };
-    // SAFETY: see above.
-    let far_lo = unsafe { FAR_LO.read_unaligned() };
-    // SAFETY: see above.
-    let far_hi = unsafe { FAR_HI.read_unaligned() };
+    let far_box = unsafe { FAR_BOX.read_unaligned() };
+
+    // The globals keep their declared 6-float width and pad lane 3 here rather
+    // than widening the guest read: each hi corner ends its block, so a 4-lane
+    // load off 0xc6324c, 0xc6252c or 0xc7cb68 would reach 0xc63258, 0xc62538 or
+    // 0xc7cb74, one dword past. Padding costs nothing, since the kernel masks
+    // lane 3 off.
+    let corners = |b: &[f32; 6]| -> ([f32; 4], [f32; 4]) {
+        ([b[0], b[1], b[2], 0.0], [b[3], b[4], b[5], 0.0])
+    };
+    let (near_lo, near_hi) = corners(&near_box);
+    let (tight_lo, tight_hi) = corners(&tight_box);
+    let (far_lo, far_hi) = corners(&far_box);
 
     let valid = |h: u32| -> bool { (h & 1) == 0 && h != 0 };
 
@@ -39324,18 +39348,20 @@ pub extern "fastcall" fn c_map__update_map_objs__698720(enable_flagged_pass: u32
         let p_owner = unsafe { def.add(0x118) };
         // SAFETY: in-bounds pointer dword of the def (stock derefs blindly).
         let owner = unsafe { p_owner.cast::<*mut u8>().read_unaligned() };
-        // SAFETY: `def+0x44`/`+0x50` are the def AABB min/max vec3s.
+        // SAFETY: `def+0x44`/`+0x50` are the def AABB min/max vec3s. The 4-lane
+        // reads take one dword past each: `def+0x50` is the max corner itself,
+        // and `def+0x5c` is well inside the def (whose +0x64, +0x7c, +0x118,
+        // +0x130 and +0x138 fields the routine goes on to read). Lane 3 is
+        // masked off by the kernel.
         let p_def_min = unsafe { def.add(0x44) };
         // SAFETY: in-bounds AABB read (see above).
-        let def_min = unsafe { p_def_min.cast::<[f32; 3]>().read_unaligned() };
+        let def_min = unsafe { p_def_min.cast::<[f32; 4]>().read_unaligned() };
         // SAFETY: in-bounds AABB read (see above).
         let p_def_max = unsafe { def.add(0x50) };
         // SAFETY: in-bounds AABB read (see above).
-        let def_max = unsafe { p_def_max.cast::<[f32; 3]>().read_unaligned() };
+        let def_max = unsafe { p_def_max.cast::<[f32; 4]>().read_unaligned() };
 
-        if map_obj_view_gate__698720(&near_min, &def_max)
-            && crate::math::vector::c3_vector__greater_equal_all__699330(&near_max, &def_min) != 0
-        {
+        if crate::math::world::map_chunk_box_overlaps_view4(def_min, def_max, near_lo, near_hi) {
             // Readiness spin: pump the async list until +0x1d4 reports ready
             // (stock spins identically; the drain unlinks completed entries).
             loop {
@@ -39370,19 +39396,22 @@ pub extern "fastcall" fn c_map__update_map_objs__698720(enable_flagged_pass: u32
             // SAFETY: in-bounds dword of the node.
             let group_idx = unsafe { p_idx.cast::<u32>().read_unaligned() };
             let group = get_loaded_group(owner, group_idx, 1);
-            // SAFETY: `node+0x44`/`+0x50` are the node AABB min/max vec3s.
+            // SAFETY: `node+0x44`/`+0x50` are the node AABB min/max vec3s. The
+            // 4-lane reads take one dword past each: `node+0x50` is the max
+            // corner itself, and `node+0x5c` is well inside the node (whose
+            // +0x7c field the routine read above). Lane 3 is masked off by the
+            // kernel.
             let p_node_min = unsafe { node.add(0x44) };
             // SAFETY: in-bounds AABB read (see above).
-            let node_min = unsafe { p_node_min.cast::<[f32; 3]>().read_unaligned() };
+            let node_min = unsafe { p_node_min.cast::<[f32; 4]>().read_unaligned() };
             // SAFETY: in-bounds AABB read (see above).
             let p_node_max = unsafe { node.add(0x50) };
             // SAFETY: in-bounds AABB read (see above).
-            let node_max = unsafe { p_node_max.cast::<[f32; 3]>().read_unaligned() };
+            let node_max = unsafe { p_node_max.cast::<[f32; 4]>().read_unaligned() };
 
-            if map_obj_view_gate__698720(&near_min, &node_max)
-                && crate::math::vector::c3_vector__greater_equal_all__699330(&near_max, &node_min)
-                    != 0
-            {
+            if crate::math::world::map_chunk_box_overlaps_view4(
+                node_min, node_max, near_lo, near_hi,
+            ) {
                 // SAFETY: `group+0x15c` is the visibility-fade f32 slot;
                 // stock stores 30.0 (0x41f00000) unconditionally here.
                 let p_fade = unsafe { group.add(0x15c) };
@@ -39399,7 +39428,9 @@ pub extern "fastcall" fn c_map__update_map_objs__698720(enable_flagged_pass: u32
                     if unsafe { p_pending.cast::<u32>().read_unaligned() } == 0 {
                         forward(owner, group_idx);
                     }
-                    if map_obj_tight_gate__698720(&tight, &node_min, &node_max) {
+                    if crate::math::world::map_chunk_box_overlaps_view4(
+                        tight_lo, tight_hi, node_min, node_max,
+                    ) {
                         drain_group(owner, group_idx);
                     }
                     // SAFETY: re-read the loaded byte after the load kick.
@@ -39434,7 +39465,9 @@ pub extern "fastcall" fn c_map__update_map_objs__698720(enable_flagged_pass: u32
             // SAFETY: in-bounds byte of the def.
             let def_flags = unsafe { p_flags.read() };
             if def_flags & 0x80 != 0
-                && map_obj_far_gate__698720(&far_lo, &far_hi, &def_min, &def_max)
+                && crate::math::world::map_chunk_box_overlaps_view4(
+                    def_min, def_max, far_lo, far_hi,
+                )
             {
                 reinsert(def_h);
             }
