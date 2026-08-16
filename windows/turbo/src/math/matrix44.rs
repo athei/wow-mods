@@ -3137,6 +3137,17 @@ fn minor3_narrowed(
     ))
 }
 
+/// A 16-float 4×4 matrix returned at 16-byte alignment.
+///
+/// `[f32; 16]` is align-4, so a caller's return slot for one lands wherever the
+/// frame has room, which in `C44Matrix::InverseScaledByDet` (0x7bd6c0) is 4 mod
+/// 16, making all four 16-byte reads of the adjugate unaligned. The alignment is
+/// the whole point of the newtype: it moves the slot to a 16-byte boundary, so
+/// the kernel's stores and the caller's reads are aligned moves. It holds the
+/// same sixteen floats in the same order.
+#[repr(align(16))]
+pub struct M4(pub [f32; 16]);
+
 /// `C44Matrix::Adjugate` — 4×4 adjugate (transpose of the cofactor matrix).
 ///
 /// The numerator of the inverse. The original evaluates the sixteen 3×3 minors
@@ -3149,14 +3160,14 @@ fn minor3_narrowed(
 /// stock negates the value before the `fstp` rounds it to f32, and
 /// negation is an exact sign-bit flip that commutes with rounding, so `-det(..)`
 /// is bit-identical. Input/output are row-major 16-float matrices.
-pub fn c44_matrix__adjugate__7bd390(src: &[f32; 16]) -> [f32; 16] {
+pub fn c44_matrix__adjugate__7bd390(src: &[f32; 16]) -> M4 {
     let s = src;
     // Unlike the 4x4 determinant, which keeps its minors at register width and
     // never stores the last term, every slot here reaches an `f32` element of
     // the output, so each minor narrows at its own store. The negations stay
     // outside the narrowing: a sign flip is exact and commutes with rounding.
     let det = minor3_narrowed;
-    [
+    M4([
         // out[0]  = +minor(rows 1,2,3 / cols 1,2,3)
         det(s[5], s[6], s[7], s[9], s[10], s[11], s[13], s[14], s[15]),
         // out[1]  = -minor(rows 0,2,3 / cols 1,2,3)
@@ -3189,7 +3200,7 @@ pub fn c44_matrix__adjugate__7bd390(src: &[f32; 16]) -> [f32; 16] {
         -det(s[0], s[1], s[2], s[4], s[5], s[6], s[12], s[13], s[14]),
         // out[15] = +minor(rows 0,1,2 / cols 0,1,2)
         det(s[0], s[1], s[2], s[4], s[5], s[6], s[8], s[9], s[10]),
-    ]
+    ])
 }
 
 #[cfg(test)]
@@ -3269,7 +3280,7 @@ mod tests_c44_matrix__adjugate__7bd390 {
         // adj(I) == I numerically. The eight negated cofactors of a zero minor
         // produce -0.0 (faithful: stock's FCHS of a 0 determinant), so compare by
         // value (-0.0 == 0.0), not by raw bits.
-        let a = adjugate(&IDENTITY);
+        let a = adjugate(&IDENTITY).0;
         for i in 0..16 {
             assert_eq!(a[i], IDENTITY[i], "idx {i}");
         }
@@ -3283,7 +3294,7 @@ mod tests_c44_matrix__adjugate__7bd390 {
             0.0, 2.0, 5.0, -1.0, //
             -3.0, 1.0, 2.0, 4.0,
         ];
-        let got = adjugate(&m);
+        let got = adjugate(&m).0;
         let want = adjugate_ref(&m);
         for i in 0..16 {
             assert!(
@@ -3303,7 +3314,7 @@ mod tests_c44_matrix__adjugate__7bd390 {
             -2.0, 1.0, 4.0, 0.0, //
             1.0, -1.0, 2.0, 3.0,
         ];
-        let adj = adjugate(&m);
+        let adj = adjugate(&m).0;
         let prod = mul4(&m, &adj);
         let d = det4(&m);
         let id_scaled: [f32; 16] = {
@@ -3335,7 +3346,7 @@ mod tests_c44_matrix__adjugate__7bd390 {
             2.0, 0.0, 3.0, -1.0, //
             1.0, -3.0, 0.0, 2.0,
         ];
-        let got = adjugate(&m);
+        let got = adjugate(&m).0;
         let want = adjugate_ref(&m);
         for i in 0..16 {
             // Same sign in every slot (the load-bearing property of the layout).
@@ -3484,7 +3495,7 @@ mod tests_c44_matrix__determinant__7bcf90 {
 pub fn c44_matrix__inverse_scaled_by_det__7bd6c0(src: &[f32; 16], determinant: f32) -> [f32; 16] {
     let inv_det = 1.0f32 / determinant;
     let adj = c44_matrix__adjugate__7bd390(src);
-    c44_matrix__multiply_scalar__7bc8e0(&adj, inv_det)
+    c44_matrix__multiply_scalar__7bc8e0(&adj.0, inv_det)
 }
 
 #[cfg(test)]

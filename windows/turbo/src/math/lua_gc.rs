@@ -68,16 +68,17 @@ pub unsafe fn sweep_list(
     while !cur.is_null() {
         // SAFETY: `cur` is a live node of the caller's list.
         let next = unsafe { (*cur).next };
-        if !next.is_null() {
-            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-            {
-                #[cfg(target_arch = "x86")]
-                use core::arch::x86::{_MM_HINT_T0, _mm_prefetch};
-                #[cfg(target_arch = "x86_64")]
-                use core::arch::x86_64::{_MM_HINT_T0, _mm_prefetch};
-                // SAFETY: prefetch has no memory effects; any address is fine.
-                unsafe { _mm_prefetch(next.cast::<i8>(), _MM_HINT_T0) };
-            }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            #[cfg(target_arch = "x86")]
+            use core::arch::x86::{_MM_HINT_T0, _mm_prefetch};
+            #[cfg(target_arch = "x86_64")]
+            use core::arch::x86_64::{_MM_HINT_T0, _mm_prefetch};
+            // SAFETY: a prefetch performs no architectural access, and an
+            // operand that is null or untranslatable is a no-op that cannot
+            // fault or set flags, so the last node's null `next` needs no
+            // guard; the compare and branch that guarded it leave the walk.
+            unsafe { _mm_prefetch(next.cast::<i8>(), _MM_HINT_T0) };
         }
         // SAFETY: `cur` is a live node; the mark byte is at header offset 5.
         let marked = unsafe { (*cur).marked };

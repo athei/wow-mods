@@ -7677,9 +7677,14 @@ pub extern "fastcall" fn c_gx_ui__emit_textured_quad_batch__6cd750(
     let mut cur_pos = pos_array as usize;
     let mut cur_off = offset_array as usize;
     // SAFETY: uvScale addresses two contiguous f32 (x, y), constant per batch.
-    let sx = unsafe { uv_scale.read_unaligned() };
-    // SAFETY: uvScale[1].
-    let sy = unsafe { uv_scale.wrapping_add(1).read_unaligned() };
+    let scale = unsafe { uv_scale.cast::<[f32; 2]>().read_unaligned() };
+    // The eight uvBase floats are batch constants, so they are read once here
+    // instead of four times each, once per vertex. Reading them above the first
+    // vertex store is equivalent only because the vertex buffer cannot overlap
+    // the caller's UV array: it is the device's own allocation, handed back by
+    // `GxResizeBuffer` (0x58a140) at the top of this body.
+    // SAFETY: uvBase addresses eight contiguous f32, the four corner pairs.
+    let corners = unsafe { uv_base.cast::<[[f32; 2]; 4]>().read_unaligned() };
     for _ in 0..4 {
         // SAFETY: position triple for this vertex (stride 0xc).
         let p = unsafe { (cur_pos as *const [u32; 3]).read_unaligned() };
@@ -7687,20 +7692,14 @@ pub extern "fastcall" fn c_gx_ui__emit_textured_quad_batch__6cd750(
         unsafe { (vout as *mut [u32; 3]).write_unaligned(p) };
         // SAFETY: vertex color dword at +0xc.
         unsafe { ((vout + 0xc) as *mut u32).write_unaligned(color) };
-        // SAFETY: per-vertex UV offset pair.
-        let ox = unsafe { (cur_off as *const f32).read_unaligned() };
-        // SAFETY: offset.y.
-        let oy = unsafe { ((cur_off + 4) as *const f32).read_unaligned() };
-        for k in 0..4 {
-            // SAFETY: uvBase pair for corner k (u at 2k, v at 2k+1).
-            let bu = unsafe { uv_base.wrapping_add(2 * k).read_unaligned() };
-            // SAFETY: uvBase[2k+1].
-            let bv = unsafe { uv_base.wrapping_add(2 * k + 1).read_unaligned() };
-            let (u, v) = crate::math::gx::quad_uv__6cd750(bu, bv, sx, sy, ox, oy);
-            // SAFETY: vertex UV slot k at +0x10 + k*8.
-            unsafe { ((vout + 0x10 + k * 8) as *mut f32).write_unaligned(u) };
-            // SAFETY: vertex UV slot k's v at +0x14 + k*8.
-            unsafe { ((vout + 0x14 + k * 8) as *mut f32).write_unaligned(v) };
+        // SAFETY: per-vertex UV offset pair (x at +0, y at +4).
+        let off = unsafe { (cur_off as *const [f32; 2]).read_unaligned() };
+        for (k, base) in corners.into_iter().enumerate() {
+            let uv = crate::math::gx::quad_uv__6cd750(base, scale, off);
+            // SAFETY: vertex UV slot k, u at +0x10 + k*8 and v at +0x14 + k*8.
+            // The two are adjacent, so the pair leaves as one 8-byte store to
+            // the addresses the two 4-byte stores wrote.
+            unsafe { ((vout + 0x10 + k * 8) as *mut [f32; 2]).write_unaligned(uv) };
         }
         cur_pos = cur_pos.wrapping_add(0xc);
         cur_off = cur_off.wrapping_add(8);
@@ -35081,7 +35080,7 @@ pub extern "thiscall" fn c44_matrix__adjugate__7bd390(this: *const f32, out: *mu
     let adj = crate::math::matrix44::c44_matrix__adjugate__7bd390(&src);
     // SAFETY: `out` is non-null (checked) and addresses 16 writable contiguous
     // f32; written via `write_unaligned` for the same alignment reason.
-    unsafe { out.cast::<[f32; 16]>().write_unaligned(adj) };
+    unsafe { out.cast::<[f32; 16]>().write_unaligned(adj.0) };
     out
 }
 
@@ -35221,9 +35220,14 @@ pub extern "thiscall" fn c44_matrix__inverse_scaled_by_det__7bd6c0(
         return out;
     }
     // SAFETY: `this` (the source matrix) is a non-null caller-owned `C44Matrix`
-    // of 16 contiguous f32, read-only; `read_unaligned` for packed storage.
-    let src = unsafe { this.cast::<[f32; 16]>().read_unaligned() };
-    let inv = crate::math::matrix44::c44_matrix__inverse_scaled_by_det__7bd6c0(&src, determinant);
+    // of 16 contiguous f32, read-only. Borrowed rather than copied into the
+    // frame: a `C44Matrix` is an aggregate of floats, so the 4-byte alignment
+    // the reference asserts (and `read_unaligned` did not) holds by
+    // construction, and the borrow stays sound when `out` overlaps `this`,
+    // because the kernel returns the inverse by value: every read of the
+    // source is complete before the first write through `out` below.
+    let src: &[f32; 16] = unsafe { &*this.cast::<[f32; 16]>() };
+    let inv = crate::math::matrix44::c44_matrix__inverse_scaled_by_det__7bd6c0(src, determinant);
     // SAFETY: `out` is non-null (checked) and addresses 16 writable contiguous
     // f32; written via `write_unaligned`.
     unsafe { out.cast::<[f32; 16]>().write_unaligned(inv) };

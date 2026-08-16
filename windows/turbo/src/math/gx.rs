@@ -346,9 +346,54 @@ mod tests_fog_pack_color_argb__70baf0 {
 /// on *greater*, *less*, OR *unordered* (a NaN operand) — anything that is not
 /// exact equality — so a NaN counts as a change. Rust `!=` reproduces this
 /// exactly (`NaN != x` is always true, including `NaN != NaN`); do NOT special-
-/// case NaN. Short-circuits on the first differing lane, matching the stock jump.
+/// case NaN. `cmpneqps` is that same predicate (false on equal, true on less,
+/// greater or unordered), which is what a lane-at-a-time `!=` compiles to
+/// anyway.
+///
+/// Compared as a 4-lane chunk plus a 2-lane chunk, with the two masks OR-ed,
+/// rather than lane by lane: written as a short-circuiting `any` the leading
+/// four packed and the trailing pair fell back to scalar compares and branches,
+/// and an eager per-lane OR was folded straight back into that shape. The answer
+/// does not depend on how the six are grouped, and evaluating all six reads
+/// nothing new, since the caller materializes the cached rect (`this+0xf38`, one
+/// unaligned read) and the incoming six before the call. The tail load is a
+/// `movq`, which zero-fills lanes 2-3 on both sides, so those two lanes compare
+/// equal and contribute nothing to the mask.
 pub fn c_gx_device__set_viewport__592530(cur: &[f32; 6], incoming: &[f32; 6]) -> bool {
-    cur.iter().zip(incoming).any(|(c, n)| *c != *n)
+    #[cfg(target_arch = "x86")]
+    use core::arch::x86::{
+        __m128i, _mm_castsi128_ps, _mm_cmpneq_ps, _mm_loadl_epi64, _mm_loadu_ps, _mm_movemask_ps,
+    };
+    #[cfg(target_arch = "x86_64")]
+    use core::arch::x86_64::{
+        __m128i, _mm_castsi128_ps, _mm_cmpneq_ps, _mm_loadl_epi64, _mm_loadu_ps, _mm_movemask_ps,
+    };
+    // Every intrinsic below is SSE2, available on every ISA baseline this crate
+    // builds for.
+    let cur_tail_ptr = cur[4..].as_ptr().cast::<__m128i>();
+    let inc_tail_ptr = incoming[4..].as_ptr().cast::<__m128i>();
+    // SAFETY: the load covers 16 of the 24 in-bounds bytes of its `[f32; 6]`.
+    let cur_head = unsafe { _mm_loadu_ps(cur.as_ptr()) };
+    // SAFETY: as above.
+    let inc_head = unsafe { _mm_loadu_ps(incoming.as_ptr()) };
+    // SAFETY: the load covers the eight in-bounds bytes lanes 4-5 occupy.
+    let cur_tail = unsafe { _mm_loadl_epi64(cur_tail_ptr) };
+    // SAFETY: as above.
+    let inc_tail = unsafe { _mm_loadl_epi64(inc_tail_ptr) };
+    // SAFETY: bit reinterpretation of an initialized vector; no memory access.
+    let cur_tail = unsafe { _mm_castsi128_ps(cur_tail) };
+    // SAFETY: as above.
+    let inc_tail = unsafe { _mm_castsi128_ps(inc_tail) };
+    // SAFETY: lane-wise not-equal-or-unordered compare of two initialized
+    // vectors.
+    let head_differs = unsafe { _mm_cmpneq_ps(cur_head, inc_head) };
+    // SAFETY: as above.
+    let tail_differs = unsafe { _mm_cmpneq_ps(cur_tail, inc_tail) };
+    // SAFETY: sign-bit extraction from an initialized vector.
+    let head_mask = unsafe { _mm_movemask_ps(head_differs) };
+    // SAFETY: as above.
+    let tail_mask = unsafe { _mm_movemask_ps(tail_differs) };
+    (head_mask | tail_mask) != 0
 }
 
 #[cfg(test)]
@@ -379,6 +424,16 @@ mod tests_c_gx_device__set_viewport__592530 {
             inc[i] = f32::NAN;
             assert!(changed(&cur, &inc), "nan in lane {i}");
         }
+    }
+
+    #[test]
+    fn opposite_zero_signs_are_not_a_change() {
+        // Stock FCOMP compares by value, so -0.0 against +0.0 is equality and
+        // writes nothing. The packed compare has to agree on every lane,
+        // including the trailing pair that is loaded separately.
+        let cur = [0.0, -0.0, 1.0, -0.0, 0.0, -0.0];
+        let inc = [-0.0, 0.0, 1.0, 0.0, -0.0, 0.0];
+        assert!(!changed(&cur, &inc));
     }
 
     #[test]
@@ -1620,40 +1675,122 @@ mod tests_emit_line_quads_5ccbe0 {
     }
 }
 
-/// UI textured-quad UV corner (0x6cd7a3..0x6cd7c6).
+/// UI textured-quad UV corner (0x6cd7a3..0x6cd7c6), both lanes at once.
 ///
 /// `u = baseU × scaleX + offX`, `v = baseV × scaleY + offY`, each folded wide
-/// with one narrow at the `FSTP`.
-pub fn quad_uv__6cd750(
-    base_u: f32,
-    base_v: f32,
-    scale_x: f32,
-    scale_y: f32,
-    off_x: f32,
-    off_y: f32,
-) -> (f32, f32) {
-    (
-        super::f64_to_f32(f64::from(base_u) * f64::from(scale_x) + f64::from(off_x)),
-        super::f64_to_f32(f64::from(base_v) * f64::from(scale_y) + f64::from(off_y)),
-    )
+/// with one narrow at the `FSTP`. `u` and `v` are adjacent in every operand
+/// (`uvBase[2k]`/`[2k+1]`, the batch's `uvScale` pair, the vertex's offset
+/// pair) and the two chains never combine, so one
+/// `cvtps2pd`/`mulpd`/`addpd`/`cvtpd2ps` computes the pair that the stock body
+/// computes a lane at a time. Bit-identical to the lane-at-a-time form on every
+/// input (the test module's oracle pins this): `cvtps2pd` widens exactly, the
+/// packed multiply and add take the same operand pairs in the same order, and
+/// `cvtpd2ps` narrows each lane under the rounding `cvtsd2ss` applies to each
+/// value, one narrow per stored coordinate, as the stock `FSTP`.
+pub fn quad_uv__6cd750(base: [f32; 2], scale: [f32; 2], off: [f32; 2]) -> [f32; 2] {
+    #[cfg(target_arch = "x86")]
+    use core::arch::x86::{
+        __m128i, _mm_add_pd, _mm_castps_si128, _mm_cvtpd_ps, _mm_cvtps_pd, _mm_mul_pd, _mm_set_ps,
+        _mm_storel_epi64,
+    };
+    #[cfg(target_arch = "x86_64")]
+    use core::arch::x86_64::{
+        __m128i, _mm_add_pd, _mm_castps_si128, _mm_cvtpd_ps, _mm_cvtps_pd, _mm_mul_pd, _mm_set_ps,
+        _mm_storel_epi64,
+    };
+    // Every intrinsic below is SSE2, available on every ISA baseline this crate
+    // builds for. Lanes 2-3 of the three `_mm_set_ps` vectors are never read:
+    // `cvtps2pd` widens lanes 0-1 only.
+    // SAFETY: assembles a vector from four floats; no memory access.
+    let base4 = unsafe { _mm_set_ps(0.0, 0.0, base[1], base[0]) };
+    // SAFETY: as above.
+    let scale4 = unsafe { _mm_set_ps(0.0, 0.0, scale[1], scale[0]) };
+    // SAFETY: as above.
+    let off4 = unsafe { _mm_set_ps(0.0, 0.0, off[1], off[0]) };
+    // SAFETY: lane-wise exact widening of an initialized vector's low pair.
+    let base2 = unsafe { _mm_cvtps_pd(base4) };
+    // SAFETY: as above.
+    let scale2 = unsafe { _mm_cvtps_pd(scale4) };
+    // SAFETY: as above.
+    let off2 = unsafe { _mm_cvtps_pd(off4) };
+    // SAFETY: lane-wise multiply of two initialized vectors.
+    let scaled = unsafe { _mm_mul_pd(base2, scale2) };
+    // SAFETY: lane-wise add of two initialized vectors.
+    let sum = unsafe { _mm_add_pd(scaled, off2) };
+    // SAFETY: lane-wise narrowing of an initialized vector.
+    let narrowed = unsafe { _mm_cvtpd_ps(sum) };
+    // SAFETY: bit reinterpretation of an initialized vector; no memory access.
+    let bits = unsafe { _mm_castps_si128(narrowed) };
+    let mut uv = [0.0f32; 2];
+    // SAFETY: the store covers the eight in-bounds bytes of `uv`; the `movq`
+    // it lowers to has no alignment requirement.
+    unsafe { _mm_storel_epi64(uv.as_mut_ptr().cast::<__m128i>(), bits) };
+    uv
 }
 
 #[cfg(test)]
 mod tests_quad_uv__6cd750 {
     use super::quad_uv__6cd750 as uv;
 
+    /// The stock body's lane-at-a-time chain, the packed kernel's oracle.
+    ///
+    /// One widening per operand, a multiply, an add and one narrow per
+    /// coordinate: the shape of `0x6cd7a3..0x6cd7c6` before the two lanes were
+    /// paired. Kept scalar on purpose, since it is what the packed form is
+    /// checked against, so it must not be written in terms of it.
+    fn scalar(base: [f32; 2], scale: [f32; 2], off: [f32; 2]) -> [f32; 2] {
+        [
+            super::super::f64_to_f32(f64::from(base[0]) * f64::from(scale[0]) + f64::from(off[0])),
+            super::super::f64_to_f32(f64::from(base[1]) * f64::from(scale[1]) + f64::from(off[1])),
+        ]
+    }
+
     #[test]
     fn scales_and_offsets() {
-        assert_eq!(uv(2.0, 3.0, 0.5, 0.25, 1.0, -0.5), (2.0, 0.25));
+        assert_eq!(uv([2.0, 3.0], [0.5, 0.25], [1.0, -0.5]), [2.0, 0.25]);
     }
 
     #[test]
     fn folds_wide_once() {
-        let (u, _) = uv(0.1, 0.0, 0.2, 0.0, 0.3, 0.0);
+        let uv = uv([0.1, 0.0], [0.2, 0.0], [0.3, 0.0]);
         assert_eq!(
-            u,
+            uv[0],
             super::super::f64_to_f32(f64::from(0.1f32) * f64::from(0.2f32) + f64::from(0.3f32))
         );
+    }
+
+    #[test]
+    fn matches_the_scalar_oracle_bit_for_bit() {
+        // Pairs deliberately mix magnitudes, both zero signs, a denormal, the
+        // infinities and a NaN, so narrowing, overflow and NaN propagation all
+        // land in the comparison. `black_box` keeps the two sides out of
+        // constant folding, so both are evaluated by the code under test.
+        const PAIRS: [[f32; 2]; 8] = [
+            [0.0, -0.0],
+            [1.0, -1.0],
+            [0.1, 0.25],
+            [1.0e30, -7.5e-9],
+            [f32::MIN_POSITIVE, 1.0e-45],
+            [f32::INFINITY, f32::NEG_INFINITY],
+            [f32::NAN, 3.5],
+            [-2.5, f32::NAN],
+        ];
+        for base in PAIRS {
+            for scale in PAIRS {
+                for off in PAIRS {
+                    let base = core::hint::black_box(base);
+                    let scale = core::hint::black_box(scale);
+                    let off = core::hint::black_box(off);
+                    let packed = uv(base, scale, off);
+                    let want = scalar(base, scale, off);
+                    assert_eq!(
+                        (packed[0].to_bits(), packed[1].to_bits()),
+                        (want[0].to_bits(), want[1].to_bits()),
+                        "base {base:?} scale {scale:?} off {off:?}"
+                    );
+                }
+            }
+        }
     }
 }
 
