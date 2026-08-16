@@ -2741,14 +2741,43 @@ mod tests_collision_clip_polygon_by_plane__6318c0 {
 /// position lies on the inner side of every side plane (each
 /// `dot(n, pos) + d <= threshold`), else `0`. The rejection is strict: a single
 /// plane with `eval > threshold` (`threshold < eval`) makes the position clear.
+///
+/// The evaluation is register-resident in the original: between the first `FMUL`
+/// at `0x63365d` and the `FCOMP` at `0x633671` there is no `FST`/`FSTP m32`, so
+/// nothing narrows to `f32` on the way. At the client's 53-bit precision control
+/// that register carries an `f64` significand, and a product of two `f32` needs
+/// 48 bits and is therefore exact, which leaves the three adds as the whole of
+/// the rounding. Their order is the one the `FADDP` pair at `0x633665` and
+/// `0x63366c` gives: `(nx*x + nz*z) + ny*y`, the z term ahead of the y term,
+/// then `+ d` — the same association both frustum culls turned out to have.
+///
+/// Both facts are observable, not cosmetic. A per-step `f32` chain, or the
+/// textual `nx*x + ny*y + nz*z + d` order, decides this compare the other way
+/// whenever the position lands within an `f32` ulp of a side plane's threshold
+/// offset, and the answer is a boolean the caller acts on.
+///
+/// `FCOMP` leaves the unordered case failing the `C0|C3` test at `0x633679`, so
+/// a NaN evaluation does not clear the position: the scan continues and, if no
+/// later plane rejects, the answer is `1`. That is what `threshold < eval` does
+/// on an unordered pair.
 pub fn collision_plane_box_clearance_test__6335d0(
     planes: &[f32; 16],
     pos: &[f32; 3],
     threshold: f32,
 ) -> u32 {
+    let x = f64::from(pos[0]);
+    let y = f64::from(pos[1]);
+    let z = f64::from(pos[2]);
+    // The threshold widens once, above the loop: the original's `FCOMP` reads it
+    // as an `f32` memory operand and the compare itself happens at register width.
+    let wide_threshold = f64::from(threshold);
+
     for plane in planes.chunks_exact(4).take(3) {
-        let eval = plane[0] * pos[0] + plane[1] * pos[1] + plane[2] * pos[2] + plane[3];
-        if threshold < eval {
+        let x_term = f64::from(plane[0]) * x;
+        let z_term = f64::from(plane[2]) * z;
+        let y_term = f64::from(plane[1]) * y;
+        let eval = ((x_term + z_term) + y_term) + f64::from(plane[3]);
+        if wide_threshold < eval {
             return 0;
         }
     }
@@ -2815,6 +2844,289 @@ mod plane_box_clearance_tests {
             let p = [rnd() * 0.9, rnd() * 0.9, rnd() * 0.9];
             assert_eq!(f(&BOX, &p, 0.0), 1, "p={p:?}");
         }
+    }
+
+    /// The clearance threshold the client holds at `0x80e004`.
+    ///
+    /// The `f32` nearest `1/12`. Every fixture below is judged against the real
+    /// constant rather than a convenient one, because the caller has no other.
+    const HOST_THRESHOLD: f32 = f32::from_bits(0x3daa_aaab);
+
+    /// The per-step `f32` chain in textual `nx*x + ny*y + nz*z + d` order.
+    ///
+    /// Not an oracle: this is the shape the kernel must NOT have, kept so the
+    /// fixtures can witness that the width is observable rather than assert it
+    /// in prose.
+    fn narrow(planes: &[f32; 16], pos: &[f32; 3], threshold: f32) -> u32 {
+        for plane in planes.chunks_exact(4).take(3) {
+            let eval = plane[0] * pos[0] + plane[1] * pos[1] + plane[2] * pos[2] + plane[3];
+            if threshold < eval {
+                return 0;
+            }
+        }
+        1
+    }
+
+    /// The original's width with the wrong association: `(nx*x + ny*y) + nz*z`.
+    ///
+    /// Also not an oracle. It isolates the term order from the width, so the
+    /// construction below can pin the `FADDP` order on its own.
+    fn wide_wrong_order(planes: &[f32; 16], pos: &[f32; 3], threshold: f32) -> u32 {
+        let x = f64::from(pos[0]);
+        let y = f64::from(pos[1]);
+        let z = f64::from(pos[2]);
+        let wt = f64::from(threshold);
+        for plane in planes.chunks_exact(4).take(3) {
+            let eval = ((f64::from(plane[0]) * x + f64::from(plane[1]) * y)
+                + f64::from(plane[2]) * z)
+                + f64::from(plane[3]);
+            if wt < eval {
+                return 0;
+            }
+        }
+        1
+    }
+
+    fn one_plane(slot: usize, n: [f32; 3], d: f32) -> [f32; 16] {
+        // The other two planes stay all-zero: their evaluation is `0`, which is
+        // below the positive host threshold and never rejects, so the case under
+        // test is the only one that decides the answer.
+        let mut planes = [0.0f32; 16];
+        planes[slot * 4] = n[0];
+        planes[slot * 4 + 1] = n[1];
+        planes[slot * 4 + 2] = n[2];
+        planes[slot * 4 + 3] = d;
+        planes
+    }
+
+    /// Four world-scale positions the narrow chain classifies the other way.
+    ///
+    /// Each is a unit-normal side plane offset so the position lands within an
+    /// `f32` ulp of the host clearance threshold, which is the regime the
+    /// movement code feeds this function. Every case carries a companion assert
+    /// that the narrow chain really does disagree: a fixture that stopped
+    /// separating the two forms would pass under either one. The first two sit
+    /// on plane 0 and the last two on plane 2, so the loop's first and last
+    /// iterations are both pinned, and both directions of the flip appear.
+    #[test]
+    fn narrow_chain_classifies_four_real_positions_the_other_way() {
+        // The direction the live differential run reported: narrow clears the
+        // position, the original keeps it.
+        let planes = one_plane(
+            0,
+            [
+                f32::from_bits(0x3f39_8dce),
+                f32::from_bits(0xbecd_c77b),
+                f32::from_bits(0x3f0f_3f06),
+            ],
+            f32::from_bits(0x42ac_1bcf),
+        );
+        let pos = [
+            f32::from_bits(0xc415_ebd4),
+            f32::from_bits(0xc474_0f66),
+            f32::from_bits(0xc29c_174a),
+        ];
+        assert_eq!(f(&planes, &pos, HOST_THRESHOLD), 1);
+        assert_eq!(
+            narrow(&planes, &pos, HOST_THRESHOLD),
+            0,
+            "fixture must separate"
+        );
+
+        // And the other way: narrow keeps, the original clears.
+        let planes = one_plane(
+            0,
+            [
+                f32::from_bits(0xbf0f_9360),
+                f32::from_bits(0x3f45_faec),
+                f32::from_bits(0xbe97_56c7),
+            ],
+            f32::from_bits(0xc400_fbeb),
+        );
+        let pos = [
+            f32::from_bits(0xc415_abe9),
+            f32::from_bits(0x4338_ade5),
+            f32::from_bits(0xc2fd_3e68),
+        ];
+        assert_eq!(f(&planes, &pos, HOST_THRESHOLD), 0);
+        assert_eq!(
+            narrow(&planes, &pos, HOST_THRESHOLD),
+            1,
+            "fixture must separate"
+        );
+
+        // Plane 2, the loop's last iteration, in both directions.
+        let planes = one_plane(
+            2,
+            [
+                f32::from_bits(0xbeae_284e),
+                f32::from_bits(0xbefb_6112),
+                f32::from_bits(0xbf4d_5160),
+            ],
+            f32::from_bits(0x439a_d51e),
+        );
+        let pos = [
+            f32::from_bits(0x41fd_085e),
+            f32::from_bits(0x43bd_78fd),
+            f32::from_bits(0x430c_9b7f),
+        ];
+        assert_eq!(f(&planes, &pos, HOST_THRESHOLD), 1);
+        assert_eq!(
+            narrow(&planes, &pos, HOST_THRESHOLD),
+            0,
+            "fixture must separate"
+        );
+
+        let planes = one_plane(
+            2,
+            [
+                f32::from_bits(0x3ed2_d0c2),
+                f32::from_bits(0x3f4b_2322),
+                f32::from_bits(0x3ee5_7031),
+            ],
+            f32::from_bits(0xc332_da71),
+        );
+        let pos = [
+            f32::from_bits(0xc3da_8fe9),
+            f32::from_bits(0x43d5_653a),
+            f32::from_bits(0x4234_db76),
+        ];
+        assert_eq!(f(&planes, &pos, HOST_THRESHOLD), 0);
+        assert_eq!(
+            narrow(&planes, &pos, HOST_THRESHOLD),
+            1,
+            "fixture must separate"
+        );
+    }
+
+    /// The `FADDP` order, pinned on its own at the host threshold.
+    ///
+    /// `nx*x` is `2^26` and `ny*y` is `-2^26`, so the wrong association cancels
+    /// them first and answers with `nz*z`, which is the threshold itself and
+    /// does not reject. The original's association adds `nz*z` to `2^26` first,
+    /// where it falls exactly halfway between two `f64`s and ties to even one
+    /// ulp up; subtracting `2^26` back out leaves an evaluation above the
+    /// threshold, so the position is cleared.
+    ///
+    /// The coefficient is that large on purpose. The threshold is an `f32`, so
+    /// its quantum is `2^-27`, and while the leading term stays below `2^26` the
+    /// threshold is itself a point of the `f64` grid that term rounds on: both
+    /// associations land on the same side of it. An 18M-case sweep of
+    /// unit-normal planes at world coordinates, walking the offset by single
+    /// ulps across the threshold, found no case where the two associations
+    /// answered differently. So the order is a faithfulness fact here rather
+    /// than a live one, and this construction is what keeps it from drifting
+    /// back unnoticed.
+    #[test]
+    fn fold_order_is_observable_at_the_host_threshold() {
+        let n = [
+            f32::from_bits(0x4c80_0000), // 2^26
+            f32::from_bits(0xcc80_0000), // -2^26
+            HOST_THRESHOLD,
+        ];
+        let pos = [1.0f32, 1.0, 1.0];
+
+        for slot in [0usize, 2] {
+            let planes = one_plane(slot, n, 0.0);
+            assert_eq!(f(&planes, &pos, HOST_THRESHOLD), 0, "slot {slot}");
+            assert_eq!(
+                wide_wrong_order(&planes, &pos, HOST_THRESHOLD),
+                1,
+                "slot {slot}: fixture must separate the association"
+            );
+        }
+    }
+
+    /// A NaN evaluation does not clear the position.
+    ///
+    /// `FCOMP` leaves the unordered case failing the `C0|C3` test, so the scan
+    /// continues instead of returning `0`, which is what `threshold < eval`
+    /// does on an unordered pair. Poison is placed in the normal, in the
+    /// position and in the offset in turn, and `inf - inf` covers the NaN the
+    /// chain manufactures rather than receives.
+    #[test]
+    fn nan_evaluation_does_not_clear() {
+        let nan = f32::NAN;
+        let inf = f32::INFINITY;
+        for (n, pos, d) in [
+            ([nan, 0.0, 0.0], [1.0f32, 1.0, 1.0], 0.0f32),
+            ([1.0, 1.0, 1.0], [1.0, nan, 1.0], 0.0),
+            ([1.0, 0.0, 0.0], [1.0, 1.0, 1.0], nan),
+            ([inf, -inf, 0.0], [1.0, 1.0, 1.0], 0.0),
+        ] {
+            let planes = one_plane(0, n, d);
+            assert_eq!(
+                f(&planes, &pos, HOST_THRESHOLD),
+                1,
+                "n={n:?} pos={pos:?} d={d}"
+            );
+        }
+        // A real infinity is above the threshold and does clear it.
+        let planes = one_plane(0, [inf, 0.0, 0.0], 0.0);
+        assert_eq!(f(&planes, &[1.0, 1.0, 1.0], HOST_THRESHOLD), 0);
+    }
+
+    /// Seeded sweep of near-boundary side planes at world scale.
+    ///
+    /// Every case walks the plane offset by single ulps across the point where
+    /// the evaluation meets the host threshold, which is the only regime where
+    /// the two widths can differ at all. The kernel must classify every case the
+    /// way a wide reference does, and must differ from the narrow chain on the
+    /// measured share of them recorded below.
+    #[test]
+    fn differential_sweep_separates_the_two_widths() {
+        let mut state = 0x243f_6a88_85a3_08d3_u64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state >> 11) as f32 / (1_u64 << 53) as f32
+        };
+        let mut separations = 0u32;
+        for i in 0..40_000u32 {
+            let slot = (i % 3) as usize;
+            let (a, b, c) = (next() - 0.5, next() - 0.5, next() - 0.5);
+            let len = (a * a + b * b + c * c).sqrt().max(1e-3);
+            let n = [a / len, b / len, c / len];
+            let pos = [
+                (next() - 0.5) * 2000.0,
+                (next() - 0.5) * 2000.0,
+                (next() - 0.5) * 400.0,
+            ];
+            let dot = f64::from(n[0]) * f64::from(pos[0])
+                + f64::from(n[1]) * f64::from(pos[1])
+                + f64::from(n[2]) * f64::from(pos[2]);
+            let d0 = super::super::f64_to_f32(f64::from(HOST_THRESHOLD) - dot);
+            if !d0.is_finite() {
+                continue;
+            }
+            // The walk is `bits - 6 ..= bits + 6`, written as unsigned wrapping
+            // arithmetic so the offsets need no signed cast: adding `step` and
+            // subtracting 6 lands on the same pattern a signed add would, and the
+            // walk never crosses zero or an exponent end where that would matter.
+            for step in 0..=12u32 {
+                let d = f32::from_bits(d0.to_bits().wrapping_add(step).wrapping_sub(6));
+                let planes = one_plane(slot, n, d);
+                // The association is not observable in this regime, so the wide
+                // reference is the kernel's own answer read back the other way.
+                assert_eq!(
+                    f(&planes, &pos, HOST_THRESHOLD),
+                    wide_wrong_order(&planes, &pos, HOST_THRESHOLD),
+                    "n={n:?} pos={pos:?} d={d}"
+                );
+                if narrow(&planes, &pos, HOST_THRESHOLD) != f(&planes, &pos, HOST_THRESHOLD) {
+                    separations += 1;
+                }
+            }
+        }
+        // Measured, not chosen: 26,272 of the 520,000 cases classify differently
+        // under the two widths. The count is pinned exactly because the sweep is
+        // deterministic, and because a drift in either direction means one of the
+        // two chains changed shape.
+        assert_eq!(
+            separations, 26_272,
+            "the sweep no longer separates the two widths the way it did"
+        );
     }
 }
 
