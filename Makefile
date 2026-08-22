@@ -106,11 +106,13 @@ windows: require-wine-sdk
 	# wow_translate.dll) are native and are NOT stamped.
 	winebuild --builtin $(OUT_i386)/version.dll
 	winebuild --builtin $(OUT_i386)/wow_mods.dll
-	# Tiny "fake DLL" placeholder for the wow_mods builtin name, for placing in
-	# the syswow64 of a prefix that already existed when wow_mods was installed
-	# (Wine finds builtins by name in the prefix, not lib/wine). A prefix created
-	# afterwards needs none: wineboot stamps a marker for every builtin it finds
-	# in lib/wine. Nothing copies this automatically any more.
+	# Tiny "fake DLL" placeholder for the wow_mods builtin name, since Wine
+	# resolves a builtin by finding a marker for that NAME in the prefix's
+	# system directories before it loads the real module out of lib/wine.
+	# `install` neither needs nor ships one: wineboot stamps a marker for every
+	# builtin it finds in lib/wine when it creates a prefix, so a prefix made
+	# after the install already has it. Only `bundle` carries it, outside
+	# wine/, for a prefix that existed first.
 	winebuild --fake-module -o $(OUT_i386)/wow_mods.fake.dll -m32 --dll $(OUT_i386)/wow_mods.dll
 
 # wow_turbo for native Windows: same i686 DLL, but with the ISA baseline raised
@@ -156,7 +158,6 @@ install: all require-wow-exe
 	    cp $(OUT_unix_arm64)/wow_mods.so     $$dir/lib/wine/$(UNIX_WINEDIR_arm64)/ ; \
 	    rm -rf $$dir/lib/wine/$(UNIX_WINEDIR_arm64)/wow_mods.so.dSYM ; \
 	    cp -R $(OUT_unix_arm64)/wow_mods.so.dSYM $$dir/lib/wine/$(UNIX_WINEDIR_arm64)/ ; \
-	    cp $(OUT_i386)/wow_mods.fake.dll $$dir/lib/wine/i386-windows/ ; \
 	done
 	# Native game-side mods → the app bundle's game mods/ dir (loaded by path via
 	# dlls.txt), NOT the wine builtin dir. `DIFF=1 make install` builds wow_turbo
@@ -206,11 +207,17 @@ bundle: all windows-avx
 	mkdir -p dist/$(TRANSLATE)/game/mods dist/$(TRANSLATE)/game/Interface/AddOns \
 	         dist/$(TRANSLATE)/wine/lib/wine/i386-windows \
 	         dist/$(TRANSLATE)/wine/lib/wine/$(UNIX_WINEDIR_x64) \
-	         dist/$(TRANSLATE)/wine/lib/wine/$(UNIX_WINEDIR_arm64)
+	         dist/$(TRANSLATE)/wine/lib/wine/$(UNIX_WINEDIR_arm64) \
+	         dist/$(TRANSLATE)/prefix-markers/syswow64
 	cp $(OUT_i386)/wow_translate.dll  dist/$(TRANSLATE)/game/mods/
 	cp -R addon/WoWTranslate          dist/$(TRANSLATE)/game/Interface/AddOns/
 	cp $(OUT_i386)/wow_mods.dll       dist/$(TRANSLATE)/wine/lib/wine/i386-windows/
-	cp $(OUT_i386)/wow_mods.fake.dll  dist/$(TRANSLATE)/wine/lib/wine/i386-windows/
+	# The marker sits outside wine/ and already carries the name it needs in the
+	# prefix, so installing it is a plain copy into the matching system dir with
+	# no rename. Keeping it out of wine/ is what stops a merge of wine/ into the
+	# Wine tree from putting it on the builtin search path, where wineboot would
+	# stamp a second, useless marker named wow_mods.fake.dll.
+	cp $(OUT_i386)/wow_mods.fake.dll  dist/$(TRANSLATE)/prefix-markers/syswow64/wow_mods.dll
 	cp $(OUT_unix_x64)/wow_mods.so    dist/$(TRANSLATE)/wine/lib/wine/$(UNIX_WINEDIR_x64)/
 	cp $(OUT_unix_arm64)/wow_mods.so  dist/$(TRANSLATE)/wine/lib/wine/$(UNIX_WINEDIR_arm64)/
 	# The standalone loader: version.dll injects every mod listed in dlls.txt

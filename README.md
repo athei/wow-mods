@@ -43,11 +43,13 @@ wow_translate-<version>/
 ├── game/
 │   ├── mods/wow_translate.dll
 │   └── Interface/AddOns/WoWTranslate/
-└── wine/
-    └── lib/wine/
-        ├── i386-windows/     wow_mods.dll, wow_mods.fake.dll
-        ├── x86_64-unix/      wow_mods.so
-        └── aarch64-unix/     wow_mods.so, for an arm64 Wine
+├── wine/
+│   └── lib/wine/
+│       ├── i386-windows/     wow_mods.dll
+│       ├── x86_64-unix/      wow_mods.so
+│       └── aarch64-unix/     wow_mods.so, for an arm64 Wine
+└── prefix-markers/
+    └── syswow64/wow_mods.dll  only for a prefix that predates the install
 
 version_loader-<version>/
 ├── game/dlls.txt
@@ -56,15 +58,17 @@ version_loader-<version>/
 
 1. Merge `game/` into the game folder.
 2. For WoWTranslate, merge `wine/` into the Wine distribution the game runs
-   under, then copy `wow_mods.fake.dll` into your prefix as
-   `drive_c/windows/syswow64/wow_mods.dll`. Wine resolves builtins by name
-   through the prefix, not `lib/wine` — the fake DLL is a tiny placeholder
-   that points Wine at the real bridge. (`make install` stages the `wine/`
-   half for a source build, but the prefix copy is yours to do — the Makefile
-   deliberately never writes into a Wine prefix, since the prefix belongs to
-   whatever launches the game.) The bridge's unix half ships for both Wine host
-   arches; Wine loads only the one matching its own build, so the other copy
-   sits there inert and there is nothing to choose.
+   under. Wine resolves builtins by name through the prefix, not `lib/wine`,
+   so the real bridge is only reachable once a placeholder named
+   `wow_mods.dll` sits in the prefix's `drive_c/windows/syswow64/`. `wineboot`
+   writes one for every builtin it finds in `lib/wine` when it creates a
+   prefix, so if the prefix comes after this merge there is nothing to do. If
+   it came first, it never saw `wow_mods`: copy
+   `prefix-markers/syswow64/wow_mods.dll` in yourself, or run `wineboot -u`.
+   (The Makefile deliberately never writes into a Wine prefix, since the
+   prefix belongs to whatever launches the game.) The bridge's unix half ships
+   for both Wine host arches; Wine loads only the one matching its own build,
+   so the other copy sits there inert and there is nothing to choose.
 3. Load the mods with whatever mod loader you already use — **after your
    other mods**, so `wow_turbo` yields on anything they already hooked (see
    [Playing with other mods](#playing-with-other-mods)). If you don't have
