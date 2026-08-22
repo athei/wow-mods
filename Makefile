@@ -106,9 +106,11 @@ windows: require-wine-sdk
 	# wow_translate.dll) are native and are NOT stamped.
 	winebuild --builtin $(OUT_i386)/version.dll
 	winebuild --builtin $(OUT_i386)/wow_mods.dll
-	# Tiny "fake DLL" placeholder for the wow_mods builtin name. Shipped into
-	# lib/wine; the game launcher copies it into the prefix's syswow64 on setup
-	# (Wine finds builtins by name in the prefix, not lib/wine).
+	# Tiny "fake DLL" placeholder for the wow_mods builtin name, for placing in
+	# the syswow64 of a prefix that already existed when wow_mods was installed
+	# (Wine finds builtins by name in the prefix, not lib/wine). A prefix created
+	# afterwards needs none: wineboot stamps a marker for every builtin it finds
+	# in lib/wine. Nothing copies this automatically any more.
 	winebuild --fake-module -o $(OUT_i386)/wow_mods.fake.dll -m32 --dll $(OUT_i386)/wow_mods.dll
 
 # wow_turbo for native Windows: same i686 DLL, but with the ISA baseline raised
