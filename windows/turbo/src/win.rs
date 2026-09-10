@@ -42,6 +42,7 @@ mod lua;
 mod objmgr;
 mod script_method;
 pub mod seam_probe;
+mod stocktext;
 mod symbols;
 mod tally;
 mod transmog;
@@ -314,6 +315,7 @@ fn attach_process(instance: *mut c_void) {
     // `install_all` can see — afterwards those bytes are our own detour.
     getname::detect_underlying(image_base);
     symbols::install_all(image_base);
+    stocktext::initialize();
     // The client now jumps into this image, so it can no longer be unloaded
     // without taking the process with it: from here a detach means exit.
     PATCHED.store(true, Ordering::Relaxed);

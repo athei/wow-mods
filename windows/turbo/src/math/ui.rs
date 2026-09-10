@@ -104,21 +104,16 @@ mod tests_os_gui_unscale_y__41ae50 {
     }
 }
 
-/// Snaps a coordinate to the nearest integer after multiplying by an integer device scale.
+/// Snaps a coordinate after multiplying by an integer device scale.
 ///
-/// Rounding half away from zero, returning the rounded value as a float.
-/// `scale` is the device pixel-scale read as a 32-bit integer.
-///
-/// `prod = scale * coord`; the result is `trunc(prod + 0.5)` when `prod > 0` and
-/// `trunc(prod - 0.5)` otherwise — the add/sub-0.5-then-truncate-toward-zero
-/// idiom (round half away from zero).
+/// The product and half-pixel bias stay wide until the truncation. Narrowing
+/// either one early can cross a half-pixel boundary and change the fitted text
+/// width. The client consumes the low signed dword of the i64 conversion,
+/// including its wraparound and indefinite-value behavior.
 pub fn snap_coord_to_pixel_y__5c7010(coord: f32, scale: u32) -> f32 {
-    let prod = scale as f32 * coord;
-    let rounded = if prod > 0.0 {
-        (prod + 0.5) as i32
-    } else {
-        (prod - 0.5) as i32
-    };
+    let prod = f64::from(scale) * f64::from(coord);
+    let biased = if prod > 0.0 { prod + 0.5 } else { prod - 0.5 };
+    let rounded = super::misc::ftol__40a2b0(biased) as i32;
     rounded as f32
 }
 
@@ -146,6 +141,23 @@ mod tests_snap_coord_to_pixel_y__5c7010 {
     fn zero_is_zero() {
         // prod == 0 takes the else branch: trunc(0 - 0.5) = trunc(-0.5) = 0
         assert_eq!(snap(0.0, 5), 0.0);
+    }
+    #[test]
+    fn preserves_wide_half_pixel_boundaries() {
+        assert_eq!(snap(0.0275, 600), 16.0);
+        assert_eq!(snap(-0.0275, 600), -16.0);
+        assert_eq!(snap(f32::from_bits(0x3c96_2fc9), 900), 16.0);
+        assert_eq!(snap(0.5_f32.next_down(), 1), 0.0);
+        assert_eq!(snap(-0.5_f32.next_down(), 1), 0.0);
+    }
+    #[test]
+    fn consumes_the_low_signed_dword_of_the_conversion() {
+        assert_eq!(snap(2_147_483_648.0, 1), -2_147_483_648.0);
+        assert_eq!(snap(4_294_967_296.0, 1), 0.0);
+        assert_eq!(snap(1.0, u32::MAX), -1.0);
+        for coord in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            assert_eq!(snap(coord, 1), 0.0);
+        }
     }
     #[test]
     fn already_integer() {

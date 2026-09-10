@@ -56,6 +56,9 @@ mod typeset;
 #[cfg(any(target_arch = "x86", test))]
 mod worldtext;
 
+#[cfg(any(target_arch = "x86", test))]
+mod stocktext;
+
 #[cfg(target_arch = "x86")]
 mod win;
 

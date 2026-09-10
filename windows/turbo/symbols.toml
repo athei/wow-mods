@@ -5107,7 +5107,8 @@ args = ["*mut u8", "i32"]
 preserve = []
 
 # The floating world-text creation entry: type 4 is the experience text,
-# suppressed on request; everything else runs the displaced code unchanged.
+# suppressed on request. The overlay takes enabled lines; stock rendering
+# uses extra slot banks when the native owner is full.
 # Verification in-game.
 [functions.CreateWorldText__6c73f0]
 rva  = 0x2c73f0
@@ -5115,6 +5116,57 @@ sig  = "55 8B EC 83 EC 0C 56 57 8B F9 33 F6"
 abi  = "thiscall"
 ret  = "void"
 args = ["*mut u8", "i32", "*const u8", "u32", "u32"]
+preserve = []
+
+# Overflow text uses the same update, auxiliary draw, and destruction paths
+# as the owner's four native slots. Creation enables overflow only when all
+# three lifecycle hooks are installed, so a skipped hook keeps stock limits.
+[functions.WorldTextOwner__Update__6c6d40]
+rva = 0x2c6d40
+sig = "55 8B EC 83 EC 08 57 8B F9 8B 47 14 8B 4F 10"
+abi = "thiscall"
+ret = "void"
+args = ["*mut u8", "u32"]
+preserve = []
+
+[functions.WorldText__Update__6c7cc0]
+rva = 0x2c7cc0
+sig = "55 8B EC 83 EC 58 8B 45 08 53 56 8B F1"
+abi = "thiscall"
+ret = "u8"
+args = ["*mut u8", "u32"]
+preserve = []
+
+[functions.FloatingTextPlaceRect__509520]
+rva = 0x109520
+sig = "55 8B EC 83 EC 30 56 8B F2 D9 46 08 57"
+abi = "fastcall"
+ret = "void"
+args = ["i32", "*mut f32"]
+preserve = []
+
+[functions.WorldText__Release__6c86a0]
+rva = 0x2c86a0
+sig = "56 8B F1 8B 06 6A 00 FF 10 6A 00 6A 00 56"
+abi = "thiscall"
+ret = "void"
+args = ["*mut u8"]
+preserve = []
+
+[functions.WorldTextOwner__Draw__6c6e00]
+rva = 0x2c6e00
+sig = "56 8B F1 8B 46 14 8B 4E 10 68 99 00 00 00"
+abi = "thiscall"
+ret = "void"
+args = ["*mut u8"]
+preserve = []
+
+[functions.WorldTextOwner__Destroy__6c6cd0]
+rva = 0x2c6cd0
+sig = "56 8B F1 8B 46 08 85 C0 8D 4E 08 57"
+abi = "thiscall"
+ret = "void"
+args = ["*mut u8"]
 preserve = []
 
 # The screenshot TGA writer: the wrapper re-encodes the frame off-thread as

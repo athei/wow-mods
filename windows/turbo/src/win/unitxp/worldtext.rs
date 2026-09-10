@@ -1252,7 +1252,7 @@ fn build_line(
     })
 }
 
-/// Place a new line: seed its rect, fast-forward overlaps, insert, cap.
+/// Place a new line: seed its rect, move overlaps apart, insert, cap.
 fn insert_line(mut line: Line, small: bool) {
     let offset = {
         let env = Env::current();
@@ -1273,14 +1273,14 @@ fn insert_line(mut line: Line, small: bool) {
     let overlap = kernel::max_overlap_height(&rect, list.iter().map(|l| l.anim.rect()));
     if overlap > 0 {
         for existing in list.iter_mut() {
-            existing.anim.fast_forward(overlap);
+            existing.anim.make_room(overlap);
         }
     }
     list.push(line);
     let overlap = kernel::max_overlap_height(&rect, other.iter().map(|l| l.anim.rect()));
     if overlap > 0 {
         for existing in other.iter_mut() {
-            existing.anim.fast_forward(overlap);
+            existing.anim.make_room(overlap);
         }
     }
     let live = overlay.floats.len() + overlay.smalls.len();
@@ -1504,6 +1504,18 @@ struct DrawCmd {
     color: u32,
 }
 
+impl DrawCmd {
+    /// The complete submitted texture rectangle, including its padding.
+    fn rect(&self) -> kernel::Rect {
+        kernel::Rect {
+            left: self.x,
+            top: self.y,
+            right: self.x + i32::try_from(self.width).unwrap_or(0),
+            bottom: self.y + i32::try_from(self.height).unwrap_or(0),
+        }
+    }
+}
+
 /// Pack the modulate tint: alpha scaled like the reference's truncation.
 fn tint(color: [u8; 3], base_alpha: f64, alpha: f64) -> u32 {
     let a = trunc_i32(base_alpha * alpha).clamp(0, 255).cast_unsigned();
@@ -1516,6 +1528,20 @@ const fn shadow_offset(player_stick: bool) -> (i32, i32) {
         (SHADOW_WEIGHT, SHADOW_WEIGHT)
     } else {
         (SHADOW_WEIGHT * 2, -SHADOW_WEIGHT)
+    }
+}
+
+/// The union of a floating line's fill and shadow at its current position.
+fn line_bounds(line: &Line) -> kernel::Rect {
+    let rect = line.anim.rect();
+    let (dx, dy) = shadow_offset(line.player_stick);
+    let x = rect.left - 1;
+    let y = rect.top - 1;
+    kernel::Rect {
+        left: x + dx.min(0),
+        top: y + dy.min(0),
+        right: x + i32::try_from(line.tex.width).unwrap_or(0) + dx.max(0),
+        bottom: y + i32::try_from(line.tex.height).unwrap_or(0) + dy.max(0),
     }
 }
 
@@ -1627,17 +1653,19 @@ pub fn draw_pass(gx: *mut u8) {
         })
     });
 
-    // Small floats, then regular floats; both skip lines a crit overlaps.
+    // Resolve the current submitted bounds, including padding and shadows.
+    // Earlier placement can overlap again as anchors and animation move.
     for list in [smalls, floats] {
         list.retain_mut(|line| {
             let (anchor, in_sight) = anchor_for(line.guid, false, offset);
             match line.anim.tick(now, anchor, in_sight) {
                 kernel::Tick::End => false,
                 kernel::Tick::Hidden => true,
-                kernel::Tick::Draw { rect, alpha } => {
-                    if !groups.iter().any(|g| g.carousel.intersects(&rect)) {
-                        push_pair(cmds, line, rect.left - 1, rect.top - 1, alpha);
-                    }
+                kernel::Tick::Draw { alpha, .. } => {
+                    let bounds = line_bounds(line);
+                    let blockers = cmds.iter().chain(crit_cmds.iter()).map(DrawCmd::rect);
+                    let rect = line.anim.avoid_rects(bounds, &blockers);
+                    push_pair(cmds, line, rect.left - 1, rect.top - 1, alpha);
                     true
                 }
             }

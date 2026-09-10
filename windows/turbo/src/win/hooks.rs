@@ -4475,10 +4475,11 @@ fn c_gx_font__get_kerned_advance__5ca2d0_miss(
     let metric: extern "fastcall" fn(*mut u8, u32) -> u32 =
         unsafe { core::mem::transmute(KADV_METRIC_VA) };
     // 0x7ce830 kern adjust — fastcall(ecx = texObj, edx = metricA;
-    // stack: metricB, 2, &out), RET 0xC.
+    // stack: metricB, 2, &out), RET 0xC. The output is an (x, y) pair of
+    // signed dwords, even though this horizontal layout only consumes x.
     const KADV_ADJUST_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x3c_e830;
     // SAFETY: image base verified at load; signature matches the callee.
-    let adjust: extern "fastcall" fn(*mut u8, u32, u32, u32, *mut i32) -> u32 =
+    let adjust: extern "fastcall" fn(*mut u8, u32, u32, u32, *mut [i32; 2]) -> u32 =
         unsafe { core::mem::transmute(KADV_ADJUST_VA) };
     // 0x5ca240 base-advance float map lookup — thiscall(font; glyph), RET 4,
     // ST0 (the map stores f32s, so the thunk's narrow is an identity).
@@ -4513,15 +4514,13 @@ fn c_gx_font__get_kerned_advance__5ca2d0_miss(
     let tex = get_field24(tex_handle);
     let r1 = metric(tex, glyph);
     let r2 = metric(tex, next_glyph);
-    let mut kern: i32 = 0;
+    let mut adjustment = [0_i32; 2];
     // SAFETY: live atlas object; +0x8 is its flags dword (byte-tested).
     if unsafe { elq_rd_u8(tex as usize + 8) } & 0x40 != 0 {
-        adjust(tex, r1, r2, 2, &raw mut kern);
-        // SETGE/DEC/AND clamp: keep only negative kern values.
-        if kern >= 0 {
-            kern = 0;
-        }
+        adjust(tex, r1, r2, 2, &raw mut adjustment);
     }
+    // SETGE/DEC/AND clamp: keep only negative horizontal adjustments.
+    let kern = adjustment[0].min(0);
     let base_adv = base_advance(font, glyph);
     // Scale is read AFTER the lookup call, like stock's FMUL [font+0x188].
     // SAFETY: live CGxFont; +0x188 is the f32 kern scale.
@@ -5213,10 +5212,10 @@ fn glyph_width_probe(
 /// delegate taking the 8-dword region block by value), pen steps down by the
 /// line advance until the block height budget (`this+0x40`, STRICT less-than;
 /// NaN stops) or a single-line flag ends the walk. Screen strings pre-scale the
-/// line spacing through the biased-__ftol seed. The four trailing region dwords
-/// the stock passes from uninitialized stack are zero-initialized here
-/// (deterministic; the `EmitLineQuads` hook writes them before any status-2 close
-/// consumes them — same knowing deviation as its hit-test pads).
+/// line spacing through the biased-__ftol seed. The hyperlink state includes
+/// two scratch dwords beyond the eight-dword region passed to the close call.
+/// Its trailing six dwords are initialized here; the emitter fills them before
+/// a status-2 close consumes the region.
 // The block-height budget and the sentinel width test are negated so an unordered
 // operand ends the walk as the stock ordered compares did; the un-negated `>=` /
 // `<=` rewrite would let it continue.
@@ -5292,8 +5291,9 @@ pub extern "thiscall" fn c_gx_string__build_geometry__5cdc20(this: *mut u8) {
     let mut cursor = text0;
 
     // linkState block: [status, lineTop, linkPenX, penYcopy, finalPenX,
-    // region×4]. Slots 5..9 are stock's uninitialized stack — zeroed here.
-    let mut link: [u32; 9] = [0; 9];
+    // region x 4, tokenStart, tokenBytes]. The emitter writes the two scratch
+    // slots when opening a hyperlink, even though the close takes only 1..=8.
+    let mut link: [u32; 11] = [0; 11];
 
     // ---- line advance + spacing seed (0x5cdcc7..0x5cdd1d) ----
     let line_advance: f32;
@@ -46259,8 +46259,8 @@ pub extern "thiscall" fn c_gx_device__scene_present__592430(this: *mut u8, arg: 
 /// `thiscall(ecx = this)` plus type, text, color and a flag, callee-cleaned.
 /// The experience text (type 4) is suppressed on request; with the overlay
 /// enabled and able to render the line, the call is swallowed and the text
-/// drawn screen-space at scene-end; every other case runs the displaced
-/// code, so stock rendering is the fallback rather than the failure mode.
+/// drawn screen-space at scene-end. Other lines use the native renderer;
+/// when the owner's four slots are full, separate banks retain the overflow.
 pub extern "thiscall" fn create_world_text__6c73f0(
     this: *mut u8,
     text_type: i32,
@@ -46274,7 +46274,44 @@ pub extern "thiscall" fn create_world_text__6c73f0(
     if super::unitxp::worldtext::intercept(this, text_type, text, color) {
         return;
     }
+    if super::stocktext::create(this, text_type, text, color, flag) {
+        return;
+    }
     (super::symbols::originals::create_world_text__6c73f0())(this, text_type, text, color, flag);
+}
+
+/// Update a world-text owner's native slots and overflow at the same instant.
+pub extern "thiscall" fn world_text_owner__update__6c6d40(this: *mut u8, now: u32) {
+    (super::symbols::originals::world_text_owner__update__6c6d40())(this, now);
+    super::stocktext::update(this, now);
+}
+
+/// Submit a world-text owner's auxiliary draws, including overflow.
+pub extern "thiscall" fn world_text_owner__draw__6c6e00(this: *mut u8) {
+    (super::symbols::originals::world_text_owner__draw__6c6e00())(this);
+    super::stocktext::draw(this);
+}
+
+/// Release overflow before destroying the native world-text owner.
+pub extern "thiscall" fn world_text_owner__destroy__6c6cd0(this: *mut u8) {
+    super::stocktext::destroy(this);
+    (super::symbols::originals::world_text_owner__destroy__6c6cd0())(this);
+}
+
+/// Preserve collision displacement while native text updates its animation.
+pub extern "thiscall" fn world_text__update__6c7cc0(this: *mut u8, now: u32) -> u8 {
+    super::stocktext::update_line(this, now)
+}
+
+/// Keep each native text search near the line's previous placement.
+pub extern "fastcall" fn floating_text_place_rect__509520(list: i32, rect: *mut f32) {
+    super::stocktext::place(list, rect);
+}
+
+/// Remove placement state before returning a native line to its pool.
+pub extern "thiscall" fn world_text__release__6c86a0(this: *mut u8) {
+    super::stocktext::release_line(this);
+    (super::symbols::originals::world_text__release__6c86a0())(this);
 }
 
 /// Backend device release — the overlay drops its textures on teardown.

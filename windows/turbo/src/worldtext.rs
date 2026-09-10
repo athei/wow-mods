@@ -3,7 +3,7 @@
 //! Ports the animation model of the reference combat-text overlay this mod
 //! replaces: rise/fall/arc float curves with a late fade, crit pop-in with an
 //! exponentially damped shake and a slot carousel that pushes earlier crits
-//! outward, and the overlap fast-forward that keeps stacked lines readable.
+//! outward, and spatial displacement that keeps stacked lines readable.
 //! Time arrives as integer ticks and is quantized to 180 virtual frames per
 //! second, the same integer division of a performance counter the reference
 //! performs; geometry is screen-space pixel rects. No game state is read
@@ -11,7 +11,8 @@
 //! curve is host-testable. One deliberate deviation: lifetime ends when the
 //! quantized frame count reaches the total, where the reference compares raw
 //! ticks against `total * frequency`; the two disagree by less than one
-//! virtual frame.
+//! virtual frame. Overlapping lines move apart without aging or waiting for
+//! each other to disappear; the displacement lasts until the line ends.
 
 /// Float lifetime (1.9 s) and fade start (1.3 s), in exact virtual frames.
 ///
@@ -79,8 +80,7 @@ impl Rect {
 
 /// Elapsed virtual frames since `start`, the reference's quantized division.
 ///
-/// Signed on purpose: the overlap fast-forward backdates starts, and a start
-/// may legitimately sit before tick zero of the process clock.
+/// A future start stays at frame zero instead of reversing the animation.
 fn elapsed_frames(now: i64, start: i64, ticks_per_frame: i64) -> f64 {
     let frames = (now - start).max(0) / ticks_per_frame;
     // A lifetime is a few hundred frames; anything beyond the cap is already
@@ -146,6 +146,7 @@ pub struct Floating {
     start_ticks: i64,
     ticks_per_frame: i64,
     direction: Direction,
+    avoidance_y: i32,
     rect: Rect,
 }
 
@@ -161,6 +162,7 @@ impl Floating {
             start_ticks: spec.start_ticks,
             ticks_per_frame: spec.ticks_per_frame.max(1),
             direction,
+            avoidance_y: 0,
             rect: Rect {
                 left: 0,
                 top: 0,
@@ -204,9 +206,9 @@ impl Floating {
         };
         self.rect = Rect {
             left: ax - self.width / 2 + dx,
-            top: ay - self.height + dy,
+            top: ay - self.height + dy + self.avoidance_y,
             right: ax + self.width / 2 + dx,
-            bottom: ay + dy,
+            bottom: ay + dy + self.avoidance_y,
         };
 
         let fade_start = FLOAT_FADE_FRAMES;
@@ -226,14 +228,51 @@ impl Floating {
         }
     }
 
-    /// Rewind the start so the line has already travelled `distance` pixels.
+    /// Move the rendered bounds clear of other text without aging the line.
     ///
-    /// Backdates in whole virtual frames like the reference, so a
-    /// fast-forwarded line stays on the same quantized curve.
-    pub fn fast_forward(&mut self, distance: i32) {
-        let frames = f64::from(distance) / f64::from(self.travel_distance) * FLOAT_TOTAL_FRAMES;
-        let whole = i64::from(truncate(frames));
-        self.start_ticks -= whole * self.ticks_per_frame;
+    /// The displacement persists across ticks, so a crit expiring cannot pull
+    /// the line back toward its anchor. Rising and arc lines move up; falling
+    /// lines move down. Re-scan after each move because clearing one rectangle
+    /// can enter another that appeared earlier in the iterator.
+    pub fn avoid_rects(
+        &mut self,
+        mut bounds: Rect,
+        blockers: &(impl Iterator<Item = Rect> + Clone),
+    ) -> Rect {
+        loop {
+            let distance = blockers
+                .clone()
+                .filter(|other| bounds.intersects(other))
+                .map(|other| match self.direction {
+                    Direction::Down => other.bottom - bounds.top,
+                    Direction::Up | Direction::Arc => bounds.bottom - other.top,
+                })
+                .max()
+                .unwrap_or(0);
+            if distance == 0 {
+                return self.rect;
+            }
+            let previous_top = self.rect.top;
+            self.make_room(distance);
+            let shift = self.rect.top - previous_top;
+            bounds.top += shift;
+            bounds.bottom += shift;
+        }
+    }
+
+    /// Move along the floating direction without consuming animation time.
+    ///
+    /// A burst may require more room than the line's full travel distance.
+    /// Backdating its start to make that room would expire it before drawing.
+    /// Update the cached rect too so another insertion sees the new position.
+    pub const fn make_room(&mut self, distance: i32) {
+        let shift = match self.direction {
+            Direction::Down => distance,
+            Direction::Up | Direction::Arc => -distance,
+        };
+        self.avoidance_y += shift;
+        self.rect.top += shift;
+        self.rect.bottom += shift;
     }
 }
 
@@ -311,6 +350,7 @@ impl Crit {
     }
 
     /// The rect of the last drawn (or provisional) position.
+    #[cfg(test)]
     pub const fn rect(&self) -> Rect {
         self.rect
     }
@@ -524,7 +564,7 @@ impl<P> CritsGroup<P> {
     ///
     /// `tick` receives each crit and its payload and answers the crit's
     /// state; entries that end are removed (dropping their payload), and
-    /// each survivor remembers whether it drew, feeding [`Self::intersects`].
+    /// each survivor remembers whether it drew for visibility queries.
     pub fn tick_all(&mut self, mut tick: impl FnMut(&mut Crit, &P) -> CritTick) -> bool {
         self.entries.retain_mut(|entry| {
             let state = tick(&mut entry.crit, &entry.payload);
@@ -534,11 +574,19 @@ impl<P> CritsGroup<P> {
         !self.entries.is_empty()
     }
 
-    /// Whether any crit drawn this frame overlaps `rect`.
-    pub fn intersects(&self, rect: &Rect) -> bool {
+    /// Rectangles occupied by crits drawn this frame.
+    #[cfg(test)]
+    fn visible_rects(&self) -> impl Iterator<Item = Rect> + Clone {
         self.entries
             .iter()
-            .any(|e| e.visible && e.crit.rect().intersects(rect))
+            .filter(|entry| entry.visible)
+            .map(|entry| entry.crit.rect())
+    }
+
+    /// Whether any crit drawn this frame overlaps `rect`.
+    #[cfg(test)]
+    fn intersects(&self, rect: &Rect) -> bool {
+        self.visible_rects().any(|other| other.intersects(rect))
     }
 
     /// Drain every entry's payload without ticking, for adapter teardown.
@@ -552,9 +600,8 @@ impl<P> CritsGroup<P> {
 
 /// The tallest overlap between `rect` and any rect the iterator yields.
 ///
-/// Feeds the fast-forward pass: when a new line lands on existing ones, every
-/// line in the overlapped list is advanced by this height so the stack keeps
-/// spreading instead of piling up.
+/// Seeds insertion spacing. The draw pass resolves the rendered rectangles
+/// again after animation and projection, including mixed sizes and shadows.
 pub fn max_overlap_height(rect: &Rect, others: impl Iterator<Item = Rect>) -> i32 {
     others.fold(0, |best, other| best.max(rect.overlap_height(&other)))
 }
@@ -671,14 +718,195 @@ mod tests {
     }
 
     #[test]
-    fn fast_forward_backdates_whole_frames() {
+    fn spacing_preserves_the_original_fade_clock() {
         let mut float = Floating::new(&spec(ticks(100)), Direction::Up);
-        // 45px of 90px travel = half the lifetime = 171 frames.
-        float.fast_forward(45);
-        let Tick::Draw { rect, .. } = float.tick(ticks(100), Some((0, 100)), true) else {
-            panic!("draws after fast-forward");
+        float.make_room(45);
+        let Tick::Draw { rect, alpha } = float.tick(ticks(100), Some((0, 100)), true) else {
+            panic!("draws after making room");
         };
         assert_eq!(rect.bottom, 100 - 45);
+        assert_eq!(alpha, 1.0);
+        let Tick::Draw { alpha, .. } = float.tick(ticks(388), Some((0, 100)), true) else {
+            panic!("spacing preserves the lifetime");
+        };
+        assert_eq!(alpha, 0.5);
+        assert_eq!(float.tick(ticks(442), Some((0, 100)), true), Tick::End);
+    }
+
+    #[test]
+    fn simultaneous_proc_burst_does_not_expire_the_first_hit() {
+        for count in [4, 6, 12] {
+            let mut lines: Vec<Floating> = Vec::new();
+            for _ in 0..count {
+                let mut line = Floating::new(&spec(0), Direction::Up);
+                let _ = line.tick(0, Some((200, 500)), true);
+                let overlap = max_overlap_height(&line.rect(), lines.iter().map(Floating::rect));
+                for older in &mut lines {
+                    older.make_room(overlap);
+                }
+                lines.push(line);
+            }
+            let mut rects = Vec::new();
+            for line in &mut lines {
+                let Tick::Draw { rect, alpha } = line.tick(0, Some((200, 500)), true) else {
+                    panic!("every hit in the burst draws on the first frame");
+                };
+                assert_eq!(alpha, 1.0);
+                assert!(rects.iter().all(|other| !rect.intersects(other)));
+                rects.push(rect);
+            }
+            assert_eq!(rects.len(), count);
+        }
+    }
+
+    #[test]
+    fn spacing_follows_downward_and_arc_lines_without_aging() {
+        for direction in [Direction::Down, Direction::Arc] {
+            let mut line = Floating::new(&spec(0), direction);
+            let _ = line.tick(0, Some((200, 500)), true);
+            line.make_room(120);
+            let placed = line.rect();
+            let Tick::Draw { rect, alpha } = line.tick(0, Some((200, 500)), true) else {
+                panic!("displacement beyond the travel span must not expire a line");
+            };
+            assert_eq!(rect, placed);
+            assert_eq!(alpha, 1.0);
+            assert_eq!(
+                rect.bottom,
+                if direction == Direction::Down {
+                    620
+                } else {
+                    380
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn normal_hit_clears_a_crit_on_its_first_frame_without_aging() {
+        let mut group = CritsGroup::new(120, 30);
+        group.add(Crit::new(&crit_spec(0)), (), false, 0);
+        assert!(group.tick_all(|crit, ()| crit.tick(0, Some((200, 300)), true)));
+
+        let mut float = Floating::new(&spec(0), Direction::Up);
+        let Tick::Draw { rect, alpha } = float.tick(0, Some((200, 300)), true) else {
+            panic!("new hit draws");
+        };
+        assert!(group.intersects(&rect));
+        let placed = float.avoid_rects(float.rect(), &group.visible_rects());
+        assert!(!group.intersects(&placed));
+        assert_eq!(alpha, 1.0);
+        assert_eq!(placed.height(), rect.height());
+        assert_eq!((placed.left, placed.right), (rect.left, rect.right));
+
+        // Expiring the crit keeps the displacement and the original fade clock.
+        assert!(!group.tick_all(|_, ()| CritTick::End));
+        let Tick::Draw { rect, alpha } = float.tick(ticks(288), Some((200, 300)), true) else {
+            panic!("avoiding a crit must not shorten the lifetime");
+        };
+        assert_eq!(rect.bottom, placed.bottom - 75);
+        assert_eq!(alpha, 0.5);
+        assert_eq!(
+            float.avoid_rects(float.rect(), &group.visible_rects()),
+            rect
+        );
+        assert_eq!(float.tick(ticks(342), Some((200, 300)), true), Tick::End);
+    }
+
+    #[test]
+    fn crit_avoidance_rescans_stacked_rects_and_does_not_drift() {
+        let blockers = [
+            Rect {
+                left: 100,
+                top: 250,
+                right: 300,
+                bottom: 280,
+            },
+            Rect {
+                left: 100,
+                top: 290,
+                right: 300,
+                bottom: 320,
+            },
+        ];
+        let mut float = Floating::new(&spec(0), Direction::Up);
+        let _ = float.tick(0, Some((200, 300)), true);
+        let placed = float.avoid_rects(float.rect(), &blockers.into_iter());
+        assert_eq!(placed.bottom, 250);
+        assert!(blockers.iter().all(|r| !r.intersects(&placed)));
+        assert_eq!(
+            float.avoid_rects(float.rect(), &blockers.into_iter()),
+            placed
+        );
+
+        let mut reversed = Floating::new(&spec(0), Direction::Up);
+        let _ = reversed.tick(0, Some((200, 300)), true);
+        assert_eq!(
+            reversed.avoid_rects(reversed.rect(), &blockers.into_iter().rev()),
+            placed
+        );
+        let Tick::Draw { rect, .. } = float.tick(0, Some((200, 300)), true) else {
+            panic!("same frame draws");
+        };
+        assert_eq!(rect, placed);
+    }
+
+    #[test]
+    fn rendered_bounds_clear_a_containing_blocker_without_aging() {
+        for direction in [Direction::Up, Direction::Down, Direction::Arc] {
+            let mut line = Floating::new(&spec(0), direction);
+            let _ = line.tick(0, Some((200, 300)), true);
+            let initial = line.rect();
+            let bounds = Rect {
+                left: initial.left - 1,
+                top: initial.top - 3,
+                right: initial.right + 5,
+                bottom: initial.bottom + 1,
+            };
+            let blocker = Rect {
+                left: bounds.left - 20,
+                top: bounds.top - 20,
+                right: bounds.right + 20,
+                bottom: bounds.bottom + 20,
+            };
+            let placed = line.avoid_rects(bounds, &core::iter::once(blocker));
+            let shift = placed.top - initial.top;
+            let rendered = Rect {
+                top: bounds.top + shift,
+                bottom: bounds.bottom + shift,
+                ..bounds
+            };
+            assert!(!rendered.intersects(&blocker));
+            assert_eq!(
+                line.avoid_rects(rendered, &core::iter::once(blocker)),
+                placed
+            );
+            let Tick::Draw { rect, alpha } = line.tick(0, Some((200, 300)), true) else {
+                panic!("spacing must preserve the line's lifetime");
+            };
+            assert_eq!(rect, placed);
+            assert_eq!(alpha, 1.0);
+        }
+    }
+
+    #[test]
+    fn falling_text_clears_crits_downward_and_keeps_moving() {
+        let blocker = Rect {
+            left: 100,
+            top: 270,
+            right: 300,
+            bottom: 320,
+        };
+        let mut float = Floating::new(&spec(0), Direction::Down);
+        let _ = float.tick(0, Some((200, 300)), true);
+        let placed = float.avoid_rects(float.rect(), &core::iter::once(blocker));
+        assert_eq!(placed.top, blocker.bottom);
+        assert!(!placed.intersects(&blocker));
+        let Tick::Draw { rect, alpha } = float.tick(ticks(171), Some((200, 300)), true) else {
+            panic!("falling line draws");
+        };
+        assert_eq!(rect.top, placed.top + 45);
+        assert_eq!(alpha, 1.0);
     }
 
     /// A crit spec with the same round numbers.
