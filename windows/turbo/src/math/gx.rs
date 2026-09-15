@@ -1387,6 +1387,8 @@ mod tests_glyph_tex_coords__5c7f80 {
     fn u48_u30_sum_is_exact_before_scaling() {
         // Two u32 near the top: the sum exceeds u32 but is exact in f64.
         let c = coords(0, 0, u32::MAX, u32::MAX, 0.5, 0.5);
+        // Preserve the reference expression's add-then-half evaluation order.
+        #[allow(clippy::manual_midpoint)]
         let want = super::super::f64_to_f32((f64::from(u32::MAX) + f64::from(u32::MAX)) * 0.5);
         assert_eq!(c[3].to_bits(), want.to_bits());
     }

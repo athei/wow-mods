@@ -20,6 +20,7 @@ windows/turbo/src/math/frustum.rs clippy::excessive_precision 1
 windows/turbo/src/math/frustum.rs non_snake_case 1
 windows/turbo/src/math/gx.rs clippy::double_comparisons 1
 windows/turbo/src/math/gx.rs clippy::fn_params_excessive_bools 1
+windows/turbo/src/math/gx.rs clippy::manual_midpoint 1
 windows/turbo/src/math/gx.rs clippy::multiple_unsafe_ops_per_block 1
 windows/turbo/src/math/gx.rs clippy::neg_cmp_op_on_partial_ord 2
 windows/turbo/src/math/gx.rs clippy::too_many_arguments 1
@@ -31,6 +32,7 @@ windows/turbo/src/math/lua.rs non_snake_case 1
 windows/turbo/src/math/lua_gc.rs clippy::vec_box 1
 windows/turbo/src/math/lua_gc.rs dead_code 2
 windows/turbo/src/math/m2.rs clippy::assign_op_pattern 1
+windows/turbo/src/math/m2.rs clippy::manual_midpoint 2
 windows/turbo/src/math/m2.rs clippy::neg_cmp_op_on_partial_ord 3
 windows/turbo/src/math/m2.rs clippy::too_many_arguments 2
 windows/turbo/src/math/m2.rs non_snake_case 1
@@ -72,6 +74,7 @@ windows/turbo/src/math/weather.rs clippy::neg_cmp_op_on_partial_ord 1
 windows/turbo/src/math/weather.rs clippy::too_many_arguments 2
 windows/turbo/src/math/weather.rs non_snake_case 1
 windows/turbo/src/math/world.rs clippy::excessive_precision 2
+windows/turbo/src/math/world.rs clippy::manual_midpoint 2
 windows/turbo/src/math/world.rs clippy::multiple_unsafe_ops_per_block 1
 windows/turbo/src/math/world.rs clippy::neg_cmp_op_on_partial_ord 10
 windows/turbo/src/math/world.rs clippy::too_many_arguments 12
@@ -82,6 +85,7 @@ windows/turbo/src/transmog.rs clippy::cast_possible_truncation 3
 windows/turbo/src/transmog.rs dead_code 5
 windows/turbo/src/win/diff.rs dead_code 1
 windows/turbo/src/win/hooks.rs clippy::cognitive_complexity 4
+windows/turbo/src/win/hooks.rs clippy::drain_collect 2
 windows/turbo/src/win/hooks.rs clippy::manual_range_contains 2
 windows/turbo/src/win/hooks.rs clippy::multiple_unsafe_ops_per_block 13
 windows/turbo/src/win/hooks.rs clippy::neg_cmp_op_on_partial_ord 15

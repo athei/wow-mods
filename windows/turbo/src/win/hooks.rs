@@ -5296,9 +5296,8 @@ pub extern "thiscall" fn c_gx_string__build_geometry__5cdc20(this: *mut u8) {
     let mut link: [u32; 11] = [0; 11];
 
     // ---- line advance + spacing seed (0x5cdcc7..0x5cdd1d) ----
-    let line_advance: f32;
-    if world {
-        line_advance = crate::math::gx::text_add_f32__5ccbe0(line_spacing, line_h0);
+    let line_advance = if world {
+        crate::math::gx::text_add_f32__5ccbe0(line_spacing, line_h0)
     } else {
         // SAFETY: device X pixel-scale global (FILDed zero-extended).
         let x_scale = unsafe { elq_rd_u32(BASE + 0x82_b9a0) };
@@ -5308,8 +5307,8 @@ pub extern "thiscall" fn c_gx_string__build_geometry__5cdc20(this: *mut u8) {
             crate::math::gx::build_line_spacing__5cdc20(line_spacing, x_scale, bias);
         line_spacing = spacing2;
         let snapped_h = object__snap_value_to_unit__5c6fa0(core::ptr::null_mut(), line_h0);
-        line_advance = crate::math::gx::text_add_f32__5ccbe0(snapped_h, t_f32);
-    }
+        crate::math::gx::text_add_f32__5ccbe0(snapped_h, t_f32)
+    };
     let mut word_break: u8 = 1;
     // lineTop tracker (linkState[1]) and penY copy (linkState[3]).
     link[1] = crate::math::gx::text_add_f32__5ccbe0(line_advance, pen[1]).to_bits();
@@ -9732,7 +9731,7 @@ pub extern "fastcall" fn collision_plane_box_clearance_test__6335d0(
     // Four side planes, pre-initialised to `(0, 0, 1, 0)` as the original does
     // before the builder overwrites them.
     let mut box_planes = [0.0f32; 16];
-    for plane in box_planes.chunks_exact_mut(4) {
+    for plane in box_planes.as_chunks_mut::<4>().0 {
         plane[2] = 1.0;
     }
     // Extrude direction `(0, 0, 1)` and the side-vertex index triple `[0,1,2]`.
@@ -11825,7 +11824,13 @@ pub extern "thiscall" fn c_cubic_spline__eval_frame_at_distance__454580(
         // verified at load).
         let baked = unsafe { BASIS_BAKED.read() };
         let mut expanded = DerivBasis([0.0f32; 16]);
-        for (row, src) in expanded.0.chunks_exact_mut(4).zip(baked.chunks_exact(3)) {
+        for (row, src) in expanded
+            .0
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .zip(baked.as_chunks::<3>().0.iter())
+        {
             row[..3].copy_from_slice(src);
         }
         expanded.0[15] = 1.0;
@@ -21388,7 +21393,7 @@ pub extern "fastcall" fn storm_archive__find_file_entry__6549a0(
         const LABEL: &str = "StormArchive__FindFileEntry__6549a0";
         static SELECTED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         let armed = *SELECTED.get_or_init(|| {
-            std::env::var("WOW_TURBO_DIFF_ARM").ok().is_some_and(|s| {
+            std::env::var("WOW_TURBO_DIFF_ARM").is_ok_and(|s| {
                 s.split(',').any(|t| {
                     let t = t.trim();
                     t == "all" || t == LABEL
@@ -22401,6 +22406,8 @@ fn lua_gc_mark_parallel(l: i32, g: usize, shared: &GcParShared) {
     if l as usize != mainthread {
         seed.mark(l as usize);
     }
+    // Keep the collector's existing allocation lifetime during the toolchain upgrade.
+    #[allow(clippy::drain_collect)]
     let seeds: Vec<usize> = seed.local.drain(..).collect();
     shared.injector.lock().unwrap().extend(seeds);
 
@@ -22428,6 +22435,8 @@ fn lua_gc_mark_parallel(l: i32, g: usize, shared: &GcParShared) {
             // SAFETY: GC-header next link at `+0x0`.
             u = unsafe { *(u as *const usize) };
         }
+        // Keep the collector's existing allocation lifetime during the toolchain upgrade.
+        #[allow(clippy::drain_collect)]
         let seeds: Vec<usize> = seed.local.drain(..).collect();
         shared.injector.lock().unwrap().extend(seeds);
     }
@@ -34752,22 +34761,21 @@ fn bdl_process_spatial_node(base: *mut u8, node: *const u8, draw_idx: &mut u32) 
         // field, the one the stock prologue loads first.
         let view = unsafe { bdl_rdp(base, 4) };
         let mut f24 = 1u32;
-        let f20;
         // SAFETY: `view` is that `+4` pointer, which the stock body dereferences
         // unconditionally at this site; `+4` is the view's flags dword.
-        if (unsafe { bdl_rd32(view, 4) } & 2) != 0 {
+        let f20 = if (unsafe { bdl_rd32(view, 4) } & 2) != 0 {
             // 0x7079c3 path.
             if depth < -radius {
                 f24 = 0;
             }
-            f20 = u32::from(!bucket::greater_or_unordered(depth, radius));
+            u32::from(!bucket::greater_or_unordered(depth, radius))
         } else {
             // 0x7079ed path.
             if bucket::strictly_less(depth, 0.0) {
                 f24 = 0;
             }
-            f20 = u32::from(f24 == 0);
-        }
+            u32::from(f24 == 0)
+        };
         flag24 = f24;
         flag20 = f20;
     }

@@ -5399,7 +5399,7 @@ pub fn c_world_view__compute_sort_hash_fold4__70a600<const N: usize>(
     let head = N % LANES;
     let mut poly = c_world_view__compute_sort_hash_fold__70a600(0, &terms[..head]);
     let mut chain = [0u32; LANES];
-    for step in terms[head..].chunks_exact(LANES) {
+    for step in terms[head..].as_chunks::<LANES>().0 {
         for (c, &t) in chain.iter_mut().zip(step) {
             *c = c.wrapping_mul(STEP).wrapping_add(t);
         }
@@ -6261,7 +6261,11 @@ mod tests_c_map__load_wdl__6944a0 {
         // Centers: X through the f32 sum local, Y extended, Z extended.
         let sum_x = narrow(min_x_ext + f64::from(max_x));
         let cx = narrow(f64::from(sum_x) * 0.5);
+        // Reference arithmetic must retain the client's add-then-half order.
+        #[allow(clippy::manual_midpoint)]
         let cy = narrow((min_y_ext + f64::from(max_y)) * 0.5);
+        // Reference arithmetic must retain the client's add-then-half order.
+        #[allow(clippy::manual_midpoint)]
         let cz = narrow((f64::from(min_h) + f64::from(max_h)) * 0.5);
         assert_eq!(b.center[0].to_bits(), cx.to_bits());
         assert_eq!(b.center[1].to_bits(), cy.to_bits());

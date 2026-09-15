@@ -4,7 +4,7 @@ resolver = "2"
 
 [workspace.package]
 edition = "2024"
-rust-version = "1.97"
+rust-version = "1.98.1"
 version = "1.12.0"
 license = "MIT"
 description = "WoW 1.12 client mods (perf reimpls + on-device chat translation) for Wine on macOS"

@@ -162,7 +162,7 @@ mod tests_c_aa_box__from_points__7c1450 {
     fn bbox_contains_all_points() {
         let pts = [3.0, -1.0, 0.0, -5.0, 2.0, 8.0, 1.0, 9.0, -4.0];
         let out = fp(&pts, 3);
-        for p in pts.chunks_exact(3) {
+        for p in pts.as_chunks::<3>().0 {
             assert!(out[0] <= p[0] && p[0] <= out[3]);
             assert!(out[1] <= p[1] && p[1] <= out[4]);
             assert!(out[2] <= p[2] && p[2] <= out[5]);

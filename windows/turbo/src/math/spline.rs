@@ -35,10 +35,9 @@ pub fn c_cubic_spline__arc_length_to_segment__453840(
     let target = scale * dist;
     let land = |idx: usize, acc: f32, divisor: f32| (idx as u32, (target - acc) / divisor);
     let head = &seg_lengths[..seg_count - 1];
-    let pairs = head.chunks_exact(2);
-    let odd = pairs.remainder();
+    let (pairs, odd) = head.as_chunks::<2>();
     let mut acc = 0.0f32;
-    for (pair_idx, pair) in pairs.enumerate() {
+    for (pair_idx, pair) in pairs.iter().enumerate() {
         let first = pair[0] + acc;
         if target < first {
             return land(2 * pair_idx, acc, pair[0]);

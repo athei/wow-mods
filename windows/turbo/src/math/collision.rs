@@ -3162,7 +3162,7 @@ pub fn collision_plane_box_clearance_test__6335d0(
     // as an `f32` memory operand and the compare itself happens at register width.
     let wide_threshold = f64::from(threshold);
 
-    for plane in planes.chunks_exact(4).take(3) {
+    for plane in planes.as_chunks::<4>().0.iter().take(3) {
         let x_term = f64::from(plane[0]) * x;
         let z_term = f64::from(plane[2]) * z;
         let y_term = f64::from(plane[1]) * y;
@@ -3248,7 +3248,7 @@ mod plane_box_clearance_tests {
     /// fixtures can witness that the width is observable rather than assert it
     /// in prose.
     fn narrow(planes: &[f32; 16], pos: &[f32; 3], threshold: f32) -> u32 {
-        for plane in planes.chunks_exact(4).take(3) {
+        for plane in planes.as_chunks::<4>().0.iter().take(3) {
             let eval = plane[0] * pos[0] + plane[1] * pos[1] + plane[2] * pos[2] + plane[3];
             if threshold < eval {
                 return 0;
@@ -3266,7 +3266,7 @@ mod plane_box_clearance_tests {
         let y = f64::from(pos[1]);
         let z = f64::from(pos[2]);
         let wt = f64::from(threshold);
-        for plane in planes.chunks_exact(4).take(3) {
+        for plane in planes.as_chunks::<4>().0.iter().take(3) {
             let eval = ((f64::from(plane[0]) * x + f64::from(plane[1]) * y)
                 + f64::from(plane[2]) * z)
                 + f64::from(plane[3]);
@@ -3539,7 +3539,7 @@ fn sweep_distance_pass(
     track_best: bool,
 ) -> (bool, f32) {
     let mut all_outside = true;
-    for vert in verts.chunks_exact(3).take(count) {
+    for vert in verts.as_chunks::<3>().0.iter().take(count) {
         let normal = [vert[0], vert[1], vert[2], 0.0];
         let t = collision_ray_plane_intersect_time__6329e0(&normal, motion, point);
         if track_best && t < f64::from(best_so_far) {

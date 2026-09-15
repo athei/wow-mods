@@ -362,7 +362,7 @@ WoWTranslate is Wine-on-macOS only while `wow_turbo` runs anywhere.
 
 Requires the Wine-on-macOS cross toolchain (`WINE_SDK`, `xwin`/`lld-link`,
 `winebuild`, `swiftc`), `cargo-nextest` (the runner both `make test` and
-`make check` invoke), and a rustup toolchain: stable 1.97 or newer, per
+`make check` invoke), and a rustup toolchain: stable 1.98.1 or newer, per
 `rust-version` in the Cargo manifests, plus nightly for `make fmt`
 (`rustfmt.toml` uses nightly-only options). Two workspaces:
 

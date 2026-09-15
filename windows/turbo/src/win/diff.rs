@@ -200,7 +200,13 @@ pub fn dump_case(
     // Per-lane, so a signed zero or a one-ulp step is readable without counting
     // hex digits. Only the lanes that differ: the rest is already above.
     if ours.len() == orig.len() && ours.len().is_multiple_of(4) {
-        for (lane, (a, b)) in ours.chunks_exact(4).zip(orig.chunks_exact(4)).enumerate() {
+        for (lane, (a, b)) in ours
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(orig.as_chunks::<4>().0.iter())
+            .enumerate()
+        {
             let (ab, bb) = (
                 u32::from_le_bytes([a[0], a[1], a[2], a[3]]),
                 u32::from_le_bytes([b[0], b[1], b[2], b[3]]),

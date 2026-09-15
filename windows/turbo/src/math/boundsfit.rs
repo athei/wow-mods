@@ -224,9 +224,11 @@ pub fn bounds_fit__moment_block__71bce0(basis: &MomentBasis, prior: &[f32; 12]) 
     let [vx, vy, vz] = basis.v;
     let mut out = [0.0f32; 12];
     for ((dst, w), src) in out
-        .chunks_exact_mut(3)
+        .as_chunks_mut::<3>()
+        .0
+        .iter_mut()
         .zip(basis.row_w)
-        .zip(prior.chunks_exact(3))
+        .zip(prior.as_chunks::<3>().0.iter())
     {
         dst[0] = w * vx + src[0];
         dst[1] = w * vy + src[1];

@@ -165,6 +165,8 @@ pub fn cm2_model__get_animation_info__711a20(
         (bound_vec[0] * bound_vec[0] + bound_vec[1] * bound_vec[1] + bound_vec[2] * bound_vec[2])
             .sqrt();
     let speed_scaled = len * move_speed;
+    // The client adds before halving, including overflow to infinity.
+    #[allow(clippy::manual_midpoint)]
     let center = [
         (box6[0] + box6[3]) * 0.5,
         (box6[1] + box6[4]) * 0.5,
@@ -405,6 +407,8 @@ pub unsafe fn cm2_shared__find_keyframe_interval__713d50(
             let mut h = hi;
             idx = l;
             while l < h {
+                // Preserve the client's add-then-shift arithmetic.
+                #[allow(clippy::manual_midpoint)]
                 let mid = (h + l) >> 1;
                 if time < at(mid) {
                     if mid == 0 {

@@ -70,7 +70,7 @@ pub fn take_over(record: usize, tga_filename: *const u8) -> bool {
     let height = u32::from(height);
     std::thread::spawn(move || {
         let mut pixels = pixels;
-        for pixel in pixels.chunks_exact_mut(BYTES_PER_PIXEL) {
+        for pixel in pixels.as_chunks_mut::<BYTES_PER_PIXEL>().0 {
             pixel.swap(0, 2);
         }
         if png {

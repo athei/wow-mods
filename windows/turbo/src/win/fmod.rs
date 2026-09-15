@@ -415,7 +415,7 @@ fn antialias_diff(
     static ARMED_NOTE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
     static STATS: super::diff::Stats = super::diff::Stats::new();
     static SELECTED: LazyLock<bool> = LazyLock::new(|| {
-        std::env::var("WOW_TURBO_DIFF_ARM").ok().is_some_and(|s| {
+        std::env::var("WOW_TURBO_DIFF_ARM").is_ok_and(|s| {
             s.split(',').any(|t| {
                 let t = t.trim();
                 t == "all" || t == LABEL
@@ -541,7 +541,7 @@ fn dct64_diff(out0: *mut f32, out1: *mut f32, samples: *const f32, pnts: &[*cons
     static ARMED_NOTE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
     static STATS: super::diff::Stats = super::diff::Stats::new();
     static SELECTED: LazyLock<bool> = LazyLock::new(|| {
-        std::env::var("WOW_TURBO_DIFF_ARM").ok().is_some_and(|s| {
+        std::env::var("WOW_TURBO_DIFF_ARM").is_ok_and(|s| {
             s.split(',').any(|t| {
                 let t = t.trim();
                 t == "all" || t == LABEL
@@ -660,7 +660,7 @@ fn dct36_diff(
     static ARMED_NOTE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
     static STATS: super::diff::Stats = super::diff::Stats::new();
     static SELECTED: LazyLock<bool> = LazyLock::new(|| {
-        std::env::var("WOW_TURBO_DIFF_ARM").ok().is_some_and(|s| {
+        std::env::var("WOW_TURBO_DIFF_ARM").is_ok_and(|s| {
             s.split(',').any(|t| {
                 let t = t.trim();
                 t == "all" || t == LABEL

@@ -2195,7 +2195,12 @@ pub fn perlin_noise3_d__452960(
     // the value ramp (nibble 28) with derivative nibble 24, then three
     // gradient channels (base nibbles 20/12/4, derivative nibbles 16/8/0).
     let mut o1 = [0.0_f32; 16];
-    for (dst, pair) in o1.chunks_exact_mut(4).zip(ch.chunks_exact(2)) {
+    for (dst, pair) in o1
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .zip(ch.as_chunks::<2>().0.iter())
+    {
         let (h0, h1) = (pair[0], pair[1]);
         dst[0] = lane(
             ramp(val_tab, nib(h1, 28) - nib(h0, 28)),
@@ -2239,7 +2244,13 @@ pub fn perlin_noise3_d__452960(
     // Value channel (nibble 28) takes its z-derivative from nibble 12; the
     // three derivative channels (base nibbles 24/20/16) from nibbles 8/4/0.
     let mut o2 = [0.0_f32; 16];
-    for ((dst, &h0), &h1) in o2.chunks_exact_mut(4).zip(&ch[..4]).zip(&ch[4..]) {
+    for ((dst, &h0), &h1) in o2
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .zip(&ch[..4])
+        .zip(&ch[4..])
+    {
         dst[0] = lane(
             ramp(val_tab, nib(h1, 28) - nib(h0, 28)),
             ramp(val_tab, nib(h0, 28)),
