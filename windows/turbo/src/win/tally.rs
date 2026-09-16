@@ -113,6 +113,7 @@ pub fn emit_cumulative() {
         return;
     }
     super::getname::emit_cumulative();
+    super::portrait::emit_cumulative();
     super::hooks::emit_cumulative();
     super::inflate_perf::emit_cumulative();
     super::script_method::emit_cumulative();

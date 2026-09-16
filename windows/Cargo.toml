@@ -83,7 +83,7 @@ too_many_lines = "allow"                # 70
 # has no hardware FMA, so `mul_add` lowers to an `fmaf` libcall. (The AVX2
 # native-Windows variant does have FMA, which is why the faithfulness argument
 # is the one that carries this and not the ISA.)
-suboptimal_flops = "allow"              # 1224
+suboptimal_flops = "allow"              # 1225
 # Stricter unsafe discipline.
 missing_safety_doc = "warn"
 not_unsafe_ptr_arg_deref = "warn"
@@ -116,7 +116,7 @@ undocumented_unsafe_blocks = "warn"
 # behaviour it has to match.
 items_after_statements = "allow"        # 845
 cast_ptr_alignment = "allow"            # 931 — reads are already `read_unaligned`
-unreadable_literal = "allow"            # 398 — addresses and bit masks, verbatim
+unreadable_literal = "allow"            # 402 — addresses and bit masks, verbatim
 similar_names = "allow"                 # 185
 semicolon_if_nothing_returned = "allow" # 55
 many_single_char_names = "allow"        # 44
@@ -126,7 +126,7 @@ many_single_char_names = "allow"        # 44
 # narrowing into a panic, which is a behaviour change, and in a per-frame hook
 # it is a crash. Float comparison is exact on purpose: the differential harness
 # compares bit patterns.
-cast_possible_truncation = "allow"      # 401
+cast_possible_truncation = "allow"      # 404
 cast_sign_loss = "allow"                # 243
 cast_possible_wrap = "allow"            # 102
 cast_precision_loss = "allow"           # 136

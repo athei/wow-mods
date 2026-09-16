@@ -5263,3 +5263,36 @@ abi = "fastcall"
 ret = "i32"
 args = ["i32"]
 preserve = []
+
+
+[functions.SetPortraitTexture__524f60]
+rva = 0x124f60
+sig = "53 8B DC 83 EC 08 83 E4 F8 83 C4 04"
+abi = "fastcall"
+ret = "void"
+args = ["usize", "usize"]
+preserve = []
+
+[functions.CGxDeviceD3d__ApplyViewport__5a1100]
+rva = 0x1a1100
+sig = "55 8B EC 83 EC 20 53 56 57 8B F1 E8 ?? ?? ?? ??"
+abi = "thiscall"
+ret = "void"
+args = ["usize"]
+preserve = []
+
+[functions.CGxDeviceD3d__TexDestroy__5a0850]
+rva = 0x1a0850
+sig = "55 8B EC 56 8B 75 08 8A 46 01 84 C0"
+abi = "thiscall"
+ret = "void"
+args = ["usize", "usize"]
+preserve = []
+
+[functions.CGxDeviceD3d__ITexUpdate__5a0d70]
+rva = 0x1a0d70
+sig = "55 8B EC 56 57 8B F9 8B 87 2C 0F 00 00"
+abi = "thiscall"
+ret = "void"
+args = ["usize", "usize"]
+preserve = []

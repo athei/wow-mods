@@ -364,6 +364,10 @@ buffer, although abrupt termination can still lose messages queued for the
 worker. No Unix companion is needed. Raw crash breadcrumbs retain their
 separate direct output path.
 
+The model-portrait hook renders directly into a 64 by 64 GPU texture, using
+native cache handles and deferred refreshes. Its lifecycle and operator test
+procedure are documented in [Model portraits](docs/PORTRAITS.md).
+
 If something ever misbehaves, `WOW_TURBO_SKIP=all` disables every hook and
 `WOW_TURBO_SKIP=Name1,Name2` disables specific ones — no rebuild, no
 reinstall.

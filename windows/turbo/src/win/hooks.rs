@@ -46402,6 +46402,7 @@ pub extern "thiscall" fn c_gx_device_d3d__i_release_d3d_resources__599900(
     this: *mut u8,
     flag: i32,
 ) {
+    super::portrait::release_resources(this.addr(), flag);
     super::unitxp::worldtext::release_resources(flag);
     (super::symbols::originals::c_gx_device_d3d__i_release_d3d_resources__599900())(this, flag);
 }
@@ -47082,4 +47083,27 @@ pub extern "fastcall" fn gx_prim_vertices_interleave_upload__58a3d0(
     }
     unlock(buf, stride.wrapping_mul(count));
     apply_preset(buf, fmt);
+}
+
+/// Model portraits keep native cache keys while rendering into GPU textures.
+pub extern "fastcall" fn set_portrait_texture__524f60(ui: usize, unit: usize) {
+    super::portrait::set_portrait(ui, unit);
+}
+
+/// Portrait passes use a 64-pixel hardware viewport with the native depth range.
+pub extern "thiscall" fn c_gx_device_d3d__apply_viewport__5a1100(device: usize) {
+    super::portrait::apply_viewport(device);
+}
+
+/// Discard portrait validity before the native texture allocation can be reused.
+pub extern "thiscall" fn c_gx_device_d3d__tex_destroy__5a0850(gx: usize, texture: usize) {
+    super::portrait::destroy_texture(texture);
+    (super::symbols::originals::c_gx_device_d3d__tex_destroy__5a0850())(gx, texture);
+}
+
+/// GPU portraits retain their placeholder until a deferred model render publishes new content.
+pub extern "thiscall" fn c_gx_device_d3d__i_tex_update__5a0d70(gx: usize, texture: usize) {
+    if !super::portrait::update_texture(gx, texture) {
+        (super::symbols::originals::c_gx_device_d3d__i_tex_update__5a0d70())(gx, texture);
+    }
 }

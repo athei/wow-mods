@@ -41,6 +41,7 @@ mod hooks;
 mod inflate_perf;
 mod lua;
 mod objmgr;
+mod portrait;
 mod script_method;
 pub mod seam_probe;
 mod stocktext;
@@ -315,8 +316,10 @@ fn attach_process(instance: *mut c_void) {
     // Reads whoever owns the `GetName` prologue, which only this side of
     // `install_all` can see — afterwards those bytes are our own detour.
     getname::detect_underlying(image_base);
+    portrait::prepare();
     symbols::install_all(image_base);
     stocktext::initialize();
+    portrait::initialize();
     // The client now jumps into this image, so it can no longer be unloaded
     // without taking the process with it: from here a detach means exit.
     PATCHED.store(true, Ordering::Relaxed);

@@ -66,6 +66,9 @@ mod worldtext;
 #[cfg(any(target_arch = "x86", test))]
 mod stocktext;
 
+#[cfg(any(target_arch = "x86", test))]
+mod portrait;
+
 #[cfg(target_arch = "x86")]
 mod win;
 
