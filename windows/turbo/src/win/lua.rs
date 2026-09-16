@@ -91,6 +91,22 @@ impl LuaState {
         Some(unsafe { core::slice::from_raw_parts((ts + 0x10) as *const u8, len) })
     }
 
+    /// Raw argument tag, or -1 for an absent argument, without coercion.
+    pub fn arg_type(&self, index: i32) -> i32 {
+        self.slot(index).map_or(-1, |slot| {
+            // SAFETY: `slot` addresses a live argument's tag word.
+            unsafe { *(slot as *const i32) }
+        })
+    }
+
+    /// Push a rooted argument through the host API.
+    pub fn push_argument(&self, index: i32) {
+        // SAFETY: `lua_pushvalue` is fastcall(L, index) at this verified entry.
+        let push: extern "fastcall" fn(i32, i32) =
+            unsafe { core::mem::transmute(crate::win::EXPECTED_IMAGE_BASE + 0x002f_3350usize) };
+        push(self.0, index);
+    }
+
     /// The number at `index`, coercing a numeric string as the host does.
     ///
     /// `None` when the argument is absent or not convertible — the probe and

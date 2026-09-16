@@ -1,11 +1,8 @@
 //! Portable string-library kernels for the Lua pattern-function fast paths.
 //!
-//! Lua 5.0's `string.gsub`/`string.gfind` always invoke the recursive pattern
-//! matcher, even when the pattern is a plain literal with no magic characters —
-//! the O(n*m) backtracking a chat/combat-log parser pays on every line. These
-//! helpers detect the literal case and perform the work with a single-pass
-//! substring search, leaving every pattern that carries a magic character (and
-//! every non-literal replacement) to the original matcher. No FFI; the 32-bit
+//! Literal substitution and iteration use substring search. Pattern calls can
+//! reject an absent mandatory literal before entering the recursive matcher;
+//! uncertain syntax and possible matches delegate. No FFI lives here: the
 //! adapters that read/write the Lua stack live in `win::hooks`.
 
 use memchr::memmem;
@@ -89,9 +86,29 @@ pub fn literal_find_from(subject: &[u8], pattern: &[u8], from: usize) -> Option<
     memmem::find(&subject[from..], pattern).map(|rel| from + rel)
 }
 
+/// Reject only when a fully inspected pattern requires an absent literal.
+///
+/// Unknown syntax delegates. `from` is the iterator's saved byte offset;
+/// inspection and search borrow their inputs and never allocate.
+#[must_use]
+pub fn pattern_rejects(subject: &[u8], pattern: &[u8], from: usize) -> bool {
+    super::strpattern::required_literal(pattern)
+        .is_some_and(|literal| literal_find_from(subject, literal, from).is_none())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{literal_find_from, literal_gsub, pattern_has_magic};
+    use super::{literal_find_from, literal_gsub, pattern_has_magic, pattern_rejects};
+
+    #[test]
+    fn prefilter_respects_iterator_offsets_and_binary_subjects() {
+        assert!(!pattern_rejects(b"abcd42", b"abcd%d+", 0));
+        assert!(pattern_rejects(b"abcd42", b"abcd%d+", 1));
+        assert!(!pattern_rejects(b"\0abcd42", b"abcd%d+", 0));
+        assert!(!pattern_rejects(b"absent", b"abcd(", 0));
+        assert!(!pattern_rejects(b"absent", b"abcd\0%d", 0));
+        assert!(pattern_rejects(b"abcd42", b"abcd%d+", 99));
+    }
 
     /// Position-by-position reference matching stock `str_gsub`'s loop.
     ///

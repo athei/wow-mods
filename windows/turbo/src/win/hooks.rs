@@ -18746,21 +18746,55 @@ pub extern "fastcall" fn lua_o_str2d__6f5900(s: *const u8, result: *mut f64) -> 
     }
 }
 
-/// `string.gsub` literal fast path.
+/// `string.find` rejection for a mandatory literal absent from the subject.
 ///
-/// When the pattern is a non-empty literal with no magic characters, the
-/// replacement is a plain string with no `%` escape, and no replacement-limit
-/// argument is supplied, rebuild the result with a single-pass substring replace
-/// and push `(result, count)` — skipping the recursive pattern matcher the
-/// original runs at every source position. Every other shape (a magic pattern, an
-/// escaped/non-string replacement, or an explicit limit) runs the stock
-/// implementation unchanged.
+/// Only actual strings and default optional arguments are inspected. All
+/// coercion, errors and positive matches remain with the original function.
+pub extern "fastcall" fn str_find__7fc3b0(l: i32) -> i32 {
+    // SAFETY: the hook receives the live Lua state for this call.
+    let state = unsafe { crate::win::lua::LuaState::from_raw(l) };
+    if state.arg_type(3) <= 0
+        && state.arg_type(4) <= 0
+        && let Some(subject) = state.str_arg(1)
+        && let Some(pattern) = state.str_arg(2)
+        && crate::math::strlib::pattern_has_magic(pattern)
+        && crate::math::strlib::pattern_rejects(subject, pattern, 0)
+    {
+        state.push_nil();
+        return 1;
+    }
+    super::symbols::originals::str_find__7fc3b0()(l)
+}
+
+/// `string.gsub` literal substitution and mandatory-literal rejection.
+///
+/// Plain literal patterns and replacements retain the substring fast path.
+/// Fully inspected patterns with an absent required literal return `(subject, 0)`
+/// after replacement-type validation. Coercion, explicit limits and possible
+/// pattern matches delegate to the original matcher.
 pub extern "fastcall" fn str_gsub__7fd0e0(l: i32) -> i32 {
     const CHECKLSTRING_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x2f_4be0;
     const TYPE_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x2f_3400;
     const PUSHLSTRING_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x2f_3840;
     const PUSHNUMBER_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x2f_3810;
     const LUA_TSTRING: i32 = 4;
+
+    // SAFETY: the hook receives the live Lua state for this call.
+    let state = unsafe { crate::win::lua::LuaState::from_raw(l) };
+    let (Some(subject), Some(pattern)) = (state.str_arg(1), state.str_arg(2)) else {
+        return super::symbols::originals::str_gsub__7fd0e0()(l);
+    };
+    // The original validates replacement type even when no match is possible.
+    // Numbers, invalid types and explicit limits retain its validation/coercion.
+    if matches!(state.arg_type(3), 4 | 6)
+        && state.arg_type(4) <= 0
+        && crate::math::strlib::pattern_has_magic(pattern)
+        && crate::math::strlib::pattern_rejects(subject, pattern, 0)
+    {
+        state.push_argument(1);
+        state.push_number(0.0);
+        return 2;
+    }
 
     // SAFETY: a fixed `.text` C-API entry in the live host image (base verified at
     // load); the transmuted signature matches the declared prototype
@@ -18782,6 +18816,7 @@ pub extern "fastcall" fn str_gsub__7fd0e0(l: i32) -> i32 {
     let pattern = unsafe { core::slice::from_raw_parts(pat, pat_len as usize) };
 
     if pat_len != 0
+        && !pattern.contains(&0)
         && !crate::math::strlib::pattern_has_magic(pattern)
         && lua_type(l, 3) == LUA_TSTRING
         && lua_type(l, 4) <= 0
@@ -18812,15 +18847,11 @@ pub extern "fastcall" fn str_gsub__7fd0e0(l: i32) -> i32 {
     original(l)
 }
 
-/// `string.gfind` iterator fast path.
+/// `string.gfind` literal iteration and mandatory-literal rejection.
 ///
-/// The closure body the factory installs runs the recursive matcher at every
-/// position on each `for` step. When the captured pattern is a non-empty literal
-/// with no magic character, advance to the next occurrence with a single substring
-/// search, store the new position back into the position upvalue, and push the
-/// matched substring — a literal pattern has no captures, so the whole match is
-/// the single result. A magic/empty pattern or an out-of-range saved position runs
-/// the stock iterator unchanged.
+/// Literal matches advance the saved position and return the matching substring.
+/// An absent required pattern literal returns zero results without changing that
+/// position. Unsupported patterns and possible matches use the original iterator.
 pub extern "fastcall" fn str_gfind_aux__7fcff0(l: i32) -> i32 {
     const TOSTRING_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x2f_3690;
     const STRLEN_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x2f_36e0;
@@ -18847,7 +18878,7 @@ pub extern "fastcall" fn str_gfind_aux__7fcff0(l: i32) -> i32 {
     // SAFETY: the pattern upvalue is an immutable, GC-rooted string.
     let pattern = unsafe { core::slice::from_raw_parts(pat, pat_len as usize) };
 
-    if pat_len != 0 && !crate::math::strlib::pattern_has_magic(pattern) {
+    if pat_len != 0 && !pattern.contains(&0) {
         let subj = tostring(l, UPVAL_SUBJECT);
         let subj_len = strlen(l, UPVAL_SUBJECT) as usize;
         // SAFETY: as above; `lua_tonumber(ecx = L, edx = index) -> f64` (in ST0).
@@ -18862,6 +18893,12 @@ pub extern "fastcall" fn str_gfind_aux__7fcff0(l: i32) -> i32 {
             }
             // SAFETY: the subject upvalue is an immutable, GC-rooted string.
             let subject = unsafe { core::slice::from_raw_parts(subj, subj_len) };
+            if crate::math::strlib::pattern_has_magic(pattern) {
+                if crate::math::strlib::pattern_rejects(subject, pattern, pos) {
+                    return 0;
+                }
+                return super::symbols::originals::str_gfind_aux__7fcff0()(l);
+            }
             let Some(matchpos) = crate::math::strlib::literal_find_from(subject, pattern, pos)
             else {
                 return 0;

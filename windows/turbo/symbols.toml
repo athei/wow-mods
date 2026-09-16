@@ -5253,3 +5253,13 @@ abi  = "fastcall"
 ret  = "void"
 args = ["u32", "*const u8", "u32", "*const u8", "u32", "*const u8", "u32", "*const u8", "u32", "*const u8", "u32"]
 preserve = []
+
+# string.find: ECX = Lua state, EAX = exact Lua result count.
+# Stack-mutating calls require fresh equivalent Lua invocations for comparison.
+[functions.str_find__7fc3b0]
+rva = 0x3fc3b0
+sig = "55 8B EC 81 EC 28 01 00 00 53 56 57"
+abi = "fastcall"
+ret = "i32"
+args = ["i32"]
+preserve = []

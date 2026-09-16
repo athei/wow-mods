@@ -70,6 +70,7 @@ pub mod trig;
 // Lua string-library literal fast-path kernels (gsub/gfind prefilter). Hand-
 // maintained, not generated — outside the assemble.py sentinels.
 pub mod strlib;
+pub mod strpattern;
 
 // Differential-mode comparator: compiled only when the harness exists
 // (`wow_turbo_diff` builds) or under test, so the default DLL carries no dead code.
