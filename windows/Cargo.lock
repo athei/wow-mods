@@ -623,7 +623,7 @@ checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 
 [[package]]
 name = "version-dll"
-version = "1.12.0"
+version = "1.13.0"
 dependencies = [
  "log",
  "wow-shared",
@@ -652,7 +652,7 @@ checksum = "23b97319f7b8343df12cc98938e5c3eb436064524c8d2b4e30a1d3a36eecdf81"
 
 [[package]]
 name = "wow-hook"
-version = "1.12.0"
+version = "1.13.0"
 dependencies = [
  "log",
  "minhook",
@@ -661,7 +661,7 @@ dependencies = [
 
 [[package]]
 name = "wow-mods-bridge"
-version = "1.12.0"
+version = "1.13.0"
 dependencies = [
  "log",
  "wow-shared",
@@ -669,7 +669,7 @@ dependencies = [
 
 [[package]]
 name = "wow-shared"
-version = "1.12.0"
+version = "1.13.0"
 dependencies = [
  "env_logger",
  "libc",
@@ -679,7 +679,7 @@ dependencies = [
 
 [[package]]
 name = "wow-translate-dll"
-version = "1.12.0"
+version = "1.13.0"
 dependencies = [
  "log",
  "wow-hook",
@@ -688,7 +688,7 @@ dependencies = [
 
 [[package]]
 name = "wow-turbo-dll"
-version = "1.12.0"
+version = "1.13.0"
 dependencies = [
  "ab_glyph",
  "jpeg-encoder",
