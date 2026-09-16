@@ -12,6 +12,7 @@ name = "wow_turbo"
 crate-type = ["cdylib"]
 
 [dependencies]
+libdeflate-sys = { workspace = true }
 log = { workspace = true }
 # Pure-Rust TTF parsing and glyph coverage rasterization for the combat-text
 # overlay (`win/unitxp/worldtext`): client-directory fonts are rasterized once
@@ -22,8 +23,7 @@ ab_glyph = { workspace = true }
 # module (classification + TSV rendering) is host-tested.
 rustc-hash = { workspace = true }
 jpeg-encoder = { workspace = true }
-# Pure-Rust inflate for the MPQ sector-decompressor reimpl (`storm::inflate`).
-# Not target-gated: the kernel is host-unit-tested under the same toolchain.
+# PNG screenshot encoding and compressed fixtures for decoder tests.
 miniz_oxide = { workspace = true }
 # Single-pattern substring search for the Lua string-library literal fast paths
 # (`math::strlib`). Not target-gated: the kernel is host-unit-tested.

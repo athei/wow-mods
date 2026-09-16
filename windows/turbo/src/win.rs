@@ -38,6 +38,7 @@ mod filecache;
 mod fmod;
 mod getname;
 mod hooks;
+mod inflate_perf;
 mod lua;
 mod objmgr;
 mod script_method;
@@ -83,6 +84,8 @@ const ISA: &str = if cfg!(target_feature = "avx2") {
 };
 
 unsafe extern "system" {
+    fn GetLastError() -> u32;
+    fn SetLastError(error: u32);
     fn GetModuleHandleA(module_name: *const u8) -> usize;
     fn GetProcAddress(module: usize, proc_name: *const u8) -> usize;
     fn GetCurrentProcess() -> *mut c_void;

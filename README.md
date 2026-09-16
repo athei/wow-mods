@@ -109,7 +109,8 @@ That makes `wow_turbo` safe to drop into an existing mod loadout (see
   fresh 2006-era one per MPQ sector, and memoized archive file-name lookups
   instead of re-hashing and re-probing every archive on every file open).
 - A drop-in replacement for `libSiliconPatch.dll`, with measurably better
-  code generation, that also covers everything `weirdperformance.dll` does.
+  code generation, plus the performance hooks from the previously audited
+  `weirdperformance.dll` binary.
 
 ### Why the 1.12 client is slow
 
@@ -271,16 +272,14 @@ and the log line names it.
   two `libm` calls per matrix where `wow_turbo` pays none — before counting
   everything it covers that `libSiliconPatch` doesn't touch (fonts, Lua,
   audio, loading, the clock).
-- **`weirdperformance.dll` — replaced; remove it.** Its collision, animation
-  and particle hooks and its MPQ-decompression hook are covered (the
-  decompressor more thoroughly — persistent inflater state instead of a
-  per-call one), and its one file-streaming optimization that actually fires
-  on this client — a memo cache for archive file-name resolution — is ported,
-  with the locking its version lacks. Its remaining stream hooks are no-ops
-  here: pass-throughs, or fast paths for a stream shape the 1.12 client never
-  creates. The only piece
-  deliberately not adopted is its small-block-allocator swap, whose global
-  free lists are unsynchronized.
+- Keep `weirdperformance.dll` unloaded. The previously audited binary's
+  collision, animation, particle, MPQ-decompression and archive-name memoization
+  hooks are covered. Its remaining stream hooks were pass-throughs or targeted
+  stream shapes absent from this client. That audit describes that binary,
+  not every feature in the subsequently published WeirdUtils source. The source
+  adds other Lua and gameplay changes; only the conservative Lua required-literal
+  prefilter is enabled here. Its allocator and additional gameplay changes remain
+  outside this project's adoption scope.
 - **UnitXP_SP3 — replaced; remove it.** `wow_turbo` serves its `UnitXP(...)`
   command set natively: line of sight (`inSight`, including the camera form),
   the five `distanceBetween` meters, `behind`, the full targeting suite, the
@@ -321,6 +320,31 @@ and the log line names it.
   and both only ever add behaviour around the original — the scene-end entry
   is the current example — the two stack instead: `wow_turbo` accepts the
   installed detour and chains underneath it.
+
+MPQ zlib decoding uses statically linked libdeflate with one reusable decoder per
+thread. Allocation failure, invalid streams and other compression methods use
+the original client decoder. The Lua character-class cache was not adopted
+because it regressed the broader benchmark; classification remains stock.
+
+Stock MPQ fallback is logged under `wow::mpq` as `[mpq-fallback]`, including the
+reason, input size, output capacity, compression mask when present, and stock
+return value (`0` means failure). Normal raw/other-codec/size-ineligible delegation logs at
+`info`; decoder problems and stock failures log at `warn`. These appear in
+normal builds with the default log level. Counts are separate for each reason
+and stock success/failure, sampled at 1, 2, 3, 4, 8, 16 and so on to bound log
+volume. Each count is current at that sample, not a final session total.
+`RUST_LOG=wow::mpq=off` silences this topic.
+
+`PERF=1` builds also report session totals as `mpq-inflate:` under `wow::perf`
+at `info`, every 60 seconds once decoding has run. `libdeflate_attempts` counts
+eligible zlib attempts; `libdeflate_ok` and `decoded_bytes` show successful use.
+`zlib_input_bytes` includes all attempted zlib streams, excluding MPQ mask bytes.
+`libdeflate_ms` includes failed attempts, TLS access and lazy decoder allocation.
+`stock_calls`, `stock_failed` and `stock_ms` describe completed fallbacks; timing
+excludes fallback logging. These are cumulative work totals across threads,
+not elapsed loading time. Reports can straddle concurrent updates. Comparing
+the two times does not measure a speedup because they cover different inputs.
+Normal builds omit these counters and clock reads entirely.
 
 If something ever misbehaves, `WOW_TURBO_SKIP=all` disables every hook and
 `WOW_TURBO_SKIP=Name1,Name2` disables specific ones — no rebuild, no

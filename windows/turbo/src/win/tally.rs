@@ -104,6 +104,7 @@ pub fn heartbeat() {
     }
     super::getname::emit_cumulative();
     super::hooks::emit_cumulative();
+    super::inflate_perf::emit_cumulative();
     super::script_method::emit_cumulative();
     super::seam_probe::emit_cumulative();
     super::unitxp::emit_cumulative();
@@ -227,6 +228,37 @@ impl SharedCounter {
     /// The running value, for a report; constant `0` without the layer.
     #[must_use]
     pub fn get(&self) -> u32 {
+        if LIVE {
+            self.0.load(Ordering::Relaxed)
+        } else {
+            0
+        }
+    }
+}
+
+/// A 64-bit sum written by multiple client threads.
+///
+/// MPQ decoding runs on asset-loading threads as well as the game thread.
+/// Byte and tick totals need both the width of [`Accum`] and an atomic add,
+/// so concurrent updates cannot overwrite each other.
+pub struct SharedAccum(AtomicU64);
+
+impl SharedAccum {
+    /// An accumulator starting from zero.
+    #[must_use]
+    pub const fn zero() -> Self {
+        Self(AtomicU64::new(0))
+    }
+
+    /// Add `v` without losing concurrent updates.
+    #[inline]
+    pub fn add(&self, _armed: &Armed, v: u64) {
+        self.0.fetch_add(v, Ordering::Relaxed);
+    }
+
+    /// The running value, for a report; constant `0` without the layer.
+    #[must_use]
+    pub fn get(&self) -> u64 {
         if LIVE {
             self.0.load(Ordering::Relaxed)
         } else {

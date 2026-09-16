@@ -26,6 +26,7 @@ windows/turbo/src/math/world.rs WdlTileBounds Clone,Copy,Debug
 windows/turbo/src/storm/filecache.rs Bucket Clone,Copy
 windows/turbo/src/storm/filecache.rs Entry Clone,Copy
 windows/turbo/src/storm/filecache.rs Hit Clone,Copy,PartialEq,Eq,Debug
+windows/turbo/src/storm/inflate.rs Fallback Clone,Copy,Debug,PartialEq,Eq
 windows/turbo/src/transmog.rs InvWrite Clone,Copy,PartialEq,Eq,Debug
 windows/turbo/src/transmog.rs PlayerWrite Clone,Copy,PartialEq,Eq,Debug
 windows/turbo/src/win/hooks.rs BdlOpaqueKey Clone,Copy

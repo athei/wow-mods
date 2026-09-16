@@ -12,6 +12,7 @@ authors = ["Alexander Theissen <alex.theissen@me.com>"]
 repository = "https://github.com/athei/wow-mods"
 
 [workspace.dependencies]
+libdeflate-sys = "1.26"
 wow-hook = { path = "hook" }
 wow-shared = { path = "../unix/shared" }
 ab_glyph = "0.2"

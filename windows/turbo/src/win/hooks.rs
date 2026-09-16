@@ -20971,19 +20971,16 @@ pub extern "thiscall" fn cm2_shared__animate_bones__714260(
 }
 
 thread_local! {
-    /// Reused inflate state for the `Storm__DecompressBlock` zlib fast path.
-    ///
-    /// Boxed because `DecompressorOxide` is ~11 KB of Huffman tables; one per
-    /// thread because MPQ sectors may be decompressed off more than one thread.
-    static INFLATE_STATE: core::cell::RefCell<Box<miniz_oxide::inflate::core::DecompressorOxide>> =
-        core::cell::RefCell::new(Box::new(miniz_oxide::inflate::core::DecompressorOxide::new()));
+    /// Reuse one decoder per thread and remember allocation failure for stock fallback.
+    static INFLATE_STATE: core::cell::RefCell<core::cell::LazyCell<Option<crate::storm::inflate::Decoder>>> =
+        const { core::cell::RefCell::new(core::cell::LazyCell::new(crate::storm::inflate::Decoder::new)) };
 }
 
 /// `Storm::DecompressBlock` (`SCompDecompress`).
 ///
 /// `__stdcall(out, *inoutOutSize, in, inSize, extra) -> 1/0`. The MPQ per-sector
 /// codec dispatcher; `in[0]` is a compression-method bitmask. Fast-paths the
-/// pure-zlib sector (`mask == 0x02`) through the reused `miniz_oxide` decompressor,
+/// pure-zlib sector (`mask == 0x02`) through a reused libdeflate decoder,
 /// eliminating the stock per-sector `inflateInit_`/`inflateEnd` + pool-allocator
 /// churn, and defers every other shape (raw passthrough, PKWARE/ADPCM/stacked
 /// masks, validation failures, any inflate error) to the stock original, which
@@ -20996,45 +20993,69 @@ pub extern "stdcall" fn storm__decompress_block(
     in_size: u32,
     extra: u32,
 ) -> u32 {
-    if !out.is_null() && !inout_out_size.is_null() && !input.is_null() && in_size >= 2 {
-        // SAFETY: `inout_out_size` is non-null; it points at the caller's 4-byte
-        // output-capacity field.
-        let capacity = unsafe { *inout_out_size };
-        // SAFETY: `input` is non-null with at least `in_size` (>= 2) readable
-        // bytes; byte 0 is the compression-method mask.
-        let mask = unsafe { *input };
-        // 0x02 = MPQ_COMPRESSION_ZLIB as the sole codec. Require `capacity >
-        // in_size` strictly: the stock path treats `in_size == capacity` as the
-        // raw-passthrough case (no mask byte — `in[0]` is data, not a method
-        // mask) and never decompresses it, so the fast path must exclude it. A
-        // genuinely compressed zlib sector is always smaller than its output.
-        if mask == 0x02 && capacity > in_size {
-            // SAFETY: `input` has at least `in_size` (>= 2) readable bytes, so
-            // element 1 (one past the mask byte) is in-bounds.
-            let payload = unsafe { input.add(1) };
-            // SAFETY: `payload` addresses the `in_size - 1` (>= 1) compressed bytes
-            // of the sector.
-            let src = unsafe { core::slice::from_raw_parts(payload, (in_size - 1) as usize) };
-            // SAFETY: `out` addresses `capacity` writable bytes (the caller's
-            // decompressed-sector buffer).
-            let dst = unsafe { core::slice::from_raw_parts_mut(out, capacity as usize) };
-            let produced = INFLATE_STATE.with(|state| {
-                let mut dec = state.borrow_mut();
-                crate::storm::inflate::inflate_zlib(&mut dec, src, dst)
-            });
-            if let Some(n) = produced
-                && let Ok(n) = u32::try_from(n)
-            {
-                // SAFETY: `inout_out_size` is non-null and writable (checked).
+    let mut capacity = None;
+    let mut mask = None;
+    let result = (|| {
+        if out.is_null() || inout_out_size.is_null() || input.is_null() {
+            return Err(crate::storm::inflate::Fallback::InvalidArguments);
+        }
+        if in_size < 2 {
+            return Err(crate::storm::inflate::Fallback::SizeIneligible);
+        }
+        // SAFETY: the caller supplies a readable output-capacity field.
+        let out_capacity = unsafe { *inout_out_size };
+        capacity = Some(out_capacity);
+        // SAFETY: the caller supplies `in_size` readable bytes.
+        let sector = unsafe { core::slice::from_raw_parts(input, in_size as usize) };
+        // Raw sectors have no mask byte; do not report their first data byte as one.
+        if in_size < out_capacity {
+            mask = Some(sector[0]);
+        }
+        let src = crate::storm::inflate::sector_payload(sector, out_capacity as usize)?;
+        // SAFETY: `out` addresses `out_capacity` writable bytes, disjoint from input.
+        let dst = unsafe { core::slice::from_raw_parts_mut(out, out_capacity as usize) };
+        let timing = super::tally::arm().map(|armed| (armed, wow_shared::tsc::rdtsc()));
+        let decoded = INFLATE_STATE.with(|state| {
+            let mut state = state
+                .try_borrow_mut()
+                .map_err(|_| crate::storm::inflate::Fallback::DecoderBusy)?;
+            core::cell::LazyCell::force_mut(&mut state)
+                .as_mut()
+                .ok_or(crate::storm::inflate::Fallback::DecoderUnavailable)?
+                .decode(src, dst)
+        });
+        if let Some((armed, start)) = timing {
+            let ticks = wow_shared::tsc::rdtsc().wrapping_sub(start);
+            super::inflate_perf::attempt(&armed, src.len(), decoded.as_ref().ok().copied(), ticks);
+        }
+        decoded
+    })();
+    let reason = match result {
+        Ok(n) => match u32::try_from(n) {
+            Ok(n) => {
+                // SAFETY: successful decoding required a non-null, writable size field.
                 unsafe { *inout_out_size = n };
                 return 1;
             }
-            // Stream rejected (or size overflow): fall through to the stock codec.
-        }
-    }
-    // Every non-fast-path shape, and any fast-path miss, runs the original.
+            Err(_) => crate::storm::inflate::Fallback::OutputSizeOverflow,
+        },
+        Err(reason) => reason,
+    };
+    // Release the TLS borrow before stock runs. Record its result without changing
+    // the return value or the output-length field it owns on this path.
     let original = super::symbols::originals::storm__decompress_block();
-    original(out, inout_out_size, input, in_size, extra)
+    let timing = super::tally::arm().map(|armed| (armed, wow_shared::tsc::rdtsc()));
+    let stock_result = original(out, inout_out_size, input, in_size, extra);
+    // SAFETY: GetLastError reads this thread's Win32 error code with no preconditions.
+    let last_error = unsafe { super::GetLastError() };
+    if let Some((armed, start)) = timing {
+        let ticks = wow_shared::tsc::rdtsc().wrapping_sub(start);
+        super::inflate_perf::stock(&armed, stock_result, ticks);
+    }
+    reason.record(in_size, capacity, mask, stock_result);
+    // SAFETY: restore the stock handler's thread-local code after logger I/O.
+    unsafe { super::SetLastError(last_error) };
+    stock_result
 }
 
 /// Un-hooked Storm archive helpers the `StormArchive__FindFileEntry` replay calls directly by VA.

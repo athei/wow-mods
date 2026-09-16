@@ -375,6 +375,8 @@ check:
 	PERF=1 $(MAKE) doc
 	$(MAKE) lint-counts
 	$(MAKE) test
+	# Compile the combined configuration used by instrumented builds.
+	cd windows && WOW_TURBO_DIFF=1 WOW_TURBO_PERF=1 WOW_CRUMB=1 cargo clippy -p wow-turbo-dll --all-targets --target $(PE_i386) $(DENY_WARNINGS)
 
 # Semver-compatible bumps; `upgrade-incompat` needs cargo-edit.
 upgrade:
