@@ -22,7 +22,7 @@ memchr = "2"
 miniz_oxide = { version = "0.9", features = ["simd"] }
 minhook = "0.9"
 rustc-hash = "2"
-jpeg-encoder = "0.6"
+jpeg-encoder = "0.7"
 serde = { version = "1", features = ["derive"] }
 snmalloc-rs = { version = "0.7", features = ["build_cc"] }
 toml = "1.1"
