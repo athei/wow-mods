@@ -78,19 +78,24 @@ impl<const N: usize> Buf<N> {
 /// `expected = true` (a hook documented as deliberately more precise than the
 /// original) logs at debug instead of warn so the operator's warn stream stays
 /// actionable.
-fn report(stats: &Stats, label: &str, expected: bool, detail: impl FnOnce() -> String) {
+fn report(
+    stats: &Stats,
+    label: &'static str,
+    expected: bool,
+    detail: impl FnOnce() -> String + Send + 'static,
+) {
     let n = stats.tick();
     if n < MISMATCH_DETAIL {
         if expected {
-            log::debug!(target: super::LOG_TARGET, "[diff] {label} diverged (expected): {}", detail());
+            crate::defer_log!(target: super::LOG_TARGET, log::Level::Debug, "[diff] {label} diverged (expected): {}", detail());
         } else {
-            log::warn!(target: super::LOG_TARGET, "[diff] {label} diverged: {}", detail());
+            crate::defer_log!(target: super::LOG_TARGET, log::Level::Warn, "[diff] {label} diverged: {}", detail());
         }
     } else if (n + 1).is_multiple_of(MISMATCH_EVERY) {
         if expected {
-            log::debug!(target: super::LOG_TARGET, "[diff] {label}: {} divergences so far (expected)", n + 1);
+            crate::defer_log!(target: super::LOG_TARGET, log::Level::Debug, "[diff] {label}: {} divergences so far (expected)", n + 1);
         } else {
-            log::warn!(target: super::LOG_TARGET, "[diff] {label}: {} divergences so far", n + 1);
+            crate::defer_log!(target: super::LOG_TARGET, log::Level::Warn, "[diff] {label}: {} divergences so far", n + 1);
         }
     }
 }
@@ -106,15 +111,14 @@ fn report(stats: &Stats, label: &str, expected: bool, detail: impl FnOnce() -> S
 /// both sides of the compare are the same machine code and match by
 /// construction. Nothing at runtime tells the two kinds of call apart, so the
 /// caveat is stated once, here, rather than implied by silence.
-pub fn note_armed(armed: &::core::sync::atomic::AtomicBool, label: &str, delegates: bool) {
+pub fn note_armed(armed: &::core::sync::atomic::AtomicBool, label: &'static str, delegates: bool) {
     if !armed.swap(true, ::core::sync::atomic::Ordering::Relaxed) {
         if delegates {
-            log::info!(
-                target: super::LOG_TARGET,
+            crate::defer_log!(target: super::LOG_TARGET, log::Level::Info,
                 "[diff] armed: {label} (delegating — matches may be vacuous, not coverage)"
             );
         } else {
-            log::info!(target: super::LOG_TARGET, "[diff] armed: {label}");
+            crate::defer_log!(target: super::LOG_TARGET, log::Level::Info, "[diff] armed: {label}");
         }
     }
 }
@@ -131,16 +135,22 @@ pub fn note_armed(armed: &::core::sync::atomic::AtomicBool, label: &str, delegat
 /// Drift compares the snapshot against live memory *after* the original returns,
 /// which catches a value that changed and stayed changed, not one that changed and
 /// changed back. A sign bit on a zero is exactly that shape.
-pub fn note_nondeterministic(stats: &Stats, label: &str, arg: usize, first: &[u8], second: &[u8]) {
+pub fn note_nondeterministic(
+    stats: &Stats,
+    label: &'static str,
+    arg: usize,
+    first: &[u8],
+    second: &[u8],
+) {
     let Some(at) = ulp::first_divergence_bytes(first, second) else {
         return;
     };
-    report(stats, label, false, || {
+    let (first, second) = (first[at], second[at]);
+    report(stats, label, false, move || {
         format!(
             "ORIGINAL NOT SELF-CONSISTENT: two runs on the same arguments disagree at \
-             out arg{arg} byte {at} ({:#04x} then {:#04x}) — divergences for this entry \
+             out arg{arg} byte {at} ({first:#04x} then {second:#04x}); divergences for this entry \
              are not attributable to the reimplementation",
-            first[at], second[at]
         )
     });
 }
@@ -171,7 +181,7 @@ pub struct Tolerance {
 /// per-frame hook pays one hex dump per session and an atomic load thereafter.
 pub fn dump_case(
     stats: &Stats,
-    label: &str,
+    label: &'static str,
     expected: bool,
     ins: &[(usize, &[u8])],
     ours: &[u8],
@@ -182,47 +192,65 @@ pub fn dump_case(
     if stats.events.load(Ordering::Relaxed) == 0 || stats.dumped.swap(true, Ordering::Relaxed) {
         return;
     }
-    for (arg, bytes) in ins {
+    let level = if expected {
+        log::Level::Debug
+    } else {
+        log::Level::Warn
+    };
+    if !log::log_enabled!(target: super::LOG_TARGET, level) {
+        return;
+    }
+    // These regions belong to the current compare call. Only their snapshots
+    // may outlive it; all hex and float formatting runs on the worker.
+    let ins: Vec<_> = ins
+        .iter()
+        .map(|(arg, bytes)| (*arg, bytes.to_vec()))
+        .collect();
+    let ours = ours.to_vec();
+    let orig = orig.to_vec();
+    crate::log_worker::defer(level, super::LOG_TARGET, move || {
+        for (arg, bytes) in &ins {
+            emit_case(
+                expected,
+                format_args!("{label} case: arg{arg} = {}", Hex(bytes)),
+            );
+        }
         emit_case(
             expected,
-            format_args!("{label} case: arg{arg} = {}", Hex(bytes)),
+            format_args!("{label} case: out ours = {}", Hex(&ours)),
         );
-    }
-    emit_case(
-        expected,
-        format_args!("{label} case: out ours = {}", Hex(ours)),
-    );
-    emit_case(
-        expected,
-        format_args!("{label} case: out orig = {}", Hex(orig)),
-    );
+        emit_case(
+            expected,
+            format_args!("{label} case: out orig = {}", Hex(&orig)),
+        );
 
-    // Per-lane, so a signed zero or a one-ulp step is readable without counting
-    // hex digits. Only the lanes that differ: the rest is already above.
-    if ours.len() == orig.len() && ours.len().is_multiple_of(4) {
-        for (lane, (a, b)) in ours
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .zip(orig.as_chunks::<4>().0.iter())
-            .enumerate()
-        {
-            let (ab, bb) = (
-                u32::from_le_bytes([a[0], a[1], a[2], a[3]]),
-                u32::from_le_bytes([b[0], b[1], b[2], b[3]]),
-            );
-            if ab != bb {
-                emit_case(
-                    expected,
-                    format_args!(
-                        "{label} case: lane {lane} ours {ab:#010x} ({}) orig {bb:#010x} ({})",
-                        f32::from_bits(ab),
-                        f32::from_bits(bb)
-                    ),
+        // Per-lane, so a signed zero or a one-ulp step is readable without counting
+        // hex digits. Only the lanes that differ: the rest is already above.
+        if ours.len() == orig.len() && ours.len().is_multiple_of(4) {
+            for (lane, (a, b)) in ours
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(orig.as_chunks::<4>().0.iter())
+                .enumerate()
+            {
+                let (ab, bb) = (
+                    u32::from_le_bytes([a[0], a[1], a[2], a[3]]),
+                    u32::from_le_bytes([b[0], b[1], b[2], b[3]]),
                 );
+                if ab != bb {
+                    emit_case(
+                        expected,
+                        format_args!(
+                            "{label} case: lane {lane} ours {ab:#010x} ({}) orig {bb:#010x} ({})",
+                            f32::from_bits(ab),
+                            f32::from_bits(bb)
+                        ),
+                    );
+                }
             }
         }
-    }
+    });
 }
 
 /// Route a case line to the same level the entry's divergences use.
@@ -251,7 +279,7 @@ impl core::fmt::Display for Hex<'_> {
 /// Report the first diverging lane.
 pub fn region_f32(
     stats: &Stats,
-    label: &str,
+    label: &'static str,
     expected: bool,
     tol: &Tolerance,
     ours: &[u8],
@@ -260,7 +288,7 @@ pub fn region_f32(
     let Some(d) = ulp::first_divergence_f32(ours, orig, tol.ulp, tol.abs) else {
         return;
     };
-    report(stats, label, expected, || {
+    report(stats, label, expected, move || {
         format!(
             "out lane {}: ours {:?} ({:#010x}) vs orig {:?} ({:#010x})",
             d.lane,
@@ -286,7 +314,7 @@ pub fn region_f32(
 /// to be within it and 4-byte aligned.
 pub fn region_split(
     stats: &Stats,
-    label: &str,
+    label: &'static str,
     expected: bool,
     tol: &Tolerance,
     float_from: usize,
@@ -294,11 +322,9 @@ pub fn region_split(
     orig: &[u8],
 ) {
     if let Some(at) = ulp::first_divergence_bytes(&ours[..float_from], &orig[..float_from]) {
-        report(stats, label, expected, || {
-            format!(
-                "out byte {at}: ours {:#04x} vs orig {:#04x}",
-                ours[at], orig[at],
-            )
+        let (ours, orig) = (ours[at], orig[at]);
+        report(stats, label, expected, move || {
+            format!("out byte {at}: ours {ours:#04x} vs orig {orig:#04x}")
         });
         return;
     }
@@ -307,7 +333,7 @@ pub fn region_split(
     else {
         return;
     };
-    report(stats, label, expected, || {
+    report(stats, label, expected, move || {
         format!(
             "out lane {} (byte {}): ours {:?} ({:#010x}) vs orig {:?} ({:#010x})",
             d.lane,
@@ -332,39 +358,50 @@ pub fn region_split(
 /// Nothing in the harness could distinguish that from a real arithmetic
 /// difference before this existed, which is exactly how a reimplementation
 /// verified from the bytes can still be reported as diverging.
-pub fn note_input_drift(stats: &Stats, label: &str, arg: usize, snapshot: &[u8], live: &[u8]) {
+pub fn note_input_drift(
+    stats: &Stats,
+    label: &'static str,
+    arg: usize,
+    snapshot: &[u8],
+    live: &[u8],
+) {
     let Some(at) = ulp::first_divergence_bytes(snapshot, live) else {
         return;
     };
-    report(stats, label, false, || {
+    let (snapshot, live) = (snapshot[at], live[at]);
+    report(stats, label, false, move || {
         format!(
             "INPUT DRIFT: arg{arg} byte {at} changed under the compare \
-             (snapshot {:#04x}, now {:#04x}) — divergences for this entry are \
+             (snapshot {snapshot:#04x}, now {live:#04x}); divergences for this entry are \
              not attributable to the reimplementation",
-            snapshot[at], live[at],
         )
     });
 }
 
 /// Compare an output region byte-exactly; report the first diverging offset.
-pub fn region_bytes(stats: &Stats, label: &str, expected: bool, ours: &[u8], orig: &[u8]) {
+pub fn region_bytes(stats: &Stats, label: &'static str, expected: bool, ours: &[u8], orig: &[u8]) {
     let Some(at) = ulp::first_divergence_bytes(ours, orig) else {
         return;
     };
-    report(stats, label, expected, || {
-        format!(
-            "out byte {at}: ours {:#04x} vs orig {:#04x}",
-            ours[at], orig[at],
-        )
+    let (ours, orig) = (ours[at], orig[at]);
+    report(stats, label, expected, move || {
+        format!("out byte {at}: ours {ours:#04x} vs orig {orig:#04x}")
     });
 }
 
 /// Compare scalar `f32` returns within `max_ulp`.
-pub fn scalar_f32(stats: &Stats, label: &str, expected: bool, max_ulp: u32, ours: f32, orig: f32) {
+pub fn scalar_f32(
+    stats: &Stats,
+    label: &'static str,
+    expected: bool,
+    max_ulp: u32,
+    ours: f32,
+    orig: f32,
+) {
     if ulp::f32_within_ulp(ours, orig, max_ulp) {
         return;
     }
-    report(stats, label, expected, || {
+    report(stats, label, expected, move || {
         format!(
             "ret: ours {ours:?} ({:#010x}) vs orig {orig:?} ({:#010x})",
             ours.to_bits(),
@@ -379,11 +416,18 @@ pub fn scalar_f32(stats: &Stats, label: &str, expected: bool, max_ulp: u32, ours
 /// callers actually read; see the `ret_mask` annotation. The report prints the raw
 /// values as well as the masked ones, so a narrowed comparison still shows what
 /// the two sides really returned rather than hiding it.
-pub fn scalar_int(stats: &Stats, label: &str, expected: bool, mask: u64, ours: u64, orig: u64) {
+pub fn scalar_int(
+    stats: &Stats,
+    label: &'static str,
+    expected: bool,
+    mask: u64,
+    ours: u64,
+    orig: u64,
+) {
     if ours & mask == orig & mask {
         return;
     }
-    report(stats, label, expected, || {
+    report(stats, label, expected, move || {
         if mask == u64::MAX {
             format!("ret: ours {ours:#x} vs orig {orig:#x}")
         } else {

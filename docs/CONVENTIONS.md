@@ -307,7 +307,7 @@ Which atomic operation a counter compiles to is a property of its declared type 
 
 A hook placed purely to observe costs more than a counting site, a patched prologue and a trampoline on every call the target takes, so it is gated twice. Those entries carry `armed_only = true` in `symbols.toml`: without the layer `build.rs` drops them from the generated table entirely, so the build has no thunk, no install step and no `originals` accessor for them, and with the layer their install step sits behind the gauge's runtime arm, which the logger has resolved before `install_all` runs. An unarmed session leaves the function stock instead of detouring it to reach a delegate. The whole script gauge is installed this way. Such an adapter therefore has no unarmed caller and should not carry an unarmed branch: a delegate arm that cannot be reached is a claim about behaviour the code does not have.
 
-Reporting rides one cadence, the gauge's cumulative tick, and one target. Counters are session-cumulative and are never reset, so a log's last line carries the totals. A family emits its line only when it has something in it: a feature the player never used prints nothing, which is what keeps an armed log readable. Each module reports its own counters, so a label and the counter it names sit together in the file that writes it — a positional snapshot handed to another module to format is how a column silently comes to name the wrong number.
+Reporting runs on the PE logging worker's 60-second cadence and uses one target. If the runtime hook cannot start the worker, the existing game-thread heartbeat remains the fallback. Counters are session-cumulative and are never reset, so a log's last line carries the totals. A family emits its line only when it has something in it: a feature the player never used prints nothing, which is what keeps an armed log readable. Each module reports its own counters, so a label and the counter it names sit together in the file that writes it; a positional snapshot handed to another module to format is how a column silently comes to name the wrong number.
 
 ## Imports
 
@@ -322,3 +322,11 @@ Default `#[inline]`, not `#[inline(always)]`. LTO inlines small functions on its
 ## `LazyLock` over `OnceLock`
 
 `LazyLock` is the default when the initializer is a static `fn`. Reach for `OnceLock` only when the initializer needs runtime arguments. The audit confines it to the recorded files; whether a given static actually needs the runtime argument is the author's to honour, since no grep can tell.
+
+## Deferred logging in wow_turbo
+
+Use `crate::defer_log!(target: TARGET, log::Level::Info, ...)` for runtime messages. Its move closure constructs ordinary `log` arguments on the PE worker, after checking the filter on the caller. Literals are static and owned values move into the job; neither needs a clone. Use `crate::log_worker::defer` when preparing the report itself involves sorting, joining strings, or other work that belongs on the worker. The script gauge moves completed windows this way.
+
+A queued closure must be `Send + 'static`. Snapshot changing client state before enqueueing, even when an unsafe accessor can return a reference with an unconstrained lifetime. Never carry a Lua state, stack borrow, or client-memory read into the worker. Copying transient bytes on the caller is necessary; an `Arc` around borrowed formatting arguments cannot extend those bytes' lifetime. Keep once/sample gates on the caller, before queue allocation.
+
+Startup messages write synchronously to the session file until the verified render hook starts the worker outside `DllMain`. Retention scans and deletions run only on that worker. The compatibility path for ordinary `log!` records formats their borrowed arguments on the caller and queues owned text. Crash breadcrumbs bypass this queue. Nothing joins or flushes the worker from a client callback or `DllMain`.

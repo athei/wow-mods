@@ -63,7 +63,7 @@ pub fn initialize() {
         Ordering::Relaxed,
     );
     if !installed || !release_matches {
-        log::warn!(target: super::LOG_TARGET, "stock text overflow disabled: lifecycle hooks unavailable");
+        crate::defer_log!(target: super::LOG_TARGET, log::Level::Warn, "stock text overflow disabled: lifecycle hooks unavailable");
     }
 }
 

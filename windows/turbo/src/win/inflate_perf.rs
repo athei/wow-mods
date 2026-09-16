@@ -49,8 +49,7 @@ pub fn emit_cumulative() {
     if attempts | stock_calls == 0 {
         return;
     }
-    log::info!(
-        target: super::tally::TARGET,
+    crate::defer_log!(target: super::tally::TARGET, log::Level::Info,
         "mpq-inflate: libdeflate_attempts={attempts} libdeflate_ok={} \
          zlib_input_bytes={} decoded_bytes={} libdeflate_ms={} \
          stock_calls={stock_calls} stock_failed={} stock_ms={}",

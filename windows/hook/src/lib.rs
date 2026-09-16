@@ -303,18 +303,12 @@ pub fn module_base(name: &str) -> Option<usize> {
 /// that makes the next attempt possible, so it goes in the log rather than
 /// being summarised away.
 #[must_use]
-pub fn thunk_bytes(va: usize) -> String {
-    use core::fmt::Write as _;
-
-    let mut out = String::new();
-    for i in 0..8 {
+pub fn thunk_bytes(va: usize) -> [u8; 8] {
+    core::array::from_fn(|i| {
         // SAFETY: `va` is the target of a jump this process just decoded out
         // of a patched prologue, so it is mapped code.
-        let byte = unsafe { *((va + i) as *const u8) };
-        let sep = if i == 0 { "" } else { " " };
-        let _ = write!(out, "{sep}{byte:02x}");
-    }
-    out
+        unsafe { *((va + i) as *const u8) }
+    })
 }
 
 /// Drive [`verify_patches`] from a per-frame caller, cheaply.

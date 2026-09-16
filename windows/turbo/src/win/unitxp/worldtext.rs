@@ -106,7 +106,7 @@ pub fn set_font_size(value: f64) -> i32 {
     // clamped to [10, 100] above
     let size = clamped as i32;
     FONT_SIZE.store(size, Ordering::Relaxed);
-    log::info!(target: crate::win::LOG_TARGET, "worldtext: font size set to {size}");
+    crate::defer_log!(target: crate::win::LOG_TARGET, log::Level::Info, "worldtext: font size set to {size}");
     size
 }
 
@@ -137,13 +137,16 @@ pub fn set_font_name(name: String) -> String {
         *slot = name;
         slot.clone()
     };
-    if let Ok(faces) = &*FACES {
+    if let Ok(faces) = &*FACES
+        && log::log_enabled!(target: crate::win::LOG_TARGET, log::Level::Info)
+    {
+        // The Lua caller retains its echo; the log needs a separate owned value.
+        let echo = echo.clone();
         let stem = normalize_stem(&echo);
         if faces.resolve(&stem).is_some() {
-            log::info!(target: crate::win::LOG_TARGET, "worldtext: font name {echo:?} resolved to {stem}");
+            crate::defer_log!(target: crate::win::LOG_TARGET, log::Level::Info, "worldtext: font name {echo:?} resolved to {stem}");
         } else {
-            log::info!(
-                target: crate::win::LOG_TARGET,
+            crate::defer_log!(target: crate::win::LOG_TARGET, log::Level::Info,
                 "worldtext: font name {echo:?} matches no face; lines fall back to {}",
                 FACE_ORDER[0]
             );
@@ -204,15 +207,17 @@ impl Faces {
             return *cached;
         }
         let loaded = load_system_face(stem);
-        match loaded {
-            Some(_) => log::info!(
-                target: crate::win::LOG_TARGET,
-                "worldtext: system face {stem} loaded"
-            ),
-            None => log::info!(
-                target: crate::win::LOG_TARGET,
-                "worldtext: no system face matches {stem}; falling back to the client faces"
-            ),
+        if log::log_enabled!(target: crate::win::LOG_TARGET, log::Level::Info) {
+            let logged_stem = stem.to_owned();
+            if loaded.is_some() {
+                crate::defer_log!(target: crate::win::LOG_TARGET, log::Level::Info,
+                    "worldtext: system face {logged_stem} loaded"
+                );
+            } else {
+                crate::defer_log!(target: crate::win::LOG_TARGET, log::Level::Info,
+                    "worldtext: no system face matches {logged_stem}; falling back to the client faces"
+                );
+            }
         }
         cache.push((String::from(stem), loaded));
         loaded
@@ -311,8 +316,7 @@ fn load_system_face(stem: &str) -> Option<&'static crate::typeset::Face> {
             if let Some(face) = crate::typeset::Face::from_bytes(bytes) {
                 return Some(&*Box::leak(Box::new(face)));
             }
-            log::warn!(
-                target: crate::win::LOG_TARGET,
+            crate::defer_log!(target: crate::win::LOG_TARGET, log::Level::Warn,
                 "worldtext: {} matched but did not parse as a font",
                 path.display()
             );
@@ -357,8 +361,7 @@ fn load_faces() -> Result<Faces, String> {
         if let Some(face) = crate::typeset::Face::from_bytes(bytes) {
             faces.push((stem, &*Box::leak(Box::new(face))));
         } else {
-            log::warn!(
-                target: crate::win::LOG_TARGET,
+            crate::defer_log!(target: crate::win::LOG_TARGET, log::Level::Warn,
                 "worldtext: {} did not parse as a font",
                 path.display()
             );
@@ -373,11 +376,17 @@ fn load_faces() -> Result<Faces, String> {
         faces,
         system: Mutex::new(Vec::new()),
     };
-    log::info!(
-        target: crate::win::LOG_TARGET,
-        "worldtext: client faces loaded: {}; any system font resolves by file name on demand",
-        registry.roster()
-    );
+    if log::log_enabled!(target: crate::win::LOG_TARGET, log::Level::Info) {
+        let names: Vec<_> = registry
+            .faces
+            .iter()
+            .map(|(name, _)| name.clone())
+            .collect();
+        crate::defer_log!(target: crate::win::LOG_TARGET, log::Level::Info,
+            "worldtext: client faces loaded: {}; any system font resolves by file name on demand",
+            names.join(", ")
+        );
+    }
     Ok(registry)
 }
 
@@ -884,8 +893,7 @@ impl Overlay {
             if let Some(armed) = tally::arm() {
                 LEAKED_ON_DEVICE_SWAP.add(&armed, leaked);
             }
-            log::warn!(
-                target: crate::win::LOG_TARGET,
+            crate::defer_log!(target: crate::win::LOG_TARGET, log::Level::Warn,
                 "worldtext: {leaked} overlay entries leaked on a device swap"
             );
         }
@@ -1167,9 +1175,13 @@ static LAST_PICK: Mutex<String> = Mutex::new(String::new());
 fn note_pick(label: &str) {
     let mut last = LAST_PICK.lock().expect("game-thread only");
     if *last != label {
-        log::info!(target: crate::win::LOG_TARGET, "worldtext: drawing new lines with {label}");
         last.clear();
         last.push_str(label);
+        drop(last);
+        if log::log_enabled!(target: crate::win::LOG_TARGET, log::Level::Info) {
+            let label = label.to_owned();
+            crate::defer_log!(target: crate::win::LOG_TARGET, log::Level::Info, "worldtext: drawing new lines with {label}");
+        }
     }
 }
 
@@ -1857,8 +1869,7 @@ pub fn emit_cumulative() {
     let leaked = LEAKED_ON_DEVICE_SWAP.get();
     let capped = CAPPED.get();
     if floats | crits | uncovered | unready | failures | leaked | capped != 0 {
-        log::info!(
-            target: tally::TARGET,
+        crate::defer_log!(target: tally::TARGET, log::Level::Info,
             "unitxp worldtext: {floats} floats, {crits} crits, {uncovered} uncovered, \
              {unready} unready, {failures} tex failures, {leaked} leaked, {capped} capped",
         );

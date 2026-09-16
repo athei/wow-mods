@@ -13,7 +13,7 @@ pub mod tsc;
 pub mod view;
 
 pub use ffi_boundary::{InPtr, InPtrMut, OutPtr, ValueIn, VtableThis};
-pub use log_filter::init_logger;
+pub use log_filter::{init_logger, logger_backend_to};
 pub use params::{InitLoggerParams, TranslateParams, TranslateStatus};
 pub use view::F32s;
 

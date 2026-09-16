@@ -478,8 +478,7 @@ pub fn emit_cumulative() {
         let pos = cache.pos_hits.get();
         let misses = cache.misses.get();
         if ttl | pos | misses != 0 {
-            log::info!(
-                target: tally::TARGET,
+            crate::defer_log!(target: tally::TARGET, log::Level::Info,
                 "unitxp sight {label}: {ttl} ttl + {pos} pos / {misses} miss, evict {}",
                 cache.evictions.get(),
             );
@@ -487,6 +486,6 @@ pub fn emit_cumulative() {
     }
     let culled = FRUSTUM_CULLED.get();
     if culled != 0 {
-        log::info!(target: tally::TARGET, "unitxp sight: frustum-cull {culled}");
+        crate::defer_log!(target: tally::TARGET, log::Level::Info, "unitxp sight: frustum-cull {culled}");
     }
 }

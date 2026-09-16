@@ -69,7 +69,7 @@ A jump pattern says a jump is there, not whose it is, so an entry that accepts o
 
 `wow-hook` is the shared substrate and is `#![cfg(target_arch = "x86")]` in its entirety. The path at load:
 
-`DllMain(PROCESS_ATTACH)` → `on_dll_attach` (disable thread-library calls, init the logger) → `crumb::init` → image-base assert → `init_engine_clock(tsc_hz())` → `symbols::install_all` → `fmod::install_init_hook`.
+`DllMain(PROCESS_ATTACH)` → `log_worker::init` (install the shared backend without spawning) → `on_dll_attach` (disable thread-library calls, init the logger) → `crumb::init` → image-base assert → `init_engine_clock(tsc_hz())` → `symbols::install_all` → `fmod::install_init_hook`.
 
 Two rules with teeth:
 
@@ -163,7 +163,13 @@ Install destinations come from the environment, never from hardcoded paths. `WOW
 
 `version.dll` is a proxy, not a reimplementation: its real APIs are forwarded to `kernelbase.dll` at link time through a `.def` file, and only the two `VerInstallFile` entries exist in the image, as logging stubs.
 
-Each cdylib carries its own copy of the logging statics, so each initialises the logger from its own entry point — `DllMain` on the PE side, a one-shot thunk on the unix side.
+Each cdylib carries its own copy of the logging statics, so each initialises the logger from its own entry point: `DllMain` on the PE side, a one-shot thunk on the unix side. The shared logger factory defines the filter, timestamp and target. Other modules retain their stderr output; wow_turbo supplies its PE file sink and disables colour.
+
+`wow_turbo` owns one process-lifetime PE logging worker. The existing verified `CGxDeviceD3d::ISceneEnd` hook starts it outside the loader lock. Runtime callers enqueue owned `Send` closures through a standard unbounded MPSC channel; the worker constructs format arguments, formats and writes them. Borrowed ordinary `log!` records from dependencies use a compatibility path that renders owned text before enqueueing. Startup, a skipped render hook, or a failed spawn retains synchronous file output. No Unix library or extra DLL is required.
+
+The worker also reads the atomic PERF totals every 60 seconds, including during loading pauses. Script-gauge windows move to it for ranking, cumulative merging and formatting. Captures contain literals, owned data or copied scalar fields, never live client pointers. The queue preserves each producer's order; log timestamps describe emission time. Producers allocate queue jobs but do not wait for sink I/O. A slow sink can grow the queue, and abrupt process termination can discard its tail. Raw crash output stays separate and synchronous; detach never waits for the worker.
+
+`log_file` resolves `Logs/wow_turbo` from `current_exe`, creates directories as needed and opens a new session file only when a message is emitted. The name contains Unix milliseconds, the PE process ID and a collision counter. `create_new` prevents overwriting earlier sessions even when Wine reuses a process ID or the wall clock repeats. The append handle permits readers but denies other writers and deletion while open. Startup writes use it directly; once the worker is running it owns normal writes and the one-time retention pass. Retention keeps the active file plus the nine newest matching old session files by modification time, never traverses links or removes directories, and tolerates concurrent deletion or sharing failures. Locked or inaccessible old files can leave more than ten logs until a later launch. No userspace file buffer delays written lines until shutdown. Open/write failure falls back to stderr with one diagnostic; no logging call occurs inside the sink itself.
 
 ## What is committed
 

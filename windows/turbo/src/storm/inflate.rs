@@ -90,7 +90,7 @@ pub enum Fallback {
 
 impl Fallback {
     /// Stable reason label used in the MPQ diagnostic log.
-    const fn label(self) -> &'static str {
+    pub const fn label(self) -> &'static str {
         match self {
             Self::InvalidArguments => "invalid-arguments",
             Self::SizeIneligible => "size-ineligible",
@@ -105,18 +105,12 @@ impl Fallback {
         }
     }
 
-    /// Record sampled fallback counts separately for each reason and stock outcome.
+    /// Select the severity and count for a sampled fallback.
     ///
     /// Available in normal builds. Counts 1 through 4 and subsequent powers of two
     /// are emitted; successful libdeflate calls never touch these counters.
     #[cold]
-    pub fn record(
-        self,
-        input_size: u32,
-        capacity: Option<u32>,
-        mask: Option<u8>,
-        stock_result: u32,
-    ) {
+    pub fn sample(self, stock_result: u32) -> Option<(log::Level, u32)> {
         static COUNTS: [[core::sync::atomic::AtomicU32; 2]; 10] =
             [const { [const { core::sync::atomic::AtomicU32::new(0) }; 2] }; 10];
         let level = if stock_result != 0
@@ -129,14 +123,10 @@ impl Fallback {
             log::Level::Warn
         };
         if !log::log_enabled!(target: "wow::mpq", level) {
-            return;
+            return None;
         }
         let counter = &COUNTS[self as usize][usize::from(stock_result == 0)];
-        if let Some(count) = fallback_sample(counter) {
-            log::log!(target: "wow::mpq", level,
-                "[mpq-fallback] reason={} count={count} input={input_size} capacity={capacity:?} mask={mask:?} stock_result={stock_result}",
-                self.label());
-        }
+        fallback_sample(counter).map(|count| (level, count))
     }
 }
 
@@ -193,7 +183,7 @@ mod tests {
             assert!(!label.is_empty() && !label.contains(char::is_whitespace));
             assert!(labels.insert(label));
             // Also exercise the facade with its normal disabled test logger.
-            reason.record(0, None, None, 0);
+            let _ = reason.sample(0);
         }
     }
 

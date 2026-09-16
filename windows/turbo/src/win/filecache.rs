@@ -59,8 +59,7 @@ pub fn emit_cumulative() {
     if pos | neg | misses | unserved == 0 {
         return;
     }
-    log::info!(
-        target: super::tally::TARGET,
+    crate::defer_log!(target: super::tally::TARGET, log::Level::Info,
         "filecache: {pos} pos hits, {neg} neg hits, {misses} misses, \
          {unserved} unserved, {} flushes",
         FLUSHES.get(),

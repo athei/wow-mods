@@ -907,8 +907,7 @@ pub fn emit_cumulative() {
     let passes = ANIM_PASSES.get();
     if passes != 0 {
         let calls = ANIM_CALLS.get();
-        log::info!(
-            target: super::tally::TARGET,
+        crate::defer_log!(target: super::tally::TARGET, log::Level::Info,
             "seam anim: {passes} passes ({} multi-root, {} worker-arm), roots sum {} max {}, \
              list sum {} max {}, root us sum {} max {}, repeat {}/{calls}",
             ANIM_MULTI.get(),
@@ -925,8 +924,7 @@ pub fn emit_cumulative() {
     let par_passes = ANIM_PAR_PASSES.get();
     let par_gated = ANIM_PAR_GATED.get();
     if par_passes != 0 || par_gated != 0 {
-        log::info!(
-            target: super::tally::TARGET,
+        crate::defer_log!(target: super::tally::TARGET, log::Level::Info,
             "seam anim par: {par_passes} passes ({par_gated} gated multi-root), roots {}, \
              worker us sum {}, wait us sum {} max {}, fork us sum {}, stalls {}, helped {}",
             ANIM_PAR_ROOTS.get(),
@@ -940,8 +938,7 @@ pub fn emit_cumulative() {
     }
     let bdl_passes = BDL_PASSES.get();
     if bdl_passes != 0 {
-        log::info!(
-            target: super::tally::TARGET,
+        crate::defer_log!(target: super::tally::TARGET, log::Level::Info,
             "seam bdl: {bdl_passes} passes, total us {} max {}, us prologue {} collect {} \
              animate {} particles {} refresh {} spatial {} child {} finalize {}",
             ticks_to_us(BDL_TOTAL_TICKS.get()),
@@ -958,8 +955,7 @@ pub fn emit_cumulative() {
     }
     let fin_passes = FIN_PASSES.get();
     if fin_passes != 0 {
-        log::info!(
-            target: super::tally::TARGET,
+        crate::defer_log!(target: super::tally::TARGET, log::Level::Info,
             "seam finalize: {fin_passes} passes, b0 in sum {} max {} out {}, runs {}, spill {}, \
              probe steps {}, cmp calls {}, us dedup {} texsort {} merge {}",
             FIN_B0_IN_SUM.get(),
@@ -973,8 +969,7 @@ pub fn emit_cumulative() {
             ticks_to_us(FIN_TEXSORT_TICKS.get()),
             ticks_to_us(FIN_MERGE_TICKS.get()),
         );
-        log::info!(
-            target: super::tally::TARGET,
+        crate::defer_log!(target: super::tally::TARGET, log::Level::Info,
             "seam finalize sorts: trans sum {} max {}, cmps {} (tag {}), us {}, \
              opaque sum {} max {}, cmps {}, us {}",
             FIN_TRANS_SUM.get(),
@@ -991,12 +986,11 @@ pub fn emit_cumulative() {
     let p = PARTICLE_LOCKS.get();
     let r = RAIN_LOCKS.get();
     if p != 0 || r != 0 {
-        log::info!(target: super::tally::TARGET, "seam locks: particle {p}, rain {r}");
+        crate::defer_log!(target: super::tally::TARGET, log::Level::Info, "seam locks: particle {p}, rain {r}");
     }
     let mc_calls = MAPCHUNK_CALLS.get();
     if mc_calls != 0 {
-        log::info!(
-            target: super::tally::TARGET,
+        crate::defer_log!(target: super::tally::TARGET, log::Level::Info,
             "seam mapchunk: {mc_calls} calls, overlap {}, nodes {}, inserted {}, subs {}, \
              drift {}",
             MAPCHUNK_OVERLAP.get(),
@@ -1008,8 +1002,7 @@ pub fn emit_cumulative() {
     }
     let clip_calls = CLIP_CALLS.get();
     if clip_calls != 0 {
-        log::info!(
-            target: super::tally::TARGET,
+        crate::defer_log!(target: super::tally::TARGET, log::Level::Info,
             "seam clip: {clip_calls} calls, verts {}, hist {}/{}/{}/{}, \
              kept {}, dropped {}, cut {}",
             CLIP_VERTS.get(),
@@ -1024,8 +1017,7 @@ pub fn emit_cumulative() {
     }
     let face_passes = FACE_PASSES.get();
     if face_passes != 0 {
-        log::info!(
-            target: super::tally::TARGET,
+        crate::defer_log!(target: super::tally::TARGET, log::Level::Info,
             "seam faces: {face_passes} passes, visited {}, back {}, wiped {}, swept {}",
             FACE_VISITED.get(),
             FACE_BACK.get(),
@@ -1042,16 +1034,14 @@ pub fn emit_cumulative() {
     let doodad = TRACE_DOODAD_QUERY.get();
     let grid = TRACE_GRID_BUILD.get();
     if ground | sweep | terrain | scene | geometry | wmo | doodad | grid != 0 {
-        log::info!(
-            target: super::tally::TARGET,
+        crate::defer_log!(target: super::tally::TARGET, log::Level::Info,
             "seam traces: ground {ground}, sweep {sweep}, terrain {terrain}, scene {scene}, \
              geom {geometry}, wmo {wmo}, doodad {doodad}, grid {grid}",
         );
     }
     let tscene_calls = TSCENE_CALLS.get();
     if tscene_calls != 0 {
-        log::info!(
-            target: super::tally::TARGET,
+        crate::defer_log!(target: super::tally::TARGET, log::Level::Info,
             "seam trace scene: {tscene_calls} calls, us sum {} max {}, list sum {} max {}, \
              cands sum {} max {}, geom {}, two-pass {}, hits {}",
             ticks_to_us(TSCENE_TICKS_SUM.get()),
@@ -1067,8 +1057,7 @@ pub fn emit_cumulative() {
     }
     let draws = PART_DRAWS.get();
     if draws != 0 {
-        log::info!(
-            target: super::tally::TARGET,
+        crate::defer_log!(target: super::tally::TARGET, log::Level::Info,
             "seam particles: {draws} draws ({} clamped), count sum {} max {}, \
              hist {}/{}/{}/{}/{}, cap sum {}, emitted sum {}, build us sum {} max {}",
             PART_CLAMPED.get(),
@@ -1087,8 +1076,7 @@ pub fn emit_cumulative() {
     }
     let phys_nodes = PHYS_NODES.get();
     if phys_nodes != 0 {
-        log::info!(
-            target: super::tally::TARGET,
+        crate::defer_log!(target: super::tally::TARGET, log::Level::Info,
             "seam particles phys: {phys_nodes} nodes, upac us {}, emitters {}, emit us {}, \
              steps {} max {}, particles {} (aligned {}), culled {}, child {}, drift {}",
             ticks_to_us(PHYS_UPAC_TICKS.get()),
@@ -1105,8 +1093,7 @@ pub fn emit_cumulative() {
     }
     let rotate_calls = ROTATE_CALLS.get();
     if rotate_calls != 0 {
-        log::info!(
-            target: super::tally::TARGET,
+        crate::defer_log!(target: super::tally::TARGET, log::Level::Info,
             "seam axisrot: {rotate_calls} calls, constant {}",
             ROTATE_CONSTANT.get(),
         );
@@ -1114,8 +1101,7 @@ pub fn emit_cumulative() {
     let pre_passes = PART_PRE_PASSES.get();
     let pre_gated = PART_PRE_GATED.get();
     if pre_passes != 0 || pre_gated != 0 {
-        log::info!(
-            target: super::tally::TARGET,
+        crate::defer_log!(target: super::tally::TARGET, log::Level::Info,
             "seam particles par: {pre_passes} passes ({pre_gated} gated, {} late), emitters {}, \
              hits {}, miss absent {} validate {}/{}/{}/{}/{}/{}/{} timeout {} declined {}, \
              unconsumed {}, wait us sum {} max {} (scan-behind {}), publish us sum {}, \

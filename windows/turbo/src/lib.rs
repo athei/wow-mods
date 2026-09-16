@@ -33,6 +33,13 @@ mod math;
 #[cfg(any(target_arch = "x86", test))]
 mod storm;
 
+/// PE-owned logging queue; also compiled on the host for ownership tests.
+#[cfg(any(target_arch = "x86", test))]
+mod log_worker;
+
+#[cfg(any(target_arch = "x86", test))]
+mod log_file;
+
 /// Portable visible-item write-coalescing kernel.
 ///
 /// Suppresses the appearance flicker behind the descriptor-write hooks. Like

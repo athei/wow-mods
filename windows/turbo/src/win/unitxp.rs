@@ -580,8 +580,7 @@ fn chain_decide(owner_va: usize) -> bool {
         || String::from("an unnamed module"),
         |(name, base)| format!("{name}+{:#x}", owner_va.wrapping_sub(base)),
     );
-    log::info!(
-        target: super::LOG_TARGET,
+    crate::defer_log!(target: super::LOG_TARGET, log::Level::Info,
         "unitxp: the entry was re-hooked by {owner}; chaining underneath it",
     );
     false
@@ -601,8 +600,7 @@ pub fn emit_cumulative() {
     let handled = HANDLED.get();
     let delegated = DELEGATED.get();
     if handled | delegated != 0 {
-        log::info!(
-            target: super::tally::TARGET,
+        crate::defer_log!(target: super::tally::TARGET, log::Level::Info,
             "unitxp: {handled} handled, {delegated} delegated",
         );
     }

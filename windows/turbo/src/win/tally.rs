@@ -21,8 +21,8 @@
 //! second of wall per minute. Both are compiled in together, but the gauge
 //! keeps its own runtime arm on top, so a `PERF=1` session that only wants the
 //! cheap counters does not buy the expensive gauge with them, and this module
-//! owns the cadence that reports its own ([`heartbeat`]) rather than borrowing
-//! the gauge's.
+//! reports through the logging worker. [`heartbeat`] retains the game-thread
+//! cadence only when that worker could not start.
 //!
 //! Two properties are carried separately, because they are independent of each
 //! other. Holding the layer open is a value the caller holds: [`arm`] hands out
@@ -90,7 +90,7 @@ pub const fn arm() -> Option<Armed> {
 /// unreachable, which is what takes the reporting bodies, their format strings
 /// and the counters they read out of the build.
 pub fn heartbeat() {
-    if arm().is_none() {
+    if arm().is_none() || crate::log_worker::active() {
         return;
     }
     let now = wow_shared::tsc::rdtsc();
@@ -100,6 +100,16 @@ pub fn heartbeat() {
     }
     LAST_REPORT.store(now, Ordering::Relaxed);
     if last == 0 {
+        return;
+    }
+    emit_cumulative();
+}
+
+/// Read only atomic telemetry and emit it from the logging worker.
+///
+/// The heartbeat uses this synchronously only when no worker is running.
+pub fn emit_cumulative() {
+    if arm().is_none() {
         return;
     }
     super::getname::emit_cumulative();

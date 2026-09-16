@@ -549,8 +549,7 @@ pub fn open_disk_lookup(image_base: usize) {
         // live host image (base verified at load), and this runs at attach,
         // before the client's own threads reach that code.
         if !unsafe { wow_hook::patch_bytes(va, &expected, &NOPS, label) } {
-            log::warn!(
-                target: wow_hook::LOG_TARGET,
+            crate::defer_log!(target: wow_hook::LOG_TARGET, log::Level::Warn,
                 "{label}: left unpatched; loose files resolve only on the scoped paths",
             );
         }
@@ -564,14 +563,16 @@ pub fn open_disk_lookup(image_base: usize) {
 /// Re-asserting would restore the bytes displaced at our install time and
 /// orphan the chain the newcomer built.
 fn scene_end_chain(owner_va: usize) -> bool {
-    let owner = wow_hook::module_of(owner_va).map_or_else(
-        || String::from("an unnamed module"),
-        |(name, base)| format!("{name}+{:#x}", owner_va.wrapping_sub(base)),
-    );
-    log::info!(
-        target: wow_hook::LOG_TARGET,
-        "scene end: the entry was re-hooked by {owner}; chaining underneath it",
-    );
+    let owner = wow_hook::module_of(owner_va);
+    crate::log_worker::defer(log::Level::Info, wow_hook::LOG_TARGET, move || {
+        let owner = owner.map_or_else(
+            || String::from("an unnamed module"),
+            |(name, base)| format!("{name}+{:#x}", owner_va.wrapping_sub(base)),
+        );
+        crate::defer_log!(target: wow_hook::LOG_TARGET, log::Level::Info,
+            "scene end: the entry was re-hooked by {owner}; chaining underneath it",
+        );
+    });
     false
 }
 
@@ -590,8 +591,7 @@ pub fn emit_cumulative() {
     if seen == 0 {
         return;
     }
-    log::info!(
-        target: super::tally::TARGET,
+    crate::defer_log!(target: super::tally::TARGET, log::Level::Info,
         "transmog: {seen} visible writes, {swallowed} coalesced, \
          {flushed} applied late, {refreshed} refreshes, {deferred} item writes parked",
     );

@@ -414,8 +414,7 @@ pub fn emit_cumulative() {
     let batches = PROBE_BATCHES.get();
     let reuses = PROBE_REUSES.get();
     if batches | reuses != 0 {
-        log::info!(
-            target: tally::TARGET,
+        crate::defer_log!(target: tally::TARGET, log::Level::Info,
             "unitxp camera: {batches} probe batches, {reuses} reused",
         );
     }

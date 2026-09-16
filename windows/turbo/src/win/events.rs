@@ -219,14 +219,12 @@ static ARMED: LazyLock<bool> = LazyLock::new(|| {
         let read_cost_ns = ticks_to_us(wow_shared::tsc::read_cost_milli_ticks());
         let stride = *API_SAMPLE;
         if stride > 1 {
-            log::debug!(
-                target: TARGET,
+            crate::defer_log!(target: TARGET, log::Level::Debug,
                 "event gauge armed, counter read cost {read_cost_ns} ns, \
                  api spans sampled 1-in-{stride}",
             );
         } else {
-            log::debug!(
-                target: TARGET,
+            crate::defer_log!(target: TARGET, log::Level::Debug,
                 "event gauge armed, counter read cost {read_cost_ns} ns",
             );
         }
@@ -370,12 +368,11 @@ struct Tables {
     span_rejects: u64,
 }
 
-/// Gauge state: the rolling one-second window plus the cumulative tables.
+/// Game-thread gauge state: the rolling window and attribution caches.
 struct State {
     window_start: u64,
     cumulative_emit: u64,
     window: Tables,
-    cumulative: Tables,
     /// Frames declared in addon markup, mapped to their declaring addon.
     ///
     /// Read from disk on first use, never on the load path.
@@ -397,11 +394,16 @@ static STATE: LazyLock<Mutex<State>> = LazyLock::new(|| {
         window_start: t,
         cumulative_emit: t,
         window: Tables::default(),
-        cumulative: Tables::default(),
         frames: None,
         owners: FxHashMap::default(),
     })
 });
+
+/// Cumulative tables owned by the reporter.
+///
+/// Startup fallback may run on the caller before the worker exists, so the owner
+/// uses a mutex.
+static REPORT_TOTALS: LazyLock<Mutex<Tables>> = LazyLock::new(|| Mutex::new(Tables::default()));
 
 /// Whether the gauge is armed (cheap after the first call).
 #[inline]
@@ -586,11 +588,12 @@ fn owner_of(st: &mut State, chunk: (usize, u32)) -> NameBuf {
     // Scripts written inline in markup are excluded — there is one chunk per
     // handler rather than per file, thousands of them in a session, and their
     // name is already the row they group under.
-    if text.contains(&b'\\') {
-        log::debug!(
-            target: TARGET,
+    if text.contains(&b'\\') && log::log_enabled!(target: TARGET, log::Level::Debug) {
+        // Lua owns the source bytes; snapshot before returning to the VM.
+        let text = text[..text.len().min(120)].to_vec();
+        crate::defer_log!(target: TARGET, log::Level::Debug,
             "chunk: {:?} -> {}",
-            String::from_utf8_lossy(&text[..text.len().min(120)]),
+            String::from_utf8_lossy(&text),
             name_str(&owner),
         );
     }
@@ -652,10 +655,10 @@ fn build_frame_index() -> FxHashMap<NameBuf, NameBuf> {
             }
         }
     }
-    log::debug!(
-        target: TARGET,
+    let frames = index.len();
+    crate::defer_log!(target: TARGET, log::Level::Debug,
         "addon frame index: {} frames declared in addon markup",
-        index.len(),
+        frames,
     );
     index
 }
@@ -1133,17 +1136,17 @@ pub fn signal_event(event_id: i32) {
     // an interface rebuild rather than a world load.
     match name_str(&dump) {
         "PLAYER_ENTERING_WORLD" => {
-            log::debug!(target: TARGET, "world: entered (loading screen ended)");
+            crate::defer_log!(target: TARGET, log::Level::Debug, "world: entered (loading screen ended)");
             dump_registry();
         }
         "PLAYER_LEAVING_WORLD" => {
-            log::debug!(target: TARGET, "world: leaving (loading screen started)");
+            crate::defer_log!(target: TARGET, log::Level::Debug, "world: leaving (loading screen started)");
         }
         "PLAYER_LOGOUT" => {
-            log::debug!(target: TARGET, "ui: unloading (reload or logout)");
+            crate::defer_log!(target: TARGET, log::Level::Debug, "ui: unloading (reload or logout)");
         }
         "VARIABLES_LOADED" => {
-            log::debug!(target: TARGET, "ui: rebuilt (saved variables read back)");
+            crate::defer_log!(target: TARGET, log::Level::Debug, "ui: rebuilt (saved variables read back)");
         }
         _ => {}
     }
@@ -1265,13 +1268,9 @@ fn record_handler(name: &NameBuf, dt: u64, ctx: u32, depth_zero: bool, param_pat
 
 /// Emit the per-second window (and periodically the cumulative tables).
 ///
-/// Emission is the most expensive thing the gauge does — formatting several
-/// ranked tables and writing them out — and it happens wherever the window
-/// happened to expire. A nested invoke can trigger it, which puts a stdout write
-/// inside a handler body that is still being timed, so what it cost is charged
-/// to the gauge's own buckets rather than to the script or the dispatch it
-/// interrupted. The charge lands on the window that follows, since the one it
-/// reported has already been printed.
+/// Move the completed tables to the worker for ranking, formatting, and merging
+/// into the cumulative report. Only the handoff cost is charged to the gauge's
+/// own next window. Before the worker starts, reporting remains synchronous.
 fn maybe_emit(st: &mut State) {
     let now = wow_shared::tsc::rdtsc();
     let window_ms = super::hooks::clock_ticks_to_ms(span(st.window_start, now));
@@ -1283,15 +1282,21 @@ fn maybe_emit(st: &mut State) {
     // belongs to, and from there into the cumulative tables by the ordinary
     // merge.
     st.window.span_rejects += u64::from(SPAN_REJECTS.swap(0, Ordering::Relaxed));
-    emit_tables(&st.window, window_ms, TOP_PER_SECOND, "", TARGET);
     let window = std::mem::take(&mut st.window);
-    merge(&mut st.cumulative, window);
     st.window_start = now;
     let cum_ms = super::hooks::clock_ticks_to_ms(span(st.cumulative_emit, now));
-    if cum_ms >= CUMULATIVE_MS {
-        emit_tables(&st.cumulative, cum_ms, TOP_CUMULATIVE, "total ", TARGET);
+    let cumulative_due = cum_ms >= CUMULATIVE_MS;
+    if cumulative_due {
         st.cumulative_emit = now;
     }
+    crate::log_worker::defer(log::Level::Debug, TARGET, move || {
+        emit_tables(&window, window_ms, TOP_PER_SECOND, "", TARGET);
+        let mut cumulative = REPORT_TOTALS.lock().unwrap_or_else(PoisonError::into_inner);
+        merge(&mut cumulative, window);
+        if cumulative_due {
+            emit_tables(&cumulative, cum_ms, TOP_CUMULATIVE, "total ", TARGET);
+        }
+    });
     // The mod's own counters report on their own arm and their own clock; this
     // call is one of the two paths that turn that clock, and it costs a load
     // and a branch when they are not armed.
@@ -1672,10 +1677,9 @@ fn dump_registry() {
         // name.
         let p = unsafe { *(entry as *const *const u8) };
         let name = name_from_cstr(p);
-        log::debug!(target: TARGET, "reg: {} listeners={n}", name_str(&name));
+        crate::defer_log!(target: TARGET, log::Level::Debug, "reg: {} listeners={n}", name_str(&name));
     }
-    log::debug!(
-        target: TARGET,
+    crate::defer_log!(target: TARGET, log::Level::Debug,
         "reg: {listened} of {count} events have listeners",
     );
 }

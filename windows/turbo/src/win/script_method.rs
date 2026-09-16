@@ -536,8 +536,7 @@ pub fn emit_cumulative() {
     if hits | nil_hits | misses | delegated == 0 {
         return;
     }
-    log::info!(
-        target: super::tally::TARGET,
+    crate::defer_log!(target: super::tally::TARGET, log::Level::Info,
         "index: {hits} hits + {nil_hits} nil hits / {misses} misses, \
          delegated {delegated}, evict {evictions}",
     );

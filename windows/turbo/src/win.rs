@@ -167,11 +167,12 @@ fn log_host() {
         let f: extern "cdecl" fn() -> *const u8 = unsafe { core::mem::transmute(loader) };
         name(f())
     };
-    log::info!(
-        target: LOG_TARGET,
+    let sysname = name(sysname);
+    let release = name(release);
+    crate::defer_log!(target: LOG_TARGET, log::Level::Info,
         "host: {} {} (loader {loader})",
-        name(sysname),
-        name(release),
+        sysname,
+        release,
     );
 }
 
@@ -198,8 +199,7 @@ fn log_windows_version(ntdll: usize) {
     if get_version(&raw mut info) != 0 {
         return;
     }
-    log::info!(
-        target: LOG_TARGET,
+    crate::defer_log!(target: LOG_TARGET, log::Level::Info,
         "host: Windows {}.{}.{}",
         info.major, info.minor, info.build,
     );
@@ -227,16 +227,14 @@ fn log_foreign_detours(image_base: usize) {
         let va = image_base + rva;
         if wow_hook::detour_target(va).is_some() {
             found += 1;
-            log::info!(
-                target: wow_hook::LOG_TARGET,
+            crate::defer_log!(target: wow_hook::LOG_TARGET, log::Level::Info,
                 "{label} @ {va:#010x} {}",
                 wow_hook::prologue_owner(va),
             );
         }
     }
     if found == 0 {
-        log::info!(
-            target: wow_hook::LOG_TARGET,
+        crate::defer_log!(target: wow_hook::LOG_TARGET, log::Level::Info,
             "script API: {} unhooked entries checked, none detoured",
             PROBED_ENTRIES.len(),
         );
@@ -284,6 +282,7 @@ fn exit_without_teardown() {
 }
 
 fn attach_process(instance: *mut c_void) {
+    crate::log_worker::init();
     // SAFETY: `instance` is the HINSTANCE the loader passed to DllMain.
     unsafe { wow_hook::on_dll_attach(instance) };
     // Join the shared breadcrumb ring so the generated thunks' `record` calls
@@ -293,10 +292,9 @@ fn attach_process(instance: *mut c_void) {
     // SAFETY: `instance` is the HINSTANCE the loader passed to DllMain, so this
     // image is mapped in full.
     let id = unsafe { identity::image_id(instance) };
-    let id = id.as_deref().unwrap_or("no-image-id");
+    let id = id.unwrap_or_else(|| String::from("no-image-id"));
     let build = identity::BUILD;
-    log::info!(
-        target: LOG_TARGET,
+    crate::defer_log!(target: LOG_TARGET, log::Level::Info,
         "wow_turbo {build} {ISA} {id} initialized, image_base = {image_base:#010x}",
     );
     log_host();

@@ -347,13 +347,12 @@ pub fn detect_underlying(image_base: usize) {
         // at install time its presence, not the entry's bytes, is what says
         // this machine has the GUID reading.
         if late_handler_installed() {
-            log::info!(
-                target: wow_hook::LOG_TARGET,
+            crate::defer_log!(target: wow_hook::LOG_TARGET, log::Level::Info,
                 "getname: stock prologue with {LATE_HANDLER_MODULE} installed, name and GUID",
             );
             MODE.store(MODE_EXTENDED, Ordering::Relaxed);
         } else {
-            log::info!(target: wow_hook::LOG_TARGET, "getname: stock handler, name only");
+            crate::defer_log!(target: wow_hook::LOG_TARGET, log::Level::Info, "getname: stock handler, name only");
             MODE.store(MODE_STOCK, Ordering::Relaxed);
         }
         return;
@@ -363,21 +362,21 @@ pub fn detect_underlying(image_base: usize) {
         name.eq_ignore_ascii_case(VERIFIED_HANDLER_MODULE)
             && VERIFIED_HANDLER_OFFSETS.contains(&target.wrapping_sub(base))
     });
-    let owner = owner.map_or_else(
-        || String::from("an unnamed module"),
-        |(name, base)| format!("{name}+{:#x}", target.wrapping_sub(base)),
-    );
-    if verified {
-        log::info!(
-            target: wow_hook::LOG_TARGET,
-            "getname: standing in for {owner}, name and GUID",
+    crate::log_worker::defer(log::Level::Info, wow_hook::LOG_TARGET, move || {
+        let owner = owner.map_or_else(
+            || String::from("an unnamed module"),
+            |(name, base)| format!("{name}+{:#x}", target.wrapping_sub(base)),
         );
-    } else {
-        log::info!(
-            target: wow_hook::LOG_TARGET,
-            "getname: unrecognized handler {owner}, running it unchanged",
-        );
-    }
+        if verified {
+            crate::defer_log!(target: wow_hook::LOG_TARGET, log::Level::Info,
+                "getname: standing in for {owner}, name and GUID",
+            );
+        } else {
+            crate::defer_log!(target: wow_hook::LOG_TARGET, log::Level::Info,
+                "getname: unrecognized handler {owner}, running it unchanged",
+            );
+        }
+    });
     MODE.store(
         if verified {
             MODE_EXTENDED
@@ -420,27 +419,24 @@ fn late_handler_installed() -> bool {
 /// reimplementation does not model go to the displaced code.
 fn late_handler_owns(thunk: usize) -> bool {
     if wow_hook::module_base(LATE_HANDLER_MODULE).is_none() {
-        log::info!(
-            target: wow_hook::LOG_TARGET,
+        let bytes = wow_hook::thunk_bytes(thunk);
+        crate::defer_log!(target: wow_hook::LOG_TARGET, log::Level::Info,
             "getname: the entry went to unnamed memory at {thunk:#010x} \
-             [{}] and {LATE_HANDLER_MODULE} is not loaded — leaving it",
-            wow_hook::thunk_bytes(thunk),
+             {bytes:02x?} and {LATE_HANDLER_MODULE} is not loaded; leaving it",
         );
         return false;
     }
     if !late_handler_installed() {
-        log::info!(
-            target: wow_hook::LOG_TARGET,
+        crate::defer_log!(target: wow_hook::LOG_TARGET, log::Level::Info,
             "getname: {LATE_HANDLER_MODULE}+{LATE_HANDLER_OFFSET:#x} is not the body \
              that was read — leaving the entry alone",
         );
         return false;
     }
-    log::info!(
-        target: wow_hook::LOG_TARGET,
-        "getname: the entry went to a thunk at {thunk:#010x} [{}] and \
+    let bytes = wow_hook::thunk_bytes(thunk);
+    crate::defer_log!(target: wow_hook::LOG_TARGET, log::Level::Info,
+        "getname: the entry went to a thunk at {thunk:#010x} {bytes:02x?} and \
          {LATE_HANDLER_MODULE}+{LATE_HANDLER_OFFSET:#x} is loaded and unchanged",
-        wow_hook::thunk_bytes(thunk),
     );
     true
 }
@@ -463,8 +459,7 @@ fn reclaim_entry(owner_va: usize) -> bool {
         return false;
     }
     if MODE.load(Ordering::Relaxed) == MODE_DELEGATE {
-        log::info!(
-            target: wow_hook::LOG_TARGET,
+        crate::defer_log!(target: wow_hook::LOG_TARGET, log::Level::Info,
             "getname: an unmodelled handler is underneath, \
              leaving the entry to {LATE_HANDLER_MODULE}",
         );
@@ -474,8 +469,7 @@ fn reclaim_entry(owner_va: usize) -> bool {
     // argument dialect differs from the optional-boolean one only for a
     // boolean argument, which is now answered under the documented reading.
     MODE.store(MODE_EXTENDED, Ordering::Relaxed);
-    log::info!(
-        target: wow_hook::LOG_TARGET,
+    crate::defer_log!(target: wow_hook::LOG_TARGET, log::Level::Info,
         "getname: reclaiming the entry from {LATE_HANDLER_MODULE}, name and GUID",
     );
     true
@@ -897,8 +891,7 @@ pub fn emit_cumulative() {
     if name_hits | name_misses | guid_hits | guid_misses | delegated == 0 {
         return;
     }
-    log::info!(
-        target: super::tally::TARGET,
+    crate::defer_log!(target: super::tally::TARGET, log::Level::Info,
         "getname: name {name_hits} hits / {name_misses} misses, \
          guid {guid_hits} / {guid_misses}, delegated {delegated}, evict {evictions}",
     );

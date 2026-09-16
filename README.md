@@ -87,8 +87,8 @@ flickering, jittering names in crowds), speeding up the addon Lua runtime, and
 removing the x87 floating-point bottleneck that makes vanilla WoW crawl under
 Rosetta 2 on Apple Silicon.
 
-Nothing on disk is modified. The mod injects at launch and patches functions
-in memory, and every patch is verified byte-for-byte first: if a function
+The client executable and assets are unchanged. The mod injects at launch and
+patches functions in memory, and every patch is verified byte-for-byte first: if a function
 doesn't look exactly as expected — because another mod already hooked it, or
 the client build differs — that one function is left alone and runs stock.
 That makes `wow_turbo` safe to drop into an existing mod loadout (see
@@ -345,6 +345,24 @@ excludes fallback logging. These are cumulative work totals across threads,
 not elapsed loading time. Reports can straddle concurrent updates. Comparing
 the two times does not measure a speedup because they cover different inputs.
 Normal builds omit these counters and clock reads entirely.
+
+Runtime logging uses a worker inside `wow_turbo.dll`: formatting and output run
+there, along with PERF reports and script-profiler table formatting. Literal
+strings require no cloning. Transient client data is copied before enqueueing;
+startup logs remain synchronous until the first verified render callback.
+Logs are plain-text files under `Logs/wow_turbo/` next to `WoW.exe`, independent
+of the launcher's working directory. Each session creates a new
+`wow_turbo-<timestamp>-<pid>-<collision>.log` on its first message; timestamps
+are Unix milliseconds and the collision number normally starts at zero.
+The worker keeps the ten newest session logs, leaving active or inaccessible
+files for a later launch. Rotation happens between sessions, with no size limit
+on the current file. `RUST_LOG` filtering is unchanged, and `RUST_LOG=off`
+creates no file. File failures report once and fall back to stderr.
+
+Startup messages reach the file immediately. Runtime writes have no userspace
+buffer, although abrupt termination can still lose messages queued for the
+worker. No Unix companion is needed. Raw crash breadcrumbs retain their
+separate direct output path.
 
 If something ever misbehaves, `WOW_TURBO_SKIP=all` disables every hook and
 `WOW_TURBO_SKIP=Name1,Name2` disables specific ones — no rebuild, no

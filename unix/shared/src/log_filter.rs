@@ -11,6 +11,23 @@
 /// all three linkage units. `NO_COLOR=1` opts out — `env_logger` only reads
 /// it under `WriteStyle::Auto`, so we have to pre-resolve the choice here.
 pub fn init_logger() {
+    let _ = build_logger().try_init();
+}
+
+/// Build the project's logger without installing it as this image's logger.
+///
+/// The PE logging worker uses it as its output backend, retaining the same
+/// filter and timestamp rules as the independently loaded modules. File output
+/// disables colour regardless of the console style.
+#[must_use]
+pub fn logger_backend_to(sink: Box<dyn std::io::Write + Send>) -> env_logger::Logger {
+    build_logger()
+        .target(env_logger::Target::Pipe(sink))
+        .write_style(env_logger::WriteStyle::Never)
+        .build()
+}
+
+fn build_logger() -> env_logger::Builder {
     let user = std::env::var("RUST_LOG").ok();
     let filter = resolved_log_filter(user.as_deref());
     let style = if std::env::var_os("NO_COLOR").is_some() {
@@ -18,10 +35,9 @@ pub fn init_logger() {
     } else {
         env_logger::WriteStyle::Always
     };
-    let _ = env_logger::Builder::new()
-        .parse_filters(&filter)
-        .write_style(style)
-        .try_init();
+    let mut builder = env_logger::Builder::new();
+    builder.parse_filters(&filter).write_style(style);
+    builder
 }
 
 fn resolved_log_filter(user: Option<&str>) -> String {

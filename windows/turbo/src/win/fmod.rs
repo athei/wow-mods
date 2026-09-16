@@ -151,7 +151,7 @@ pub fn install_init_hook() {
     // SAFETY: a NUL-terminated module name.
     let module = unsafe { GetModuleHandleA(c"fmod.dll".as_ptr().cast()) };
     if module == 0 {
-        log::warn!(target: LOG_TARGET, "{INIT_LABEL}: fmod.dll not loaded at attach — audio stays stock");
+        crate::defer_log!(target: LOG_TARGET, log::Level::Warn, "{INIT_LABEL}: fmod.dll not loaded at attach; audio stays stock");
         return;
     }
     // SAFETY: `module` is a live HMODULE and the export name is NUL-terminated.
@@ -159,7 +159,7 @@ pub fn install_init_hook() {
     // SAFETY: `module` is a live HMODULE and the export name is NUL-terminated.
     let init = unsafe { GetProcAddress(module, c"_FSOUND_Init@12".as_ptr().cast()) };
     if setmixer == 0 || init == 0 {
-        log::warn!(target: LOG_TARGET, "{INIT_LABEL}: fmod exports unresolved — audio stays stock");
+        crate::defer_log!(target: LOG_TARGET, log::Level::Warn, "{INIT_LABEL}: fmod exports unresolved; audio stays stock");
         return;
     }
     let base = setmixer - SETMIXER_RVA;
@@ -274,8 +274,7 @@ fn install_fmod_hooks() {
         // SAFETY: `va` is within fmod's mapped code; reads at most the
         // signature's token count of bytes.
         if !unsafe { wow_hook::signature_matches(va, hook.sig) } {
-            log::warn!(
-                target: wow_hook::LOG_TARGET,
+            crate::defer_log!(target: wow_hook::LOG_TARGET, log::Level::Warn,
                 "{} signature mismatch at {va:#010x} (base {base:#010x}) — refusing to patch",
                 hook.label,
             );

@@ -40,7 +40,7 @@ const NORMALIZE_K: *const f32 = (crate::win::EXPECTED_IMAGE_BASE + 0x3f_f9d8) as
 /// producing hook is named in the trail.
 #[cfg(wow_turbo_perf)]
 #[inline]
-fn trip_nonfinite(label: &str, inputs: &[f32], outputs: &[f32]) {
+fn trip_nonfinite(label: &'static str, inputs: &[f32], outputs: &[f32]) {
     if outputs.iter().all(|v| v.is_finite()) {
         return;
     }
@@ -55,14 +55,18 @@ fn trip_nonfinite(label: &str, inputs: &[f32], outputs: &[f32]) {
             wow_shared::crumb::dump_recent(128);
         }
     }
-    if n < 128 || n.is_multiple_of(512) {
+    if (n < 128 || n.is_multiple_of(512))
+        && log::log_enabled!(target: super::LOG_TARGET, log::Level::Warn)
+    {
+        // Stack/client slices expire on return; formatting uses owned snapshots.
+        let inputs = inputs.to_vec();
+        let outputs = outputs.to_vec();
         let origin = if manufactured {
             "MANUFACTURED"
         } else {
             "propagated"
         };
-        log::warn!(
-            target: super::LOG_TARGET,
+        crate::defer_log!(target: super::LOG_TARGET, log::Level::Warn,
             "[nan-trip] {label} {origin} #{n}: in={inputs:?} out={outputs:?}",
         );
     }
@@ -5087,12 +5091,12 @@ static GLYPH_NULL_EMIT: core::sync::atomic::AtomicU32 = core::sync::atomic::Atom
 /// And, under the `wow_turbo::glyph` TRACE target, logs a rate-limited note for
 /// that return.
 #[cold]
-fn glyph_cache_null(counter: &core::sync::atomic::AtomicU32, site: &str, codepoint: u32) {
+fn glyph_cache_null(counter: &core::sync::atomic::AtomicU32, site: &'static str, codepoint: u32) {
     let n = counter.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
     if log::log_enabled!(target: GLYPH_TRACE_TARGET, log::Level::Trace)
         && (n < 64 || n.is_multiple_of(256))
     {
-        log::trace!(target: GLYPH_TRACE_TARGET, "[glyph-null] {site} cp={codepoint:#x} n={}", n + 1);
+        crate::defer_log!(target: GLYPH_TRACE_TARGET, log::Level::Trace, "[glyph-null] {site} cp={codepoint:#x} n={}", n + 1);
     }
 }
 
@@ -5162,7 +5166,7 @@ fn glyph_width_probe(
         let mut map = map.borrow_mut();
         if map.len() >= 16384 {
             map.clear();
-            log::trace!(target: GLYPH_TRACE_TARGET, "[glyph-width] tracker reset (cap)");
+            crate::defer_log!(target: GLYPH_TRACE_TARGET, log::Level::Trace, "[glyph-width] tracker reset (cap)");
         }
         if let Some((prev, prev_tainted)) = map.insert(key, (width, tainted))
             && prev.to_bits() != width.to_bits()
@@ -5171,7 +5175,10 @@ fn glyph_width_probe(
             let a = GLYPH_NULL_ADVANCE.load(core::sync::atomic::Ordering::Relaxed);
             let f = GLYPH_NULL_FIT.load(core::sync::atomic::Ordering::Relaxed);
             let e = GLYPH_NULL_EMIT.load(core::sync::atomic::Ordering::Relaxed);
-            let preview = String::from_utf8_lossy(&bytes[..bytes.len().min(32)]);
+            // The preview borrows client text. Keep its bytes, never the borrow.
+            let mut preview = [0u8; 32];
+            let preview_len = bytes.len().min(preview.len());
+            preview[..preview_len].copy_from_slice(&bytes[..preview_len]);
             if tainted || prev_tainted {
                 // A glyph was dropped from this text's measure AND the width
                 // moved: the glyph-cache thrash signature. Rate-limited — a
@@ -5180,21 +5187,21 @@ fn glyph_width_probe(
                     core::sync::atomic::AtomicU32::new(0);
                 let n = WIDTH_WARNS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
                 if n < 16 || n.is_multiple_of(256) {
-                    log::warn!(
-                        target: GLYPH_TRACE_TARGET,
+                    crate::defer_log!(target: GLYPH_TRACE_TARGET, log::Level::Warn,
                         "[glyph-width] glyph-cache thrash regression: mode={mode} \
                          font={font:#x} h={height} w {prev}->{width} d={:+} n={} \
-                         nulls m/a/f/e={m}/{a}/{f}/{e} text={preview:?}",
+                         nulls m/a/f/e={m}/{a}/{f}/{e} text={:?}",
                         width - prev,
                         n + 1,
+                        String::from_utf8_lossy(&preview[..preview_len]),
                     );
                 }
             } else {
-                log::trace!(
-                    target: GLYPH_TRACE_TARGET,
+                crate::defer_log!(target: GLYPH_TRACE_TARGET, log::Level::Trace,
                     "[glyph-width] mode={mode} font={font:#x} h={height} w {prev}->{width} \
-                     d={:+} nulls m/a/f/e={m}/{a}/{f}/{e} text={preview:?}",
+                     d={:+} nulls m/a/f/e={m}/{a}/{f}/{e} text={:?}",
                     width - prev,
+                    String::from_utf8_lossy(&preview[..preview_len]),
                 );
             }
         }
@@ -12709,8 +12716,7 @@ pub fn init_engine_clock(hz: u64) {
     let bias = ms0 - ((u128::from(tsc0) * u128::from(magic)) >> CLOCK_SHIFT) as i64;
     CLOCK_MAGIC.store(magic, core::sync::atomic::Ordering::Relaxed);
     CLOCK_BIAS.store(bias, core::sync::atomic::Ordering::Relaxed);
-    log::info!(
-        target: super::LOG_TARGET,
+    crate::defer_log!(target: super::LOG_TARGET, log::Level::Info,
         "engine clock: tsc {hz} Hz -> magic {magic}, bias {bias} ms",
     );
 }
@@ -21052,7 +21058,13 @@ pub extern "stdcall" fn storm__decompress_block(
         let ticks = wow_shared::tsc::rdtsc().wrapping_sub(start);
         super::inflate_perf::stock(&armed, stock_result, ticks);
     }
-    reason.record(in_size, capacity, mask, stock_result);
+    if let Some((level, count)) = reason.sample(stock_result) {
+        crate::defer_log!(target: "wow::mpq", level,
+            "[mpq-fallback] reason={} count={count} input={in_size} \
+             capacity={capacity:?} mask={mask:?} stock_result={stock_result}",
+            reason.label(),
+        );
+    }
     // SAFETY: restore the stock handler's thread-local code after logger I/O.
     unsafe { super::SetLastError(last_error) };
     stock_result
@@ -22424,7 +22436,7 @@ fn gc_pool() -> &'static GcParShared {
                 })
                 .expect("wow_turbo: gc worker spawn failed");
         }
-        log::info!(target: "wow::gc", "gc pool: {workers} workers + coordinator");
+        crate::defer_log!(target: "wow::gc", log::Level::Info, "gc pool: {workers} workers + coordinator");
         shared
     })
 }
@@ -23029,8 +23041,7 @@ pub extern "fastcall" fn lua_c_collectgarbage__6f7340(l: i32) {
         let thr = unsafe { *((g + 0x24) as *const u32) };
         (after, thr)
     };
-    log::debug!(
-        target: "wow::gc",
+    crate::defer_log!(target: "wow::gc", log::Level::Debug,
         "gc: {total_ms} ms (mark {mark_ms}, sweep {sweep_ms}, \
          sizes {sizes_ms}, gctm {gctm_ms}), nblocks {nblocks_before} -> \
          {nblocks_after}, threshold {threshold}",
@@ -23043,8 +23054,7 @@ pub extern "fastcall" fn lua_c_collectgarbage__6f7340(l: i32) {
         static SLOW: AtomicU32 = AtomicU32::new(0);
         let n = SLOW.fetch_add(1, Ordering::Relaxed);
         if n < 64 || n.is_multiple_of(16) {
-            log::warn!(
-                target: "wow::gc",
+            crate::defer_log!(target: "wow::gc", log::Level::Warn,
                 "slow gc #{n}: {total_ms} ms (mark {mark_ms}, \
                  sweep {sweep_ms}, sizes {sizes_ms}, gctm {gctm_ms}), nblocks \
                  {nblocks_before} -> {nblocks_after}, threshold {threshold}",
@@ -25171,8 +25181,7 @@ pub extern "thiscall" fn cm2_scene__draw_batch_pass_entry__70b360(
             static TIMEOUTS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
             let n = TIMEOUTS.fetch_add(1, Ordering::Relaxed);
             if n < 8 || n.is_multiple_of(64) {
-                log::warn!(
-                    target: super::tally::TARGET,
+                crate::defer_log!(target: super::tally::TARGET, log::Level::Warn,
                     "particle pass join timed out (#{n}); leaking one pass storage box",
                 );
             }
@@ -33909,10 +33918,11 @@ impl BdlAnimPending {
                 // Once per session, not once per pass: a pool that stalls at
                 // all stalls every frame, and the first line already says
                 // everything the next thousand would.
-                wow_shared::log_once_warn!(
+                let roots = self.roots.len();
+                crate::defer_once_warn!(
                     target: super::tally::TARGET,
                     "animate fork join stalled past the deadline over {} roots; waiting it out",
-                    self.roots.len(),
+                    roots,
                 );
             }
         }
@@ -46296,6 +46306,8 @@ pub extern "thiscall" fn weather__set_type__67baf0(
 /// follows a present runs the limiter (the scene ends twice per frame under
 /// a software cursor).
 pub fn c_gx_device_d3d__i_scene_end__5a17a0(this: *mut u8) {
+    // This verified render callback runs outside DllMain's loader lock.
+    crate::log_worker::start(super::tally::emit_cumulative);
     super::transmog::flush();
     if !super::unitxp::settings::in_world() {
         (super::symbols::originals::c_gx_device_d3d__i_scene_end__5a17a0())(this);
@@ -46534,8 +46546,7 @@ pub fn emit_cumulative() {
     let placements = LAYOUT_PLACEMENTS.get();
     if placements != 0 {
         let per = f64::from(placements);
-        log::info!(
-            target: crate::win::tally::TARGET,
+        crate::defer_log!(target: crate::win::tally::TARGET, log::Level::Info,
             "plate placement: {placements} placed, {:.1} expansions/placement, \
              {:.1} obstacles/placement, \
              frontier max {}, cap max {}, {} gave up",
@@ -46921,8 +46932,7 @@ fn emit_gxprim_cumulative() {
                 let _ = write!(fmts, "{id:x}:{n}");
             }
         }
-        log::info!(
-            target: crate::win::tally::TARGET,
+        crate::defer_log!(target: crate::win::tally::TARGET, log::Level::Info,
             "seam gxprim: calls {calls}, verts {}, fmt [{fmts}], delegated {delegated}",
             GXPRIM_VERTICES.get(),
         );
