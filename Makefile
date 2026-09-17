@@ -115,9 +115,10 @@ windows: require-wine-sdk
 	# wine/, for a prefix that existed first.
 	winebuild --fake-module -o $(OUT_i386)/wow_mods.fake.dll -m32 --dll $(OUT_i386)/wow_mods.dll
 
-# wow_turbo for native Windows: same i686 DLL, but with the ISA baseline raised
-# to haswell (AVX2 — see .cargo/avx.toml). Built into its own target dir so it
-# never clobbers the nehalem artifacts. Not a Wine builtin, so no winebuild.
+# The AVX build of wow_turbo: the same i686 DLL with the ISA baseline raised
+# to haswell (AVX2, see .cargo/avx.toml) for hardware that runs 256-bit vectors
+# at full width. Built into its own target dir so it never clobbers the SSE
+# artifacts. Not a Wine builtin, so no winebuild.
 windows-avx: require-wine-sdk
 	cd windows && cargo build -p wow-turbo-dll --profile $(PROFILE) \
 	    --target $(PE_i386) --target-dir target/avx --config .cargo/avx.toml
@@ -178,15 +179,15 @@ install: all require-wow-exe
 # injector only works on clients that load a version.dll at all. Always built
 # at the production profile (PROD is forced above when `bundle` is a goal).
 BUNDLE_VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-TURBO_MAC      := wow_turbo-$(BUNDLE_VERSION)-mac
-TURBO_WIN      := wow_turbo-$(BUNDLE_VERSION)-windows-avx
+TURBO_SSE      := wow_turbo-$(BUNDLE_VERSION)-sse
+TURBO_AVX      := wow_turbo-$(BUNDLE_VERSION)-avx
 TRANSLATE      := wow_translate-$(BUNDLE_VERSION)
 LOADER         := version_loader-$(BUNDLE_VERSION)
 # A fifth zip nobody installs: the symbols for every artifact above, so a crash
 # report from a release build can be read. One archive for both ISA baselines,
 # split by subdirectory because the two wow_turbo builds share a filename.
 DEBUG          := wow_mods-debug-$(BUNDLE_VERSION)
-BUNDLE_NAMES   := $(TURBO_MAC) $(TURBO_WIN) $(TRANSLATE) $(LOADER) $(DEBUG)
+BUNDLE_NAMES   := $(TURBO_SSE) $(TURBO_AVX) $(TRANSLATE) $(LOADER) $(DEBUG)
 # The identity the binaries themselves log (`unix/shared/build.rs`), which drops
 # the `--dirty` marker BUNDLE_VERSION carries. Written into the debug archive so
 # it can be paired with a captured log without guessing.
@@ -195,11 +196,12 @@ BUILD_ID       := $(shell git describe --tags --always 2>/dev/null || \
 
 bundle: all windows-avx
 	rm -rf $(addprefix dist/,$(BUNDLE_NAMES) $(addsuffix .zip,$(BUNDLE_NAMES)))
-	# wow_turbo, one DLL per ISA baseline: nehalem for the Wine-on-macOS stack
-	# (Rosetta's vector unit is 128-bit), haswell (AVX2) for native Windows.
-	mkdir -p dist/$(TURBO_MAC)/game/mods dist/$(TURBO_WIN)/game/mods
-	cp $(OUT_i386)/wow_turbo.dll  dist/$(TURBO_MAC)/game/mods/
-	cp $(OUT_avx)/wow_turbo.dll   dist/$(TURBO_WIN)/game/mods/
+	# wow_turbo, one DLL per ISA baseline: SSE (nehalem) for a translated x86
+	# guest, whose vector unit is 128-bit, and AVX (haswell, AVX2) for hardware
+	# that runs 256-bit vectors at full width.
+	mkdir -p dist/$(TURBO_SSE)/game/mods dist/$(TURBO_AVX)/game/mods
+	cp $(OUT_i386)/wow_turbo.dll  dist/$(TURBO_SSE)/game/mods/
+	cp $(OUT_avx)/wow_turbo.dll   dist/$(TURBO_AVX)/game/mods/
 	# WoWTranslate (Wine-on-macOS only): the mod DLL + Lua addon, and the wine/
 	# half with the wow_mods unixlib bridge pair. The `.so` ships for both Wine
 	# host arches so one archive drops into either build; each Wine reads only
@@ -227,18 +229,19 @@ bundle: all windows-avx
 	cp $(OUT_i386)/version.dll  dist/$(LOADER)/wine/lib/wine/i386-windows/
 	# The symbols for exactly the binaries staged above. Grouped by ISA baseline
 	# rather than by install destination: debug info has no install route, and
-	# the split is what keeps the two wow_turbo.pdb files apart. The two `.so`
-	# dSYMs share a name as well, so they take a subdirectory each.
-	mkdir -p dist/$(DEBUG)/mac/$(UNIX_WINEDIR_x64) dist/$(DEBUG)/mac/$(UNIX_WINEDIR_arm64) \
-	         dist/$(DEBUG)/windows-avx
+	# the split is what keeps the two wow_turbo.pdb files apart; the PE builtins
+	# and the loader exist at the SSE baseline only. The two `.so` dSYMs share
+	# a name as well, so they take the Wine host-arch directory each ships in.
+	mkdir -p dist/$(DEBUG)/sse dist/$(DEBUG)/avx \
+	         dist/$(DEBUG)/$(UNIX_WINEDIR_x64) dist/$(DEBUG)/$(UNIX_WINEDIR_arm64)
 	echo $(BUILD_ID)                     > dist/$(DEBUG)/BUILD
-	cp $(OUT_i386)/version.pdb             dist/$(DEBUG)/mac/
-	cp $(OUT_i386)/wow_mods.pdb            dist/$(DEBUG)/mac/
-	cp $(OUT_i386)/wow_turbo.pdb           dist/$(DEBUG)/mac/
-	cp $(OUT_i386)/wow_translate.pdb       dist/$(DEBUG)/mac/
-	cp -R $(OUT_unix_x64)/wow_mods.so.dSYM   dist/$(DEBUG)/mac/$(UNIX_WINEDIR_x64)/
-	cp -R $(OUT_unix_arm64)/wow_mods.so.dSYM dist/$(DEBUG)/mac/$(UNIX_WINEDIR_arm64)/
-	cp $(OUT_avx)/wow_turbo.pdb            dist/$(DEBUG)/windows-avx/
+	cp $(OUT_i386)/version.pdb             dist/$(DEBUG)/sse/
+	cp $(OUT_i386)/wow_mods.pdb            dist/$(DEBUG)/sse/
+	cp $(OUT_i386)/wow_turbo.pdb           dist/$(DEBUG)/sse/
+	cp $(OUT_i386)/wow_translate.pdb       dist/$(DEBUG)/sse/
+	cp -R $(OUT_unix_x64)/wow_mods.so.dSYM   dist/$(DEBUG)/$(UNIX_WINEDIR_x64)/
+	cp -R $(OUT_unix_arm64)/wow_mods.so.dSYM dist/$(DEBUG)/$(UNIX_WINEDIR_arm64)/
+	cp $(OUT_avx)/wow_turbo.pdb            dist/$(DEBUG)/avx/
 	for name in $(BUNDLE_NAMES); do \
 	    (cd dist && zip -qr $$name.zip $$name) ; \
 	    echo "==> dist/$$name.zip" ; \

@@ -16,11 +16,12 @@ The two share nothing at runtime — install either one, or both.
 Grab the archives you need from the [Releases](../../releases) page, or build
 them yourself with `make bundle` (see [Building](#building)):
 
-- **`wow_turbo-<version>-mac.zip`** / **`wow_turbo-<version>-windows-avx.zip`**
-  — the wow_turbo DLL, one build per ISA baseline: the mac build targets
-  Rosetta's 128-bit vector unit, the Windows build raises the baseline to
-  AVX2 (Intel 2013+ or any AMD Ryzen) since real hardware runs 256-bit
-  vectors at full width.
+- **`wow_turbo-<version>-sse.zip`** / **`wow_turbo-<version>-avx.zip`** —
+  the wow_turbo DLL, one build per ISA baseline. Take SSE when the client
+  runs under an x86 translator (Wine on Apple Silicon, an arm64 Wine, or any
+  emulator): its vector unit is 128-bit, so the SSE4.2 baseline is the one
+  that runs at full width there. Take AVX on real x86 hardware with AVX2
+  (Intel 2013+ or any AMD Ryzen), which runs 256-bit vectors at full width.
 - **`wow_translate-<version>.zip`** — WoWTranslate (Wine-on-macOS only).
 - **`version_loader-<version>.zip`** — an optional standalone loader for
   setups without one. The mods don't care how they get loaded — any mod
@@ -36,7 +37,7 @@ into the game folder (next to `WoW.exe`) and `wine/` into the Wine build the
 game runs under.
 
 ```
-wow_turbo-<version>-mac/            wow_turbo-<version>-windows-avx/
+wow_turbo-<version>-sse/            wow_turbo-<version>-avx/
 └── game/mods/wow_turbo.dll
 
 wow_translate-<version>/
@@ -420,7 +421,7 @@ addon/       the WoWTranslate Lua addon
 
 `make` builds, `make bundle` stages the four release archives plus their debug
 symbols under `dist/` (always at the production profile — fat LTO — and
-including the AVX2 native-Windows build of `wow_turbo`), and `make install`
+including the AVX build of `wow_turbo`), and `make install`
 deploys straight into a local setup, symbols included: a `.pdb` beside every PE
 and a `.dSYM` beside the `.so` (on Mach-O the DWARF otherwise stays behind in
 the compiler's object files, so `make` runs `dsymutil` to gather it). Destinations come from the environment, not the Makefile:

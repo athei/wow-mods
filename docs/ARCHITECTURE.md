@@ -157,7 +157,7 @@ Generated thunks record the hook RVA, but skip recording when the *same* hook fi
 
 `make bundle` produces exactly four zips, always at the production profile, and their internal layout mirrors the install destinations: `game/` merges next to `WoW.exe`, `wine/` merges into the Wine distribution.
 
-The two `wow_turbo` builds differ **only** in ISA baseline and are built into separate target directories so they never clobber each other: nehalem for the Wine-on-macOS stack, because Rosetta's vector unit is 128-bit and AVX2 would be emulated, and haswell for native Windows. `windows/.cargo/avx.toml` documents the merge footgun — rustflags arrays from merged config sources are joined with the overlay's entries last, which is what makes the baseline override work.
+The two `wow_turbo` builds, SSE and AVX, differ **only** in ISA baseline and are built into separate target directories so they never clobber each other: nehalem for a translated x86 guest, because a translator's vector unit is 128-bit and AVX2 would be split in two, and haswell for hardware that runs 256-bit vectors at full width. `windows/.cargo/avx.toml` documents the merge footgun — rustflags arrays from merged config sources are joined with the overlay's entries last, which is what makes the baseline override work.
 
 Install destinations come from the environment, never from hardcoded paths. `WOW_EXE` is required and locates the game; native mods deploy into the `mods` directory beside it. `WINE_SDK`, plus an optional `WINE_INSTALL_DIR`, names the Wine trees the builtins install into.
 

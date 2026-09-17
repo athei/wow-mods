@@ -73,11 +73,12 @@ static PATCHED: AtomicBool = AtomicBool::new(false);
 
 /// ISA baseline this DLL was compiled for.
 ///
-/// Two artifacts ship under this same filename: the nehalem build for the
-/// Wine-on-macOS stack, whose translated vector unit is 128-bit, and the
-/// haswell build for native Windows (`.cargo/avx.toml`). They are otherwise
-/// indistinguishable in a log, and the numeric kernels differ between them, so
-/// the startup line has to say which one is running.
+/// Two artifacts ship under this same filename: the SSE build (nehalem) for a
+/// translated x86 guest, whose vector unit is 128-bit, and the AVX build
+/// (haswell, `.cargo/avx.toml`) for hardware that runs 256-bit vectors at full
+/// width. They are otherwise indistinguishable in a log, and the numeric
+/// kernels differ between them, so the startup line has to say which one is
+/// running.
 const ISA: &str = if cfg!(target_feature = "avx2") {
     "avx2"
 } else {
