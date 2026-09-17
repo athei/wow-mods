@@ -24,7 +24,7 @@ minhook = "0.9"
 rustc-hash = "2"
 jpeg-encoder = "0.7"
 serde = { version = "1", features = ["derive"] }
-snmalloc-rs = { version = "0.7", features = ["build_cc"] }
+mimalloc = "0.1"
 toml = "1.1"
 
 [profile.dev]
@@ -44,18 +44,20 @@ debug = 1
 debug-assertions = true
 overflow-checks = true
 
-# snmalloc-sys builds its C++ through `cc`, whose build script reads cargo's
-# `DEBUG` variable (set for every package whose profile carries debuginfo) and
-# switches the snmalloc build to its debug configuration, which links `msvcrtd`.
-# The cross-compile SDK ships only `msvcrt.lib`, and mixing the two CRTs in one
-# image is unsound anyway, so the workspace-wide `debug = 1` above has to be
-# taken back for that one package. Both profiles, because `dev` defaults to full
-# debuginfo; `production` picks it up through `inherits`, which merges
-# per-package overrides along the chain.
-[profile.release.package.snmalloc-sys]
+# libmimalloc-sys compiles the allocator through `cc`, and its build script
+# reads cargo's `DEBUG` variable (set for every package whose profile carries
+# debuginfo) as the switch between the allocator's release build and its
+# debug one: with it set the C is compiled with `MI_DEBUG=3` and
+# `MI_SHOW_ERRORS=1`, which puts assertions and error reporting on every
+# allocation path, instead of `MI_BUILD_RELEASE`/`NDEBUG`. The workspace-wide
+# `debug = 1` above would flip that for the one package whose speed is the
+# point of having it, so it is taken back here. Both profiles, because `dev`
+# defaults to full debuginfo; `production` picks it up through `inherits`,
+# which merges per-package overrides along the chain.
+[profile.release.package.libmimalloc-sys]
 debug = 0
 
-[profile.dev.package.snmalloc-sys]
+[profile.dev.package.libmimalloc-sys]
 debug = 0
 
 # Shipped builds — fat cross-crate LTO + a single codegen unit. Activated by

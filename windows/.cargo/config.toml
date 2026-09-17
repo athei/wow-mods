@@ -68,11 +68,12 @@ rustflags = [
 [env]
 # xwin include paths repeated for C and C++ — cc-rs reads CFLAGS_<target>
 # and CXXFLAGS_<target> separately with no cross-fallback, and TOML has
-# no variable substitution. snmalloc-sys needs the C++ path for <atomic>;
-# libmimalloc-sys only needs the C one.
+# no variable substitution. libmimalloc-sys compiles through a C++ wrapper on
+# this target (the allocator's MSVC build takes the C++ atomics path), so it
+# reads the C++ set; the C set covers the remaining build-script C.
 #
 # `-march=nehalem` mirrors the rustflags `target-cpu` baseline so build-script
-# C/C++ code (snmalloc-sys is the big one — ~300 KB of object in release) gets
+# C/C++ code (libmimalloc-sys is the big one) gets
 # the same ISA — including the absence of BMI, for the reason given above the
 # rustflags. These DLLs run under x86-on-ARM translation, whose vector unit is
 # 128-bit: 256-bit AVX/AVX2 ops are split across two halves and underperform

@@ -15,7 +15,7 @@ rustflags = [
 [env]
 MACOSX_DEPLOYMENT_TARGET = "15.0"
 # `-march=x86-64-v2` mirrors the rustflags `target-cpu=x86-64-v2` baseline so
-# build-script C/C++ code (snmalloc-sys, zstd-sys) gets the same ISA. This `.so`
+# build-script C/C++ code gets the same ISA. This `.so`
 # runs under x86-on-ARM translation, whose vector unit is 128-bit: 256-bit
 # AVX/AVX2 ops are split across two halves and underperform plain SSE, so the
 # baseline caps at SSE4.2 (128-bit, 1:1 with the host vector unit) plus the

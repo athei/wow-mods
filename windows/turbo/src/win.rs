@@ -261,19 +261,20 @@ pub extern "system" fn dll_main(instance: *mut c_void, reason: u32, _reserved: *
 
 /// End the process here rather than let the rest of shutdown run.
 ///
-/// The global allocator keeps its per-thread state in a C++ `thread_local`, and
-/// the runtime runs that destructor once this returns. It walks the thread's
-/// pools deeply enough to overrun the 1 MB stack the loader gives the main
-/// thread, and the loader then fails to dispatch the resulting exception, so the
-/// process never finishes exiting: the window is gone and the job stays.
-/// Terminating is the only exit that skips both the remaining detach callbacks
-/// and those destructors. `ExitProcess` runs them, and aborting fast-fails
-/// instead of exiting.
+/// What follows a detach at exit is teardown: the allocator's per-thread and
+/// process cleanup, the remaining detach callbacks of every other module, all
+/// of it run under the loader on the main thread's 1 MB stack, and all of it
+/// work the operating system does anyway when the process dies. An allocator
+/// whose thread cleanup walked its pools deeply enough to overrun that stack
+/// left the loader unable to dispatch the exception, and the process never
+/// finished exiting: the window was gone and the job stayed. Terminating is
+/// the only exit that skips both the remaining detach callbacks and that
+/// cleanup. `ExitProcess` runs them, and aborting fast-fails instead of
+/// exiting.
 ///
 /// [`PATCHED`] is what makes this safe to do: it is only reached at process
 /// exit, by which point the client has run its own shutdown and written its
-/// configuration back out, so nothing with work left is being cut off. What is
-/// skipped is teardown the operating system does anyway when the process dies.
+/// configuration back out, so nothing with work left is being cut off.
 fn exit_without_teardown() {
     // SAFETY: the pseudo-handle this returns names the calling process, and
     // passing it back is the documented form for terminating oneself.

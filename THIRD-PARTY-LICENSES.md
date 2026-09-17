@@ -82,16 +82,16 @@ terms.
 
 ---
 
-## snmalloc (via the `snmalloc-rs` crate)
+## mimalloc (via the `mimalloc` and `libmimalloc-sys` crates)
 
-`wow_turbo.dll` serves its own allocations from snmalloc, which the
-`snmalloc-rs` crate compiles from the bundled C++ sources and links into the
-DLL. snmalloc is distributed under the MIT License.
+`wow_turbo.dll` serves its own allocations from mimalloc, which the
+`libmimalloc-sys` crate compiles from the bundled C sources and links into the
+DLL. mimalloc is distributed under the MIT License.
 
 ```
 MIT License
 
-Copyright (c) Microsoft Corporation. All rights reserved.
+Copyright (c) 2018-2025 Microsoft Corporation, Daan Leijen
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

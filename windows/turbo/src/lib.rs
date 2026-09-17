@@ -78,10 +78,15 @@ mod win;
 /// every allocation to `HeapAlloc`, which on this stack is the loader's
 /// `RtlAllocateHeap`: one heap lock shared by the game thread and both worker
 /// pools, and a separate virtual mapping per large block, all of it paid in
-/// emulated x86 crossing into the loader's unix side. snmalloc serves from
-/// per-thread slabs, takes address space from `VirtualAlloc` directly and never
+/// emulated x86 crossing into the loader's unix side. mimalloc serves from
+/// per-thread heaps, takes address space from `VirtualAlloc` directly and never
 /// calls `HeapAlloc` at any size, so a per-frame allocation on the game thread
 /// no longer contends with a worker's.
+///
+/// It reserves that address space aligned, through the newer memory API when
+/// the loader resolves it, and falls back to a plain reservation trimmed to
+/// alignment when the loader refuses the call. A loader without the aligned
+/// form therefore costs a slower reservation, not a failed load.
 ///
 /// The client's own allocator is untouched by this: it is reached through the
 /// client's own code, which this mod does not replace.
@@ -90,4 +95,4 @@ mod win;
 /// kernels, and its allocation traffic is the test harness's.
 #[cfg(target_arch = "x86")]
 #[global_allocator]
-static ALLOCATOR: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
+static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
