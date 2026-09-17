@@ -30,10 +30,20 @@ fn main() {
 
     let unix_lib_path = format!("{out_dir}/unix_lib.o");
     std::fs::write(&unix_lib_path, &output.stdout).expect("failed to write unix_lib.o");
+
+    // The object carries DWARF sections, whose names run past the eight
+    // characters a PE section name holds, so the linker files them through a
+    // string table and would say so on every link. That is the documented
+    // handling for such a name, and the DLL's own debug info is a `.pdb` those
+    // sections never reach, so the notice is switched off rather than the
+    // sections stripped: rewriting the object would also have to rewrite its
+    // address-significance table, which is more surgery than a notice merits.
+    println!("cargo:rustc-link-arg-cdylib=/ignore:longsections");
     println!("cargo:rustc-link-arg-cdylib={unix_lib_path}");
 
-    // Wine's libntdll.a must be found before xwin's ntdll.lib.
-    println!("cargo:rustc-link-arg-cdylib=-L{lib_dir}");
+    // Nothing else from the Wine tree goes on the link line: the object above
+    // is the whole of what this builtin takes from it, and the SDK's import
+    // library satisfies every `ntdll` reference the bridge makes.
 
     println!("cargo:rerun-if-env-changed=WINE_SDK");
 }

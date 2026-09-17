@@ -55,11 +55,20 @@ linker = "lld-link"
 # compiler's own IR verifier. Every one of this workspace's four `cdylib`s hits
 # it. `dynamic-no-pic` drops position independence and leaves imported symbols
 # indirect, which is exactly the split a DLL needs.
+#
+# `/ignore:4099` silences the linker's notice that it cannot use the debug
+# info of an object from the SDK's static C++ runtime library, because the
+# `.pdb` that object names was never shipped with the SDK. The allocator is
+# compiled as C++ on this target and its out-of-memory path consults the C++
+# `new_handler`, which is what pulls those objects in; the DLL links and runs
+# the same with or without their debug info, and nothing in this tree can
+# supply a `.pdb` the SDK does not have.
 rustflags = [
     "-C", "target-cpu=nehalem",
     "-C", "target-feature=-crt-static",
     "-C", "relocation-model=dynamic-no-pic",
     "-C", "force-frame-pointers=no",
+    "-C", "link-arg=/ignore:4099",
     "-Lnative=/opt/xwin/crt/lib/x86",
     "-Lnative=/opt/xwin/sdk/lib/um/x86",
     "-Lnative=/opt/xwin/sdk/lib/ucrt/x86",
