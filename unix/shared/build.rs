@@ -32,14 +32,14 @@ fn build_id() -> String {
     // exists to prevent.
     if let Some(dir) = git(&["rev-parse", "--absolute-git-dir"]) {
         let dir = PathBuf::from(dir);
-        let mut watch = vec![
+        // Linked worktrees keep HEAD locally but share branch and tag refs.
+        let common = git(&["rev-parse", "--path-format=absolute", "--git-common-dir"])
+            .map_or_else(|| dir.clone(), PathBuf::from);
+        let watch = [
             dir.join("HEAD"),
-            dir.join("packed-refs"),
-            dir.join("refs").join("tags"),
+            common.join("packed-refs"),
+            common.join("refs"),
         ];
-        if let Some(head_ref) = git(&["symbolic-ref", "--quiet", "HEAD"]) {
-            watch.push(dir.join(head_ref));
-        }
         for path in watch.iter().filter(|p| p.exists()) {
             println!("cargo:rerun-if-changed={}", path.display());
         }
