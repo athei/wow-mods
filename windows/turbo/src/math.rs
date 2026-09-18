@@ -62,6 +62,9 @@ pub mod reach;
 // Hand-maintained, outside the assemble.py sentinels.
 pub mod editcamera;
 
+/// Camera projection parameters and conservative near-plane dimensions.
+pub mod camera_projection;
+
 // libm-free polynomial sin/cos shared by the trig kernels (Euler/axis-angle/
 // quaternion/movement-arc). Hand-maintained, not generated — outside the
 // assemble.py sentinels.

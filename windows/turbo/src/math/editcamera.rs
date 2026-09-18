@@ -1,16 +1,15 @@
 //! Camera-offset arithmetic behind the camera-editing feature.
 //!
 //! Pure kernels: the shoulder/height translation of the camera position, the
-//! look-at and pitch basis rebuilds, the near-clip-plane probe endpoints and
-//! the collision corrections that pull an offset camera back out of a wall.
-//! New arithmetic (the feature is not a client function); the reference
-//! semantics are preserved exactly, including the revert-when-too-close rule.
+//! look-at and pitch basis rebuilds, and up to three translation collision
+//! probes. New arithmetic for the feature, rather than a reimplementation of
+//! a client function. These rays do not cover a rotating camera volume.
 
 /// The float tolerance shared by every near-zero test here.
 const TOLERANCE: f32 = 1e-5;
 
-/// An offset camera corrects to this distance in front of a hit surface.
-const KEEP_DISTANCE_FROM_WALL: f32 = 0.2;
+/// Clearance along the translation path before a hit surface.
+const KEEP_DISTANCE_FROM_WALL: f64 = 0.2;
 
 fn length(v: [f32; 3]) -> f32 {
     (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt()
@@ -55,13 +54,40 @@ pub fn pitch_basis(forward: [f32; 3], delta: f32) -> Option<[[f32; 3]; 3]> {
 }
 
 fn basis_from_forward(forward: [f32; 3]) -> Option<[[f32; 3]; 3]> {
-    if almost_zero(forward) {
+    if !forward.iter().all(|v| v.is_finite()) || almost_zero(forward) {
         return None;
     }
     let forward = normalize(forward);
-    let right = normalize(cross([0.0, 0.0, 1.0], forward));
+    if almost_zero(forward) {
+        return None;
+    }
+    let mut right = cross([0.0, 0.0, 1.0], forward);
+    if length(right) == 0.0 {
+        // A vertical view has no preferred horizontal heading. Use the y
+        // axis as its reference so neither of the remaining rows collapses.
+        right = cross([0.0, 1.0, 0.0], forward);
+    }
+    let right = normalize(right);
     let up = normalize(cross(forward, right));
     Some([forward, right, up])
+}
+
+/// The eye position and the forward, right and up rows of a camera.
+pub struct CameraPose {
+    /// World-space eye position.
+    pub position: [f32; 3],
+    /// Camera basis rows in forward, right, up order.
+    pub basis: [[f32; 3]; 3],
+}
+
+/// The dimensions of a camera's rectangular near plane.
+pub struct NearPlane {
+    /// Distance from the eye along the forward row.
+    pub distance: f32,
+    /// Extent on either side of the plane center along the right row.
+    pub half_width: f32,
+    /// Extent on either side of the plane center along the up row.
+    pub half_height: f32,
 }
 
 /// The pin-height inputs.
@@ -116,94 +142,108 @@ pub fn translate_camera(
     result
 }
 
-/// The near-clip probe segment for one translation axis.
-///
-/// Both endpoints sit on the near plane (`forward * near_clip` ahead of the
-/// unedited and edited camera positions), displaced to the plane corner the
-/// translation moved toward: `axis` is the camera right or up vector and
-/// `signed_half` the half-extent with the translation's sign.
-pub fn probe_endpoints(
-    original: [f32; 3],
-    translated: [f32; 3],
-    forward: [f32; 3],
-    axis: [f32; 3],
-    signed_half: f32,
-    near_clip: f32,
-) -> ([f32; 3], [f32; 3]) {
-    let forward = normalize(forward);
-    let axis = normalize(axis);
-    let mut from = original;
-    let mut to = translated;
-    for i in 0..3 {
-        from[i] += forward[i] * near_clip + axis[i] * signed_half;
-        to[i] += forward[i] * near_clip + axis[i] * signed_half;
-    }
-    (from, to)
+/// Whether translation requires checking, including invalid coordinates.
+pub fn position_changed(from: &[f32; 3], to: &[f32; 3]) -> bool {
+    from.iter()
+        .zip(to)
+        .any(|(a, b)| !a.is_finite() || !b.is_finite() || (a - b).abs() > TOLERANCE)
 }
 
-/// The correction for a near-clip probe hit at fraction `hit`.
+/// Correct a translation with at most three rays and no geometry allocation.
 ///
-/// Pulls the translation back past the surface plus the keep-distance; when
-/// the probe hit closer than the keep-distance allows, the whole translation
-/// reverts instead. `horizontal` selects which axes the correction carries.
-pub fn clip_correction(
-    from: [f32; 3],
-    to: [f32; 3],
-    hit: f32,
-    original: [f32; 3],
-    translated: [f32; 3],
-    horizontal: bool,
-) -> [f32; 3] {
-    let delta = [to[0] - from[0], to[1] - from[1], to[2] - from[2]];
-    let mut correction = if horizontal {
-        [-(delta[0] * (1.0 - hit)), -(delta[1] * (1.0 - hit)), 0.0]
-    } else {
-        [0.0, 0.0, -(delta[2] * (1.0 - hit))]
-    };
-    let reached = if horizontal {
-        [delta[0] * hit, delta[1] * hit, 0.0]
-    } else {
-        [0.0, 0.0, delta[2] * hit]
-    };
-    if length(reached) >= KEEP_DISTANCE_FROM_WALL {
-        let unit = normalize(correction);
-        for i in 0..3 {
-            correction[i] += unit[i] * KEEP_DISTANCE_FROM_WALL;
+/// Probe the eye and the leading near-plane edge for each translated axis.
+/// All rays follow the same translation. One minimum hit fraction, including
+/// wall clearance, shortens the whole edit along that path without resweeps.
+/// No result is cached across updates. Rotation and the space between these
+/// rays remain unchecked; this is deliberately not a swept-volume guard.
+/// Invalid inputs reject the edit before the callback is called.
+pub fn correct_translation(
+    original: &CameraPose,
+    edited: &mut CameraPose,
+    plane: &NearPlane,
+    mut trace: impl FnMut(&[f32; 3], &[f32; 3]) -> Option<f32>,
+) -> bool {
+    if !original
+        .position
+        .iter()
+        .chain(&edited.position)
+        .all(|v| v.is_finite())
+        || !edited.basis.iter().all(|row| {
+            row.iter().all(|v| v.is_finite()) && length(*row).is_finite() && length(*row) > 0.0
+        })
+        || ![plane.distance, plane.half_width, plane.half_height]
+            .iter()
+            .all(|v| v.is_finite() && *v > 0.0)
+    {
+        return false;
+    }
+    let delta = core::array::from_fn::<_, 3, _>(|i| {
+        f64::from(edited.position[i]) - f64::from(original.position[i])
+    });
+    let distance_sq = delta.iter().map(|v| v * v).sum::<f64>();
+    if distance_sq > 150.0 * 150.0 {
+        return false;
+    }
+    if !position_changed(&original.position, &edited.position) {
+        return true;
+    }
+    let [forward, right, up] = edited.basis.map(normalize);
+    let mut rays = [(original.position, edited.position); 3];
+    let mut count = 1;
+    for (axis, half, needed) in [
+        (
+            right,
+            plane.half_width,
+            delta[0].abs() > f64::from(TOLERANCE) || delta[1].abs() > f64::from(TOLERANCE),
+        ),
+        (up, plane.half_height, delta[2].abs() > f64::from(TOLERANCE)),
+    ] {
+        if !needed {
+            continue;
         }
-    } else if horizontal {
-        correction = [
-            original[0] - translated[0],
-            original[1] - translated[1],
-            0.0,
-        ];
-    } else {
-        correction = [0.0, 0.0, original[2] - translated[2]];
+        let along = delta
+            .iter()
+            .zip(axis)
+            .map(|(d, a)| d * f64::from(a))
+            .sum::<f64>();
+        let signed_half = if along > 0.0 { half } else { -half };
+        let offset = core::array::from_fn::<_, 3, _>(|i| {
+            forward[i] * plane.distance + axis[i] * signed_half
+        });
+        rays[count] = (
+            core::array::from_fn(|i| original.position[i] + offset[i]),
+            core::array::from_fn(|i| edited.position[i] + offset[i]),
+        );
+        count += 1;
     }
-    correction
-}
-
-/// The camera-body sweep corrections for a hit at fraction `hit`.
-///
-/// Returns the horizontal (x, y) and vertical (z) parts separately: the
-/// caller compares each against the near-clip correction of the same axis
-/// and applies whichever is larger.
-pub fn body_corrections(
-    original: [f32; 3],
-    translated: [f32; 3],
-    hit: f32,
-) -> ([f32; 3], [f32; 3]) {
-    let horizontal = [
-        -((translated[0] - original[0]) * (1.0 - hit)),
-        -((translated[1] - original[1]) * (1.0 - hit)),
-        0.0,
-    ];
-    let vertical = [0.0, 0.0, -((translated[2] - original[2]) * (1.0 - hit))];
-    (horizontal, vertical)
-}
-
-/// Length compare used to pick the larger of two corrections.
-pub fn longer(a: [f32; 3], b: [f32; 3]) -> bool {
-    length(a) > length(b)
+    if !rays[..count]
+        .iter()
+        .all(|(from, to)| from.iter().chain(to).all(|v| v.is_finite()))
+    {
+        return false;
+    }
+    let mut closest = None::<f64>;
+    for (from, to) in &rays[..count] {
+        if let Some(hit) = trace(from, to) {
+            if !hit.is_finite() || hit < 0.0 {
+                return false;
+            }
+            if hit <= 1.0 {
+                let hit = f64::from(hit);
+                closest = Some(closest.map_or(hit, |prior| prior.min(hit)));
+                if hit == 0.0 {
+                    break;
+                }
+            }
+        }
+    }
+    if let Some(hit) = closest {
+        let fraction = (hit - KEEP_DISTANCE_FROM_WALL / distance_sq.sqrt()).max(0.0);
+        edited.position = core::array::from_fn(|i| {
+            (f64::from(original.position[i]) + delta[i] * fraction) as f32
+        });
+    }
+    true
 }
 
 #[cfg(test)]
@@ -273,37 +313,197 @@ mod tests {
     }
 
     #[test]
-    fn probe_endpoints_sit_on_the_near_plane_corner() {
-        let (from, to) = probe_endpoints(
-            [0.0, 0.0, 0.0],
-            [0.0, 2.0, 0.0],
-            [1.0, 0.0, 0.0],
-            [0.0, 0.0, 1.0],
-            0.5,
-            0.3,
-        );
-        assert_close(from, [0.3, 0.0, 0.5]);
-        assert_close(to, [0.3, 2.0, 0.5]);
+    fn vertical_view_keeps_three_unit_basis_rows() {
+        for z in [-1.0, 1.0] {
+            let basis = look_at_basis([0.0; 3], [0.0, 0.0, z]).unwrap();
+            for row in basis {
+                assert!((length(row) - 1.0).abs() < 1e-6);
+            }
+            assert_close(cross(basis[0], basis[1]), basis[2]);
+        }
     }
 
     #[test]
-    fn clip_correction_pulls_back_or_reverts() {
-        let original = [0.0, 0.0, 0.0];
-        let translated = [2.0, 0.0, 0.0];
-        // A hit at 0.5: one yard reached, past the keep distance: pull back
-        // the unreached yard plus the keep distance.
-        let pulled = clip_correction(original, translated, 0.5, original, translated, true);
-        assert_close(pulled, [-1.2, 0.0, 0.0]);
-        // A hit at 0.05: only 0.1 reached, under the keep distance: revert.
-        let reverted = clip_correction(original, translated, 0.05, original, translated, true);
-        assert_close(reverted, [-2.0, 0.0, 0.0]);
+    fn invalid_direction_does_not_build_a_basis() {
+        assert!(pitch_basis([1.0, 0.0, 0.0], f32::NAN).is_none());
+        assert!(look_at_basis([0.0; 3], [f32::INFINITY, 0.0, 0.0]).is_none());
+        assert!(look_at_basis([0.0; 3], [f32::MAX; 3]).is_none());
     }
 
     #[test]
-    fn body_corrections_split_axes() {
-        let (h, v) = body_corrections([0.0, 0.0, 0.0], [4.0, 2.0, 1.0], 0.75);
-        assert_close(h, [-1.0, -0.5, 0.0]);
-        assert_close(v, [0.0, 0.0, -0.25]);
-        assert!(longer(h, v));
+    fn almost_vertical_view_preserves_its_heading() {
+        let basis = look_at_basis([0.0; 3], [1e-6, 0.0, 1.0]).unwrap();
+        assert_close(basis[1], [0.0, 1.0, 0.0]);
+        assert_close(cross(basis[0], basis[1]), basis[2]);
+    }
+
+    fn stock_pose() -> CameraPose {
+        CameraPose {
+            position: [0.0; 3],
+            basis: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        }
+    }
+
+    const PLANE: NearPlane = NearPlane {
+        distance: 0.5,
+        half_width: 0.5,
+        half_height: 0.5,
+    };
+
+    #[test]
+    fn ray_budget_is_zero_for_rotation_and_at_most_three_for_translation() {
+        let original = stock_pose();
+        for (position, expected) in [
+            ([0.0; 3], 0),
+            ([0.0, 1.0, 0.0], 2),
+            ([0.0, 0.0, 1.0], 2),
+            ([0.0, 1.0, 1.0], 3),
+        ] {
+            let mut edited = CameraPose {
+                position,
+                basis: pitch_basis(original.basis[0], 0.3).unwrap(),
+            };
+            let mut calls = 0;
+            assert!(correct_translation(
+                &original,
+                &mut edited,
+                &PLANE,
+                |_, _| {
+                    calls += 1;
+                    None
+                }
+            ));
+            assert_eq!(calls, expected);
+            assert_eq!(edited.position, position);
+        }
+    }
+
+    #[test]
+    fn leading_edge_uses_displacement_and_moving_geometry_is_rechecked() {
+        let original = stock_pose();
+        for blocked in [false, true] {
+            let mut edited = CameraPose {
+                position: translate_camera(original.position, [10.0, 0.0, 0.0], 1.0, 0.0, None),
+                basis: original.basis,
+            };
+            let mut saw_leading_edge = false;
+            assert!(correct_translation(
+                &original,
+                &mut edited,
+                &PLANE,
+                |from, to| {
+                    if from[1] < -0.4 {
+                        saw_leading_edge = true;
+                        assert_eq!(from[1], -0.5);
+                        assert_eq!(to[1], -1.5);
+                        if blocked {
+                            return Some(0.7);
+                        }
+                    }
+                    None
+                }
+            ));
+            assert!(saw_leading_edge);
+            assert_close(
+                edited.position,
+                [0.0, if blocked { -0.5 } else { -1.0 }, 0.0],
+            );
+        }
+    }
+
+    #[test]
+    fn endpoint_hits_keep_clearance_and_diagonal_corrections_share_one_fraction() {
+        let original = stock_pose();
+        let mut edited = CameraPose {
+            position: [0.0, 3.0, 4.0],
+            basis: original.basis,
+        };
+        let mut hits = [Some(1.0), Some(0.8), Some(0.5)].into_iter();
+        assert!(correct_translation(
+            &original,
+            &mut edited,
+            &PLANE,
+            |_, _| hits.next().unwrap()
+        ));
+        assert_close(edited.position, [0.0, 1.38, 1.84]);
+        let mut endpoint = CameraPose {
+            position: [0.0, 1.0, 0.0],
+            basis: original.basis,
+        };
+        assert!(correct_translation(
+            &original,
+            &mut endpoint,
+            &PLANE,
+            |_, _| Some(1.0)
+        ));
+        assert_close(endpoint.position, [0.0, 0.8, 0.0]);
+        let mut close = CameraPose {
+            position: [0.0, 0.1, 0.0],
+            basis: original.basis,
+        };
+        let mut calls = 0;
+        assert!(correct_translation(
+            &original,
+            &mut close,
+            &PLANE,
+            |_, _| {
+                calls += 1;
+                Some(0.0)
+            }
+        ));
+        assert_eq!(calls, 1);
+        assert_eq!(close.position, original.position);
+    }
+
+    #[test]
+    fn invalid_and_overlong_inputs_never_reach_a_world_query() {
+        let original = stock_pose();
+        for position in [
+            [f32::NAN, 0.0, 0.0],
+            [f32::INFINITY, 0.0, 0.0],
+            [151.0, 0.0, 0.0],
+        ] {
+            assert!(position_changed(&original.position, &position));
+            let mut edited = CameraPose {
+                position,
+                basis: original.basis,
+            };
+            assert!(!correct_translation(
+                &original,
+                &mut edited,
+                &PLANE,
+                |_, _| panic!("invalid query")
+            ));
+        }
+        let mut edited = CameraPose {
+            position: [0.0, 1.0, 0.0],
+            basis: [[0.0; 3]; 3],
+        };
+        assert!(!correct_translation(
+            &original,
+            &mut edited,
+            &PLANE,
+            |_, _| panic!("invalid basis")
+        ));
+        edited.basis = original.basis;
+        let plane = NearPlane {
+            distance: f32::NAN,
+            half_width: 0.5,
+            half_height: 0.5,
+        };
+        assert!(!correct_translation(
+            &original,
+            &mut edited,
+            &plane,
+            |_, _| panic!("invalid plane")
+        ));
+        let position = edited.position;
+        assert!(!correct_translation(
+            &original,
+            &mut edited,
+            &PLANE,
+            |_, _| Some(f32::NAN)
+        ));
+        assert_eq!(edited.position, position);
     }
 }

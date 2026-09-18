@@ -364,36 +364,34 @@ mod tests_c_world_frustum__classify_point__686c20 {
 /// sign of the orientation-transformed plane normal: a negative component selects
 /// `aabb[0..3]`, a non-negative one selects `aabb[3..6]`.
 ///
-/// The plane distance is evaluated in the box's local frame: with `tn = O*n`
-/// (the same transformed normal that picks the support corner), the world-space
-/// distance `n . (O^T*c + t) + d` is computed as `tn . c + (n . t + d)` — equal
-/// by the transpose identity `(O*n) . c == n . (O^T*c)` for any 3x3 `O` — which
-/// removes the corner's transform back to world space (one 3x3 matrix-vector
-/// product and one dot product per plane). Only final-`dist` rounding differs
-/// from the world-space form; the classification can move solely within a
-/// few-ULP band around the plane epsilon.
+/// The local normal and the oriented support corner each narrow once per
+/// component. Adding translation then narrows each world coordinate again.
+/// Those stores cannot be removed by folding the translation into the plane:
+/// the reordered expression can reject a box that stock accepts. Only the
+/// final plane dot, `(z + y) + x`, and its offset remain wide through the
+/// epsilon comparison at 0x686b0c.
 pub fn c_world_frustum__test_oriented_box__6869c0(
     planes: &[f32; 24],
     aabb: &[f32; 6],
     orientation: &[f32; 9],
     translation: &[f32; 3],
 ) -> u32 {
-    let o = orientation;
-    let t = translation;
+    let o = orientation.map(f64::from);
     let extent_a = [aabb[0], aabb[1], aabb[2]];
     let extent_b = [aabb[3], aabb[4], aabb[5]];
 
     for p in 0..6 {
         let base = p * 4;
-        let na = planes[base];
-        let nb = planes[base + 1];
-        let nc = planes[base + 2];
-        let nd = planes[base + 3];
+        let na = f64::from(planes[base]);
+        let nb = f64::from(planes[base + 1]);
+        let nc = f64::from(planes[base + 2]);
+        let nd = f64::from(planes[base + 3]);
 
-        // Transform the plane normal into the box's local frame: tn = orientation * n.
-        let tnx = o[0] * na + o[1] * nb + o[2] * nc;
-        let tny = o[3] * na + o[4] * nb + o[5] * nc;
-        let tnz = o[6] * na + o[7] * nb + o[8] * nc;
+        // The normal transform folds (y + z) + x, then stores each component
+        // before its sign bit selects the support corner (0x686a10..0x686a65).
+        let tnx = super::f64_to_f32((o[1] * nb + o[2] * nc) + o[0] * na);
+        let tny = super::f64_to_f32((o[4] * nb + o[5] * nc) + o[3] * na);
+        let tnz = super::f64_to_f32((o[7] * nb + o[8] * nc) + o[6] * na);
 
         // Select the support corner from the sign bit of each local-normal
         // component (faithful to the original's integer `tn >> 31`, signed zero
@@ -414,11 +412,21 @@ pub fn c_world_frustum__test_oriented_box__6869c0(
             extent_b[2]
         };
 
-        // Plane evaluated at the box translation, plus the support corner's
-        // local projection onto the transformed normal.
-        let plane_at_t = na * t[0] + nb * t[1] + nc * t[2] + nd;
-        let dist = tnx * cx + tny * cy + tnz * cz + plane_at_t;
-        if dist < FRUSTUM_PLANE_EPS {
+        let cx = f64::from(cx);
+        let cy = f64::from(cy);
+        let cz = f64::from(cz);
+        // Stock's component folds differ: x=(z+x)+y, y=(x+z)+y,
+        // z=(y+x)+z. Each is stored before translation (0x686a8e..0x686acd).
+        let rx = super::f64_to_f32((o[6] * cz + o[0] * cx) + o[3] * cy);
+        let ry = super::f64_to_f32((o[1] * cx + o[7] * cz) + o[4] * cy);
+        let rz = super::f64_to_f32((o[5] * cy + o[2] * cx) + o[8] * cz);
+        let wx = f64::from(rx + translation[0]);
+        let wy = f64::from(ry + translation[1]);
+        let wz = f64::from(rz + translation[2]);
+
+        // The dot helper's ST(0) return stays wide through the offset add.
+        let dist = ((nc * wz + nb * wy) + na * wx) + nd;
+        if dist < f64::from(FRUSTUM_PLANE_EPS) {
             return 0;
         }
     }
@@ -530,45 +538,58 @@ mod tests_c_world_frustum__test_oriented_box__6869c0 {
         const { assert!(FRUSTUM_PLANE_EPS < 0.0 && FRUSTUM_PLANE_EPS > -0.1) };
     }
 
-    /// The pre-fold world-space formulation, kept verbatim as the differential oracle.
-    ///
-    /// Round-trip the support corner to world space and evaluate the plane
-    /// there. Equal to the folded form by the transpose identity up to
-    /// final-sum rounding.
-    fn world_space_oracle(planes: &[f32; 24], aabb: &[f32; 6], o: &[f32; 9], t: &[f32; 3]) -> u32 {
-        let extent_a = [aabb[0], aabb[1], aabb[2]];
-        let extent_b = [aabb[3], aabb[4], aabb[5]];
-        for p in 0..6 {
-            let base = p * 4;
-            let (na, nb, nc, nd) = (
-                planes[base],
-                planes[base + 1],
-                planes[base + 2],
-                planes[base + 3],
-            );
-            let tnx = o[0] * na + o[1] * nb + o[2] * nc;
-            let tny = o[3] * na + o[4] * nb + o[5] * nc;
-            let tnz = o[6] * na + o[7] * nb + o[8] * nc;
-            let cx = if tnx.is_sign_negative() {
-                extent_a[0]
-            } else {
-                extent_b[0]
-            };
-            let cy = if tny.is_sign_negative() {
-                extent_a[1]
-            } else {
-                extent_b[1]
-            };
-            let cz = if tnz.is_sign_negative() {
-                extent_a[2]
-            } else {
-                extent_b[2]
-            };
-            let wx = o[0] * cx + o[3] * cy + o[6] * cz + t[0];
-            let wy = o[1] * cx + o[4] * cy + o[7] * cz + t[1];
-            let wz = o[2] * cx + o[5] * cy + o[8] * cz + t[2];
-            let dist = na * wx + nb * wy + nc * wz + nd;
-            if dist < FRUSTUM_PLANE_EPS {
+    #[test]
+    fn translated_support_corner_rounds_before_plane_dot() {
+        let mut planes = [0.0; 24];
+        for plane in planes.as_chunks_mut::<4>().0 {
+            plane[3] = 1.0;
+        }
+        planes[0] = 1.0;
+        planes[3] = f32::from_bits(0xbf82_bddf);
+        let translation = [f32::from_bits(0x3b01_6f00), 0.0, 0.0];
+
+        // The stored world x is 1.0019750595092773. Its wide plane distance
+        // is -0.01944434642791748, above the rejection epsilon. Folding the
+        // translation into the plane first instead produces -0.0194444656.
+        assert_eq!(
+            c_world_frustum__test_oriented_box__6869c0(
+                &planes,
+                &[-1.0, -1.0, -1.0, 1.0, 1.0, 1.0],
+                &identity(),
+                &translation,
+            ),
+            3,
+        );
+    }
+
+    /// Scalar reference with explicit component order and f32 store boundaries.
+    fn world_space_reference(
+        planes: &[f32; 24],
+        aabb: &[f32; 6],
+        o: &[f32; 9],
+        t: &[f32; 3],
+    ) -> u32 {
+        let dot = |a: [f32; 3], b: [f32; 3], order: [usize; 3]| {
+            let products = core::array::from_fn::<_, 3, _>(|i| f64::from(a[i]) * f64::from(b[i]));
+            (products[order[0]] + products[order[1]]) + products[order[2]]
+        };
+        for plane in planes.as_chunks::<4>().0 {
+            let normal = [plane[0], plane[1], plane[2]];
+            let mut corner = [0.0; 3];
+            for axis in 0..3 {
+                let row = [o[axis * 3], o[axis * 3 + 1], o[axis * 3 + 2]];
+                let local = super::super::f64_to_f32(dot(row, normal, [1, 2, 0]));
+                corner[axis] = aabb[axis + if local.is_sign_negative() { 0 } else { 3 }];
+            }
+            let orders = [[2, 0, 1], [0, 2, 1], [1, 0, 2]];
+            let mut world = [0.0; 3];
+            for axis in 0..3 {
+                let column = [o[axis], o[axis + 3], o[axis + 6]];
+                let rotated = super::super::f64_to_f32(dot(column, corner, orders[axis]));
+                world[axis] = rotated + t[axis];
+            }
+            let dist = dot(normal, world, [2, 1, 0]) + f64::from(plane[3]);
+            if dist < f64::from(FRUSTUM_PLANE_EPS) {
                 return 0;
             }
         }
@@ -577,7 +598,7 @@ mod tests_c_world_frustum__test_oriented_box__6869c0 {
 
     fn check(planes: &[f32; 24], aabb: &[f32; 6], o: &[f32; 9], t: &[f32; 3], what: &str) {
         let got = c_world_frustum__test_oriented_box__6869c0(planes, aabb, o, t);
-        let want = world_space_oracle(planes, aabb, o, t);
+        let want = world_space_reference(planes, aabb, o, t);
         assert_eq!(got, want, "{what}: aabb={aabb:?} o={o:?} t={t:?}");
     }
 
@@ -661,7 +682,7 @@ mod tests_c_world_frustum__test_oriented_box__6869c0 {
             &[0.5, 0.5, 0.5],
             "signed-zero lane",
         );
-        // Non-orthonormal orientation: the fold needs only the transpose identity.
+        // Non-orthonormal orientation exercises all transform coefficients.
         check(
             &f,
             &[1.0, 1.0, 1.0, -1.0, -1.0, -1.0],
@@ -673,8 +694,7 @@ mod tests_c_world_frustum__test_oriented_box__6869c0 {
 
     /// Seeded random sweep at game-scale magnitudes.
     ///
-    /// The folded form and the world-space oracle classify identically away
-    /// from the epsilon knife edge.
+    /// Compare the explicit component expressions with the indexed reference.
     #[test]
     fn differential_random_sweep() {
         let mut state = 0x243f_6a88_85a3_08d3_u64;

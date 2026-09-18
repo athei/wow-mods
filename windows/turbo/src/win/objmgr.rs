@@ -115,6 +115,27 @@ impl UnitRef {
         out
     }
 
+    /// The object's world facing, using the same virtual slot as camera transports.
+    pub fn object_facing(self) -> Option<f32> {
+        // SAFETY: the live object begins with its vtable pointer.
+        let vtable = unsafe { (self.0 as *const usize).read() };
+        if vtable == 0 || vtable & 3 != 0 {
+            return None;
+        }
+        // SAFETY: slot six is GetFacing for live client objects, also used by
+        // UpdateShadowTransform. The camera transport path stores its return
+        // to f32 before constructing its rotation matrix.
+        let slot = unsafe { ((vtable + 0x18) as *const usize).read() };
+        if slot == 0 {
+            return None;
+        }
+        // SAFETY: the verified object virtual ABI is thiscall with no stack
+        // arguments and a floating return in ST(0).
+        let get: extern "thiscall" fn(usize) -> f32 = unsafe { core::mem::transmute(slot) };
+        let facing = get(self.0);
+        facing.is_finite().then_some(facing)
+    }
+
     /// The unit descriptor block, at `*(obj + 0x110)`.
     fn descriptor(self) -> Option<usize> {
         // SAFETY: the wrapped address passed the liveness heuristic; `+0x110`

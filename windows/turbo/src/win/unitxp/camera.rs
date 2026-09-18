@@ -4,12 +4,10 @@
 //! the configured offsets: a shoulder displacement perpendicular to the
 //! camera-to-subject line, a height offset (optionally pinning the eye at
 //! the subject's collision-box height so shapeshifts do not jolt the view),
-//! and a pitch tilt. Offsets are validated against the world with up to
-//! three collision probes — the near-clip plane corner in each translated
-//! axis plus a camera-body sweep — pulling the camera back out of any
-//! surface it would clip; probes re-run at most sixty times a second and
-//! only when the camera actually moved, cached corrections serving the
-//! frames between.
+//! and a pitch tilt. Translation uses at most three current-pose ray probes,
+//! without collecting triangles or iterating over candidate corrections. A
+//! hit shortens the translation along its original path. Rotation and spaces
+//! between the rays are not collision-validated.
 //!
 //! The final edited position and forward vector are published for the sight
 //! features, so camera traces originate where the eye actually is; readers
@@ -19,16 +17,16 @@
 
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
-use crate::win::tally::{self, Counter};
+use crate::{
+    math::editcamera::CameraPose,
+    win::tally::{self, Accum, Counter},
+};
 
-/// The active camera record — no arguments, record pointer in `eax`.
+/// The active camera record: no arguments, record pointer in `eax`.
 const GET_ACTIVE_CAMERA_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x0008_18f0;
 
 /// The video-options record whose water-collision field picks the trace flag.
 const VIDEO_OPTIONS: usize = crate::win::EXPECTED_IMAGE_BASE + 0x007e_1088;
-
-/// Camera-collision probes re-run at most this often, in engine milliseconds.
-const REFRESH_INTERVAL_MS: u32 = 16;
 
 /// The float tolerance shared with the offset arithmetic.
 const TOLERANCE: f32 = 1e-5;
@@ -41,25 +39,12 @@ static TRANSLATED_POS: [AtomicU32; 3] = [const { AtomicU32::new(0) }; 3];
 /// The edited camera forward vector, f32 bits per axis.
 static ROTATED_FWD: [AtomicU32; 3] = [const { AtomicU32::new(0) }; 3];
 
-/// Where the last collision probes ran from, f32 bits per axis.
-static LAST_PROBED_POS: [AtomicU32; 3] = [const { AtomicU32::new(0) }; 3];
-/// The pitch the last probes ran with, f32 bits.
-static LAST_PROBED_PITCH: AtomicU32 = AtomicU32::new(0);
-/// Engine time of the last probe batch.
-static LAST_PROBE_MS: AtomicU32 = AtomicU32::new(0);
-/// Cached corrections between probe batches, f32 bits per axis.
-static LAST_V_CLIP: [AtomicU32; 3] = [const { AtomicU32::new(0) }; 3];
-/// See [`LAST_V_CLIP`].
-static LAST_H_CLIP: [AtomicU32; 3] = [const { AtomicU32::new(0) }; 3];
-/// See [`LAST_V_CLIP`].
-static LAST_V_BODY: [AtomicU32; 3] = [const { AtomicU32::new(0) }; 3];
-/// See [`LAST_V_CLIP`].
-static LAST_H_BODY: [AtomicU32; 3] = [const { AtomicU32::new(0) }; 3];
-
-/// Probe batches run and frames served from cached corrections (armed only).
+/// Camera updates checked against world geometry (armed only).
 static PROBE_BATCHES: Counter = Counter::zero();
-/// See [`PROBE_BATCHES`].
-static PROBE_REUSES: Counter = Counter::zero();
+static QUERY_FAILURES: Counter = Counter::zero();
+static PROBES: Counter = Counter::zero();
+static GUARD_TICKS: Accum = Accum::zero();
+static GUARD_MAX_TICKS: Accum = Accum::zero();
 
 fn store3(slots: &[AtomicU32; 3], value: [f32; 3]) {
     for (slot, v) in slots.iter().zip(value) {
@@ -111,6 +96,26 @@ fn camera_vec3(camera: usize, offset: usize) -> [f32; 3] {
     out
 }
 
+/// Publish stock camera direction in world space, including on transports.
+fn unmodified_forward(camera: usize) -> [f32; 3] {
+    let forward = camera_vec3(camera, 0x14);
+    // SAFETY: the live camera's transport GUID occupies +0x98, with only the
+    // record's four-byte alignment guaranteed.
+    let transport = unsafe { ((camera + 0x98) as *const u64).read_unaligned() };
+    if transport == 0 {
+        return forward;
+    }
+    super::camera_projection::CameraSpace::snapshot(camera)
+        .and_then(|space| {
+            space.renderer_basis([
+                forward,
+                camera_vec3(camera, 0x20),
+                camera_vec3(camera, 0x2c),
+            ])
+        })
+        .map_or(forward, |basis| basis[0])
+}
+
 /// Write the camera basis rows: forward, right, up from `+0x14`.
 fn set_basis(camera: usize, basis: [[f32; 3]; 3]) {
     for (row, vec) in basis.iter().enumerate() {
@@ -130,14 +135,17 @@ fn looking_at_guid(camera: usize) -> u64 {
 }
 
 /// The game's own camera-collision flag, switched by the water option.
-fn camera_query_flag() -> u32 {
+fn camera_query_flag() -> Option<u32> {
     // SAFETY: `VIDEO_OPTIONS` is a fixed host global at the verified image
     // base, holding the live options record pointer.
     let options = unsafe { *(VIDEO_OPTIONS as *const usize) };
+    if options == 0 {
+        return None;
+    }
     // SAFETY: `+0x28` of the options record is the water-collision field the
     // client's camera collision switches its flag on.
     let water = unsafe { *((options + 0x28) as *const u32) };
-    if water != 0 { 0x001f_0171 } else { 0x0010_0171 }
+    Some(if water != 0 { 0x001f_0171 } else { 0x0010_0171 })
 }
 
 /// Where sight traces originate: the edited camera position.
@@ -153,178 +161,34 @@ pub fn rotated_forward() -> [f32; 3] {
     if PUBLISHED.load(Ordering::Relaxed) {
         return load3(&ROTATED_FWD);
     }
-    live_camera().map_or([0.0; 3], |camera| camera_vec3(camera, 0x14))
-}
-
-/// The near-clip corner probe for the vertical translation.
-fn vertical_clip_probe(camera: usize, original: [f32; 3], translated: [f32; 3]) -> [f32; 3] {
-    let near_clip = cam_f32(camera, 0x38);
-    let fov = cam_f32(camera, 0x40) / cam_f32(camera, 0x44);
-    let half = (fov / 2.0).tan() * near_clip;
-    let signed = if translated[2] > original[2] {
-        half
-    } else {
-        -half
-    };
-    let (from, to) = crate::math::editcamera::probe_endpoints(
-        original,
-        translated,
-        camera_vec3(camera, 0x14),
-        camera_vec3(camera, 0x2c),
-        signed,
-        near_clip,
-    );
-    match super::trace::world_intersect_flagged(&from, &to, camera_query_flag()) {
-        Some(hit) if (0.0..=1.0).contains(&hit) => {
-            crate::math::editcamera::clip_correction(from, to, hit, original, translated, false)
-        }
-        _ => [0.0; 3],
-    }
-}
-
-/// The near-clip corner probe for the shoulder translation.
-fn horizontal_clip_probe(
-    camera: usize,
-    horizontal: f32,
-    original: [f32; 3],
-    translated: [f32; 3],
-) -> [f32; 3] {
-    let near_clip = cam_f32(camera, 0x38);
-    let fov = cam_f32(camera, 0x40);
-    let half = (fov / 2.0).tan() * near_clip;
-    let signed = if horizontal > 0.0 { half } else { -half };
-    let (from, to) = crate::math::editcamera::probe_endpoints(
-        original,
-        translated,
-        camera_vec3(camera, 0x14),
-        camera_vec3(camera, 0x20),
-        signed,
-        near_clip,
-    );
-    match super::trace::world_intersect_flagged(&from, &to, camera_query_flag()) {
-        Some(hit) if (0.0..=1.0).contains(&hit) => {
-            crate::math::editcamera::clip_correction(from, to, hit, original, translated, true)
-        }
-        _ => [0.0; 3],
-    }
-}
-
-/// The camera-body sweep from the unedited to the edited position.
-fn body_probe(original: [f32; 3], translated: [f32; 3]) -> ([f32; 3], [f32; 3]) {
-    match super::trace::world_intersect_flagged(&original, &translated, camera_query_flag()) {
-        Some(hit) if (0.0..=1.0).contains(&hit) => {
-            crate::math::editcamera::body_corrections(original, translated, hit)
-        }
-        _ => ([0.0; 3], [0.0; 3]),
-    }
-}
-
-fn positions_near(a: [f32; 3], b: [f32; 3]) -> bool {
-    let dx = a[0] - b[0];
-    let dy = a[1] - b[1];
-    let dz = a[2] - b[2];
-    dx * dx + dy * dy + dz * dz <= TOLERANCE * TOLERANCE
-}
-
-/// The collision-validation block: probe or reuse, then correct `translated`.
-fn validate_against_world(
-    camera: usize,
-    original: [f32; 3],
-    translated: &mut [f32; 3],
-    horizontal: f32,
-    vertical: f32,
-    pitch: f32,
-    pin_on: bool,
-) {
-    let need_vertical = pin_on || vertical.abs() > TOLERANCE || pitch.abs() > TOLERANCE;
-    let need_horizontal = horizontal.abs() > TOLERANCE;
-    let now = super::super::objmgr::game_tick_ms();
-    let due = now.wrapping_sub(LAST_PROBE_MS.load(Ordering::Relaxed)) > REFRESH_INTERVAL_MS;
-    let last_pitch = f32::from_bits(LAST_PROBED_PITCH.load(Ordering::Relaxed));
-    let moved = !positions_near(*translated, load3(&LAST_PROBED_POS))
-        || (last_pitch.abs() - pitch.abs()).abs() > TOLERANCE;
-    let (v_clip, h_clip, h_body, v_body);
-    if due && moved {
-        tally::bump(&PROBE_BATCHES);
-        LAST_PROBE_MS.store(now, Ordering::Relaxed);
-        store3(&LAST_PROBED_POS, *translated);
-        LAST_PROBED_PITCH.store(pitch.to_bits(), Ordering::Relaxed);
-        v_clip = if need_vertical {
-            vertical_clip_probe(camera, original, *translated)
-        } else {
-            [0.0; 3]
-        };
-        store3(&LAST_V_CLIP, v_clip);
-        h_clip = if need_horizontal {
-            horizontal_clip_probe(camera, horizontal, original, *translated)
-        } else {
-            [0.0; 3]
-        };
-        store3(&LAST_H_CLIP, h_clip);
-        (h_body, v_body) = body_probe(original, *translated);
-        store3(&LAST_H_BODY, h_body);
-        store3(&LAST_V_BODY, v_body);
-    } else {
-        tally::bump(&PROBE_REUSES);
-        v_clip = if need_vertical {
-            load3(&LAST_V_CLIP)
-        } else {
-            [0.0; 3]
-        };
-        h_clip = if need_horizontal {
-            load3(&LAST_H_CLIP)
-        } else {
-            [0.0; 3]
-        };
-        h_body = load3(&LAST_H_BODY);
-        v_body = load3(&LAST_V_BODY);
-    }
-    if crate::math::editcamera::longer(v_body, v_clip) {
-        translated[2] += v_body[2];
-    } else {
-        translated[2] += v_clip[2];
-    }
-    if crate::math::editcamera::longer(h_body, h_clip) {
-        translated[0] += h_body[0];
-        translated[1] += h_body[1];
-    } else {
-        translated[0] += h_clip[0];
-        translated[1] += h_clip[1];
-    }
+    live_camera().map_or([0.0; 3], unmodified_forward)
 }
 
 /// The follow-target basis rebuild, when the target qualifies.
-fn follow_target(camera: usize) {
+fn follow_target(eye: [f32; 3]) -> Option<[[f32; 3]; 3]> {
     let target_guid = super::super::objmgr::guid_of_token(c"target");
     if target_guid == 0 {
-        return;
+        return None;
     }
-    let Some(target) = super::super::objmgr::object_by_guid(target_guid) else {
-        return;
-    };
-    let Some(player) = super::super::objmgr::player() else {
-        return;
-    };
+    let target = super::super::objmgr::object_by_guid(target_guid)?;
+    let player = super::super::objmgr::player()?;
     let qualifies = match target.object_type() {
         super::super::objmgr::TYPE_PLAYER => !player.can_attack(target),
         super::super::objmgr::TYPE_UNIT => target.is_player_controlled() == Some(false),
         _ => false,
     };
     if !qualifies {
-        return;
+        return None;
     }
     let close = super::distance::between_units(player, target, crate::math::reach::Meter::Ranged);
     // The sight test follows the original's truthiness: any non-zero verdict
     // (including the error shape) passes.
     if !(0.0..50.0).contains(&close) || super::insight::unit_in_sight(player, target) == 0 {
-        return;
+        return None;
     }
     let mut target_position = target.position();
     target_position[2] += target.collision_box_height();
-    let eye = camera_vec3(camera, 0x8);
-    if let Some(basis) = crate::math::editcamera::look_at_basis(eye, target_position) {
-        set_basis(camera, basis);
-    }
+    crate::math::editcamera::look_at_basis(eye, target_position)
 }
 
 /// The per-frame edit, run after the client's own camera update.
@@ -351,14 +215,14 @@ pub fn after_update(camera_raw: u32) {
         && vertical.abs() <= TOLERANCE
         && pitch.abs() <= TOLERANCE
     {
-        publish(original_pos, camera_vec3(camera, 0x14));
+        publish(original_pos, unmodified_forward(camera));
         return;
     }
     let Some(unit) = super::super::objmgr::object_by_guid(looking_at_guid(camera))
         .filter(|u| u.is_unit_or_player())
     else {
         // No subject (login, cinematics): the unedited camera IS the state.
-        publish(original_pos, camera_vec3(camera, 0x14));
+        publish(original_pos, unmodified_forward(camera));
         return;
     };
     let pin = if pin_on && unit.mount_display_id() == 0 {
@@ -371,51 +235,129 @@ pub fn after_update(camera_raw: u32) {
     } else {
         None
     };
-    let mut translated = crate::math::editcamera::translate_camera(
-        original_pos,
-        unit.position(),
-        horizontal,
-        vertical,
-        pin.as_ref(),
-    );
-    if pitch.abs() > TOLERANCE
-        && let Some(basis) = crate::math::editcamera::pitch_basis(camera_vec3(camera, 0x14), pitch)
-    {
-        set_basis(camera, basis);
-    }
-    if pin_on
-        || vertical.abs() > TOLERANCE
-        || horizontal.abs() > TOLERANCE
-        || pitch.abs() > TOLERANCE
-    {
-        validate_against_world(
-            camera,
+    let raw_basis = [
+        camera_vec3(camera, 0x14),
+        camera_vec3(camera, 0x20),
+        camera_vec3(camera, 0x2c),
+    ];
+    let Some(space) = super::camera_projection::CameraSpace::snapshot(camera) else {
+        tally::bump(&QUERY_FAILURES);
+        publish(original_pos, raw_basis[0]);
+        return;
+    };
+    let Some(world_basis) = space.renderer_basis(raw_basis) else {
+        tally::bump(&QUERY_FAILURES);
+        publish(original_pos, raw_basis[0]);
+        return;
+    };
+    let original = CameraPose {
+        position: original_pos,
+        basis: world_basis,
+    };
+    let mut edited = CameraPose {
+        position: crate::math::editcamera::translate_camera(
             original_pos,
-            &mut translated,
+            unit.position(),
             horizontal,
             vertical,
-            pitch,
-            pin_on,
-        );
+            pin.as_ref(),
+        ),
+        basis: original.basis,
+    };
+    if pitch.abs() > TOLERANCE
+        && let Some(basis) = crate::math::editcamera::pitch_basis(original.basis[0], pitch)
+    {
+        edited.basis = basis;
     }
-    for (i, &v) in translated.iter().enumerate() {
+    let mut accepted = if edited.basis == original.basis {
+        AcceptedPose {
+            pose: edited,
+            raw_basis,
+        }
+    } else {
+        let Some(pose) = rounded_pose(&edited, &space) else {
+            tally::bump(&QUERY_FAILURES);
+            publish(original_pos, world_basis[0]);
+            return;
+        };
+        pose
+    };
+    if crate::math::editcamera::position_changed(&original.position, &accepted.pose.position) {
+        let started = tally::arm().map(|_| wow_shared::tsc::rdtsc());
+        let valid = validate_translation(camera, &original, &mut accepted.pose);
+        if let Some(armed) = tally::arm()
+            && let Some(started) = started
+        {
+            let ticks = wow_shared::tsc::rdtsc().wrapping_sub(started);
+            GUARD_TICKS.add(&armed, ticks);
+            GUARD_MAX_TICKS.max(&armed, ticks);
+        }
+        if !valid {
+            tally::bump(&QUERY_FAILURES);
+            publish(original_pos, world_basis[0]);
+            return;
+        }
+    }
+    // Follow from the corrected eye. Rotation adds no validation rays;
+    // its existing target-eligibility sight query remains unchanged.
+    if follow && let Some(basis) = follow_target(accepted.pose.position) {
+        let candidate = CameraPose {
+            position: accepted.pose.position,
+            basis,
+        };
+        if let Some(pose) = rounded_pose(&candidate, &space) {
+            accepted = pose;
+        }
+    }
+    for (i, &v) in accepted.pose.position.iter().enumerate() {
         // SAFETY: `camera` passed the liveness heuristic; `+0x8` is the
         // camera position this feature exists to rewrite.
         unsafe { *((camera + 0x8 + i * 4) as *mut f32) = v };
     }
-    if follow {
-        follow_target(camera);
-    }
-    publish(translated, camera_vec3(camera, 0x14));
+    set_basis(camera, accepted.raw_basis);
+    publish(accepted.pose.position, accepted.pose.basis[0]);
 }
 
-/// One cumulative line for the collision probes, when any has run.
+struct AcceptedPose {
+    pose: CameraPose,
+    raw_basis: [[f32; 3]; 3],
+}
+
+fn rounded_pose(
+    candidate: &CameraPose,
+    space: &super::camera_projection::CameraSpace,
+) -> Option<AcceptedPose> {
+    let raw_basis = space.world_to_local(candidate.basis)?;
+    Some(AcceptedPose {
+        pose: CameraPose {
+            position: candidate.position,
+            basis: space.renderer_basis(raw_basis)?,
+        },
+        raw_basis,
+    })
+}
+
+fn validate_translation(camera: usize, original: &CameraPose, edited: &mut CameraPose) -> bool {
+    let Some(plane) = super::camera_projection::current_projection(camera) else {
+        return false;
+    };
+    let Some(flag) = camera_query_flag() else {
+        return false;
+    };
+    tally::bump(&PROBE_BATCHES);
+    crate::math::editcamera::correct_translation(original, edited, &plane, |from, to| {
+        tally::bump(&PROBES);
+        super::trace::world_intersect_flagged(from, to, flag)
+    })
+}
+
+/// One cumulative line for the translation probes, when any has run.
 pub fn emit_cumulative() {
     let batches = PROBE_BATCHES.get();
-    let reuses = PROBE_REUSES.get();
-    if batches | reuses != 0 {
+    if batches != 0 || QUERY_FAILURES.get() != 0 {
         crate::defer_log!(target: tally::TARGET, log::Level::Info,
-            "unitxp camera: {batches} probe batches, {reuses} reused",
+            "unitxp camera: {batches} translation batches, {} rays, {} unavailable, {} guard ticks, {} max guard ticks",
+            PROBES.get(), QUERY_FAILURES.get(), GUARD_TICKS.get(), GUARD_MAX_TICKS.get(),
         );
     }
 }

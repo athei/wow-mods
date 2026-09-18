@@ -517,10 +517,10 @@ pub fn weather_raindrop_vertex__675ac0(
     let rel = [pos[0] - camera[0], pos[1] - camera[1], pos[2] - camera[2]];
     // inv_len = 1.0 / sqrt(SquaredMagnitude(rel)) (0x675de3 call; 0x675de8
     // `fsqrt`; 0x675df3 `fdivr 1.0`). f64 sqrt matches the stock x87 80-bit
-    // intermediate closer than an f32 sqrt of the f32 squared magnitude; the
+    // intermediate without narrowing the squared magnitude; the
     // squared magnitude itself reuses the shared kernel's fadd grouping.
     let mag = crate::math::vector::c3_vector__squared_magnitude__4549f0(&rel);
-    let inv_len = (f64::from(one) / f64::from(mag).sqrt()) as f32;
+    let inv_len = (f64::from(one) / mag.sqrt()) as f32;
 
     // tilt = rel * inv_len, then negated per component (0x675e16..0x675e43
     // `fchs` + `C3Vector::Set`).

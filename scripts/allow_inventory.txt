@@ -33,7 +33,7 @@ windows/turbo/src/math/lua_gc.rs clippy::vec_box 1
 windows/turbo/src/math/lua_gc.rs dead_code 2
 windows/turbo/src/math/m2.rs clippy::assign_op_pattern 1
 windows/turbo/src/math/m2.rs clippy::manual_midpoint 2
-windows/turbo/src/math/m2.rs clippy::neg_cmp_op_on_partial_ord 3
+windows/turbo/src/math/m2.rs clippy::neg_cmp_op_on_partial_ord 4
 windows/turbo/src/math/m2.rs clippy::too_many_arguments 2
 windows/turbo/src/math/m2.rs non_snake_case 1
 windows/turbo/src/math/matrix33.rs clippy::too_many_arguments 1
@@ -62,6 +62,7 @@ windows/turbo/src/math/plane.rs non_snake_case 1
 windows/turbo/src/math/quaternion.rs clippy::too_many_arguments 1
 windows/turbo/src/math/quaternion.rs non_snake_case 1
 windows/turbo/src/math/spline.rs clippy::excessive_precision 2
+windows/turbo/src/math/spline.rs clippy::neg_cmp_op_on_partial_ord 1
 windows/turbo/src/math/spline.rs non_snake_case 1
 windows/turbo/src/math/ui.rs clippy::neg_cmp_op_on_partial_ord 1
 windows/turbo/src/math/ui.rs clippy::too_many_arguments 1
@@ -88,7 +89,7 @@ windows/turbo/src/win/hooks.rs clippy::cognitive_complexity 4
 windows/turbo/src/win/hooks.rs clippy::drain_collect 2
 windows/turbo/src/win/hooks.rs clippy::manual_range_contains 2
 windows/turbo/src/win/hooks.rs clippy::multiple_unsafe_ops_per_block 13
-windows/turbo/src/win/hooks.rs clippy::neg_cmp_op_on_partial_ord 15
+windows/turbo/src/win/hooks.rs clippy::neg_cmp_op_on_partial_ord 14
 windows/turbo/src/win/hooks.rs clippy::too_many_arguments 14
 windows/turbo/src/win/hooks.rs clippy::undocumented_unsafe_blocks 1
 windows/turbo/src/win/hooks.rs non_snake_case 1

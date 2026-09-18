@@ -94,15 +94,11 @@ pub fn c_aa_box__from_points__7c1450(points: &[f32], count: u32) -> [f32; 6] {
         let y = point[1];
         let z = point[2];
 
-        if x < min_x {
-            min_x = x;
-        }
-        if y < min_y {
-            min_y = y;
-        }
-        if z < min_z {
-            min_z = z;
-        }
+        // Stock retains the old minimum only when it is strictly smaller.
+        // Ties take the later zero sign; unordered also takes the new value.
+        min_x = if min_x < x { min_x } else { x };
+        min_y = if min_y < y { min_y } else { y };
+        min_z = if min_z < z { min_z } else { z };
         if max_x < x {
             max_x = x;
         }
@@ -168,6 +164,26 @@ mod tests_c_aa_box__from_points__7c1450 {
             assert!(out[2] <= p[2] && p[2] <= out[5]);
         }
     }
+
+    #[test]
+    fn minimum_ties_take_the_later_zero_sign() {
+        for (first, next) in [(0.0f32, -0.0f32), (-0.0f32, 0.0f32)] {
+            let out = fp(&[first, first, first, next, next, next], 2);
+            assert_eq!(
+                [out[0], out[1], out[2]].map(f32::to_bits),
+                [next.to_bits(); 3]
+            );
+        }
+    }
+
+    #[test]
+    fn unordered_minimum_takes_the_later_component() {
+        let nan = f32::from_bits(0x7fc0_1234);
+        let out = fp(&[nan, nan, nan, 1.0, 2.0, 3.0], 2);
+        assert_eq!(&out[..3], &[1.0, 2.0, 3.0]);
+        let out = fp(&[1.0, 2.0, 3.0, nan, nan, nan], 2);
+        assert!(out[..3].iter().all(|v| v.to_bits() == nan.to_bits()));
+    }
 }
 
 /// Segment-vs-AABB intersection (slab clip).
@@ -180,6 +196,11 @@ mod tests_c_aa_box__from_points__7c1450 {
 /// axis with the largest entry-`t` defines the hit point, which is validated
 /// against the box (±1e-5) on the other two axes. A start inside every slab
 /// is an immediate hit.
+///
+/// Direction components and entry parameters narrow at the stock float stores.
+/// The entry numerator remains wide until division, and the hit coordinate and
+/// expanded bounds remain wide through validation. The hit's `FST m32` does not
+/// narrow the x87 register used by the following comparisons.
 ///
 /// Compare senses are faithful to the original: outside-tests are
 /// ordered-strict (a NaN start or NaN bound counts as inside), the best-`t`
@@ -256,7 +277,9 @@ pub fn c_aa_box__intersect_segment__6dc5a0(
         ($a:literal) => {
             if clipped[$a] {
                 let s = seg_start.at::<$a>();
-                t[$a] = (plane[$a] - s) / (seg_end.at::<$a>() - s);
+                let direction = seg_end.at::<$a>() - s;
+                t[$a] =
+                    super::f64_to_f32((f64::from(plane[$a]) - f64::from(s)) / f64::from(direction));
             }
         };
     }
@@ -284,11 +307,12 @@ pub fn c_aa_box__intersect_segment__6dc5a0(
         ($a:literal) => {{
             if best != $a {
                 let s = seg_start.at::<$a>();
-                let hit = (seg_end.at::<$a>() - s) * tb + s;
-                if hit < box6.at::<$a>() - EPS {
+                let direction = seg_end.at::<$a>() - s;
+                let hit = f64::from(direction) * f64::from(tb) + f64::from(s);
+                if hit < f64::from(box6.at::<$a>()) - f64::from(EPS) {
                     return 0;
                 }
-                if box6.at::<{ $a + 3 }>() + EPS < hit {
+                if f64::from(box6.at::<{ $a + 3 }>()) + f64::from(EPS) < hit {
                     return 0;
                 }
             }
@@ -338,6 +362,60 @@ mod tests_c_aa_box__intersect_segment__6dc5a0 {
     #[test]
     fn diagonal_miss_outside() {
         assert_eq!(hit(&UNIT, &[-3.0, 3.0, 0.0], &[-1.5, 1.5, 0.0]), 0);
+    }
+
+    #[test]
+    fn saved_stock_hits_survive_the_epsilon_boundary() {
+        // Saved finite inputs accepted by the original primitive. These assert
+        // stock compatibility, not an ideal geometric intersection predicate.
+        let cases = [
+            (
+                [
+                    0x415e_8370,
+                    0x4119_093f,
+                    0xc16c_9239,
+                    0x4186_df00,
+                    0x4160_a781,
+                    0xc130_5b2a,
+                ],
+                [0x4080_2a0c, 0x4114_2676, 0xc0b9_c9a4],
+                [0x4219_5d62, 0x41ce_b7e2, 0xc1de_8ffe],
+            ),
+            (
+                [
+                    0xc0cd_7b4d,
+                    0x410a_a77e,
+                    0x40d3_9f76,
+                    0xc098_e168,
+                    0x4149_cbd1,
+                    0x4127_52b1,
+                ],
+                [0xc12f_85f0, 0x40e6_66dc, 0x3e32_c740],
+                [0xc0a0_92b7, 0x4164_8318, 0x4116_ab46],
+            ),
+            (
+                [
+                    0xc101_d960,
+                    0x4126_a23a,
+                    0xc106_37af,
+                    0xc066_6000,
+                    0x4137_36a3,
+                    0xc084_b2b3,
+                ],
+                [0xc135_b385, 0x4038_9826, 0xc187_b668],
+                [0x400f_3740, 0x421b_4645, 0x41e2_58b2],
+            ),
+        ];
+        for (bounds, start, end) in cases {
+            assert_eq!(
+                hit(
+                    &bounds.map(f32::from_bits),
+                    &start.map(f32::from_bits),
+                    &end.map(f32::from_bits)
+                ),
+                1
+            );
+        }
     }
 
     #[test]

@@ -3031,14 +3031,21 @@ pub fn c_map_obj__hit_normal_dot__6a37b0(
     v2: &[f32; 3],
     seg: &[f32; 3],
 ) -> ([f32; 3], f32) {
-    let a = [v2[0] - v0[0], v2[1] - v0[1], v2[2] - v0[2]];
-    let b = [v1[0] - v0[0], v1[1] - v0[1], v1[2] - v0[2]];
-    let n = [
-        b[1] * a[2] - b[2] * a[1],
-        b[2] * a[0] - a[2] * b[0],
-        b[0] * a[1] - b[1] * a[0],
+    let w = f64::from;
+    // The second edge stays in registers. Only the first edge's x/y
+    // differences spill before the cross product; its z difference stays wide.
+    let a = [
+        w(v2[0]) - w(v0[0]),
+        w(v2[1]) - w(v0[1]),
+        w(v2[2]) - w(v0[2]),
     ];
-    let dot = (n[2] * seg[2] + n[1] * seg[1]) + n[0] * seg[0];
+    let b = [w(v1[0] - v0[0]), w(v1[1] - v0[1]), w(v1[2]) - w(v0[2])];
+    let n = [
+        super::f64_to_f32(b[1] * a[2] - b[2] * a[1]),
+        super::f64_to_f32(b[2] * a[0] - a[2] * b[0]),
+        super::f64_to_f32(b[0] * a[1] - b[1] * a[0]),
+    ];
+    let dot = super::f64_to_f32((w(n[2]) * w(seg[2]) + w(n[1]) * w(seg[1])) + w(n[0]) * w(seg[0]));
     (n, dot)
 }
 
@@ -3047,7 +3054,8 @@ pub fn c_map_obj__hit_normal_dot__6a37b0(
 /// `dot / |n|` with the reference's `(nz² + ny²) + nx²` accumulation (a zero
 /// normal divides by zero).
 pub fn c_map_obj__normalize_facet_dot__6a37b0(dot: f32, n: &[f32; 3]) -> f32 {
-    dot / ((n[2] * n[2] + n[1] * n[1]) + n[0] * n[0]).sqrt()
+    let w = f64::from;
+    super::f64_to_f32(w(dot) / ((w(n[2]) * w(n[2]) + w(n[1]) * w(n[1])) + w(n[0]) * w(n[0])).sqrt())
 }
 
 #[cfg(test)]
@@ -7009,8 +7017,8 @@ mod tests_update_visibility__6838f0 {
 ///
 /// The camera deltas are EACH narrowed to f32 (stock FSTPs every component to
 /// the stack before `C3Vector__Set`), the squared magnitude is the hooked
-/// 0x4549f0 kernel (f32 `x·x + y·y + z·z` — stock already calls our hook at
-/// 0x6836b4), and the compare is `FCOMP; TEST AH,0x5; JP` against the LOD
+/// 0x4549f0 kernel, retained wide through the compare at 0x6836b4. The compare
+/// is `FCOMP; TEST AH,0x5; JP` against the LOD
 /// threshold at `0x810178`: near = strictly less; `>=` AND unordered (NaN)
 /// both give far.
 pub fn cull_lod_is_near__6834e0(center: &[f32; 3], camera: &[f32; 3], thresh: f32) -> bool {
@@ -7019,7 +7027,7 @@ pub fn cull_lod_is_near__6834e0(center: &[f32; 3], camera: &[f32; 3], thresh: f3
         super::f64_to_f32(f64::from(center[1]) - f64::from(camera[1])),
         super::f64_to_f32(f64::from(center[2]) - f64::from(camera[2])),
     ];
-    super::vector::c3_vector__squared_magnitude__4549f0(&d) < thresh
+    super::vector::c3_vector__squared_magnitude__4549f0(&d) < f64::from(thresh)
 }
 
 #[cfg(test)]
@@ -7412,5 +7420,87 @@ mod tests_depth_bucket__681a40 {
     fn index_rounds_after_scale_and_bias() {
         // proj2 = 2+3+4+0-0 = 9; *2 = 18; -0.5 = 17.5 -> round-ties-even 18.
         assert_eq!(idx(1.0, 1.0, 1.0, 0.0, 0.0, 4.0, 2.0, 3.0, 2.0, 0.5), 18);
+    }
+}
+
+/// Whether a world segment candidate is strictly nearer than the current hit.
+///
+/// An unordered candidate or current fraction leaves the existing result unchanged.
+pub fn world_segment_hit_is_nearer__6a8840(candidate: f32, current: f32) -> bool {
+    candidate < current
+}
+
+/// Selects the highest surface after a geometry hit on the vertical sample segment.
+///
+/// The doubled drop, reconstructed height and comparison with the terrain or liquid
+/// height stay wide. Only the selected output height is narrowed to f32.
+pub fn world_sample_surface_height_select__6b7070(
+    top_z: f32,
+    max_drop: f32,
+    hit_frac: f32,
+    best_z: f32,
+) -> f32 {
+    let drop = f64::from(max_drop);
+    let hit_z = f64::from(top_z) - (drop + drop) * f64::from(hit_frac);
+    if f64::from(best_z) > hit_z {
+        best_z
+    } else {
+        super::f64_to_f32(hit_z)
+    }
+}
+
+#[cfg(test)]
+mod tests_world_segment_hit_selection {
+    use super::{
+        world_sample_surface_height_select__6b7070 as select_height,
+        world_segment_hit_is_nearer__6a8840 as nearer,
+    };
+
+    #[test]
+    fn unordered_candidate_does_not_replace_a_nearer_hit() {
+        assert!(nearer(0.25, 0.5));
+        assert!(!nearer(0.5, 0.5));
+        assert!(!nearer(0.75, 0.5));
+        assert!(!nearer(f32::NAN, 0.5));
+        assert!(!nearer(0.25, f32::NAN));
+    }
+
+    #[test]
+    fn surface_height_keeps_the_product_wide() {
+        let height = select_height(100.0, 100.0, f32::from_bits(0x3f33_3333), -100_000.0);
+        assert_eq!(height.to_bits(), 0xc21f_ffff);
+    }
+
+    #[test]
+    fn terrain_or_liquid_height_wins_only_when_higher() {
+        assert_eq!(select_height(10.0, 10.0, 0.75, -4.0), -4.0);
+        assert_eq!(select_height(10.0, 10.0, 0.75, -6.0), -5.0);
+        assert_eq!(select_height(10.0, 10.0, 0.75, f32::NAN), -5.0);
+    }
+}
+
+#[cfg(test)]
+mod tests_hit_normal_register_precision {
+    #[test]
+    fn unspilled_edge_differences_reach_the_cross_product() {
+        let (normal, dot) = super::c_map_obj__hit_normal_dot__6a37b0(
+            &[f32::from_bits(0x33000000), 0.0, 0.0],
+            &[1.0, 2.0, 3.0],
+            &[2.0, 3.0, 4.0],
+            &[1.0, 1.0, 1.0],
+        );
+        assert_eq!(
+            normal.map(f32::to_bits),
+            [0xbf800000, 0x3fffffff, 0xbf7fffff]
+        );
+        assert_eq!(dot.to_bits(), 0xb3800000);
+    }
+
+    #[test]
+    fn facet_normalization_rounds_after_division() {
+        let normal = [0xc09a0370, 0xc0aa0737, 0x411e9b3a].map(f32::from_bits);
+        let value =
+            super::c_map_obj__normalize_facet_dot__6a37b0(f32::from_bits(0xbf184037), &normal);
+        assert_eq!(value.to_bits(), 0xbd471fd3);
     }
 }

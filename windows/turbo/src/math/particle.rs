@@ -2776,12 +2776,14 @@ pub fn c_particle_emitter__spawn_cone_velocity__7b8890(
 /// Stock performs `FSQRT; FDIVR` with NO zero guard: a zero-length `dir`
 /// divides by zero (`s = ±inf`, or NaN when `radius` is also 0) and the
 /// `0 · inf = NaN` products propagate into the velocity — reproduced verbatim
-/// (IEEE f32 gives the identical inf/NaN behavior); do NOT add a guard. The
+/// (IEEE arithmetic gives the identical inf/NaN behavior); do NOT add a guard. The
 /// squared magnitude reuses the hooked `C3Vector::SquaredMagnitude` kernel,
-/// exactly the call stock makes.
+/// exactly the call stock makes. The squared length, square root and scale stay
+/// wide until the three velocity stores.
 pub fn c_particle_emitter__spawn_directed_velocity__7b8890(dir: [f32; 3], radius: f32) -> [f32; 3] {
-    let s = radius / crate::math::vector::c3_vector__squared_magnitude__4549f0(&dir).sqrt();
-    [dir[0] * s, dir[1] * s, dir[2] * s]
+    let sq = crate::math::vector::c3_vector__squared_magnitude__4549f0(&dir);
+    let s = f64::from(radius) / sq.sqrt();
+    dir.map(|component| super::f64_to_f32(f64::from(component) * s))
 }
 
 /// Random velocity kick of `SpawnParticle` 0x7b8890 (flag 0x400).
@@ -2937,6 +2939,13 @@ mod tests_c_particle_emitter__spawn_particle__7b8890 {
         assert_eq!(directed([3.0, 4.0, 0.0], 10.0), [6.0, 8.0, 0.0]);
         // Negative components ride along.
         assert_eq!(directed([-3.0, 0.0, 4.0], 10.0), [-6.0, 0.0, 8.0]);
+    }
+
+    #[test]
+    fn directed_length_and_scale_stay_wide_until_velocity_store() {
+        let dir = [0x4101_8350, 0x40d9_944e, 0x40c6_2921].map(f32::from_bits);
+        let got = directed(dir, 2.3).map(f32::to_bits);
+        assert_eq!(got, [0x3fc2_8258, 0x3fa3_62c8, 0x3f94_cdcd]);
     }
 
     #[test]
@@ -3578,7 +3587,7 @@ pub fn substep_camera_distance__7b5230(p: [f32; 3], q: [f32; 3]) -> f32 {
         super::f64_to_f32(f64::from(p[2]) - f64::from(q[2])),
     ];
     let sq = crate::math::vector::c3_vector__squared_magnitude__4549f0(&d);
-    super::f64_to_f32(f64::from(sq).sqrt())
+    super::f64_to_f32(sq.sqrt())
 }
 
 /// Velocity arm of `CParticleEmitter::UpdateWithSubsteps` (flag 0x40000, 0x7b530e–0x7b53c0).

@@ -157,7 +157,7 @@ pub fn c3_vector__scale_by_inverse__4549c0(this: *mut f32, divisor: f32) -> *mut
 }
 
 /// Returns the squared magnitude of the vec3 at `this`.
-pub fn c3_vector__squared_magnitude__4549f0(this: *const f32) -> f32 {
+pub fn c3_vector__squared_magnitude__4549f0(this: *const f32) -> f64 {
     if this.is_null() {
         return 0.0;
     }
@@ -855,7 +855,7 @@ pub fn c3_vector__cross__672130(out: *mut f32, a: *const f32, b: *const f32) -> 
 }
 
 /// `C3Vector::Dot` — `__fastcall(ecx = a, edx = b)`, returns `a · b`.
-pub fn c3_vector__dot__602630(a: *const f32, b: *const f32) -> f32 {
+pub fn c3_vector__dot__602630(a: *const f32, b: *const f32) -> f64 {
     if a.is_null() || b.is_null() {
         return 0.0;
     }
@@ -1695,8 +1695,11 @@ pub extern "thiscall" fn c_cubic_spline__eval_segment_pos__4541b0(
     }
 }
 
-/// `CCubicSpline::SqMag2D` — `__fastcall(ecx = v)`, returns `v[0]^2 + v[1]^2`.
-pub fn c_cubic_spline__sq_mag2_d__454980(v: *const f32) -> f32 {
+/// `CCubicSpline::SqMag2D`, `__fastcall(ecx = v)`, returns `v[0]^2 + v[1]^2`.
+///
+/// The result stays in `ST(0)` without an `f32` store, so the caller decides
+/// whether to narrow it before its next operation.
+pub fn c_cubic_spline__sq_mag2_d__454980(v: *const f32) -> f64 {
     if v.is_null() {
         return 0.0;
     }
@@ -15231,13 +15234,9 @@ pub extern "thiscall" fn collide_bsp_node_trace_segment__6bc370(
 /// local space (OUR `TransformPoint` hook) and walks the instance's sub-part
 /// list, running the group BSP trace (OUR `TraceSegment` hook) against each
 /// culled sub-part and keeping the closest hit. The closest-hit gate stores
-/// when the new distance is NOT ordered-greater-or-equal than the running
-/// fraction (a NaN distance stores, matching `TEST AH,5; JP`). Returns
-/// whether any hit was recorded (outMapObj non-zero).
-// The closest-hit gate stores when the distance is not ordered-greater-or-equal
-// than the running fraction, so a NaN distance stores, as the doc above pins;
-// the plain `<` rewrite would drop it.
-#[allow(clippy::neg_cmp_op_on_partial_ord)]
+/// only when the new distance is ordered-less than the running fraction;
+/// unordered candidates leave the previous result untouched. Returns whether
+/// any hit was recorded (outMapObj non-zero).
 pub extern "fastcall" fn c_world__intersect_map_obj_segment__6a8840(
     start: *const f32,
     end: *const f32,
@@ -15344,9 +15343,11 @@ pub extern "fastcall" fn c_world__intersect_map_obj_segment__6a8840(
                             );
                             // SAFETY: current running fraction for the gate.
                             let frac = unsafe { out_frac.read_unaligned() };
-                            // Store on hit unless ordered dist >= frac (NaN
-                            // stores) — the TEST AH,5; JP polarity.
-                            if hit != 0 && !(dist >= frac) {
+                            if hit != 0
+                                && crate::math::world::world_segment_hit_is_nearer__6a8840(
+                                    dist, frac,
+                                )
+                            {
                                 // SAFETY: caller out slots.
                                 unsafe { out_frac.write_unaligned(dist) };
                                 // SAFETY: caller out slot.
@@ -18515,15 +18516,11 @@ pub extern "fastcall" fn world_sample_surface_height__6b7070(
     // SAFETY: fixed, initialized `.data` dword in the live host image.
     let one = unsafe { ONE.read() };
     if hit_frac < one {
-        // Geometry hit: convert the fraction back to a Z on the segment.
-        let hit_z = ray_top[2] - (max_drop + max_drop) * hit_frac;
+        let hit_z = crate::math::world::world_sample_surface_height_select__6b7070(
+            ray_top[2], max_drop, hit_frac, best_z,
+        );
         // SAFETY: `out_height` is a writable float (checked non-null).
         unsafe { out_height.write(hit_z) };
-        if best_z > hit_z {
-            // Terrain/liquid sits above the geometry hit: it wins.
-            // SAFETY: `out_height` is a writable float (checked non-null).
-            unsafe { out_height.write(best_z) };
-        }
         return 1;
     }
     if terrain_hit == 0 {
@@ -20186,13 +20183,20 @@ pub extern "thiscall" fn cm2_shared__animate_bones__714260(
                         for r in [0usize, 4, 8] {
                             // SAFETY: the model-matrix row is in-bounds.
                             let mr = unsafe { anim_vec3(inst, 0xfc + r * 4) };
-                            let msq = mr[0] * mr[0] + mr[1] * mr[1] + mr[2] * mr[2];
+                            let model_order = if r == 8 { [mr[1], mr[2], mr[0]] } else { mr };
+                            let msq = crate::math::vector::c3_vector__squared_magnitude__4549f0(
+                                &model_order,
+                            );
                             let row = [local_m[r], local_m[r + 1], local_m[r + 2]];
-                            let lsq = crate::math::matrix44::bb_row_sqmag_xzy__714260(&row);
+                            let lsq = if r == 0 {
+                                crate::math::matrix44::bb_row_sqmag_xzy__714260(&row)
+                            } else {
+                                crate::math::matrix44::bb_row_sqmag_zyx__714260(&row)
+                            };
                             let f = crate::math::matrix44::bb_row_ratio__714260(msq, lsq);
-                            local_m[r] = f * mr[0];
-                            local_m[r + 1] = f * mr[1];
-                            local_m[r + 2] = f * mr[2];
+                            local_m[r] = (f * f64::from(mr[0])) as f32;
+                            local_m[r + 1] = (f * f64::from(mr[1])) as f32;
+                            local_m[r + 2] = (f * f64::from(mr[2])) as f32;
                         }
                     }
                     6 => {
@@ -20400,7 +20404,7 @@ pub extern "thiscall" fn cm2_shared__animate_bones__714260(
                     m[10] = r2[2];
                 }
                 0x40 => {
-                    let sq = m[8] * m[8] + m[9] * m[9] + m[10] * m[10];
+                    let sq = crate::math::matrix44::bb_row_sqmag_zyx__714260(&[m[8], m[9], m[10]]);
                     let r2 = norm([m[8], m[9], m[10]], sq);
                     m[8] = r2[0];
                     m[9] = r2[1];
@@ -20408,7 +20412,7 @@ pub extern "thiscall" fn cm2_shared__animate_bones__714260(
                     m[4] = m[9];
                     m[5] = -m[8];
                     m[6] = 0.0;
-                    let sq = m[4] * m[4] + m[5] * m[5] + m[6] * m[6];
+                    let sq = crate::math::matrix44::bb_row_sqmag_zyx__714260(&[m[4], m[5], m[6]]);
                     let r1 = norm([m[4], m[5], m[6]], sq);
                     m[4] = r1[0];
                     m[5] = r1[1];
@@ -32166,7 +32170,9 @@ pub extern "fastcall" fn c_world__collect_tile_geometry__6aadc0(
         return 0; // 0x6aae1d: xor al,al; ret 0x10
     }
 
-    // --- Optional per-tile refresh when (cell+0xc & 0x40). (0x6aae2a..0x6aae3a)
+    // --- Impassable chunk boundaries when (cell+0xc & 0x40). (0x6aae2a..0x6aae3a)
+    // The helper appends vertical boundary facets when the query extends past
+    // the chunk's XY bounds. It ignores query flags; this is not a refresh.
     // SAFETY: `cell` is non-null (tested above); the map-chunk record runs at least
     // to +0xf08, where its vertex grid ends, so the flags byte at +0xc is inside it.
     let cell_flags_p = unsafe { cell.add(0xc) };

@@ -21,6 +21,7 @@
 //! Lua stack; verification is the armed counters plus in-game observation.
 
 pub mod camera;
+mod camera_projection;
 mod distance;
 pub mod fpscap;
 mod insight;

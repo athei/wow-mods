@@ -323,8 +323,10 @@ mod tests_c_cubic_spline__eval_segment_pos__4541b0 {
 }
 
 /// Squared 2D magnitude of a vector: `v[0]^2 + v[1]^2` (x, y only).
-pub fn c_cubic_spline__sq_mag2_d__454980(v: &[f32; 2]) -> f32 {
-    v[0] * v[0] + v[1] * v[1]
+///
+/// Both products and the sum leave in ST(0) without a float store.
+pub fn c_cubic_spline__sq_mag2_d__454980(v: &[f32; 2]) -> f64 {
+    f64::from(v[0]) * f64::from(v[0]) + f64::from(v[1]) * f64::from(v[1])
 }
 
 #[cfg(test)]
@@ -333,15 +335,15 @@ mod tests_c_cubic_spline__sq_mag2_d__454980 {
 
     #[test]
     fn known_values() {
-        assert_eq!(sq(&[3.0, 4.0]).to_bits(), 25.0f32.to_bits());
-        assert_eq!(sq(&[0.0, 0.0]).to_bits(), 0.0f32.to_bits());
-        assert_eq!(sq(&[1.0, 0.0]).to_bits(), 1.0f32.to_bits());
+        assert_eq!(sq(&[3.0, 4.0]).to_bits(), 25.0f64.to_bits());
+        assert_eq!(sq(&[0.0, 0.0]).to_bits(), 0.0f64.to_bits());
+        assert_eq!(sq(&[1.0, 0.0]).to_bits(), 1.0f64.to_bits());
     }
 
     #[test]
     fn ignores_z_would_be() {
         // Only x and y participate; sign-independent.
-        assert_eq!(sq(&[-2.0, -1.5]).to_bits(), (4.0f32 + 2.25).to_bits());
+        assert_eq!(sq(&[-2.0, -1.5]).to_bits(), (4.0f64 + 2.25).to_bits());
     }
 
     #[test]
@@ -353,6 +355,14 @@ mod tests_c_cubic_spline__sq_mag2_d__454980 {
             assert_eq!(a.to_bits(), sq(&[-x, -y]).to_bits());
             assert_eq!(a.to_bits(), sq(&[y, x]).to_bits()); // swap symmetry
         }
+    }
+
+    #[test]
+    fn products_and_sum_stay_wide_through_return() {
+        let v = [0x40cb_0864, 0x40ce_75a8].map(f32::from_bits);
+        assert_eq!(sq(&v).to_bits(), 0x4054_787d_f516_5500);
+        let narrow = v[0] * v[0] + v[1] * v[1];
+        assert_ne!(sq(&v), f64::from(narrow));
     }
 }
 
@@ -685,6 +695,9 @@ mod tests_c_spline_eval_point__453580 {
 /// untouched). Returns `(forward, right, up)` where
 /// `right = normalize2d(-forward.y, forward.x, 0)` and
 /// `up = forward x right`.
+// The original skips only ordered values below each gate. Unordered lengths
+// normalize, and an unordered agreement dot selects the tangent.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn c_cubic_spline__eval_frame_at_distance__454580(
     cp: &[f32; 12],
     deriv_basis: Option<&[f32; 16]>,
@@ -702,22 +715,28 @@ pub fn c_cubic_spline__eval_frame_at_distance__454580(
 
     let mut fwd = [cp[6] - cp[3], cp[7] - cp[4], cp[8] - cp[5]];
     let len = super::vector::c3_vector__squared_magnitude__4549f0(&fwd).sqrt();
-    // `>=` is false on NaN: a non-finite length skips the normalize, as the
-    // original's parity-flag branch does.
-    if len.abs() >= EPS_LEN {
-        fwd = super::vector::c3_vector__scale_by_inverse__4549c0(&fwd, len);
+    // Only ordered values below the gate skip normalization; NaN propagates.
+    if !(len.abs() < f64::from(EPS_LEN)) {
+        // The stored divisor narrows after sqrt; the gate uses its wide value.
+        fwd = super::vector::c3_vector__scale_by_inverse__4549c0(&fwd, super::f64_to_f32(len));
     }
     let chosen = match deriv_basis {
         None => fwd,
         Some(basis) => {
             let tan = c_cubic_spline__eval_basis_quadratic__453640(cp, basis, local_t);
             let tan_len = super::vector::c3_vector__squared_magnitude__4549f0(&tan).sqrt();
-            if tan_len.abs() >= EPS_TANGENT {
-                let inv = 1.0_f32 / tan_len;
-                let tan = [tan[0] * inv, tan[1] * inv, tan[2] * inv];
+            if !(tan_len.abs() < f64::from(EPS_TANGENT)) {
+                let inv = 1.0_f64 / tan_len;
+                let tan = tan.map(|component| super::f64_to_f32(f64::from(component) * inv));
                 // Source x87 accumulation order: (z + y) + x.
-                let dot = (tan[2] * fwd[2] + tan[1] * fwd[1]) + fwd[0] * tan[0];
-                if dot >= DOT_AGREE { tan } else { fwd }
+                let dot = (f64::from(tan[2]) * f64::from(fwd[2])
+                    + f64::from(tan[1]) * f64::from(fwd[1]))
+                    + f64::from(fwd[0]) * f64::from(tan[0]);
+                if !(dot < f64::from(DOT_AGREE)) {
+                    tan
+                } else {
+                    fwd
+                }
             } else {
                 // Degenerate tangent: the original leaves the forward row
                 // untouched and builds the basis from the caller's value.
@@ -727,15 +746,17 @@ pub fn c_cubic_spline__eval_frame_at_distance__454580(
     };
     let mut right = [-chosen[1], chosen[0], 0.0_f32];
     let right_len = c_cubic_spline__sq_mag2_d__454980(&[right[0], right[1]]).sqrt();
-    if right_len.abs() >= EPS_LEN {
-        let inv = 1.0_f32 / right_len;
-        right[0] *= inv;
-        right[1] *= inv;
+    if !(right_len.abs() < f64::from(EPS_LEN)) {
+        let inv = 1.0_f64 / right_len;
+        right[0] = super::f64_to_f32(f64::from(right[0]) * inv);
+        right[1] = super::f64_to_f32(f64::from(right[1]) * inv);
     }
     let up = [
         -(right[1] * chosen[2]),
         right[0] * chosen[2],
-        chosen[0] * right[1] - chosen[1] * right[0],
+        super::f64_to_f32(
+            f64::from(chosen[0]) * f64::from(right[1]) - f64::from(chosen[1]) * f64::from(right[0]),
+        ),
     ];
     (chosen, right, up)
 }
@@ -873,5 +894,103 @@ mod tests_c_cubic_spline__eval_frame_at_distance__454580 {
         let (fwd, right, _) = frame(&cp, None, 0.0, &ZERO);
         assert!(fwd.iter().all(|c| c.is_finite()));
         assert!(right[1].abs() < 1e-7 && right[0] == 0.0);
+    }
+
+    #[test]
+    fn chord_length_narrows_after_sqrt_for_the_divisor() {
+        let mut cp = [0.0; 12];
+        cp[6..9].copy_from_slice(&[0x4108_ea96, 0x40b7_37db, 0x40b1_a57c].map(f32::from_bits));
+        let (fwd, _, _) = frame(&cp, None, 0.0, &ZERO);
+        assert_eq!(
+            fwd.map(f32::to_bits),
+            [0x3f3b_4758, 0x3efa_9ca3, 0x3ef2_fd99]
+        );
+    }
+
+    #[test]
+    fn chord_length_gate_uses_the_unstored_sqrt() {
+        let mut cp = [0.0; 12];
+        let chord = [f32::from_bits(0x347f_ffff), 2.0_f32.powi(-34), 0.0];
+        cp[6..9].copy_from_slice(&chord);
+        let (fwd, _, _) = frame(&cp, None, 0.0, &ZERO);
+        assert_eq!(fwd, chord);
+    }
+
+    #[test]
+    fn tangent_length_and_reciprocal_stay_wide() {
+        let mut cp = [0.0; 12];
+        cp[6] = 1.0;
+        cp[9..12].copy_from_slice(&[0x40d1_0aae, 0x4016_443c, 0x4084_2dfd].map(f32::from_bits));
+        let (fwd, _, _) = frame(&cp, Some(&p3_select_basis()), 0.0, &ZERO);
+        assert_eq!(
+            fwd.map(f32::to_bits),
+            [0x3f4f_080b, 0x3e94_d24b, 0x3f02_e894]
+        );
+    }
+
+    #[test]
+    fn tangent_agreement_does_not_round_up_to_the_gate() {
+        let mut cp = [0.0; 12];
+        let chord = [0xbf7c_a972, 0x3e24_d356, 0].map(f32::from_bits);
+        cp[6..9].copy_from_slice(&chord);
+        cp[9..12].copy_from_slice(&[0xbf22_0448, 0xbf46_355c, 0].map(f32::from_bits));
+        let (fwd, _, _) = frame(&cp, Some(&p3_select_basis()), 0.0, &ZERO);
+        assert_eq!(fwd, chord);
+    }
+
+    #[test]
+    fn right_length_and_reciprocal_stay_wide() {
+        let prev = [0x40cb_0864, 0x40ce_75a8, 0x40fb_319c].map(f32::from_bits);
+        let (_, right, _) = frame(&[0.0; 12], Some(&p3_select_basis()), 0.0, &prev);
+        assert_eq!(right.map(f32::to_bits), [0xbf36_871e, 0x3f33_7f8a, 0]);
+    }
+
+    #[test]
+    fn up_z_products_stay_wide_until_subtraction() {
+        let prev = [0x40a1_ccfa, 0x4008_54a2, 0x3efd_19cc].map(f32::from_bits);
+        let (_, right, up) = frame(&[0.0; 12], Some(&p3_select_basis()), 0.0, &prev);
+        let want = (f64::from(prev[0]) * f64::from(right[1])
+            - f64::from(prev[1]) * f64::from(right[0])) as f32;
+        assert_eq!(up[2].to_bits(), want.to_bits());
+        let narrowed_products = prev[0] * right[1] - prev[1] * right[0];
+        assert_ne!(up[2].to_bits(), narrowed_products.to_bits());
+    }
+
+    #[test]
+    fn nan_chord_length_enters_normalization() {
+        let mut cp = [0.0; 12];
+        cp[6] = f32::NAN;
+        cp[7] = 1.0;
+        let (fwd, _, _) = frame(&cp, None, 0.0, &ZERO);
+        assert!(fwd.iter().all(|component| component.is_nan()));
+    }
+
+    #[test]
+    fn nan_tangent_length_does_not_keep_the_previous_forward() {
+        let mut cp = [0.0; 12];
+        cp[6] = 1.0;
+        cp[9] = f32::NAN;
+        let (fwd, _, _) = frame(&cp, Some(&p3_select_basis()), 0.0, &[1.0, 0.0, 0.0]);
+        assert!(fwd.iter().all(|component| component.is_nan()));
+    }
+
+    #[test]
+    fn nan_agreement_selects_the_finite_tangent() {
+        let mut cp = [0.0; 12];
+        // The chord overflows its genuine float store while the selected
+        // tangent remains finite, so only the agreement dot is unordered.
+        cp[3] = -f32::MAX;
+        cp[6] = f32::MAX;
+        cp[9] = 1.0;
+        let (fwd, _, _) = frame(&cp, Some(&p3_select_basis()), 0.0, &ZERO);
+        assert_eq!(fwd, [1.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn nan_right_length_enters_normalization() {
+        let prev = [f32::NAN, 1.0, 0.0];
+        let (_, right, _) = frame(&[0.0; 12], Some(&p3_select_basis()), 0.0, &prev);
+        assert!(right[0].is_nan() && right[1].is_nan());
+        assert_eq!(right[2].to_bits(), 0);
     }
 }

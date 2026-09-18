@@ -1940,26 +1940,21 @@ mod tests_c44_matrix__transform_point__7bca80 {
 /// translation from the last column (indices 3/7/11). `out[i] = in.x·mat[4i] +
 /// in.y·mat[4i+1] + in.z·mat[4i+2] + mat[4i+3]`.
 pub fn c44_matrix__transform_point__7bcae0(mat: &[f32; 16], input: &[f32; 3]) -> [f32; 3] {
-    let ix = input[0];
-    let iy = input[1];
-    let iz = input[2];
+    let ix = f64::from(input[0]);
+    let iy = f64::from(input[1]);
+    let iz = f64::from(input[2]);
+    let elem = |i: usize| f64::from(mat[i]);
 
-    let mut x = mat[0] * ix;
-    x += mat[1] * iy;
-    x += mat[2] * iz;
-    x += mat[3];
-
-    let mut y = mat[4] * ix;
-    y += mat[5] * iy;
-    y += mat[6] * iz;
-    y += mat[7];
-
-    let mut z = mat[8] * ix;
-    z += mat[9] * iy;
-    z += mat[10] * iz;
-    z += mat[11];
-
-    [x, y, z]
+    // The first row sums z, y, x; the other rows sum z, x, y. Each row
+    // retains the wide intermediates until its destination element is stored.
+    let x = ((elem(2) * iz + elem(1) * iy) + elem(0) * ix) + elem(3);
+    let y = ((elem(6) * iz + elem(4) * ix) + elem(5) * iy) + elem(7);
+    let z = ((elem(10) * iz + elem(8) * ix) + elem(9) * iy) + elem(11);
+    [
+        super::f64_to_f32(x),
+        super::f64_to_f32(y),
+        super::f64_to_f32(z),
+    ]
 }
 
 #[cfg(test)]
@@ -1972,6 +1967,19 @@ mod tests_c44_matrix__transform_point__7bcae0 {
         0.0, 0.0, 1.0, 0.0, //
         0.0, 0.0, 0.0, 1.0,
     ];
+
+    #[test]
+    fn cancellation_keeps_the_small_component() {
+        let mut mat = ID;
+        mat[1] = 1.0;
+        mat[2] = -1.0;
+        let tiny = f32::from_bits(0x3380_0000);
+        let out = xform(&mat, &[1.0, tiny, 1.0]);
+        assert_eq!(
+            out.map(f32::to_bits),
+            [0x3380_0000, 0x3380_0000, 0x3f80_0000]
+        );
+    }
 
     #[test]
     fn identity_is_neutral() {
@@ -3007,38 +3015,49 @@ pub fn bb_pivot_world_zyx__714260(m: &[f32; 16], p: &[f32; 3]) -> [f32; 3] {
 
 /// Per-row Euclidean lengths of the three rotation rows, each summed `(x² + y²) + z²`.
 pub fn bb_row_lengths__714260(m: &[f32; 16]) -> [f32; 3] {
-    [
-        (m[0] * m[0] + m[1] * m[1] + m[2] * m[2]).sqrt(),
-        (m[4] * m[4] + m[5] * m[5] + m[6] * m[6]).sqrt(),
-        (m[8] * m[8] + m[9] * m[9] + m[10] * m[10]).sqrt(),
-    ]
+    // Each sum and square root stays wide until the length's float store.
+    [0, 4, 8].map(|r| {
+        let sq =
+            crate::math::vector::c3_vector__squared_magnitude__4549f0(&[m[r], m[r + 1], m[r + 2]]);
+        super::f64_to_f32(sq.sqrt())
+    })
 }
 
 /// Normalize a basis row given its squared magnitude.
 ///
 /// Skipped only when `|sqrt(sqmag)|` is strictly below the 2⁻²² epsilon (an
-/// unordered compare — NaN — still normalizes, poisoning the row like the
-/// original).
+/// unordered compare with NaN still normalizes, poisoning the row like the
+/// original). The sum, square root, reciprocal and products remain wide until
+/// each output component is stored.
 // `!(s.abs() < EPS)` keeps the unordered case on the normalize arm; the `>=` form
 // clippy suggests would send NaN to the skip arm and lose the original's poisoning.
 #[allow(clippy::neg_cmp_op_on_partial_ord)]
-pub fn bb_normalize_row__714260(row: [f32; 3], sqmag: f32) -> [f32; 3] {
-    const EPS: f32 = f32::from_bits(0x3480_0000);
+pub fn bb_normalize_row__714260(row: [f32; 3], sqmag: f64) -> [f32; 3] {
+    const EPS: f64 = f32::from_bits(0x3480_0000) as f64;
     let s = sqmag.sqrt();
     if !(s.abs() < EPS) {
         let f = 1.0 / s;
-        return [row[0] * f, row[1] * f, row[2] * f];
+        return row.map(|v| super::f64_to_f32(f64::from(v) * f));
     }
     row
+}
+
+/// The wide squared magnitude for the z-locked billboard rows.
+///
+/// This mode sums `(z² + y²) + x²` before the square root and normalization.
+pub fn bb_row_sqmag_zyx__714260(row: &[f32; 3]) -> f64 {
+    let [x, y, z] = row.map(f64::from);
+    (z * z + y * y) + x * x
 }
 
 /// Row replacement ratio for the project-onto-model-rows billboard mode.
 ///
 /// `sqrt(local² / model²)` when the model row clears the 1e-5 squared-length
-/// floor (ordered compare — NaN falls to the 1.0 arm), else 1.0. `local_sqmag`
-/// is computed by the caller with the mode's own `(x² + z²) + y²` grouping.
-pub fn bb_row_ratio__714260(model_sqmag: f32, local_sqmag: f32) -> f32 {
-    const EPS_SQ: f32 = f32::from_bits(0x3727_c5ac);
+/// floor (ordered compare with NaN falls to the 1.0 arm), else 1.0. The ratio
+/// remains wide through the caller's row scaling. The caller sums model rows
+/// 0/1 in xyz order and row 2 in yzx order; local rows use xzy, zyx, zyx.
+pub fn bb_row_ratio__714260(model_sqmag: f64, local_sqmag: f64) -> f64 {
+    const EPS_SQ: f64 = f32::from_bits(0x3727_c5ac) as f64;
     if model_sqmag > EPS_SQ {
         (local_sqmag / model_sqmag).sqrt()
     } else {
@@ -3048,9 +3067,10 @@ pub fn bb_row_ratio__714260(model_sqmag: f32, local_sqmag: f32) -> f32 {
 
 /// The local-row squared magnitude feeding [`bb_row_ratio__714260`].
 ///
-/// `(x² + z²) + y²` (the original pairs the x and z squares first).
-pub fn bb_row_sqmag_xzy__714260(row: &[f32; 3]) -> f32 {
-    row[0] * row[0] + row[2] * row[2] + row[1] * row[1]
+/// The first local row uses `(x² + z²) + y²`, carried at register width.
+pub fn bb_row_sqmag_xzy__714260(row: &[f32; 3]) -> f64 {
+    let [x, y, z] = row.map(f64::from);
+    (x * x + z * z) + y * y
 }
 
 /// Cross product in the swapped orientation the axis-locked billboard modes use.
@@ -3120,7 +3140,8 @@ mod tests_bb__714260 {
         bb_finalize__714260 as finalize, bb_normalize_row__714260 as norm,
         bb_pivot_world_xyz__714260 as pw_xyz, bb_pivot_world_zyx__714260 as pw_zyx,
         bb_row_lengths__714260 as lengths, bb_row_ratio__714260 as ratio,
-        bb_row_sqmag_xzy__714260 as sqmag_xzy, bb_trans_fixup__714260 as fixup,
+        bb_row_sqmag_xzy__714260 as sqmag_xzy, bb_row_sqmag_zyx__714260 as sqmag_zyx,
+        bb_trans_fixup__714260 as fixup,
     };
 
     const M: [f32; 16] = [
@@ -3157,6 +3178,16 @@ mod tests_bb__714260 {
     }
 
     #[test]
+    fn row_length_narrows_after_sqrt() {
+        let row = [0xc18a_d880, 0xc16a_83c4, 0xc21c_03dc].map(f32::from_bits);
+        let mut m = [0.0; 16];
+        m[..3].copy_from_slice(&row);
+        assert_eq!(lengths(&m)[0].to_bits(), 0x4234_8c46);
+        let narrowed = (row[0] * row[0] + row[1] * row[1] + row[2] * row[2]).sqrt();
+        assert_eq!(narrowed.to_bits(), 0x4234_8c45);
+    }
+
+    #[test]
     fn normalize_guard_boundaries() {
         // Length exactly 0: sqrt(0) = 0 < eps -> untouched.
         assert_eq!(norm([0.0, 0.0, 0.0], 0.0), [0.0, 0.0, 0.0]);
@@ -3164,30 +3195,100 @@ mod tests_bb__714260 {
         let r = norm([2.0, 0.0, 0.0], 4.0);
         assert_eq!(r[0].to_bits(), 1.0f32.to_bits());
         // NaN sqmag still normalizes (poisons the row).
-        assert!(norm([1.0, 0.0, 0.0], f32::NAN)[0].is_nan());
+        assert!(norm([1.0, 0.0, 0.0], f64::NAN)[0].is_nan());
         // Negative sqmag -> sqrt NaN -> normalize -> NaN.
         assert!(norm([1.0, 0.0, 0.0], -1.0)[0].is_nan());
     }
 
     #[test]
-    fn ratio_floor() {
-        assert_eq!(ratio(1.0, 4.0).to_bits(), 2.0f32.to_bits());
-        // At/below the floor (and NaN): the 1.0 arm.
-        assert_eq!(
-            ratio(f32::from_bits(0x3727_c5ac), 4.0).to_bits(),
-            1.0f32.to_bits()
-        );
-        assert_eq!(ratio(0.0, 4.0).to_bits(), 1.0f32.to_bits());
-        assert_eq!(ratio(f32::NAN, 4.0).to_bits(), 1.0f32.to_bits());
+    fn normalize_retains_sum_sqrt_and_reciprocal_precision() {
+        let fixtures = [
+            (
+                [0xc1f4_60d4, 0x41d9_d1d8, 0xc0e8_1048],
+                [0xbf3c_2c6b, 0x3f27_b923, 0xbe32_b0ee],
+            ),
+            (
+                [0x4218_e733, 0x40d1_d545, 0xc1fc_13c8],
+                [0x3f43_d4b6, 0x3e06_5f3d, 0xbf21_6c97],
+            ),
+            (
+                [0x4177_0a33, 0x405f_4915, 0x4082_d285],
+                [0x3f71_c578, 0x3e5a_860a, 0x3e80_0849],
+            ),
+        ];
+        for (case, (bits, expected)) in fixtures.into_iter().enumerate() {
+            let row = bits.map(f32::from_bits);
+            let sq = crate::math::vector::c3_vector__squared_magnitude__4549f0(&row);
+            assert_eq!(norm(row, sq).map(f32::to_bits), expected);
+            // Each fixture distinguishes one accidental intermediate store.
+            let narrowed_scale = match case {
+                0 => 1.0 / f64::from(sq.sqrt() as f32),
+                1 => f64::from((1.0 / sq.sqrt()) as f32),
+                _ => 1.0 / f64::from(sq as f32).sqrt(),
+            };
+            let narrowed = row.map(|v| (f64::from(v) * narrowed_scale) as f32);
+            assert_ne!(narrowed.map(f32::to_bits), expected);
+        }
     }
 
     #[test]
-    fn sqmag_grouping_is_x_z_y() {
-        let row = [3.0f32, 5.0, 7.0];
+    fn normalize_finite_row_whose_square_exceeds_single_range() {
+        let row = [1.0e20, 0.0, 0.0];
+        let sq = crate::math::vector::c3_vector__squared_magnitude__4549f0(&row);
+        assert!((sq as f32).is_infinite());
+        assert_eq!(norm(row, sq), [1.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn normalize_compares_the_wide_length_to_epsilon() {
+        let row = [
+            f32::from_bits(0x347f_ffff),
+            f32::from_bits(0x2e80_0000),
+            0.0,
+        ];
+        let sq = crate::math::vector::c3_vector__squared_magnitude__4549f0(&row);
+        assert_eq!((sq.sqrt() as f32).to_bits(), 0x3480_0000);
+        assert!(sq.sqrt() < f64::from(f32::from_bits(0x3480_0000)));
+        assert_eq!(norm(row, sq).map(f32::to_bits), row.map(f32::to_bits));
+    }
+
+    #[test]
+    fn ratio_floor() {
+        assert_eq!(ratio(1.0, 4.0).to_bits(), 2.0f64.to_bits());
+        // At/below the floor (and NaN): the 1.0 arm.
         assert_eq!(
-            sqmag_xzy(&row).to_bits(),
-            (row[0] * row[0] + row[2] * row[2] + row[1] * row[1]).to_bits()
+            ratio(f64::from(f32::from_bits(0x3727_c5ac)), 4.0).to_bits(),
+            1.0f64.to_bits()
         );
+        assert_eq!(ratio(0.0, 4.0).to_bits(), 1.0f64.to_bits());
+        assert_eq!(ratio(f64::NAN, 4.0).to_bits(), 1.0f64.to_bits());
+    }
+
+    #[test]
+    fn ratio_stays_wide_through_row_scaling() {
+        let model = [0x4218_e733, 0x40d1_d545, 0xc1fc_13c8].map(f32::from_bits);
+        let local = [0x4177_0a33, 0x405f_4915, 0x4082_d285].map(f32::from_bits);
+        let msq = crate::math::vector::c3_vector__squared_magnitude__4549f0(&model);
+        let f = ratio(msq, sqmag_xzy(&local));
+        assert_eq!(f.to_bits(), 0x3fd4_f046_167e_6f3f);
+        let scaled = model.map(|v| super::super::f64_to_f32(f64::from(v) * f));
+        assert_eq!(
+            scaled.map(f32::to_bits),
+            [0x4148_192a, 0x4009_4cd6, 0xc124_f119]
+        );
+        let early_store = model.map(|v| v * f as f32);
+        assert_ne!(scaled.map(f32::to_bits), early_store.map(f32::to_bits));
+    }
+
+    #[test]
+    fn sqmag_groupings_stay_wide_and_distinct() {
+        let row = [
+            1.0,
+            f32::from_bits(0x3220_0000),
+            f32::from_bits(0x3220_0000),
+        ];
+        assert_eq!(sqmag_xzy(&row).to_bits(), 0x3ff0_0000_0000_0000);
+        assert_eq!(sqmag_zyx(&row).to_bits(), 0x3ff0_0000_0000_0001);
     }
 
     #[test]

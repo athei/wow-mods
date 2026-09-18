@@ -151,7 +151,7 @@ float = "bytes"
 rva  = 0x0549f0
 sig  = "D9 41 08 D9 41 04 D9 01 D9 C0 D8 C9 D9 C2 D8 CB DE C1 D9 C3 D8 CC DE C1"
 abi  = "thiscall"
-ret  = "f32"
+ret  = "f64"
 args = ["*const f32"]
 preserve = ["eax", "ecx", "edx"]
 [functions.C3Vector__AddInPlace__4841c0]
@@ -653,7 +653,7 @@ float = "bytes"
 rva  = 0x202630
 sig  = "D9 41 08 D8 4A 08 D9 41 04 D8 4A 04"
 abi  = "fastcall"
-ret  = "f32"
+ret  = "f64"
 args = ["*const f32", "*const f32"]
 preserve = ["eax", "ecx", "edx"]
 [functions.C3Vector__Negate__637330]
@@ -1148,7 +1148,7 @@ delegates = true
 rva  = 0x054980
 sig  = "D9 41 04 D9 01 D9 C0 D8 C9 D9 C2 D8 CB DE C1 DD"
 abi  = "fastcall"
-ret  = "f32"
+ret  = "f64"
 args = ["*const f32"]
 preserve = ["eax", "ecx", "edx"]
 

@@ -700,10 +700,11 @@ mod tests_m2_track__sample_float_lerp__71af20 {
 /// row 2 = row0 × row1, the first two scaled to `num` length when the
 /// pre-scale length clears `eps`), mode 3 delegates to the
 /// basis-from-direction builder, other modes leave the rotation as is.
-// The eight parameters are the client's own emitter-transform inputs — translation,
+// The eight parameters are the client's own emitter-transform inputs: translation,
 // axis-angle, mode flags, direction and the three float constants the caller supplies.
 // Folding them into a params struct would hide the original's argument order.
-#[allow(clippy::too_many_arguments)]
+// The ordered less-than test skips normalization; unordered lengths still scale the row.
+#[allow(clippy::too_many_arguments, clippy::neg_cmp_op_on_partial_ord)]
 pub fn cm2_model__build_emitter_transform__7106c0(
     translate: &[f32; 3],
     rot_angle: f32,
@@ -734,27 +735,32 @@ pub fn cm2_model__build_emitter_transform__7106c0(
             m[5] = m[0] - t;
             m[6] = m[1] * zero_k - m[0] * zero_k;
             let row1 = [m[4], m[5], m[6]];
+            // Length, reciprocal and scale products stay wide until each component store.
             let len = crate::math::vector::c3_vector__squared_magnitude__4549f0(&row1).sqrt();
-            if len.abs() >= eps {
-                let s = num / len;
-                m[4] *= s;
-                m[5] *= s;
-                m[6] *= s;
+            if !(len.abs() < f64::from(eps)) {
+                let s = f64::from(num) / len;
+                m[4] = super::f64_to_f32(f64::from(m[4]) * s);
+                m[5] = super::f64_to_f32(f64::from(m[5]) * s);
+                m[6] = super::f64_to_f32(f64::from(m[6]) * s);
             }
-            m[0] = m[5] * dir[2] - m[6] * dir[1];
-            m[1] = m[6] * dir[0] - dir[2] * m[4];
-            m[2] = dir[1] * m[4] - m[5] * dir[0];
+            // Both cross products narrow after subtraction, not after each product.
+            let row1 = [m[4], m[5], m[6]].map(f64::from);
+            let dir = dir.map(f64::from);
+            m[0] = super::f64_to_f32(row1[1] * dir[2] - row1[2] * dir[1]);
+            m[1] = super::f64_to_f32(row1[2] * dir[0] - dir[2] * row1[0]);
+            m[2] = super::f64_to_f32(dir[1] * row1[0] - row1[1] * dir[0]);
             let row0 = [m[0], m[1], m[2]];
             let len0 = crate::math::vector::c3_vector__squared_magnitude__4549f0(&row0).sqrt();
-            if len0.abs() >= eps {
-                let s = num / len0;
-                m[0] *= s;
-                m[1] *= s;
-                m[2] *= s;
+            if !(len0.abs() < f64::from(eps)) {
+                let s = f64::from(num) / len0;
+                m[0] = super::f64_to_f32(f64::from(m[0]) * s);
+                m[1] = super::f64_to_f32(f64::from(m[1]) * s);
+                m[2] = super::f64_to_f32(f64::from(m[2]) * s);
             }
-            m[8] = m[6] * m[1] - m[5] * m[2];
-            m[9] = m[2] * m[4] - m[6] * m[0];
-            m[10] = m[5] * m[0] - m[1] * m[4];
+            let row0 = [m[0], m[1], m[2]].map(f64::from);
+            m[8] = super::f64_to_f32(row1[2] * row0[1] - row1[1] * row0[2]);
+            m[9] = super::f64_to_f32(row0[2] * row1[0] - row1[2] * row0[0]);
+            m[10] = super::f64_to_f32(row1[1] * row0[0] - row0[1] * row1[0]);
         }
         3 => crate::math::matrix44::c44_matrix__build_basis_from_dir__710a80(dir, &mut m),
         _ => {}
@@ -959,6 +965,122 @@ mod tests_cm2_model__build_emitter_transform__7106c0 {
         assert!(dot(r0, [0.6, 0.0, 0.8]).abs() < 1e-5);
         // row2 = row0 × row1, unnormalized.
         approx(&r2, &cross(r0, r1), 1e-5);
+    }
+
+    #[test]
+    fn mode1_first_normalization_keeps_register_precision() {
+        let (m, seed) = stage1(
+            &[0.0; 3],
+            0.02,
+            &[0.3, -0.7, 0.648_074_05],
+            1,
+            &[0.6, 0.0, 0.8],
+            ZERO_K,
+            EPS,
+            ONE_K,
+        );
+        let unscaled = [-seed[1], seed[0], 0.0];
+        let wide = unscaled.map(f64::from);
+        let mag_sq = wide[0] * wide[0] + wide[1] * wide[1] + wide[2] * wide[2];
+        let scale = 1.0 / mag_sq.sqrt();
+        let expected = wide.map(|value| (value * scale) as f32);
+        let narrow_scale = 1.0 / (mag_sq as f32).sqrt();
+        let prematurely_narrowed = unscaled.map(|value| value * narrow_scale);
+        assert_ne!(
+            expected.map(f32::to_bits),
+            prematurely_narrowed.map(f32::to_bits)
+        );
+        assert_eq!(row(&m, 1).map(f32::to_bits), expected.map(f32::to_bits));
+    }
+
+    #[test]
+    fn mode1_second_normalization_keeps_large_finite_rows() {
+        let (m, _) = stage1(
+            &[0.0; 3],
+            0.0,
+            &[0.0, 0.0, 1.0],
+            1,
+            &[3.0e20, 0.0, 4.0e20],
+            ZERO_K,
+            EPS,
+            ONE_K,
+        );
+        // The squared length exceeds f32, but the length and normalized row do not.
+        assert_eq!(row(&m, 0), [0.8, 0.0, -0.6]);
+    }
+
+    #[test]
+    fn mode1_cross_products_narrow_only_after_subtraction() {
+        let direction = [0.153_000_01, -0.3, 0.189];
+        let (m, seed) = stage1(
+            &[0.0; 3],
+            0.9,
+            &[0.3, -0.7, 0.648_074_05],
+            1,
+            &direction,
+            ZERO_K,
+            10.0,
+            ONE_K,
+        );
+        // A large epsilon isolates the stored cross products from normalization.
+        let row1 = [-seed[1], seed[0], 0.0];
+        let row1_wide = row1.map(f64::from);
+        let direction_wide = direction.map(f64::from);
+        let expected0 = [
+            row1_wide[1] * direction_wide[2] - row1_wide[2] * direction_wide[1],
+            row1_wide[2] * direction_wide[0] - direction_wide[2] * row1_wide[0],
+            direction_wide[1] * row1_wide[0] - row1_wide[1] * direction_wide[0],
+        ]
+        .map(|value| value as f32);
+        let row0_wide = expected0.map(f64::from);
+        let expected2 = [
+            row1_wide[2] * row0_wide[1] - row1_wide[1] * row0_wide[2],
+            row0_wide[2] * row1_wide[0] - row1_wide[2] * row0_wide[0],
+            row1_wide[1] * row0_wide[0] - row0_wide[1] * row1_wide[0],
+        ]
+        .map(|value| value as f32);
+        assert_ne!(
+            cross(row1, direction).map(f32::to_bits),
+            expected0.map(f32::to_bits)
+        );
+        assert_ne!(
+            cross(expected0, row1).map(f32::to_bits),
+            expected2.map(f32::to_bits)
+        );
+        assert_eq!(row(&m, 0).map(f32::to_bits), expected0.map(f32::to_bits));
+        assert_eq!(row(&m, 2).map(f32::to_bits), expected2.map(f32::to_bits));
+    }
+
+    #[test]
+    fn mode1_unordered_length_scales_the_whole_row() {
+        let (m, _) = stage1(
+            &[0.0; 3],
+            0.0,
+            &[0.0, 0.0, 1.0],
+            1,
+            &[f32::NAN, 0.0, 1.0],
+            ZERO_K,
+            EPS,
+            ONE_K,
+        );
+        // A NaN length enters the scale arm, including components that were finite.
+        assert!(row(&m, 0).into_iter().all(f32::is_nan));
+    }
+
+    #[test]
+    fn mode1_unordered_threshold_still_normalizes_both_rows() {
+        let (m, _) = stage1(
+            &[0.0; 3],
+            0.0,
+            &[0.0, 0.0, 1.0],
+            1,
+            &[0.0, 0.0, 2.0],
+            ZERO_K,
+            f32::NAN,
+            2.0,
+        );
+        assert_eq!(row(&m, 1), [0.0, 2.0, 0.0]);
+        assert_eq!(row(&m, 0), [2.0, 0.0, 0.0]);
     }
 
     #[test]
@@ -2278,8 +2400,7 @@ pub fn cm2_shadow__outcode6__7137c0(v: &[f32; 4], lo: &[f32; 4], hi: &[f32; 4]) 
 /// the normalize arm runs on GREATER-OR-EQUAL **and on unordered**: a NaN
 /// length is not skipped, it scales the row by a NaN factor (row becomes NaN),
 /// exactly like stock. Arithmetic is `f64` matching the x87 double-precision
-/// intermediates (the hooked `SquaredMagnitude` already narrowed `mag²` to
-/// `f32`), narrowed per element at the `FSTP m32` points.
+/// intermediates, narrowed per element at the `FSTP m32` points.
 // `!(len.abs() < eps)` is the original's `FCOMP`/`JNP` skip test: a NaN length enters
 // the scale arm and poisons the row, which `len.abs() >= eps` would not.
 #[allow(clippy::neg_cmp_op_on_partial_ord)]
@@ -2287,7 +2408,7 @@ pub fn cm2_shadow__normalize_basis3__7137c0(basis: &mut [f32; 9], k: f32, eps: f
     for r in 0..3 {
         let row = [basis[r * 3], basis[r * 3 + 1], basis[r * 3 + 2]];
         let mag_sq = crate::math::vector::c3_vector__squared_magnitude__4549f0(&row);
-        let len = f64::from(mag_sq).sqrt();
+        let len = mag_sq.sqrt();
         // Skip ONLY on an ordered `|len| < eps`; NaN falls into the scale arm.
         if !(len.abs() < f64::from(eps)) {
             let scale = f64::from(k) / len;

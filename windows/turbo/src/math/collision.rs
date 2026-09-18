@@ -439,20 +439,20 @@ pub fn collide_line_triangle_indexed16__7c29f0(
     let e2y = v2[1] - v0[1];
     let e2z = v2[2] - v0[2];
 
-    // pvec = edge2 × dir.
-    let px = e2z * dir[1] - e2y * dir[2];
-    let py = e2x * dir[2] - e2z * dir[0];
-    let pz = e2y * dir[0] - e2x * dir[1];
-
-    // det = dot(pvec, edge1).
-    let det = px * e1x + py * e1y + pz * e1z;
+    // Cross products stay wide through subtraction, then each component is
+    // stored as f32. The determinant stays wide and folds (z + y) + x.
+    let w = f64::from;
+    let px = super::f64_to_f32(w(e2z) * w(dir[1]) - w(e2y) * w(dir[2]));
+    let py = super::f64_to_f32(w(e2x) * w(dir[2]) - w(e2z) * w(dir[0]));
+    let pz = super::f64_to_f32(w(e2y) * w(dir[0]) - w(e2x) * w(dir[1]));
+    let det = (w(pz) * w(e1z) + w(py) * w(e1y)) + w(px) * w(e1x);
 
     // Reject determinants inside the near-zero band (-1e-6, 1e-6).
-    if det > -1.0e-6_f32 && det < 1.0e-6_f32 {
+    if det > w(-1.0e-6_f32) && det < w(1.0e-6_f32) {
         return None;
     }
 
-    let inv_det = 1.0_f32 / det;
+    let inv_det = w(super::f64_to_f32(1.0 / det));
 
     // tvec = origin - v0.
     let tx = segment.at::<0>() - v0[0];
@@ -460,27 +460,31 @@ pub fn collide_line_triangle_indexed16__7c29f0(
     let tz = segment.at::<2>() - v0[2];
 
     // u = dot(tvec, pvec) * invDet.
-    let u = (tx * px + ty * py + tz * pz) * inv_det;
-    if u < t_min || u > t_max {
+    let u_wide = ((w(tz) * w(pz) + w(ty) * w(py)) + w(tx) * w(px)) * inv_det;
+    let u = super::f64_to_f32(u_wide);
+    // FST preserves the register for the lower comparison; the upper one
+    // reloads the f32 store. Both comparisons leave NaN on the hit path.
+    if u_wide < w(t_min) || u > t_max {
         return None;
     }
 
     // qvec = tvec × edge1.
-    let qx = ty * e1z - tz * e1y;
-    let qy = tz * e1x - e1z * tx;
-    let qz = e1y * tx - ty * e1x;
+    let qx = super::f64_to_f32(w(ty) * w(e1z) - w(tz) * w(e1y));
+    let qy = super::f64_to_f32(w(tz) * w(e1x) - w(e1z) * w(tx));
+    let qz = super::f64_to_f32(w(e1y) * w(tx) - w(ty) * w(e1x));
 
     // v = dot(dir, qvec) * invDet.
-    let v = (qx * dir[0] + qy * dir[1] + qz * dir[2]) * inv_det;
-    if v < t_min {
+    let v_wide = ((w(qz) * w(dir[2]) + w(qy) * w(dir[1])) + w(qx) * w(dir[0])) * inv_det;
+    let v = super::f64_to_f32(v_wide);
+    if v_wide < w(t_min) {
         return None;
     }
-    if u + v > t_max {
+    if w(u) + w(v) > w(t_max) {
         return None;
     }
 
     // t = dot(qvec, edge2) * invDet (the ray parameter; intentionally unclamped).
-    let t = (qx * e2x + qy * e2y + qz * e2z) * inv_det;
+    let t = super::f64_to_f32(((w(qy) * w(e2y) + w(qz) * w(e2z)) + w(qx) * w(e2x)) * inv_det);
     Some([t, u, v])
 }
 
@@ -639,66 +643,16 @@ pub fn collide_line_triangle_indexed32__7c2c40(
     v2: &[f32; 3],
     edge_tol: f32,
 ) -> Option<(f32, f32, f32)> {
-    const EPS: f32 = 1.0e-6;
-    let t_min = -edge_tol;
-    let t_max = edge_tol + 1.0;
-
-    let dir = [segment[3], segment[4], segment[5]];
-
-    let edge1 = [v1[0] - v0[0], v1[1] - v0[1], v1[2] - v0[2]];
-    let edge2 = [v2[0] - v0[0], v2[1] - v0[1], v2[2] - v0[2]];
-
-    // pvec = cross(dir, edge2)
-    let pvec = [
-        dir[1] * edge2[2] - dir[2] * edge2[1],
-        dir[2] * edge2[0] - dir[0] * edge2[2],
-        dir[0] * edge2[1] - dir[1] * edge2[0],
-    ];
-
-    // det = dot(pvec, edge1)
-    let det = pvec[0] * edge1[0] + pvec[1] * edge1[1] + pvec[2] * edge1[2];
-
-    // Reject near-parallel: keep only |det| >= EPS (two-sided, non-culling).
-    if det > -EPS && det < EPS {
-        return None;
-    }
-    let inv_det = 1.0 / det;
-
-    // tvec = origin - v0
-    let tvec = [segment[0] - v0[0], segment[1] - v0[1], segment[2] - v0[2]];
-
-    // u = dot(tvec, pvec) * inv_det
-    let u = (tvec[0] * pvec[0] + tvec[1] * pvec[1] + tvec[2] * pvec[2]) * inv_det;
-    // Negative predicate, so a miss needs an ordered compare. The original's
-    // band tests are the unordered-tolerant form — `FCOM` then `FNSTSW AX` with
-    // `TEST AH,5`/`JNP` for the lower bound and `TEST AH,0x41`/`JZ` for the
-    // upper — and an unordered result sets both tested bits, so a NaN `u` takes
-    // neither miss branch and reaches the hit epilogue with NaN outputs. A
-    // positive `u >= t_min && u <= t_max` would reject NaN instead.
-    if u < t_min || u > t_max {
-        return None;
-    }
-
-    // qvec = cross(tvec, edge1)
-    let qvec = [
-        tvec[1] * edge1[2] - tvec[2] * edge1[1],
-        tvec[2] * edge1[0] - tvec[0] * edge1[2],
-        tvec[0] * edge1[1] - tvec[1] * edge1[0],
-    ];
-
-    // v = dot(dir, qvec) * inv_det
-    let v = (dir[0] * qvec[0] + dir[1] * qvec[1] + dir[2] * qvec[2]) * inv_det;
-    // Lower bound on `v`, upper bound on `u + v` (the original tests the sum
-    // against `t_max`); negative predicates for the same fall-through reason as
-    // the `u` band.
-    if v < t_min || u + v > t_max {
-        return None;
-    }
-
-    // t = dot(edge2, qvec) * inv_det
-    let t = (qvec[0] * edge2[0] + qvec[1] * edge2[1] + qvec[2] * edge2[2]) * inv_det;
-
-    Some((t, u, v))
+    // The three entry points have the same arithmetic stores and compare
+    // widths. Keep one implementation so a precision repair reaches them all.
+    collide_line_triangle_indexed16__7c29f0(
+        segment.into(),
+        v0.into(),
+        v1.into(),
+        v2.into(),
+        edge_tol,
+    )
+    .map(|[t, u, v]| (t, u, v))
 }
 
 #[cfg(test)]
@@ -832,65 +786,16 @@ pub fn collide_line_triangle__7c27d0(
     tri: &[f32; 9],
     edge_tol: f32,
 ) -> Option<[f32; 3]> {
-    // The two fixed `.data` thresholds from the host image: `1.0` and `1e-6`.
-    const ONE: f32 = 1.0;
-    const EPS: f32 = 1.0e-6;
-
-    let t_min = -edge_tol;
-    let t_max = edge_tol + ONE;
-
-    let dir = [segment[3], segment[4], segment[5]];
-
-    // Triangle edges from `v0`.
-    let e1 = [tri[3] - tri[0], tri[4] - tri[1], tri[5] - tri[2]];
-    let e2 = [tri[6] - tri[0], tri[7] - tri[1], tri[8] - tri[2]];
-
-    // pvec = cross(dir, e2).
-    let pvec = [
-        e2[2] * dir[1] - e2[1] * dir[2],
-        e2[0] * dir[2] - e2[2] * dir[0],
-        e2[1] * dir[0] - e2[0] * dir[1],
-    ];
-
-    // det = dot(e1, pvec). Two-sided: reject only the parallel band |det| < EPS.
-    let det = pvec[0] * e1[0] + pvec[1] * e1[1] + pvec[2] * e1[2];
-    if det > -EPS && det < EPS {
-        return None;
-    }
-    let inv_det = ONE / det;
-
-    // tvec = origin - v0.
-    let tvec = [
-        segment[0] - tri[0],
-        segment[1] - tri[1],
-        segment[2] - tri[2],
-    ];
-
-    // u = dot(tvec, pvec) * inv_det.
-    let u = (tvec[0] * pvec[0] + tvec[1] * pvec[1] + tvec[2] * pvec[2]) * inv_det;
-    if u < t_min || u > t_max {
-        return None;
-    }
-
-    // qvec = cross(tvec, e1).
-    let qvec = [
-        tvec[1] * e1[2] - tvec[2] * e1[1],
-        tvec[2] * e1[0] - tvec[0] * e1[2],
-        tvec[0] * e1[1] - tvec[1] * e1[0],
-    ];
-
-    // v = dot(dir, qvec) * inv_det.
-    let v = (qvec[0] * dir[0] + qvec[1] * dir[1] + qvec[2] * dir[2]) * inv_det;
-    if v < t_min {
-        return None;
-    }
-    if u + v > t_max {
-        return None;
-    }
-
-    // t = dot(qvec, e2) * inv_det.
-    let t = (qvec[0] * e2[0] + qvec[1] * e2[1] + qvec[2] * e2[2]) * inv_det;
-    Some([t, u, v])
+    let v0 = [tri[0], tri[1], tri[2]];
+    let v1 = [tri[3], tri[4], tri[5]];
+    let v2 = [tri[6], tri[7], tri[8]];
+    collide_line_triangle_indexed16__7c29f0(
+        segment.into(),
+        (&v0).into(),
+        (&v1).into(),
+        (&v2).into(),
+        edge_tol,
+    )
 }
 
 #[cfg(test)]
@@ -4223,7 +4128,7 @@ pub fn build_mesh_triangle_planes__671cc0(
         let e2 = [q2[0] - q0[0], q2[1] - q0[1], q2[2] - q0[2]];
         let mut n = super::vector::c3_vector__cross__672130(&e1, &e2);
         super::vector::normalize3(&mut n, target_len);
-        let d = -super::vector::c3_vector__dot__602630(&n, q0);
+        let d = super::f64_to_f32(-super::vector::c3_vector__dot__602630(&n, q0));
         return [n[0], n[1], n[2], d];
     }
     super::world::tile_collect_triangle_plane__6aadc0(q0, q1, q2)
@@ -4404,10 +4309,11 @@ pub fn collide_bsp_node_trace_segment__6bc370(
 
     // Slab early-out: reject only when BOTH endpoints test ordered-below on a
     // side (a NaN difference passes, matching the unordered branch).
-    if seg[a] - clip[a] < band_lo && seg[a + 3] - clip[a] < band_lo {
+    let w = f64::from;
+    if w(seg[a]) - w(clip[a]) < w(band_lo) && w(seg[a + 3]) - w(clip[a]) < w(band_lo) {
         return Step::Reject;
     }
-    if clip[a + 3] - seg[a] < band_hi && clip[a + 3] - seg[a + 3] < band_hi {
+    if w(clip[a + 3]) - w(seg[a]) < w(band_hi) && w(clip[a + 3]) - w(seg[a + 3]) < w(band_hi) {
         return Step::Reject;
     }
 
@@ -4425,8 +4331,9 @@ pub fn collide_bsp_node_trace_segment__6bc370(
         return Step::LowOnly;
     }
 
-    // Straddle: per-component f32 lerp to the plane crossing.
-    let t = fa / (fa - fb);
+    // The denominator stays wide until t is stored; the subsequent vector
+    // subtract, multiply and add each have their own f32 stores.
+    let t = super::f64_to_f32(w(fa) / (w(fa) - w(fb)));
     let mid = [
         seg[0] + (seg[3] - seg[0]) * t,
         seg[1] + (seg[4] - seg[1]) * t,
@@ -6623,8 +6530,8 @@ mod tests_step_offset__616cb0 {
 /// back un-narrowed because `trace_seg_len_dist__6b92b0` multiplies it wide,
 /// and narrowing it here would move that product's bits. Returns
 /// `(inv_len, len)`.
-pub fn trace_seg_dir_scale__6b92b0(sqmag: f32, one: f32) -> (f32, f64) {
-    let len = f64::from(sqmag).sqrt();
+pub fn trace_seg_dir_scale__6b92b0(sqmag: f64, one: f32) -> (f32, f64) {
+    let len = sqmag.sqrt();
     (super::f64_to_f32(f64::from(one) / len), len)
 }
 
@@ -6655,6 +6562,22 @@ mod tests_trace_seg_folds__6b92b0 {
         let (inv, len) = dir_scale(0.0, 1.0);
         assert_eq!(inv, f32::INFINITY);
         assert_eq!(len_dist(len, 3.0), 0.0);
+    }
+
+    #[test]
+    fn segment_direction_retains_squared_length_precision() {
+        let delta = [
+            f32::from_bits(0xc01c_e652),
+            f32::from_bits(0xc04f_f2c2),
+            f32::from_bits(0xbe92_6bef),
+        ];
+        let sq = crate::math::vector::c3_vector__squared_magnitude__4549f0(&delta);
+        let (inv, _) = dir_scale(sq, 1.0);
+        assert_eq!(inv.to_bits(), 0x3e7a_f5a4);
+        let direction = delta.map(|v| (v * inv).to_bits());
+        assert_eq!(direction, [0xbf19_cf79, 0xbf4b_da9a, 0xbd8f_89e6]);
+        let (narrowed_inv, _) = dir_scale(f64::from(sq as f32), 1.0);
+        assert_eq!(narrowed_inv.to_bits(), 0x3e7a_f5a5);
     }
 }
 
@@ -6688,5 +6611,68 @@ mod tests_water_levels__6030c0 {
         assert_eq!(s, 6.0);
         assert_eq!(o, 5.0);
         assert_eq!(r, 8.0);
+    }
+}
+
+#[cfg(test)]
+mod tests_collision_register_precision {
+    use super::*;
+
+    #[test]
+    fn grazing_hit_matches_recorded_stock_outputs_in_all_triangle_entries() {
+        // A finite grazing ray recorded against the original indexed16 entry.
+        // The other two entry points have the same arithmetic boundaries.
+        // Rounding each product to f32 loses this hit before the distance gate.
+        let ray = [
+            0x41b2949e, 0xbddabea0, 0xc119bfcb, 0xbe273855, 0x3f6116d7, 0xbee51cea,
+        ]
+        .map(f32::from_bits);
+        let tri = [
+            0x4192f006, 0xc07b1378, 0xc0af96e6, 0x4185c391, 0x409e2f24, 0xc11ffe3f, 0x41d21ef0,
+            0x409fd2ce, 0xc167db4d,
+        ]
+        .map(f32::from_bits);
+        let a = [tri[0], tri[1], tri[2]];
+        let b = [tri[3], tri[4], tri[5]];
+        let c = [tri[6], tri[7], tri[8]];
+        let expected = [5.8163347_f32, 0.47916764, 0.4766464].map(f32::to_bits);
+        let indexed16 = collide_line_triangle_indexed16__7c29f0(
+            (&ray).into(),
+            (&a).into(),
+            (&b).into(),
+            (&c).into(),
+            0.002,
+        )
+        .expect("recorded stock hit");
+        let (t, u, v) = collide_line_triangle_indexed32__7c2c40(&ray, &a, &b, &c, 0.002)
+            .expect("recorded stock hit");
+        let plain = collide_line_triangle__7c27d0(&ray, &tri, 0.002).expect("recorded stock hit");
+        assert_eq!(indexed16.map(f32::to_bits), expected);
+        assert_eq!([t, u, v].map(f32::to_bits), expected);
+        assert_eq!(plain.map(f32::to_bits), expected);
+    }
+
+    #[test]
+    fn bsp_ratio_keeps_its_denominator_wide_until_the_store() {
+        let segment = [
+            f32::from_bits(0x3fab139b),
+            0.0,
+            0.0,
+            f32::from_bits(0xc2a78015),
+            0.0,
+            1.0,
+        ];
+        let step = collide_bsp_node_trace_segment__6bc370(
+            &segment,
+            &[-100.0, -100.0, -100.0, 100.0, 100.0, 100.0],
+            0,
+            0.0,
+            -0.01,
+            0.01,
+        );
+        let BspTraceStep::Straddle { mid, .. } = step else {
+            panic!("straddles x=0")
+        };
+        assert_eq!(mid[2].to_bits(), 0x3c80adea);
     }
 }
