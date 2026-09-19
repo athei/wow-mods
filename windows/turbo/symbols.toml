@@ -2159,7 +2159,7 @@ preserve = []
 rva  = 0x29c320
 sig  = "55 8B EC 83 EC 4C 53 56 57 8B F9 D9 47 04"
 abi  = "fastcall"
-ret  = "void"
+ret  = "u8"
 args = ["*const f32", "*const f32", "*mut f32", "u32", "*mut i32"]
 preserve = []
 

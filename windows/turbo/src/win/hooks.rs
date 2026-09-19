@@ -36662,7 +36662,8 @@ pub extern "fastcall" fn world_rasterize_trace_line_cells__69c780(
 /// `World_TraceLineAgainstTerrain` — the terrain trace-line entry point.
 ///
 /// `fastcall(ecx = startPos f32*[2..], edx = endPos f32*[2..];
-/// inoutHitFraction f32*, flags, outHitChunk i32*)`, `RET 0xC`, void. Sets up
+/// inoutHitFraction f32*, flags, outHitChunk i32*)`, `RET 0xC`, returns the
+/// chunk worker's hit byte in AL. Sets up
 /// the world→grid recentre and cell indices, resets the trace cursor,
 /// dispatches to one of four DDA span walkers by the major-axis /
 /// same-row-or-column tests, then runs the chunk worker.
@@ -36684,7 +36685,7 @@ pub extern "fastcall" fn world_trace_line_against_terrain__69c320(
     inout_hit_fraction: *mut f32,
     flags: u32,
     out_hit_chunk: *mut i32,
-) {
+) -> u8 {
     const BASE: usize = crate::win::EXPECTED_IMAGE_BASE;
     super::seam_probe::trace_terrain();
     // SAFETY: fixed `.rdata`/`.data` grid constants in the live host image.
@@ -36756,13 +36757,14 @@ pub extern "fastcall" fn world_trace_line_against_terrain__69c320(
         }
     }
 
-    // 0x69c920 chunk worker — fastcall(startPos, endPos; inoutHitFraction,
-    // flags, outHitChunk), RET 0xC. Pointer-chasing cell walk, NO-GO.
+    // 0x69c920 chunk worker: fastcall(startPos, endPos; inoutHitFraction,
+    // flags, outHitChunk), RET 0xC. Its hit result is defined only in AL;
+    // the original dispatcher forwards it to callers that consume that byte.
     const CHUNK_WORKER_VA: usize = BASE + 0x29_c920;
     // SAFETY: image base verified at load; signature matches the callee.
-    let chunk_worker: extern "fastcall" fn(*const f32, *const f32, *mut f32, u32, *mut i32) -> u32 =
+    let chunk_worker: extern "fastcall" fn(*const f32, *const f32, *mut f32, u32, *mut i32) -> u8 =
         unsafe { core::mem::transmute(CHUNK_WORKER_VA) };
-    chunk_worker(start_pos, end_pos, inout_hit_fraction, flags, out_hit_chunk);
+    chunk_worker(start_pos, end_pos, inout_hit_fraction, flags, out_hit_chunk)
 }
 
 /// `Rasterizer_EmitSlopedLineDDA` — the sloped-span DDA emitter.
