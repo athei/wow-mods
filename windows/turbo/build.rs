@@ -1310,6 +1310,35 @@ fn install_thunk(
         ::log::warn!(target: super::LOG_TARGET, "{label} skipped (WOW_TURBO_SKIP)");
         return false;
     }
+    // These two adapters inline the same read-only predecessor resolver. A
+    // foreign replacement may have effects that the inline form cannot retain.
+    // The entire helper is relocation-free, so verify every byte rather than
+    // accepting a matching entry with a changed tail. Mismatch leaves both
+    // original callers in place, including their call through the helper.
+    if matches!(
+        label,
+        "CMapChunk__Update__6afad0" | "HeightBucket_InsertNodeFromObject__6816f0"
+    ) {
+        let helper = image_base + 0x0028_76b0;
+        // SAFETY: the verified host image maps the complete 41-byte helper body.
+        let verified = unsafe {
+            ::wow_hook::signature_matches(
+                helper,
+                concat!(
+                    "55 8B EC 8B 41 04 A8 01 75 04 85 C0 75 07 83 E0 FE 5D C2 04 00 ",
+                    "8B 55 08 85 D2 7D 07 8B 11 2B 4A 04 8B D1 03 C2 5D C2 04 00",
+                ),
+            )
+        };
+        if !verified {
+            ::log::warn!(
+                target: ::wow_hook::LOG_TARGET,
+                "{label} predecessor helper mismatch at {helper:#010x} ({}) - refusing to patch",
+                ::wow_hook::prologue_owner(helper),
+            );
+            return false;
+        }
+    }
     let va = image_base + rva;
     // SAFETY: `va` is the live image base plus the function's manifest RVA, which
     // lies within the host image's mapped code.
