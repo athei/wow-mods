@@ -10322,9 +10322,9 @@ pub fn height_bucket_insert_node_at_pos_with(object_node: i32, pos: &[f32; 3], h
 /// (`0xc7cfb8..0xc7cfc4`) and bucket scale/bias (`0x810174`/`0x86861c`), clamps
 /// the rounded index to `0..=31` (drops the node when above), then performs the
 /// intrusive doubly-linked-list surgery on the global bucket array at `0xc7bd40`
-/// (stride `0x6c`): unlinks the node from its current list (resolving its prev via
-/// the stock helper at `0x6876b0`, `__thiscall(link, -1)`, `ret 4`) and relinks it at
-/// the destination bucket's list head.
+/// (stride `0x6c`): unlinks the node from its current list (inlining the
+/// tagged-prev resolution of `0x6876b0` for its constant `-1` argument) and
+/// relinks it at the destination bucket's list head.
 pub extern "fastcall" fn height_bucket_insert_node_from_object__6816f0(object_node: i32) {
     if object_node == 0 {
         return;
@@ -10372,14 +10372,23 @@ pub fn height_bucket_insert_node_from_object_with(object_node: i32, hb: &HbPlane
     // SAFETY: `link[0]` is the node's `next` link dword.
     let next = unsafe { link.read() };
     if next != 0 {
-        // Currently linked: unlink. Resolve the prev-link address via the stock fn.
-        const PREV_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x28_76b0;
-        // SAFETY: a fixed `.text` entry in the live host image (base verified at
-        // load); the transmuted signature matches the declared prototype of the
-        // callee (`__thiscall(ecx=link, stack=-1) -> *mut u32`, `ret 4`).
-        let resolve_prev: extern "thiscall" fn(*mut u32, i32) -> *mut u32 =
-            unsafe { core::mem::transmute(PREV_VA) };
-        let prev = resolve_prev(link, -1);
+        // The stock resolver at 0x6876b0 only reads the two link words and,
+        // for an untagged prev, the successor's prev. Its -1 argument selects
+        // the back-offset form. Keeping that resolution here avoids a stock
+        // call and its reloads for each linked scene node.
+        // SAFETY: `link+4` is this node's initialized tagged-prev dword.
+        let prev_word = unsafe { link.add(1) };
+        // SAFETY: `prev_word` addresses the node's tagged-prev dword.
+        let prev_tag = unsafe { prev_word.read() };
+        let prev = if prev_tag & 1 == 0 && prev_tag != 0 {
+            // SAFETY: nonzero `next` is the successor link; `next+4` is its prev.
+            let successor_prev_word = unsafe { (next as *const u32).add(1) };
+            // SAFETY: `successor_prev_word` addresses the initialized successor prev.
+            let successor_prev = unsafe { successor_prev_word.read() };
+            (link as u32).wrapping_add(prev_tag.wrapping_sub(successor_prev)) as *mut u32
+        } else {
+            (prev_tag & !1) as *mut u32
+        };
         if !prev.is_null() {
             // SAFETY: `link[0]` is `next`; copy it into `prev[0]` (prev.next = next).
             let next_ptr = unsafe { link.read() };
