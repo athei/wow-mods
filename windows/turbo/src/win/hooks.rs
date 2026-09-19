@@ -14083,19 +14083,27 @@ pub extern "fastcall" fn c_map_chunk__update__6afad0(chunk: i32) {
             continue;
         }
         let sub_obj = sub as usize as *mut u8;
-        // One spare lane past the 6 bounds floats so the vector overlap kernel
-        // can take two overlapping 4-lane reads; the stock callee writes only
-        // the first 6.
-        let mut box6 = [0.0f32; 7];
-        const SUB_BOUNDS_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x28_df40;
-        // SAFETY: fixed `.text` entry (base verified); the transmuted signature
-        // matches the declared prototype (`__thiscall(ecx=sub, stack=out) ->
-        // void`, `ret 4`).
-        let bounds: extern "thiscall" fn(*mut u8, *mut f32) =
-            unsafe { core::mem::transmute(SUB_BOUNDS_VA) };
-        bounds(sub_obj, box6.as_mut_ptr());
+        // The installer verifies the complete bounds helper before replacing
+        // this call. Its output is private scratch: copy the live parent's box,
+        // then substitute the child's two Z bounds, without floating arithmetic.
+        // SAFETY: the live child owns an initialized parent pointer at +0x1c.
+        let parent_slot = unsafe { sub_obj.add(0x1c) };
+        // SAFETY: the loader keeps the parent alive for the child's lifetime.
+        let parent = unsafe { parent_slot.cast::<*const u8>().read() };
+        // SAFETY: the parent contains six initialized bounds floats at +0x44.
+        let parent_box = unsafe { parent.add(0x44) };
+        // SAFETY: this exact 24-byte span is the helper's source box.
+        let mut box6 = unsafe { parent_box.cast::<[f32; 6]>().read_unaligned() };
+        // SAFETY: the child contains an initialized minimum-Z float at +4.
+        let min_z = unsafe { sub_obj.add(4) };
+        // SAFETY: the child's minimum-Z field is aligned and initialized.
+        box6[2] = unsafe { min_z.cast::<f32>().read() };
+        // SAFETY: the child contains an initialized maximum-Z float at +8.
+        let max_z = unsafe { sub_obj.add(8) };
+        // SAFETY: the child's maximum-Z field is aligned and initialized.
+        box6[5] = unsafe { max_z.cast::<f32>().read() };
         let smin4 = [box6[0], box6[1], box6[2], box6[3]];
-        let smax4 = [box6[3], box6[4], box6[5], box6[6]];
+        let smax4 = [box6[3], box6[4], box6[5], 0.0];
         if crate::math::world::map_chunk_box_overlaps_view4(smin4, smax4, view_lo, view_hi) {
             seam.subs = seam.subs.wrapping_add(1);
             let smin = [box6[0], box6[1], box6[2]];

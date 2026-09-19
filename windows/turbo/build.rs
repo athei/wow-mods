@@ -1364,6 +1364,27 @@ fn install_thunk(
             return false;
         }
     }
+    // The chunk adapter composes this read-only bounds helper. Reject unknown
+    // replacement behaviour before bypassing its entry. Its complete body has
+    // no relocated operands, so the signature covers every instruction.
+    if label == "CMapChunk__Update__6afad0" {
+        let helper = image_base + 0x0028_df40;
+        // SAFETY: the fixed host image maps the complete 43-byte bounds helper.
+        let verified = unsafe {
+            ::wow_hook::signature_matches(
+                helper,
+                "55 8B EC 8B 55 08 56 8B C1 8B 70 1C 57 83 C6 44 B9 06 00 00 00 8B FA F3 A5 8B 48 04 89 4A 08 8B 40 08 5F 89 42 14 5E 5D C2 04 00",
+            )
+        };
+        if !verified {
+            ::log::warn!(
+                target: ::wow_hook::LOG_TARGET,
+                "{label} bounds helper mismatch at {helper:#010x} ({}) - refusing to patch",
+                ::wow_hook::prologue_owner(helper),
+            );
+            return false;
+        }
+    }
     // The typed lookup removes this wrapper's call layer in ordinary builds.
     // Its complete relocation-free body must still dispatch to the active
     // lookup, otherwise the original typed caller must retain that dispatch.
