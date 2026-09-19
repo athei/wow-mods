@@ -9206,7 +9206,111 @@ pub extern "fastcall" fn c_world_view__compare_draw_list_extended__70aa30(
 /// second `elem+0x38` key with it in the `IDENT = true` instance: control only
 /// reaches that key with the two dwords already established equal by the run's
 /// leading test, and nothing between them writes memory.
+#[inline]
 fn cmp_draw_list_extended_body<const IDENT: bool>(index_a: u32, index_b: u32, wv: u32) -> i32 {
+    // SAFETY: the comparator caller supplies a live view containing this slot.
+    let elem_base = unsafe { (wv.wrapping_add(0x34) as usize as *const u32).read_unaligned() };
+    cmp_draw_list_extended_elements::<IDENT>(index_a, index_b, elem_base)
+}
+
+/// Compare the cheap identity tiers without entering the variable-length tail.
+///
+/// The sort owns the index array and does not mutate the view or its elements.
+/// Keeping these tiers separate avoids the texture walk's register spills and
+/// call boundary on pairs decided before that walk.
+#[inline]
+fn cmp_draw_list_extended_elements<const IDENT: bool>(
+    index_a: u32,
+    index_b: u32,
+    elem_base: u32,
+) -> i32 {
+    // All address math below is 32-bit and wraps exactly as the stock body's
+    // (`SHL reg,6` / `IMUL reg,reg,0xdc` / scaled `LEA`); every load lands on
+    // the same guest address the stock body computes.
+    let rd32 = |base: u32, off: u32| -> u32 {
+        // SAFETY: `base+off` is the same in-bounds dword the stock body loads.
+        unsafe { (base.wrapping_add(off) as usize as *const u32).read_unaligned() }
+    };
+    let rd16 = |base: u32, off: u32| -> u16 {
+        // SAFETY: `base+off` is the same in-bounds word the stock body loads.
+        unsafe { (base.wrapping_add(off) as usize as *const u16).read_unaligned() }
+    };
+    // Unsigned three-way step: `Some(order)` decides, `None` falls through to
+    // the next key in the chain.
+    let step_u = |a: u32, b: u32| -> Option<i32> {
+        if a == b {
+            None
+        } else {
+            Some(if a < b { -1 } else { 1 })
+        }
+    };
+
+    if elem_base == 0 {
+        return 0;
+    }
+    let ea = elem_base.wrapping_add(index_a.wrapping_mul(0x40));
+    let eb = elem_base.wrapping_add(index_b.wrapping_mul(0x40));
+
+    // Top-level dispatch: SIGNED three-way on the element type tag (JGE/JG).
+    let tag = rd32(ea, 0) as i32;
+    let tag_b = rd32(eb, 0) as i32;
+    if tag < tag_b {
+        return -1;
+    }
+    if tag_b < tag {
+        return 1;
+    }
+
+    if tag == 0 {
+        // Leading identity-key run, tag 0 only.
+        if IDENT && let Some(o) = step_u(rd32(ea, 0x38), rd32(eb, 0x38)) {
+            return o;
+        }
+        let obj_a = rd32(ea, 0x4);
+        let obj_b = rd32(eb, 0x4);
+        let blk_a = rd32(obj_a, 0x30);
+        let blk_b = rd32(obj_b, 0x30);
+        if let Some(o) = step_u(blk_a, blk_b) {
+            return o;
+        }
+        // The one SIGNED key in the chain (JGE/JG on `elem+0x34`).
+        let ka = rd32(ea, 0x34) as i32;
+        let kb = rd32(eb, 0x34) as i32;
+        if ka < kb {
+            return -1;
+        }
+        if kb < ka {
+            return 1;
+        }
+        if let Some(o) = step_u(obj_a, obj_b) {
+            return o;
+        }
+        if let Some(o) = step_u(
+            u32::from(rd16(rd32(ea, 0x30), 0xe)),
+            u32::from(rd16(rd32(eb, 0x30), 0xe)),
+        ) {
+            return o;
+        }
+        // The run's second `elem+0x38` key, and the reason it is guarded:
+        // with the bit set the leading test above already established the
+        // two dwords are equal, and every tier between the two writes
+        // nothing and calls nothing, so this step could only fall through.
+        if !IDENT && let Some(o) = step_u(rd32(ea, 0x38), rd32(eb, 0x38)) {
+            return o;
+        }
+        if let Some(o) = step_u(rd32(ea, 0x3c), rd32(eb, 0x3c)) {
+            return o;
+        }
+        return cmp_draw_list_extended_tail::<true>(ea, eb, tag);
+    }
+    cmp_draw_list_extended_tail::<false>(ea, eb, tag)
+}
+
+/// The pairwise stream tiers, reached only after the identity keys tie.
+///
+/// `SAME_OBJECT` follows from the tag-zero prefix's object-pointer comparison.
+/// Its two model and texture-table paths therefore share the same object.
+fn cmp_draw_list_extended_tail<const SAME_OBJECT: bool>(ea: u32, eb: u32, tag: i32) -> i32 {
     // All address math below is 32-bit and wraps exactly as the stock body's
     // (`SHL reg,6` / `IMUL reg,reg,0xdc` / scaled `LEA`); every load lands on
     // the same guest address the stock body computes.
@@ -9236,71 +9340,22 @@ fn cmp_draw_list_extended_body<const IDENT: bool>(index_a: u32, index_b: u32, wv
             Some(if d < 0 { -1 } else { 1 })
         }
     };
-
-    let elem_base = rd32(wv, 0x34);
-    if elem_base == 0 {
-        return 0;
-    }
-    let ea = elem_base.wrapping_add(index_a.wrapping_mul(0x40));
-    let eb = elem_base.wrapping_add(index_b.wrapping_mul(0x40));
-
-    // Top-level dispatch: SIGNED three-way on the element type tag (JGE/JG).
-    let tag = rd32(ea, 0) as i32;
-    let tag_b = rd32(eb, 0) as i32;
-    if tag < tag_b {
-        return -1;
-    }
-    if tag_b < tag {
-        return 1;
-    }
-
-    // Loaded unconditionally once the tags are equal, exactly as stock does
-    // (even for tag values that fall out to the unordered verdict below). The
-    // models the two blocks point at are not: see the `blk+0x130` chases below.
     let obj_a = rd32(ea, 0x4);
-    let obj_b = rd32(eb, 0x4);
+    let obj_b = if SAME_OBJECT { obj_a } else { rd32(eb, 0x4) };
     let blk_a = rd32(obj_a, 0x30);
-    let blk_b = rd32(obj_b, 0x30);
+    let blk_b = if SAME_OBJECT {
+        blk_a
+    } else {
+        rd32(obj_b, 0x30)
+    };
 
     if tag < 2 {
         let sub_a = rd32(ea, 0x2c);
         let sub_b = rd32(eb, 0x2c);
-        if tag == 0 {
-            // Leading identity-key run, tag 0 only.
-            if IDENT && let Some(o) = step_u(rd32(ea, 0x38), rd32(eb, 0x38)) {
-                return o;
-            }
-            if let Some(o) = step_u(blk_a, blk_b) {
-                return o;
-            }
-            // The one SIGNED key in the chain (JGE/JG on `elem+0x34`).
-            let ka = rd32(ea, 0x34) as i32;
-            let kb = rd32(eb, 0x34) as i32;
-            if ka < kb {
-                return -1;
-            }
-            if kb < ka {
-                return 1;
-            }
-            if let Some(o) = step_u(obj_a, obj_b) {
-                return o;
-            }
-            if let Some(o) = step_u(
-                u32::from(rd16(rd32(ea, 0x30), 0xe)),
-                u32::from(rd16(rd32(eb, 0x30), 0xe)),
-            ) {
-                return o;
-            }
-            // The run's second `elem+0x38` key, and the reason it is guarded:
-            // with the bit set the leading test above already established the
-            // two dwords are equal, and every tier between the two writes
-            // nothing and calls nothing, so this step could only fall through.
-            if !IDENT && let Some(o) = step_u(rd32(ea, 0x38), rd32(eb, 0x38)) {
-                return o;
-            }
-            if let Some(o) = step_u(rd32(ea, 0x3c), rd32(eb, 0x3c)) {
-                return o;
-            }
+        // With the same object and subrecord, both remaining read-only
+        // streams and their final address tie-break are identical.
+        if SAME_OBJECT && sub_a == sub_b {
+            return 0;
         }
 
         // The models. Stock chases `blk+0x130` for both sides above the tag
@@ -33481,23 +33536,21 @@ fn bdl_sort_transparent_ident<const IDENT: bool>(
     base: *mut u8,
     tally: Option<&mut BdlSortTally>,
 ) {
-    let view = bdl_view_i32(base).cast_unsigned();
+    // SAFETY: the live view owns this element-array base for the whole sort.
+    let elem_base = unsafe { bdl_rd32(base, 0x34) };
     match tally {
         // Armed: one branch per sort, not per comparison.
         Some(t) => {
-            // SAFETY: `base` is the live view and `+0x34` is its element-array base slot,
-            // the same one the comparator loads on every call.
-            let elem_base = unsafe { bdl_rd32(base, 0x34) };
             crate::math::misc::intro_sort_u_int32(slice, |a, b| {
                 t.cmps = t.cmps.wrapping_add(1);
                 if bdl_elem_tag(elem_base, a) != bdl_elem_tag(elem_base, b) {
                     t.tag = t.tag.wrapping_add(1);
                 }
-                cmp_draw_list_extended_body::<IDENT>(a, b, view)
+                cmp_draw_list_extended_elements::<IDENT>(a, b, elem_base)
             });
         }
         None => crate::math::misc::intro_sort_u_int32(slice, |a, b| {
-            cmp_draw_list_extended_body::<IDENT>(a, b, view)
+            cmp_draw_list_extended_elements::<IDENT>(a, b, elem_base)
         }),
     }
 }
