@@ -37,6 +37,7 @@ mod events;
 mod filecache;
 mod fmod;
 mod getname;
+mod gx_slot;
 mod hooks;
 mod inflate_perf;
 mod lua;

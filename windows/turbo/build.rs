@@ -1385,6 +1385,9 @@ fn install_thunk(
             return false;
         }
     }
+    if label == "GxSetSlot__589e80" && !slot_helpers_match(image_base, label) {
+        return false;
+    }
     let va = image_base + rva;
     // SAFETY: `va` is the live image base plus the function's manifest RVA, which
     // lies within the host image's mapped code.
@@ -1411,6 +1414,52 @@ fn install_thunk(
     }
     queued
 }
+// The wrapper composes only the stock slot setter's allocation-free
+// bookkeeping. Foreign setter or dirty-helper code must retain its calls,
+// including modifications beyond a matching entry prologue.
+fn slot_helpers_match(image_base: usize, label: &str) -> bool {
+    for (offset, signature) in [
+        (0x0019_3840, concat!(
+                "55 8B EC 53 56 8B 75 0C 57 8B 7D 08 8B D9 8B 8B 24 28 00 00 ",
+                "8D 04 7F 8D 04 C1 39 30 89 45 08 74 2E 57 8B CB E8 A7 07 00 ",
+                "00 85 F6 8B 55 08 89 32 74 1D 83 FF 17 7C 18 83 FF 1E 7F 13 ",
+                "8A 46 3C 84 C0 79 0C 80 3E 00 74 07 8B 03 56 8B CB FF 10 5F ",
+                "5E 5B 5D C2 08 00",
+        )),
+        (0x0019_4010, concat!(
+                "55 8B EC 83 EC 0C 8B 45 08 8B D1 8B 8A 24 28 00 00 53 8D 04 ",
+                "40 8D 1C C1 8B 43 14 85 C0 56 57 89 55 FC 89 5D F4 75 59 8B ",
+                "7A 28 8B 42 24 8D 72 24 47 3B F8 76 32 8B 4E 0C 85 C9 75 0A ",
+                "57 8B CE E8 4C 2E 00 00 8B C8 33 D2 8B C7 F7 F1 89 7D F8 85 ",
+                "D2 74 06 2B CA 03 CF EB 03 8B 4D F8 51 8B CE E8 8C 2E 00 00 ",
+                "8B 55 FC 8B 46 04 8B 4E 08 8D 0C 81 40 89 46 04 8B 45 08 89 ",
+                "01 C7 43 14 01 00 00 00 8B 4B 10 3B 4A 18 0F 84 9F 00 00 00 ",
+                "8B 72 08 8B 42 04 8D 7A 04 46 3B F0 76 55 8B 4F 0C 85 C9 75 ",
+                "30 83 FE 0A 8B CE 73 1D 8D 46 FF 23 C6 74 0A 90 8B C8 8D 41 ",
+                "FF 23 C1 75 F7 83 F9 01 73 13 B9 01 00 00 00 EB 0C C7 47 0C ",
+                "0A 00 00 00 B9 0A 00 00 00 33 D2 8B C6 F7 F1 85 D2 74 06 2B ",
+                "CA 03 CE 8B F1 56 8B CF E8 57 2C 00 00 8B 5D F4 8B 55 FC 8B ",
+                "47 04 8B 77 08 8D 0C 40 40 89 47 04 8B 45 08 8D 0C CE 89 01 ",
+                "8D 41 04 8B F3 8B 3E 89 38 8B 7E 04 89 78 04 8B 7E 08 89 78 ",
+                "08 8B 76 0C 89 70 0C 8B 43 10 89 41 14 8B 4A 18 89 4B 10 5F ",
+                "5E 5B 8B E5 5D C2 04 00",
+        )),
+    ] {
+        let helper = image_base + offset;
+        // SAFETY: the verified host image maps both complete helper bodies.
+        let verified = unsafe { ::wow_hook::signature_matches(helper, signature) };
+        if !verified {
+            ::log::warn!(
+                target: ::wow_hook::LOG_TARGET,
+                "{label} slot helper mismatch at {helper:#010x} ({}) - refusing to patch",
+                ::wow_hook::prologue_owner(helper),
+            );
+            return false;
+        }
+    }
+    true
+}
+
 "#;
 
 /// Map a manifest ABI name to a Rust `extern` ABI string.

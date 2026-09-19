@@ -47209,3 +47209,11 @@ pub extern "fastcall" fn clnt_obj_mgr__object_ptr__468460(
 ) -> u32 {
     super::objmgr::lookup_typed(low, high, type_mask)
 }
+
+/// Set a device slot and retain its dirty/undo bookkeeping.
+///
+/// Fastcall takes the slot in ECX and value in EDX, with no stack arguments.
+/// Mutating helpers and texture activation remain single-dispatch operations.
+pub extern "fastcall" fn gx_set_slot__589e80(index: u32, value: u32) {
+    super::gx_slot::set(index, value);
+}

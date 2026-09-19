@@ -5330,3 +5330,11 @@ preserve = []
 [functions.ClntObjMgr__ObjectPtr__468460.diff]
 mode = "out"
 ulp = 0
+
+[functions.GxSetSlot__589e80]
+rva = 0x00189e80
+sig = "52 51 8B 0D 38 ED C0 00 E8 B3 99 00 00 C3"
+abi = "fastcall"
+ret = "void"
+args = ["u32", "u32"]
+preserve = []
