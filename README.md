@@ -347,6 +347,17 @@ not elapsed loading time. Reports can straddle concurrent updates. Comparing
 the two times does not measure a speedup because they cover different inputs.
 Normal builds omit these counters and clock reads entirely.
 
+`PERF=1` also reports `guid-lookup:` traversal counters on the same cadence.
+`hit_bins` and `miss_bins` count completed lookups that visited 0, 1, 2-3,
+4-7, 8-15, 16-31, or at least 32 live nodes, in that order. `nodes` counts
+all visited nodes. `reject_hash`, `reject_low`, and `reject_high` count the
+first failed key comparison at each rejected node. Subtract successive
+reports for interval distributions; first-node hits are `hit_bins[1]`.
+Concurrent reports can straddle updates. The counters use local aggregation
+and publish shared totals at return, with no per-node atomic or clock read.
+They add diagnostic overhead, so an instrumented lookup's sample share is not
+its uninstrumented cost. Normal builds omit the observer and counters.
+
 Runtime logging uses a worker inside `wow_turbo.dll`: formatting and output run
 there, along with PERF reports and script-profiler table formatting. Literal
 strings require no cloning. Transient client data is copied before enqueueing;

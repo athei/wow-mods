@@ -5,7 +5,28 @@
 /// `read` supplies words from one stable manager and its live bucket/node records.
 /// Address arithmetic wraps at the client's 32-bit width. The caller owns the
 /// exclusion against mutation and the lifetime of the returned borrowed object.
-pub fn lookup(manager: u32, low: u32, high: u32, mut read: impl FnMut(u32) -> u32) -> u32 {
+pub fn lookup(manager: u32, low: u32, high: u32, read: impl FnMut(u32) -> u32) -> u32 {
+    lookup_observed(manager, low, high, read, |_| {})
+}
+
+/// One completed comparison cohort or live node visit during a lookup.
+pub enum Probe {
+    Visit,
+    HashMiss,
+    LowMiss,
+    HighMiss,
+}
+
+/// Observe traversal without changing the order or extent of memory reads.
+///
+/// The observer must not mutate the manager or any reachable node.
+pub fn lookup_observed(
+    manager: u32,
+    low: u32,
+    high: u32,
+    mut read: impl FnMut(u32) -> u32,
+    mut observe: impl FnMut(Probe),
+) -> u32 {
     let mask = read(manager.wrapping_add(0x24));
     if mask == u32::MAX {
         return 0;
@@ -16,7 +37,7 @@ pub fn lookup(manager: u32, low: u32, high: u32, mut read: impl FnMut(u32) -> u3
     if !live(node) {
         return 0;
     }
-    if matches(node, low, high, &mut read) {
+    if matches(node, low, high, &mut read, &mut observe) {
         return node;
     }
 
@@ -28,7 +49,7 @@ pub fn lookup(manager: u32, low: u32, high: u32, mut read: impl FnMut(u32) -> u3
         if !live(node) {
             return 0;
         }
-        if matches(node, low, high, &mut read) {
+        if matches(node, low, high, &mut read, &mut observe) {
             return node;
         }
     }
@@ -38,10 +59,27 @@ const fn live(node: u32) -> bool {
     node != 0 && node & 1 == 0
 }
 
-fn matches(node: u32, low: u32, high: u32, read: &mut impl FnMut(u32) -> u32) -> bool {
-    read(node.wrapping_add(0x18)) == low
-        && read(node.wrapping_add(0x30)) == low
-        && read(node.wrapping_add(0x34)) == high
+fn matches(
+    node: u32,
+    low: u32,
+    high: u32,
+    read: &mut impl FnMut(u32) -> u32,
+    observe: &mut impl FnMut(Probe),
+) -> bool {
+    observe(Probe::Visit);
+    if read(node.wrapping_add(0x18)) != low {
+        observe(Probe::HashMiss);
+        return false;
+    }
+    if read(node.wrapping_add(0x30)) != low {
+        observe(Probe::LowMiss);
+        return false;
+    }
+    if read(node.wrapping_add(0x34)) != high {
+        observe(Probe::HighMiss);
+        return false;
+    }
+    true
 }
 
 #[cfg(test)]

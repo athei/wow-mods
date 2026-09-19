@@ -13,6 +13,8 @@
 //! reading resolves transport-relative coordinates and the raw record does
 //! not.
 
+mod lookup_perf;
+
 /// The object-manager global; the live manager pointer, zero out-of-world.
 const OBJECT_MANAGER: usize = crate::win::EXPECTED_IMAGE_BASE + 0x0074_1414;
 /// The engine's millisecond tick global, advanced once per frame.
@@ -28,12 +30,16 @@ pub fn lookup_active(low: u32, high: u32) -> u32 {
     // Callers of the active lookup supply a live manager and exclude mutation
     // of its intrusive hash for the duration of this call.
     let manager = unsafe { (OBJECT_MANAGER as *const u32).read() };
-    crate::object_lookup::lookup(manager, low, high, |address| {
+    let read = |address| {
         // SAFETY: the manager's bucket array and reachable nodes remain live
         // under the caller's exclusion. Null and tagged links are checked
         // before any node read, and every field read has dword alignment.
         unsafe { (address as *const u32).read() }
-    })
+    };
+    super::tally::arm().map_or_else(
+        || crate::object_lookup::lookup(manager, low, high, read),
+        |armed| lookup_perf::lookup(&armed, manager, low, high, read),
+    )
 }
 /// Unit-token resolver — `fastcall(ecx = token text)`, GUID in `edx:eax`.
 const GUID_OF_TOKEN_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x0011_5970;
@@ -438,4 +444,9 @@ pub fn objects() -> Objects {
         link_base,
         current: first as usize,
     }
+}
+
+/// Report the active-object lookup's cumulative traversal counters.
+pub fn emit_cumulative() {
+    lookup_perf::emit_cumulative();
 }

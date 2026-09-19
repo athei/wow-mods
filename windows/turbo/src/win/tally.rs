@@ -112,6 +112,7 @@ pub fn emit_cumulative() {
     if arm().is_none() {
         return;
     }
+    super::objmgr::emit_cumulative();
     super::getname::emit_cumulative();
     super::portrait::emit_cumulative();
     super::hooks::emit_cumulative();

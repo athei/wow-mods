@@ -120,3 +120,65 @@ fn zero_guid_is_not_special_in_the_active_lookup() {
     ]);
     assert_eq!(lookup(MANAGER, 0, 0, |at| words[&at]), 0x3000);
 }
+
+#[test]
+fn observed_lookup_counts_completed_comparisons_without_extra_reads() {
+    let mut words = table(0x3000, 0x1c);
+    for address in [0x3000, 0x3100, 0x3200, 0x3300] {
+        node(&mut words, address, LOW, HIGH);
+        words.insert(address + 0x20, address + 0x100);
+    }
+    words.insert(0x3018, LOW + 1);
+    words.remove(&0x3030);
+    words.remove(&0x3034);
+    words.insert(0x3130, LOW + 1);
+    words.remove(&0x3134);
+    words.insert(0x3234, HIGH + 1);
+    words.insert(0x3320, 1);
+    for hit in [true, false] {
+        words.insert(0x3334, if hit { HIGH } else { HIGH + 1 });
+        let mut counts = [0; 4];
+        let mut observed_reads = Vec::new();
+        let result = lookup_observed(
+            MANAGER,
+            LOW,
+            HIGH,
+            |at| {
+                observed_reads.push(at);
+                words[&at]
+            },
+            |probe| {
+                counts[match probe {
+                    Probe::Visit => 0,
+                    Probe::HashMiss => 1,
+                    Probe::LowMiss => 2,
+                    Probe::HighMiss => 3,
+                }] += 1;
+            },
+        );
+        let mut plain_reads = Vec::new();
+        assert_eq!(
+            result,
+            lookup(MANAGER, LOW, HIGH, |at| {
+                plain_reads.push(at);
+                words[&at]
+            })
+        );
+        assert_eq!(observed_reads, plain_reads);
+        assert_eq!(counts, [4, 1, 1, if hit { 1 } else { 2 }]);
+        assert_eq!(result, if hit { 0x3300 } else { 0 });
+    }
+    for head in [0, 1, u32::MAX] {
+        words.insert(BUCKET + 8, head);
+        assert_eq!(
+            lookup_observed(
+                MANAGER,
+                LOW,
+                HIGH,
+                |at| words[&at],
+                |_| { panic!("an empty bucket must not visit a node") }
+            ),
+            0
+        );
+    }
+}
