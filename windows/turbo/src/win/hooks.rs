@@ -47225,3 +47225,37 @@ pub extern "fastcall" fn clnt_obj_mgr__object_ptr__468460(
 pub extern "fastcall" fn gx_set_slot__589e80(index: u32, value: u32) {
     super::gx_slot::set(index, value);
 }
+
+/// Mark a model subtree for tracing in depth-first order.
+///
+/// `__fastcall(ecx=node, edx=key, stack=payload)`, `RET 4`, returns zero.
+/// Hierarchy pointers are read after the active marking callback and after
+/// each recursive child walk, preserving membership changes at either point.
+/// The installer verifies both composed hierarchy getters before patching.
+pub extern "fastcall" fn c_world_frame__set_node_trace_flag_recursive__480d90(
+    node: *mut u8,
+    key: u32,
+    payload: u32,
+) -> u32 {
+    const MARK_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x31_3cb0;
+    // SAFETY: the live image provides thiscall(node, state, key, payload), RET 12.
+    // Keep this dispatch through its entry so another owner's callback still runs.
+    let mark: extern "thiscall" fn(*mut u8, u32, u32, u32) =
+        unsafe { core::mem::transmute(MARK_VA) };
+    mark(node, 1, key, payload);
+    // SAFETY: as in the original, the caller keeps this node alive through marking.
+    let first_child = unsafe { node.add(0x1dc) };
+    // SAFETY: +0x1dc is the initialized, null-terminated hierarchy head pointer.
+    let mut child = unsafe { first_child.cast::<*mut u8>().read() };
+    while !child.is_null() {
+        c_world_frame__set_node_trace_flag_recursive__480d90(child, key, payload);
+        // SAFETY: the live child remains readable through its recursive walk.
+        // Its sibling is reloaded here because marking may change membership.
+        let next_sibling = unsafe { child.add(0x1e4) };
+        // SAFETY: +0x1e4 is the initialized, null-terminated sibling pointer.
+        child = unsafe { next_sibling.cast::<*mut u8>().read() };
+    }
+    // The only nonzero stock return depends on a nonzero recursive return;
+    // every terminating subtree bottoms out at zero.
+    0
+}

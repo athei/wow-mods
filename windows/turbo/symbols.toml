@@ -5338,3 +5338,11 @@ abi = "fastcall"
 ret = "void"
 args = ["u32", "u32"]
 preserve = []
+
+[functions.CWorldFrame__SetNodeTraceFlagRecursive__480d90]
+rva = 0x00080d90
+sig = "55 8B EC 53 8B 5D 08 56 57 53 8B FA 57 6A 01 8B F1 E8 0A 2F 29 00 8B CE E8 43 21 29 00 8B F0 85 F6 74 1B 53 8B D7 8B CE E8 D3 FF FF FF 85 C0 75 16 8B CE E8 68 21 29 00 8B F0 85 F6 75 E5 5F 5E 33 C0 5B 5D C2 04 00 5F 5E B8 01 00 00 00 5B 5D C2 04 00"
+abi = "fastcall"
+ret = "u32"
+args = ["*mut u8", "u32", "u32"]
+preserve = []

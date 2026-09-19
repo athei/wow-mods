@@ -117,8 +117,8 @@ undocumented_unsafe_blocks = "warn"
 # it to suit a lint makes the reimplementation harder to check against the
 # behaviour it has to match.
 items_after_statements = "allow"        # 844
-cast_ptr_alignment = "allow"            # 934 — reads are already `read_unaligned`
-unreadable_literal = "allow"            # 437, addresses and bit masks, verbatim
+cast_ptr_alignment = "allow"            # 936 — reads are already `read_unaligned`
+unreadable_literal = "allow"            # 438, addresses and bit masks, verbatim
 similar_names = "allow"                 # 185
 semicolon_if_nothing_returned = "allow" # 55
 many_single_char_names = "allow"        # 45

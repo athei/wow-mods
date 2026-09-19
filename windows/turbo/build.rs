@@ -1385,6 +1385,11 @@ fn install_thunk(
             return false;
         }
     }
+    if label == "CWorldFrame__SetNodeTraceFlagRecursive__480d90"
+        && !trace_getters_match(image_base, label)
+    {
+        return false;
+    }
     // The typed lookup removes this wrapper's call layer in ordinary builds.
     // Its complete relocation-free body must still dispatch to the active
     // lookup, otherwise the original typed caller must retain that dispatch.
@@ -1435,6 +1440,27 @@ fn install_thunk(
     }
     queued
 }
+// The recursive marker composes only these two read-only hierarchy getters.
+// Keep foreign getter effects by refusing the caller when either body differs.
+fn trace_getters_match(image_base: usize, label: &str) -> bool {
+    for (rva, sig) in [
+        (0x0031_2ef0, "8B 81 DC 01 00 00 C3"),
+        (0x0031_2f30, "8B 81 E4 01 00 00 C3"),
+    ] {
+        let helper = image_base + rva;
+        // SAFETY: the fixed host image maps each complete seven-byte getter.
+        if !unsafe { ::wow_hook::signature_matches(helper, sig) } {
+            ::log::warn!(
+                target: ::wow_hook::LOG_TARGET,
+                "{label} hierarchy getter mismatch at {helper:#010x} ({}) - refusing to patch",
+                ::wow_hook::prologue_owner(helper),
+            );
+            return false;
+        }
+    }
+    true
+}
+
 // The wrapper composes only the stock slot setter's allocation-free
 // bookkeeping. Foreign setter or dirty-helper code must retain its calls,
 // including modifications beyond a matching entry prologue.
