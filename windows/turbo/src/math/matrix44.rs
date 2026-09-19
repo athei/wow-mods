@@ -1639,11 +1639,36 @@ pub fn c44_matrix__rotate_axis_angle__7bdd60(
     skip_normalize: bool,
 ) -> [f32; 16] {
     let r = if is_z_quarter_turn(axis, angle) {
+        // A non-short-circuit reduction lets the finite-input check use whole
+        // vectors. Nonfinite inputs keep the general kernel's NaN propagation.
+        let nonfinite = m.iter().fold(false, |any, v| any | !v.is_finite());
+        if !nonfinite {
+            return multiply_z_quarter_turn(m);
+        }
         Z_QUARTER_TURN
     } else {
         c44_matrix__set_rotation_axis_angle__7bdb00(axis, angle, skip_normalize)
     };
     c44_matrix__multiply__7bc6a0(&r, m)
+}
+
+// Keep the coefficients visible to the compiler without changing the order or
+// width of any operation. Even a zero coefficient still multiplies its input:
+// removing that product would lose the sign of zero.
+fn multiply_z_quarter_turn(b: &[f32; 16]) -> [f32; 16] {
+    let mut out = [0.0f32; 16];
+    for r in 0..4 {
+        for c in 0..4 {
+            let ks = MULTIPLY_K_ORDER[r * 4 + c];
+            let term = |k: usize| f64::from(Z_QUARTER_TURN[r * 4 + k]) * f64::from(b[k * 4 + c]);
+            let mut acc = term(ks[0]);
+            acc += term(ks[1]);
+            acc += term(ks[2]);
+            acc += term(ks[3]);
+            out[r * 4 + c] = super::f64_to_f32(acc);
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -1652,6 +1677,78 @@ mod tests_c44_matrix__rotate_axis_angle__7bdd60 {
         Z_QUARTER_TURN, Z_QUARTER_TURN_ANGLE_BITS, c44_matrix__rotate_axis_angle__7bdd60 as rotate,
         c44_matrix__set_rotation_axis_angle__7bdb00 as build,
     };
+
+    #[test]
+    fn constant_product_requires_the_exact_axis_and_angle_bits() {
+        let m = receiver();
+        let inputs = [0_u32, 0, 0x3f80_0000, Z_QUARTER_TURN_ANGLE_BITS];
+        for component in 0..4 {
+            for bit in 0..32 {
+                let mut changed = inputs;
+                changed[component] ^= 1 << bit;
+                let axis = [changed[0], changed[1], changed[2]].map(f32::from_bits);
+                let angle = f32::from_bits(changed[3]);
+                assert!(!super::is_z_quarter_turn(&axis, angle));
+                for skip in [false, true] {
+                    let want = super::c44_matrix__multiply__7bc6a0(&build(&axis, angle, skip), &m);
+                    let got = rotate(&m, &axis, angle, skip);
+                    assert_eq!(got.map(f32::to_bits), want.map(f32::to_bits));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn constant_product_keeps_general_product_bits() {
+        let mut seed = 0x1234_5678_u32;
+        for case in 0..10_000 {
+            let m = std::array::from_fn(|_| {
+                seed ^= seed << 13;
+                seed ^= seed >> 17;
+                seed ^= seed << 5;
+                f32::from_bits(seed)
+            });
+            let want = super::c44_matrix__multiply__7bc6a0(&Z_QUARTER_TURN, &m);
+            for skip in [false, true] {
+                let got = rotate(
+                    &m,
+                    &[0.0, 0.0, 1.0],
+                    f32::from_bits(Z_QUARTER_TURN_ANGLE_BITS),
+                    skip,
+                );
+                assert_eq!(got.map(f32::to_bits), want.map(f32::to_bits), "case {case}");
+            }
+        }
+    }
+
+    #[test]
+    fn constant_product_keeps_zero_and_boundary_bits() {
+        let bits = [
+            0,
+            0x8000_0000,
+            1,
+            0x8000_0001,
+            0x007f_ffff,
+            0x0080_0000,
+            0x807f_ffff,
+            0x8080_0000,
+            0x3f80_0000,
+            0xbf80_0000,
+            0x7f7f_ffff,
+            0xff7f_ffff,
+        ];
+        for shift in 0..bits.len() {
+            let m = std::array::from_fn(|i| f32::from_bits(bits[(i + shift) % bits.len()]));
+            let want = super::c44_matrix__multiply__7bc6a0(&Z_QUARTER_TURN, &m);
+            let got = rotate(
+                &m,
+                &[0.0, 0.0, 1.0],
+                f32::from_bits(Z_QUARTER_TURN_ANGLE_BITS),
+                false,
+            );
+            assert_eq!(got.map(f32::to_bits), want.map(f32::to_bits));
+        }
+    }
 
     #[test]
     fn the_constant_is_what_the_builder_returns() {
