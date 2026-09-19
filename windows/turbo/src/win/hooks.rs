@@ -35808,9 +35808,26 @@ pub fn orientation__set_position__7adcd0(this: *mut u8, pos: *const f32) {
     // SAFETY: `stored` addresses 3 contiguous readable f32.
     let old = unsafe { stored.cast::<[f32; 3]>().read_unaligned() };
     if crate::math::object::position_differs(&old, &new) {
-        // SAFETY: `stored` addresses 3 writable contiguous f32; the raw f32 copy
-        // preserves the exact incoming bit pattern, matching stock's dword stores.
-        unsafe { stored.cast::<[f32; 3]>().write_unaligned(new) };
+        // Stock copies forward one dword at a time. If the destination starts
+        // inside the input, a store can change the next component before its
+        // read. Keep the snapshot copy for every other pointer relationship.
+        let separation = (stored as usize).wrapping_sub(pos as usize);
+        if (1..12).contains(&separation) {
+            for i in 0..3 {
+                // SAFETY: `pos` addresses the three readable source components.
+                let source = unsafe { pos.add(i).cast::<u32>() };
+                // SAFETY: `stored` addresses the three writable components.
+                let destination = unsafe { stored.add(i * 4) };
+                // SAFETY: read the current source bits after preceding stores.
+                let bits = unsafe { source.read_unaligned() };
+                // SAFETY: write this component before reading the next one.
+                unsafe { destination.cast::<u32>().write_unaligned(bits) };
+            }
+        } else {
+            // SAFETY: the snapshot matches forward copies when no destination
+            // store can overwrite a source component that is still unread.
+            unsafe { stored.cast::<[f32; 3]>().write_unaligned(new) };
+        }
         // SAFETY: the dirty-flags byte lives at `this+0xd`.
         let flags = unsafe { this.add(0xd) };
         // SAFETY: `flags` addresses one readable byte.
