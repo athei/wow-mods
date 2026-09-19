@@ -794,15 +794,22 @@ fn render(m: &Manifest) -> String {
         // check, so an unarmed run never patches the address at all.
         let typed_lookup = name == "ClntObjMgr__ObjectPtr__468460";
         let active_lookup = name == "ClntObjMgr__GetActiveObjectPtrByGuid__464890";
+        let point_classifier = name == "CWorldFrustum__ClassifyPoint__686c20";
+        let triangle_cull = name == "CWorldFrustum__CullTriangleTrivial__6b8c00";
+        let queue_name = if active_lookup {
+            "active_lookup_queued"
+        } else {
+            "point_classifier_queued"
+        };
         if typed_lookup {
             install_body.push_str("    if active_lookup_queued {\n");
         }
+        if triangle_cull {
+            install_body.push_str("    if point_classifier_queued {\n");
+        }
         let ind = open_armed_gate(&mut install_body, f);
-        if active_lookup {
-            let _ = writeln!(
-                install_body,
-                "{ind}    let active_lookup_queued = install_thunk("
-            );
+        if active_lookup || point_classifier {
+            let _ = writeln!(install_body, "{ind}    let {queue_name} = install_thunk(");
         } else {
             let _ = writeln!(
                 install_body,
@@ -837,11 +844,11 @@ fn render(m: &Manifest) -> String {
             "{ind}            let _ = {screaming}_ORIGINAL.set(original);"
         );
         let _ = writeln!(install_body, "{ind}        }},");
-        if active_lookup {
+        if active_lookup || point_classifier {
             let _ = writeln!(install_body, "{ind}    );");
             let _ = writeln!(
                 install_body,
-                "{ind}    queued += usize::from(active_lookup_queued);"
+                "{ind}    queued += usize::from({queue_name});"
             );
         } else {
             let _ = writeln!(install_body, "{ind}    ));");
@@ -850,6 +857,12 @@ fn render(m: &Manifest) -> String {
         if typed_lookup {
             install_body.push_str(
                 "    } else {\n        ::log::warn!(target: super::LOG_TARGET, \"ClntObjMgr__ObjectPtr__468460 skipped: active lookup unavailable\");\n    }\n",
+            );
+        }
+
+        if triangle_cull {
+            install_body.push_str(
+                "    } else {\n        ::log::warn!(target: super::LOG_TARGET, \"CWorldFrustum__CullTriangleTrivial__6b8c00 skipped: classifier unavailable\");\n    }\n",
             );
         }
 
@@ -1413,6 +1426,37 @@ fn install_thunk(
     }
     if label == "GxSetSlot__589e80" && !slot_helpers_match(image_base, label) {
         return false;
+    }
+    // Diagnostic builds retain the original caller and its three live helper
+    // calls, including ClassifyPoint's armed comparisons and breadcrumbs.
+    if label == "CWorldFrustum__CullTriangleTrivial__6b8c00"
+        && cfg!(any(wow_turbo_diff, wow_crumb))
+    {
+        ::log::warn!(
+            target: ::wow_hook::LOG_TARGET,
+            "{label} skipped: retaining classifier diagnostics",
+        );
+        return false;
+    }
+    if label == "CWorldFrustum__CullTriangleTrivial__6b8c00" {
+        let helper = image_base + 0x0028_6c20;
+        // SAFETY: the fixed host image maps the complete 97-byte classifier.
+        // Its hook is queued but not applied yet. Refuse the composed caller
+        // if another owner changed any part of the helper being bypassed.
+        let verified = unsafe {
+            ::wow_hook::signature_matches(
+                helper,
+                "55 8B EC 53 56 8B 75 0C 8B C1 57 8B 7D 08 C7 06 00 00 00 00 33 C9 8D 50 04 8D A4 24 00 00 00 00 D9 42 FC D8 0F D9 42 04 D8 4F 08 DE C1 D9 02 D8 4F 04 DE C1 D8 42 08 D8 1D B4 01 81 00 DF E0 F6 C4 05 7A 0D 8B 1E B8 01 00 00 00 D3 E0 0B D8 89 1E 41 83 C2 10 83 F9 06 72 C6 5F 5E 5B 5D C2 08 00",
+            )
+        };
+        if !verified {
+            ::log::warn!(
+                target: ::wow_hook::LOG_TARGET,
+                "{label} classifier mismatch at {helper:#010x} ({}) - refusing to patch",
+                ::wow_hook::prologue_owner(helper),
+            );
+            return false;
+        }
     }
     let va = image_base + rva;
     // SAFETY: `va` is the live image base plus the function's manifest RVA, which

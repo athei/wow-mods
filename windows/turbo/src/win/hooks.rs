@@ -2159,6 +2159,28 @@ pub extern "thiscall" fn c_world_frustum__classify_point__686c20(
     ret
 }
 
+/// Tests the three vertex outcodes and returns their common rejection in AL.
+// The installer requires the owned ClassifyPoint replacement to be queued.
+pub extern "fastcall" fn c_world_frustum__cull_triangle_trivial__6b8c00(
+    this: *const core::ffi::c_void,
+    vertex0: *const f32,
+    vertex1: *const f32,
+    vertex2: *const f32,
+) -> u8 {
+    // SAFETY: the mesh caller supplies a live six-plane record and three live
+    // C3Vectors. These read-only records may overlap; no helper or writer runs
+    // between the snapshots. Each vertex read is exactly twelve bytes.
+    let planes = unsafe { this.cast::<[f32; 24]>().read_unaligned() };
+    // SAFETY: vertex0 addresses one live twelve-byte C3Vector.
+    let point0 = unsafe { vertex0.cast::<[f32; 3]>().read_unaligned() };
+    // SAFETY: vertex1 addresses one live twelve-byte C3Vector.
+    let point1 = unsafe { vertex1.cast::<[f32; 3]>().read_unaligned() };
+    // SAFETY: vertex2 addresses one live twelve-byte C3Vector.
+    let point2 = unsafe { vertex2.cast::<[f32; 3]>().read_unaligned() };
+    let points = [point0, point1, point2];
+    crate::math::frustum::c_world_frustum__cull_triangle_trivial__6b8c00(&planes, &points)
+}
+
 /// `CWorldFrustum::TestOrientedBox` — `__thiscall(ecx = this)` oriented-AABB cull.
 ///
 /// Returns 3 if the box may be visible, 0 if any plane fully rejects it.

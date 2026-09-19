@@ -78,14 +78,14 @@ pedantic = { level = "warn", priority = -1 }
 # Length is a poor proxy for complexity; allow long procedural functions
 # (per-opcode dispatchers, codegen templates) where the structural alternative
 # is fragmented helpers threading the same state.
-too_many_lines = "allow"                # 71
+too_many_lines = "allow"                # 72
 # A separate multiply and add is what the originals compiled to, and the
 # differential harness compares against that — fusing them changes the rounding
 # and the comparison fails. It is also faster on the default baseline: nehalem
 # has no hardware FMA, so `mul_add` lowers to an `fmaf` libcall. (The AVX2
 # native-Windows variant does have FMA, which is why the faithfulness argument
 # is the one that carries this and not the ISA.)
-suboptimal_flops = "allow"              # 1206
+suboptimal_flops = "allow"              # 1208
 # Stricter unsafe discipline.
 missing_safety_doc = "warn"
 not_unsafe_ptr_arg_deref = "warn"
@@ -118,8 +118,8 @@ undocumented_unsafe_blocks = "warn"
 # behaviour it has to match.
 items_after_statements = "allow"        # 844
 cast_ptr_alignment = "allow"            # 936 — reads are already `read_unaligned`
-unreadable_literal = "allow"            # 438, addresses and bit masks, verbatim
-similar_names = "allow"                 # 185
+unreadable_literal = "allow"            # 439, addresses and bit masks, verbatim
+similar_names = "allow"                 # 186
 semicolon_if_nothing_returned = "allow" # 55
 many_single_char_names = "allow"        # 45
 

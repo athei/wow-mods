@@ -65,6 +65,198 @@ pub fn c_world_frustum__classify_point__686c20(planes: &[f32; 24], point: &[f32;
     (last_bit, out_mask)
 }
 
+/// Rejects a triangle only when all three vertex outcodes share a plane.
+///
+/// All vertices visit every plane. Sharing the widened coefficients removes
+/// repeated setup while retaining `ClassifyPoint`'s `f64` association and epsilon.
+/// Input records are stable for the complete call, including aliased vertices.
+pub fn c_world_frustum__cull_triangle_trivial__6b8c00(
+    planes: &[f32; 24],
+    points: &[[f32; 3]; 3],
+) -> u8 {
+    #[cfg(target_arch = "x86")]
+    use core::arch::x86::{_mm_cmplt_sd, _mm_movemask_pd, _mm_set_sd};
+    #[cfg(target_arch = "x86_64")]
+    use core::arch::x86_64::{_mm_cmplt_sd, _mm_movemask_pd, _mm_set_sd};
+
+    let mut points_wide = [[0.0_f64; 3]; 3];
+    for (wide, point) in points_wide.iter_mut().zip(points) {
+        for (component, value) in wide.iter_mut().zip(point) {
+            *component = f64::from(*value);
+        }
+    }
+    let eps = f64::from(FRUSTUM_PLANE_EPS);
+    let mut masks = [0_u32; 3];
+    for p in 0..6 {
+        let a = f64::from(planes[p * 4]);
+        let b = f64::from(planes[p * 4 + 1]);
+        let c = f64::from(planes[p * 4 + 2]);
+        let d = f64::from(planes[p * 4 + 3]);
+        for (i, point) in points_wide.iter().enumerate() {
+            let distance = ((a * point[0] + c * point[2]) + b * point[1]) + d;
+            let outside = if i == 2 {
+                // The existing classifier uses signaling packed comparisons.
+                // Keep that status behavior for the final scalar vertex too:
+                // ordinary `<` can select quiet UCOMISD for this remainder.
+                // SAFETY: SSE2 is present on both supported math targets
+                // (i686 production and x86_64 host tests).
+                let value = unsafe { _mm_set_sd(distance) };
+                // SAFETY: SSE2 scalar construction; no memory access.
+                let threshold = unsafe { _mm_set_sd(eps) };
+                // SAFETY: only the low lane is compared, so no extra
+                // exceptional lane is evaluated.
+                let compared = unsafe { _mm_cmplt_sd(value, threshold) };
+                // SAFETY: SSE2 sign-bit extraction from an initialized vector.
+                unsafe { _mm_movemask_pd(compared) & 1 != 0 }
+            } else {
+                distance < eps
+            };
+            if outside {
+                masks[i] |= 1 << p;
+            }
+        }
+    }
+    u8::from(masks[0] & masks[1] & masks[2] != 0)
+}
+
+#[cfg(test)]
+mod tests_c_world_frustum__cull_triangle_trivial__6b8c00 {
+    use super::{
+        FRUSTUM_PLANE_EPS, c_world_frustum__classify_point__686c20,
+        c_world_frustum__cull_triangle_trivial__6b8c00,
+    };
+
+    fn compare(planes: &[f32; 24], points: &[[f32; 3]; 3]) {
+        let masks = points.map(|point| c_world_frustum__classify_point__686c20(planes, &point).1);
+        assert_eq!(
+            c_world_frustum__cull_triangle_trivial__6b8c00(planes, points),
+            u8::from(masks[0] & masks[1] & masks[2] != 0),
+        );
+    }
+
+    fn planes() -> [f32; 24] {
+        [
+            1.0, 0.0, 0.0, 1.0, -1.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, -1.0, 0.0, 1.0, 0.0,
+            0.0, 1.0, 1.0, 0.0, 0.0, -1.0, 1.0,
+        ]
+    }
+
+    #[test]
+    fn common_plane_is_required_for_rejection() {
+        let points = [
+            [0.0, 0.0, 0.0],
+            [3.0, 0.0, 0.0],
+            [-3.0, 0.0, 0.0],
+            [0.0, 3.0, 0.0],
+            [0.0, -3.0, 0.0],
+            [0.0, 0.0, 3.0],
+            [0.0, 0.0, -3.0],
+            [1.0, 1.0, 1.0],
+            [-3.0, -3.0, -3.0],
+        ];
+        for a in points {
+            for b in points {
+                for c in points {
+                    compare(&planes(), &[a, b, c]);
+                }
+            }
+        }
+        assert_eq!(
+            c_world_frustum__cull_triangle_trivial__6b8c00(
+                &planes(),
+                &[[3.0, 0.0, 0.0], [-3.0, 0.0, 0.0], [0.0, 3.0, 0.0]],
+            ),
+            0
+        );
+    }
+
+    #[test]
+    fn preserves_boundaries_nonfinite_values_and_cancellation() {
+        let special = [
+            0,
+            0x8000_0000,
+            1,
+            0x8000_0001,
+            0x007f_ffff,
+            0x0080_0000,
+            0x7f7f_ffff,
+            0xff7f_ffff,
+            0x7f80_0000,
+            0xff80_0000,
+            0x7fc1_2345,
+            0x7f81_2345,
+            0xbc9f_49f3,
+            0xbc9f_49f4,
+            0xbc9f_49f5,
+        ];
+        for bits in special {
+            for component in 0..33 {
+                let mut planes = planes();
+                let mut points = [[0.25; 3]; 3];
+                if component < 24 {
+                    planes[component] = f32::from_bits(bits);
+                } else {
+                    points[(component - 24) / 3][(component - 24) % 3] = f32::from_bits(bits);
+                }
+                compare(&planes, &points);
+            }
+        }
+        let mut planes = [0.0; 24];
+        planes[12..16].copy_from_slice(&[
+            1.0,
+            -1.0,
+            f32::from_bits(0xa900_0000),
+            FRUSTUM_PLANE_EPS,
+        ]);
+        let points = [[8192.0, 8192.0, 1.0]; 3];
+        compare(&planes, &points);
+        assert_eq!(
+            c_world_frustum__cull_triangle_trivial__6b8c00(&planes, &points),
+            0
+        );
+    }
+
+    #[test]
+    fn final_vertex_comparison_keeps_invalid_status() {
+        let mut planes = planes();
+        planes[6] = f32::INFINITY;
+        let mut points = [[0.25; 3]; 3];
+        points[2][0] = f32::from_bits(0x7fc1_2345);
+        let mut saved = 0_u32;
+        let mut after = 0_u32;
+        let masked = 0x1f80_u32;
+        // SAFETY: this test changes only its own thread's SSE control/status,
+        // masks exceptions, and restores the complete state before asserting.
+        unsafe {
+            core::arch::asm!("stmxcsr [{0}]", in(reg) &raw mut saved, options(nostack, preserves_flags));
+        }
+        // SAFETY: the initialized local selects masked SSE exceptions.
+        unsafe {
+            core::arch::asm!("ldmxcsr [{0}]", in(reg) &raw const masked, options(nostack, preserves_flags));
+        }
+        let result = std::hint::black_box(c_world_frustum__cull_triangle_trivial__6b8c00(
+            std::hint::black_box(&planes),
+            std::hint::black_box(&points),
+        ));
+        // SAFETY: both addresses refer to initialized four-byte local words;
+        // the saved MXCSR came from this thread immediately above.
+        unsafe {
+            core::arch::asm!("stmxcsr [{0}]", in(reg) &raw mut after, options(nostack, preserves_flags));
+        }
+        // SAFETY: restore the complete control/status read from this thread.
+        unsafe {
+            core::arch::asm!("ldmxcsr [{0}]", in(reg) &raw const saved, options(nostack, preserves_flags));
+        }
+        assert_eq!(result, 0);
+        assert_eq!(
+            after & 1,
+            1,
+            "quiet NaN must set the existing invalid sticky flag"
+        );
+        assert_eq!(after & !0x3f, masked);
+    }
+}
+
 #[cfg(test)]
 mod tests_c_world_frustum__classify_point__686c20 {
     use super::{FRUSTUM_PLANE_EPS, c_world_frustum__classify_point__686c20};

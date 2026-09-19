@@ -1284,6 +1284,16 @@ out      = { arg = 2, len = 4 }
 float    = "bytes"
 ret_mask = 0x0
 
+# The sole mesh caller consumes AL at 0x6bca26. Upper EAX is unspecified.
+# Installation requires the classifier hook and its complete native signature.
+[functions.CWorldFrustum__CullTriangleTrivial__6b8c00]
+rva  = 0x2b8c00
+sig  = "55 8B EC 83 EC 0C 56 8D 45 F4 50 52 8B F1 E8 0D E0 FC FF 8B 55 08 8D 4D F8 51 52 8B CE E8 FE DF FC FF 8B 4D 0C 8D 45 FC 50 51 8B CE E8 EF DF FC FF 8B 55 FC 8B 4D F8 8B 45 F4 23 D1 85 C2 0F 95 C0 5E 8B E5 5D C2 08 00"
+abi  = "fastcall"
+ret  = "u8"
+args = ["*const core::ffi::c_void", "*const f32", "*const f32", "*const f32"]
+preserve = []
+
 [functions.CWorldFrustum__TestOrientedBox__6869c0]
 rva  = 0x2869c0
 sig  = "55 8B EC 83 EC 50 53 56 8B 75 0C 8B"
