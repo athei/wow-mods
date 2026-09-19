@@ -15357,10 +15357,10 @@ pub extern "fastcall" fn c_world__intersect_map_obj_segment__6a8840(
     let bounds_test: extern "thiscall" fn(*mut u8, *const f32, *const f32) -> u32 =
         unsafe { core::mem::transmute(BOUNDS_VA) };
     // 0x6a47e0 sub-part cull — thiscall(geom; localStart, localEnd, key),
-    // RET 0xC.
+    // RET 0xC, bool in AL. The rejected paths leave upper EAX unchanged.
     const CULL_VA: usize = BASE + 0x2a_47e0;
     // SAFETY: image base verified at load; signature matches the callee.
-    let cull: extern "thiscall" fn(*mut u8, *const f32, *const f32, u32) -> u32 =
+    let cull: extern "thiscall" fn(*mut u8, *const f32, *const f32, u32) -> u8 =
         unsafe { core::mem::transmute(CULL_VA) };
     // 0x6a4a00 group accessor by key — thiscall(geom; key, 0), RET 8.
     const GET_GROUP_VA: usize = BASE + 0x2a_4a00;
