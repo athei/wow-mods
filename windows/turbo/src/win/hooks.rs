@@ -47195,3 +47195,17 @@ pub extern "stdcall" fn clnt_obj_mgr__get_active_object_ptr_by_guid__464890(
 ) -> u32 {
     super::objmgr::lookup_active(low, high)
 }
+
+/// Typed object lookup keeps the source-file and source-line arguments inert.
+///
+/// Fastcall takes the mask in ECX and source file in EDX, with GUID low/high
+/// and source line on the stack. The callee pops twelve bytes.
+pub extern "fastcall" fn clnt_obj_mgr__object_ptr__468460(
+    type_mask: u32,
+    _source_file: *const u8,
+    low: u32,
+    high: u32,
+    _source_line: u32,
+) -> u32 {
+    super::objmgr::lookup_typed(low, high, type_mask)
+}

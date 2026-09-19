@@ -5317,3 +5317,16 @@ abi = "thiscall"
 ret = "void"
 args = ["*mut u8"]
 preserve = []
+
+[functions.ClntObjMgr__ObjectPtr__468460]
+rva = 0x00068460
+sig = "55 8B EC 8B 45 0C 56 8B F1 8B 4D 08 50 51 E8 FD C3 FF FF 85 C0 74 0A 8B 50 08 85 72 08 75 02 33 C0 5E 5D C2 0C 00"
+abi = "fastcall"
+ret = "u32"
+args = ["u32", "*const u8", "u32", "u32", "u32"]
+preserve = []
+
+# Read-only lookup and type filter; compare the borrowed pointer exactly.
+[functions.ClntObjMgr__ObjectPtr__468460.diff]
+mode = "out"
+ulp = 0

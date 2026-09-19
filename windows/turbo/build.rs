@@ -792,11 +792,23 @@ fn render(m: &Manifest) -> String {
         //
         // An `armed_only` entry puts that step behind the gauge's own arming
         // check, so an unarmed run never patches the address at all.
+        let typed_lookup = name == "ClntObjMgr__ObjectPtr__468460";
+        let active_lookup = name == "ClntObjMgr__GetActiveObjectPtrByGuid__464890";
+        if typed_lookup {
+            install_body.push_str("    if active_lookup_queued {\n");
+        }
         let ind = open_armed_gate(&mut install_body, f);
-        let _ = writeln!(
-            install_body,
-            "{ind}    queued += usize::from(install_thunk("
-        );
+        if active_lookup {
+            let _ = writeln!(
+                install_body,
+                "{ind}    let active_lookup_queued = install_thunk("
+            );
+        } else {
+            let _ = writeln!(
+                install_body,
+                "{ind}    queued += usize::from(install_thunk("
+            );
+        }
         let _ = writeln!(install_body, "{ind}        image_base,");
         let _ = writeln!(install_body, "{ind}        {:#010x},", f.rva);
         let _ = writeln!(install_body, "{ind}        {},", f.sig.literal());
@@ -825,8 +837,21 @@ fn render(m: &Manifest) -> String {
             "{ind}            let _ = {screaming}_ORIGINAL.set(original);"
         );
         let _ = writeln!(install_body, "{ind}        }},");
-        let _ = writeln!(install_body, "{ind}    ));");
+        if active_lookup {
+            let _ = writeln!(install_body, "{ind}    );");
+            let _ = writeln!(
+                install_body,
+                "{ind}    queued += usize::from(active_lookup_queued);"
+            );
+        } else {
+            let _ = writeln!(install_body, "{ind}    ));");
+        }
         close_armed_gate(&mut install_body, f);
+        if typed_lookup {
+            install_body.push_str(
+                "    } else {\n        ::log::warn!(target: super::LOG_TARGET, \"ClntObjMgr__ObjectPtr__468460 skipped: active lookup unavailable\");\n    }\n",
+            );
+        }
 
         // Arm this hook's compare switch if it is selected at runtime. Only a
         // hook with a `[diff]` table has the switch (compare mode runs both
@@ -1334,6 +1359,27 @@ fn install_thunk(
             ::log::warn!(
                 target: ::wow_hook::LOG_TARGET,
                 "{label} predecessor helper mismatch at {helper:#010x} ({}) - refusing to patch",
+                ::wow_hook::prologue_owner(helper),
+            );
+            return false;
+        }
+    }
+    // The typed lookup removes this wrapper's call layer in ordinary builds.
+    // Its complete relocation-free body must still dispatch to the active
+    // lookup, otherwise the original typed caller must retain that dispatch.
+    if label == "ClntObjMgr__ObjectPtr__468460" {
+        let helper = image_base + 0x0006_4870;
+        // SAFETY: the fixed host image maps the complete 32-byte wrapper.
+        let verified = unsafe {
+            ::wow_hook::signature_matches(
+                helper,
+                "55 8B EC 8B 45 08 8B 4D 0C 8B D0 0B D1 74 0B 51 50 E8 0A 00 00 00 5D C2 08 00 33 C0 5D C2 08 00",
+            )
+        };
+        if !verified {
+            ::log::warn!(
+                target: ::wow_hook::LOG_TARGET,
+                "{label} GUID wrapper mismatch at {helper:#010x} ({}) - refusing to patch",
                 ::wow_hook::prologue_owner(helper),
             );
             return false;

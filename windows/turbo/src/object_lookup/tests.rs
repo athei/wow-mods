@@ -182,3 +182,60 @@ fn observed_lookup_counts_completed_comparisons_without_extra_reads() {
         );
     }
 }
+
+#[test]
+fn typed_lookup_keeps_zero_guid_and_null_result_read_boundaries() {
+    assert_eq!(
+        typed(
+            0,
+            0,
+            u32::MAX,
+            |_, _| panic!("zero GUID must not resolve"),
+            |_| { panic!("zero GUID must not read an object") }
+        ),
+        0
+    );
+    for guid in [(1, 0), (0, 1), (u32::MAX, u32::MAX)] {
+        assert_eq!(
+            typed(
+                guid.0,
+                guid.1,
+                0,
+                |low, high| {
+                    assert_eq!((low, high), guid);
+                    0
+                },
+                |_| panic!("null result must not read a descriptor"),
+            ),
+            0
+        );
+    }
+}
+
+#[test]
+fn typed_lookup_reads_the_current_descriptor_even_for_a_zero_mask() {
+    for mask in [0, 1, 8, 0x8000_0000, u32::MAX] {
+        for flags in [0, 1, 8, 0x8000_0000, u32::MAX] {
+            let mut reads = Vec::new();
+            let result = typed(
+                LOW,
+                HIGH,
+                mask,
+                |low, high| {
+                    assert_eq!((low, high), (LOW, HIGH));
+                    0x3000
+                },
+                |address| {
+                    reads.push(address);
+                    match address {
+                        0x3008 => 0x4000,
+                        0x4008 => flags,
+                        _ => panic!("unexpected typed lookup read"),
+                    }
+                },
+            );
+            assert_eq!(reads, [0x3008, 0x4008]);
+            assert_eq!(result, if mask & flags == 0 { 0 } else { 0x3000 });
+        }
+    }
+}

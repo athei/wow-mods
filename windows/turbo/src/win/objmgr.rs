@@ -41,6 +41,32 @@ pub fn lookup_active(low: u32, high: u32) -> u32 {
         |armed| lookup_perf::lookup(&armed, manager, low, high, read),
     )
 }
+/// Resolve a typed object without retaining pointers across calls.
+pub fn lookup_typed(low: u32, high: u32, mask: u32) -> u32 {
+    crate::object_lookup::typed(
+        low,
+        high,
+        mask,
+        |low, high| {
+            if cfg!(wow_turbo_diff) || cfg!(wow_crumb) {
+                // Preserve the inner hook's compare selector and breadcrumbs.
+                // SAFETY: this verified client wrapper takes two stack words
+                // and returns the object pointer with eight bytes of cleanup.
+                let lookup: extern "stdcall" fn(u32, u32) -> u32 =
+                    unsafe { core::mem::transmute(OBJECT_BY_GUID_VA) };
+                lookup(low, high)
+            } else {
+                lookup_active(low, high)
+            }
+        },
+        |address| {
+            // SAFETY: the resolved object and its descriptor remain live under
+            // the same mutation exclusion as the original typed lookup.
+            unsafe { (address as *const u32).read() }
+        },
+    )
+}
+
 /// Unit-token resolver — `fastcall(ecx = token text)`, GUID in `edx:eax`.
 const GUID_OF_TOKEN_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x0011_5970;
 /// Active player GUID — no arguments, GUID in `edx:eax`.

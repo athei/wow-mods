@@ -82,5 +82,31 @@ fn matches(
     true
 }
 
+/// Resolve a nonzero GUID and retain only objects matching the descriptor type mask.
+///
+/// `resolve` and `read` share the caller's manager-mutation exclusion. The
+/// descriptor pointer at object+8 and its flags at descriptor+8 remain live
+/// through both reads. A zero mask still resolves and reads the descriptor.
+pub fn typed(
+    low: u32,
+    high: u32,
+    mask: u32,
+    resolve: impl FnOnce(u32, u32) -> u32,
+    mut read: impl FnMut(u32) -> u32,
+) -> u32 {
+    if low == 0 && high == 0 {
+        return 0;
+    }
+    let object = resolve(low, high);
+    if object == 0 {
+        return 0;
+    }
+    let descriptor = read(object.wrapping_add(8));
+    if read(descriptor.wrapping_add(8)) & mask == 0 {
+        return 0;
+    }
+    object
+}
+
 #[cfg(test)]
 mod tests;
