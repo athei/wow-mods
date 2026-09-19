@@ -2848,11 +2848,14 @@ pub fn map_chunk_box_overlaps_view4(
     view_hi: [f32; 4],
 ) -> bool {
     #[cfg(target_arch = "x86")]
-    use core::arch::x86::{_mm_and_ps, _mm_cmple_ps, _mm_loadu_ps, _mm_movemask_ps};
+    use core::arch::x86::{
+        _mm_and_ps, _mm_castps_si128, _mm_cmple_ps, _mm_loadu_ps, _mm_set_epi32, _mm_testc_si128,
+    };
     #[cfg(target_arch = "x86_64")]
-    use core::arch::x86_64::{_mm_and_ps, _mm_cmple_ps, _mm_loadu_ps, _mm_movemask_ps};
-    // Every intrinsic below is SSE1, available on every ISA baseline this
-    // crate builds for.
+    use core::arch::x86_64::{
+        _mm_and_ps, _mm_castps_si128, _mm_cmple_ps, _mm_loadu_ps, _mm_set_epi32, _mm_testc_si128,
+    };
+    // SSE4.1 is in both production baselines, nehalem and haswell.
     // SAFETY: the load covers the 16 in-bounds bytes of its `[f32; 4]` argument.
     let lo = unsafe { _mm_loadu_ps(lo_corner.as_ptr()) };
     // SAFETY: as above.
@@ -2867,9 +2870,13 @@ pub fn map_chunk_box_overlaps_view4(
     let above = unsafe { _mm_cmple_ps(vlo, hi) };
     // SAFETY: lane-wise AND of two compare masks.
     let both = unsafe { _mm_and_ps(below, above) };
-    // SAFETY: sign-bit extraction from an initialized vector.
-    let mask = unsafe { _mm_movemask_ps(both) };
-    (mask & 0b111) == 0b111
+    // Select only the three coordinate lanes; the fourth may be unordered.
+    // SAFETY: constructs an initialized mask on the required SSE2 baseline.
+    let axes = unsafe { _mm_set_epi32(0, -1, -1, -1) };
+    // SAFETY: reinterprets an initialized compare mask without changing bits.
+    let bits = unsafe { _mm_castps_si128(both) };
+    // SAFETY: SSE4.1 tests whether all selected compare-mask bits are set.
+    unsafe { _mm_testc_si128(bits, axes) != 0 }
 }
 
 #[cfg(test)]
@@ -2986,6 +2993,35 @@ mod tests_c_map_chunk__update__6afad0 {
                         "lo={lo:?} hi={hi:?} vlo={vlo:?} vhi={vhi:?} junk={junk}"
                     );
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn overlap4_checks_each_axis_and_ignores_each_padding_lane() {
+        for rejected in 0..64 {
+            for padding in 0..16 {
+                let mut lo = [0.0; 4];
+                let mut hi = [1.0; 4];
+                let mut view_lo = [0.0; 4];
+                let mut view_hi = [1.0; 4];
+                for axis in 0..3 {
+                    if rejected & (1 << axis) != 0 {
+                        lo[axis] = 2.0;
+                    }
+                    if rejected & (1 << (axis + 3)) != 0 {
+                        hi[axis] = -1.0;
+                    }
+                }
+                for (lane, corner) in [&mut lo, &mut hi, &mut view_lo, &mut view_hi]
+                    .into_iter()
+                    .enumerate()
+                {
+                    if padding & (1 << lane) != 0 {
+                        corner[3] = f32::NAN;
+                    }
+                }
+                assert_eq!(overlaps4(lo, hi, view_lo, view_hi), rejected == 0);
             }
         }
     }

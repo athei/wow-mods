@@ -922,26 +922,31 @@ mod tests_object_pick_child_at_point__6a4e00 {
 
 /// Ordered `<=` across the first three lanes of two 4-lane groups.
 ///
-/// `cmpleps` is an ordered compare, so a `NaN` in either operand clears its
-/// lane and the reduce is false exactly where a scalar `<=` chain is. Lane 3
-/// is dropped from the mask, which is what lets a caller fill it with whatever
-/// dword neighbours the three floats in memory.
+/// A greater or unordered comparison sets its rejection lane, so any `NaN`
+/// fails exactly where a scalar `<=` chain does. Lane 3 is excluded from the
+/// rejection mask, letting a caller fill it with the neighbouring dword.
 fn lanes3_le(lhs: [f32; 4], rhs: [f32; 4]) -> bool {
     #[cfg(target_arch = "x86")]
-    use core::arch::x86::{_mm_cmple_ps, _mm_loadu_ps, _mm_movemask_ps};
+    use core::arch::x86::{
+        _mm_castps_si128, _mm_cmpnle_ps, _mm_loadu_ps, _mm_set_epi32, _mm_testz_si128,
+    };
     #[cfg(target_arch = "x86_64")]
-    use core::arch::x86_64::{_mm_cmple_ps, _mm_loadu_ps, _mm_movemask_ps};
-    // Every intrinsic below is SSE1, available on every ISA baseline this
-    // crate builds for.
+    use core::arch::x86_64::{
+        _mm_castps_si128, _mm_cmpnle_ps, _mm_loadu_ps, _mm_set_epi32, _mm_testz_si128,
+    };
+    // SSE4.1 is in both production baselines, nehalem and haswell.
     // SAFETY: the load covers the 16 in-bounds bytes of its `[f32; 4]` argument.
     let a = unsafe { _mm_loadu_ps(lhs.as_ptr()) };
     // SAFETY: as above.
     let b = unsafe { _mm_loadu_ps(rhs.as_ptr()) };
-    // SAFETY: lane-wise ordered compare of two initialized vectors.
-    let le = unsafe { _mm_cmple_ps(a, b) };
-    // SAFETY: sign-bit extraction from an initialized vector.
-    let mask = unsafe { _mm_movemask_ps(le) };
-    (mask & 0b111) == 0b111
+    // SAFETY: compares initialized lanes; greater and unordered both reject.
+    let rejected = unsafe { _mm_cmpnle_ps(a, b) };
+    // SAFETY: constructs an initialized mask on the required SSE2 baseline.
+    let axes = unsafe { _mm_set_epi32(0, -1, -1, -1) };
+    // SAFETY: reinterprets an initialized compare mask without changing bits.
+    let bits = unsafe { _mm_castps_si128(rejected) };
+    // SAFETY: SSE4.1 tests the selected lanes, ignoring every bit of lane 3.
+    unsafe { _mm_testz_si128(bits, axes) != 0 }
 }
 
 /// Inclusive AABB overlap test between a stored record box and a query box.
@@ -1018,6 +1023,35 @@ mod tests_object_query_overlapping_boxes__6a3b10 {
 
     fn overlap(rec: &[f32; 6], query: &[f32; 6]) -> bool {
         overlap_junk(rec, query, 0.0)
+    }
+
+    #[test]
+    fn each_half_checks_only_its_three_coordinate_lanes() {
+        for rejected in 0..64 {
+            for padding in 0..16 {
+                let mut lo = [0.0; 4];
+                let mut hi = [1.0; 4];
+                let mut view_lo = [0.0; 4];
+                let mut view_hi = [1.0; 4];
+                for axis in 0..3 {
+                    if rejected & (1 << axis) != 0 {
+                        lo[axis] = 2.0;
+                    }
+                    if rejected & (1 << (axis + 3)) != 0 {
+                        hi[axis] = -1.0;
+                    }
+                }
+                for (lane, corner) in [&mut lo, &mut hi, &mut view_lo, &mut view_hi]
+                    .into_iter()
+                    .enumerate()
+                {
+                    if padding & (1 << lane) != 0 {
+                        corner[3] = f32::NAN;
+                    }
+                }
+                assert_eq!(overlap4(lo, hi, view_lo, view_hi), rejected == 0);
+            }
+        }
     }
 
     #[test]
