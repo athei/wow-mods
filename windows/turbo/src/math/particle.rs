@@ -320,6 +320,15 @@ impl PhysConst {
         }
     }
 
+    /// The particle flag byte after the optional spawn-velocity stage.
+    ///
+    /// That stage consumes bit zero when enabled and never changes another bit.
+    /// Keeping the byte avoids reconstructing it from the returned flag boolean.
+    #[must_use]
+    pub fn first_frame_byte_after_step(&self, byte: u8) -> u8 {
+        byte & !u8::from(self.spawn_bonus_on)
+    }
+
     /// Bit-exact comparison, for a caller's mid-walk mutation tripwire.
     ///
     /// Compares the float fields by their bits rather than by value, so a NaN
@@ -593,6 +602,24 @@ mod tests_c_particle_emitter__update_particle_physics__7b2680 {
     fn approx(a: [f32; 3], b: [f32; 3]) {
         for (x, y) in a.iter().zip(b.iter()) {
             assert!((x - y).abs() < 1e-4, "{a:?} != {b:?}");
+        }
+    }
+
+    #[test]
+    fn first_frame_byte_matches_step_for_every_bit_pattern() {
+        for flags in [0, 0x800, 0x4_0000, 0x4_0800] {
+            let k = consts(0.25, flags);
+            for byte in 0..=u8::MAX {
+                let (_, _, first_frame, _) = step_particle__7b2680(
+                    &k,
+                    [1.0, 2.0, 3.0],
+                    [0.5, 0.25, -0.25],
+                    byte & 1 != 0,
+                    0.0,
+                );
+                let old_byte = if first_frame { byte | 1 } else { byte & 0xfe };
+                assert_eq!(k.first_frame_byte_after_step(byte), old_byte);
+            }
         }
     }
 

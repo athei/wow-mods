@@ -3610,7 +3610,7 @@ fn step_one_particle_7b2680(k: &crate::math::particle::PhysConst, pbase: *mut u8
     let ff_byte = unsafe { ff_p.read() };
     let first_frame = ff_byte & 1 != 0;
 
-    let (new_pos, new_vel, new_ff, alive) =
+    let (new_pos, new_vel, _, alive) =
         crate::math::particle::step_particle__7b2680(k, pos, vel, first_frame, age);
 
     // SAFETY: `pos_p` addresses the writable 3-float position.
@@ -3618,7 +3618,7 @@ fn step_one_particle_7b2680(k: &crate::math::particle::PhysConst, pbase: *mut u8
     // SAFETY: `vel_p` addresses the writable 3-float velocity.
     unsafe { vel_p.cast::<[f32; 3]>().write_unaligned(new_vel) };
     // The original only ever clears bit0 of the first-frame byte (never sets it).
-    let new_ff_byte = if new_ff { ff_byte | 1 } else { ff_byte & 0xfe };
+    let new_ff_byte = k.first_frame_byte_after_step(ff_byte);
     // SAFETY: `ff_p` addresses the writable first-frame byte.
     unsafe { ff_p.write(new_ff_byte) };
 
