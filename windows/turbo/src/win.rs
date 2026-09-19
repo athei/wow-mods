@@ -40,6 +40,7 @@ mod getname;
 mod hooks;
 mod inflate_perf;
 mod lua;
+mod model_batch;
 mod objmgr;
 mod portrait;
 mod script_method;

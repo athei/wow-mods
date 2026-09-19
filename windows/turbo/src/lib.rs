@@ -69,6 +69,11 @@ mod stocktext;
 #[cfg(any(target_arch = "x86", test))]
 mod portrait;
 
+#[cfg(any(target_arch = "x86", test))]
+mod object_lookup;
+#[cfg(any(target_arch = "x86", test))]
+mod palette;
+
 #[cfg(target_arch = "x86")]
 mod win;
 

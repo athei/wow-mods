@@ -17,8 +17,24 @@
 const OBJECT_MANAGER: usize = crate::win::EXPECTED_IMAGE_BASE + 0x0074_1414;
 /// The engine's millisecond tick global, advanced once per frame.
 const GAME_TICK: usize = crate::win::EXPECTED_IMAGE_BASE + 0x008f_0bc8;
-/// GUID hash lookup — `fastcall(guid on the stack)`, object pointer or zero.
+/// GUID hash lookup, stack-passed 64-bit GUID, object pointer or zero.
 const OBJECT_BY_GUID_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x0006_4870;
+
+/// Resolve an active GUID while the caller excludes manager mutation.
+///
+/// The result is borrowed from the active hash; this lookup does not retain it.
+pub fn lookup_active(low: u32, high: u32) -> u32 {
+    // SAFETY: the fixed-image global is mapped for the client's lifetime.
+    // Callers of the active lookup supply a live manager and exclude mutation
+    // of its intrusive hash for the duration of this call.
+    let manager = unsafe { (OBJECT_MANAGER as *const u32).read() };
+    crate::object_lookup::lookup(manager, low, high, |address| {
+        // SAFETY: the manager's bucket array and reachable nodes remain live
+        // under the caller's exclusion. Null and tagged links are checked
+        // before any node read, and every field read has dword alignment.
+        unsafe { (address as *const u32).read() }
+    })
+}
 /// Unit-token resolver — `fastcall(ecx = token text)`, GUID in `edx:eax`.
 const GUID_OF_TOKEN_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x0011_5970;
 /// Active player GUID — no arguments, GUID in `edx:eax`.

@@ -14519,6 +14519,16 @@ pub extern "thiscall" fn c_movement__update_spline_path__7c5490(
     1
 }
 
+/// Submit a model batch, with bit-preserving bone-palette packing.
+///
+/// The dispatcher supplies ECX and owns the state and model graph until return.
+pub extern "thiscall" fn c_model_batch__commit__70cb30(this: *mut u8) {
+    // SAFETY: this entry's dispatcher supplies a live, writable batch graph;
+    // its stack palette and referenced heap matrices are disjoint.
+    let mut batch = unsafe { super::model_batch::Batch::new(this) };
+    batch.commit();
+}
+
 /// `CParticleEmitter::DrawBatch` — `__thiscall(ecx = this, stack = billboardVec)`.
 ///
 /// Prepares the batch geometry and pushes render state through the stock
@@ -47112,4 +47122,14 @@ pub extern "thiscall" fn c_gx_device_d3d__i_tex_update__5a0d70(gx: usize, textur
     if !super::portrait::update_texture(gx, texture) {
         (super::symbols::originals::c_gx_device_d3d__i_tex_update__5a0d70())(gx, texture);
     }
+}
+
+/// Find an active object by GUID without retaining the result.
+///
+/// Both GUID words are stack arguments; the callee pops eight bytes.
+pub extern "stdcall" fn clnt_obj_mgr__get_active_object_ptr_by_guid__464890(
+    low: u32,
+    high: u32,
+) -> u32 {
+    super::objmgr::lookup_active(low, high)
 }
