@@ -6675,15 +6675,9 @@ pub extern "fastcall" fn cg_object__gather_render_proxy_by_guid__483340(
         return 0;
     }
 
-    // ClntObjMgr::ObjectPtr(typeMask=1, guidLo, guidHi, classId=0x2d1).
-    const OBJECT_PTR_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x6_8460;
-    // SAFETY: a fixed `.text` entry in the live host image (base verified at
-    // load); the transmuted signature matches the declared prototype of the
-    // callee (`__thiscall(ecx = typeMask, stack = [guidLo, guidHi, classId])`,
-    // `ret 0xc`).
-    let object_ptr: extern "thiscall" fn(u32, u32, i32, u32) -> *mut u8 =
-        unsafe { core::mem::transmute(OBJECT_PTR_VA) };
-    let obj = object_ptr(1, guid_lo, guid_hi, 0x2d1);
+    // ClntObjMgr::ObjectPtr(typeMask=1, guidLo, guidHi, classId=0x2d1). The
+    // lookup never reads the source-file register, so zero stands in for it.
+    let obj = super::objmgr::object_ptr(1, 0, guid_lo, guid_hi.cast_unsigned(), 0x2d1);
     if obj.is_null() {
         return 0;
     }
@@ -14641,7 +14635,6 @@ pub extern "thiscall" fn c_particle_emitter__draw_batch__70ca50(
     }
 
     const PREP_GEOM_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x30_b740;
-    const CLEAR_TEX_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x18_9e80;
     const SET_WORLD_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x18_b050;
     const DRAW_INDEXED_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x18_b240;
     const FLUSH_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x18_9f40;
@@ -14651,9 +14644,6 @@ pub extern "thiscall" fn c_particle_emitter__draw_batch__70ca50(
     // the transmuted signature matches the declared prototype (`__fastcall`,
     // `this` in ecx, no stack args, plain ret).
     let prep_geom: extern "fastcall" fn(*mut u8) = unsafe { core::mem::transmute(PREP_GEOM_VA) };
-    // SAFETY: as above; `__fastcall(ecx = idx, edx = ptr)`, no stack args.
-    let clear_tex: extern "fastcall" fn(i32, *const u8) =
-        unsafe { core::mem::transmute(CLEAR_TEX_VA) };
     // SAFETY: as above; `__fastcall(ecx = matrix4x4)`, no stack args.
     let set_world: extern "fastcall" fn(*const f32) = unsafe { core::mem::transmute(SET_WORLD_VA) };
     // SAFETY: as above; `__fastcall(ecx = primCount, edx = indexDesc)`.
@@ -14667,8 +14657,8 @@ pub extern "thiscall" fn c_particle_emitter__draw_batch__70ca50(
     // hooks — call the adapters directly (no detour).
     c_gx_batch__update_fog_state__70baf0(this);
     c_particle_emitter__apply_render_state__70c190(this.cast());
-    clear_tex(0x40, core::ptr::null());
-    clear_tex(0x3f, core::ptr::null());
+    super::gx_slot::set_slot(0x40, 0);
+    super::gx_slot::set_slot(0x3f, 0);
 
     // SAFETY: `this+0x40` is the in-bounds, aligned device/batch pointer slot.
     let device_slot = unsafe { this.add(0x40) };
@@ -26664,8 +26654,6 @@ pub extern "thiscall" fn c_particle_emitter__render__7b3d20(
     const DTOR_STREAM3: usize = BASE + 0x3b_44e0;
 
     // Delegates.
-    // 0x7bc6a0 C44Matrix::Multiply — fastcall(out, a; b), RET 4, EAX = out.
-    const MAT_MULTIPLY_VA: usize = BASE + 0x3b_c6a0;
     // 0x58b0b0 GetCurrentMatrix — thiscall(&out[16]), fills it.
     const GET_MATRIX_VA: usize = BASE + 0x18_b0b0;
     // 0x58b050 set-world-matrix — fastcall(ecx = matrix4x4).
@@ -26676,8 +26664,6 @@ pub extern "thiscall" fn c_particle_emitter__render__7b3d20(
     // 0x44acf0 texture-handle getter — fastcall(owner, flag; one stack
     // dword), RET 4 (stock here: edx = 0, push 0).
     const GET_TEX_VA: usize = BASE + 0x4_acf0;
-    // 0x589e80 SetTexture — fastcall(stage, handle).
-    const SET_TEX_VA: usize = BASE + 0x18_9e80;
     // 0x589a90 global-table entry by index — fastcall(index) -> ptr
     // (bounds-checked; error stub on a bad index), plain RET.
     const GET_DECL_VA: usize = BASE + 0x18_9a90;
@@ -26703,11 +26689,10 @@ pub extern "thiscall" fn c_particle_emitter__render__7b3d20(
     // 0x409aef crt_atexit — cdecl(fn), caller cleans.
     const ATEXIT_VA: usize = BASE + 0x0_9aef;
 
+    // 0x7bc6a0 C44Matrix::Multiply is our own hook, so call its adapter by name.
+    let multiply = c44_matrix__multiply__7bc6a0;
     // SAFETY: image base verified at load; every transmuted signature below
     // matches its callee's declared prototype.
-    let multiply: extern "fastcall" fn(*mut f32, *const f32, *const f32) -> *mut f32 =
-        unsafe { core::mem::transmute(MAT_MULTIPLY_VA) };
-    // SAFETY: as above.
     let get_matrix: extern "thiscall" fn(*mut f32) = unsafe { core::mem::transmute(GET_MATRIX_VA) };
     // SAFETY: as above.
     let set_world: extern "fastcall" fn(*const f32) = unsafe { core::mem::transmute(SET_WORLD_VA) };
@@ -26721,9 +26706,10 @@ pub extern "thiscall" fn c_particle_emitter__render__7b3d20(
         u32,
         *const core::ffi::c_void,
     ) -> *mut core::ffi::c_void = unsafe { core::mem::transmute(GET_TEX_VA) };
-    // SAFETY: as above.
-    let set_tex: extern "fastcall" fn(u32, *mut core::ffi::c_void) =
-        unsafe { core::mem::transmute(SET_TEX_VA) };
+    // 0x589e80 SetTexture, fastcall(stage, handle), through the slot setter.
+    let set_tex = |stage, handle: *mut core::ffi::c_void| {
+        super::gx_slot::set_slot(stage, handle as u32);
+    };
     // SAFETY: as above.
     let get_decl: extern "fastcall" fn(u32) -> *mut core::ffi::c_void =
         unsafe { core::mem::transmute(GET_DECL_VA) };
@@ -27090,13 +27076,8 @@ pub extern "thiscall" fn c_object_placement__set_relative_transform__7b5160(
     if this.is_null() || xform.is_null() || pos.is_null() {
         return;
     }
-    const BASE: usize = crate::win::EXPECTED_IMAGE_BASE;
-    // 0x7bc6a0 C44Matrix::Multiply — fastcall(out, a; b), RET 4, EAX = out.
-    const MAT_MULTIPLY_VA: usize = BASE + 0x3b_c6a0;
-    // SAFETY: image base verified at load; the transmuted signature matches
-    // the declared prototype of the callee.
-    let multiply: extern "fastcall" fn(*mut f32, *const f32, *const f32) -> *mut f32 =
-        unsafe { core::mem::transmute(MAT_MULTIPLY_VA) };
+    // 0x7bc6a0 C44Matrix::Multiply is our own hook, so call its adapter by name.
+    let multiply = c44_matrix__multiply__7bc6a0;
 
     // SAFETY: `pos` addresses the caller's 3 contiguous dwords.
     let p = unsafe { pos.cast::<[u32; 3]>().read_unaligned() };
@@ -27874,8 +27855,6 @@ pub extern "thiscall" fn weather_draw_rain_drops__675ac0(this: *mut core::ffi::c
     const EMIT_1STK_E30_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x18_9e30;
     // 0x589e00: emit-1-stack-arg — same ABI as 0x589e30 (ecx opcode, stack value).
     const EMIT_1STK_E00_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x18_9e00;
-    // 0x589e80: SetTexture, `fastcall(ecx = stage, edx = handle)`, ret.
-    const SET_TEX_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x18_9e80;
     // 0x44acf0: texture-handle getter — `fastcall(ecx = owner, edx = flag, one
     //   stack dword)`; reads its 2nd arg from EDX (`test edx,edx` @0x44ad12) and
     //   its 3rd from [ebp+8] (@0x44ad24), ret 0x4. (Stock caller: ecx=[edi+0xc4],
@@ -27922,10 +27901,11 @@ pub extern "thiscall" fn weather_draw_rain_drops__675ac0(this: *mut core::ffi::c
         // SAFETY: `.text` at the checked base; 0x589e00 has the same ecx-opcode,
         // one-stack-dword, `ret 0x4` shape as 0x589e30.
         unsafe { core::mem::transmute(EMIT_1STK_E00_VA) };
-    let set_tex: extern "fastcall" fn(u32, *mut core::ffi::c_void) =
-        // SAFETY: `.text` at the checked base; 0x589e80 takes the stage in ecx and the
-        // handle in edx with no stack args.
-        unsafe { core::mem::transmute(SET_TEX_VA) };
+    // 0x589e80: SetTexture, `fastcall(ecx = stage, edx = handle)`, through the
+    // slot setter.
+    let set_tex = |stage, handle: *mut core::ffi::c_void| {
+        super::gx_slot::set_slot(stage, handle as u32);
+    };
     // owner -> ecx, flag -> edx, the trailing dword -> the one stack arg.
     let get_tex: extern "fastcall" fn(
         u32,
@@ -40940,7 +40920,6 @@ pub extern "thiscall" fn minimap__unit_blip_enum_callback__4eaa90(
     const B: usize = crate::win::EXPECTED_IMAGE_BASE;
     /// Stock delegates (VAs).
     const GET_ACTIVE_PLAYER_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x06_8550;
-    const OBJECT_PTR_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x06_8460;
     const IS_GAMEOBJ_TRACKED_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x1e_d2b0;
     const IS_UNIT_TRACKED_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x1e_d210;
     const IS_GUID_IN_PARTY_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x09_18d0;
@@ -40968,12 +40947,9 @@ pub extern "thiscall" fn minimap__unit_blip_enum_callback__4eaa90(
     // SAFETY: `this+0` is the owning map-context pointer (stock 0x4eaab5).
     let map_ctx = unsafe { ctx.cast::<*mut core::ffi::c_void>().read_unaligned() };
 
-    // SAFETY: fixed `.text` entry of ClntObjMgr__ObjectPtr
-    // (`__fastcall(ecx = 1, edx = token, stack = [guidLo, guidHi, 0xc6])`,
-    // ret 0xc, object ptr in EAX).
-    let object_ptr: extern "fastcall" fn(u32, u32, u32, u32, u32) -> *mut u8 =
-        unsafe { core::mem::transmute(OBJECT_PTR_VA) };
-    let obj = object_ptr(1, OBJ_PTR_TOKEN, guid_lo, guid_hi, 0xc6);
+    // ClntObjMgr__ObjectPtr (`__fastcall(ecx = 1, edx = token, stack =
+    // [guidLo, guidHi, 0xc6])`, object ptr in EAX).
+    let obj = super::objmgr::object_ptr(1, OBJ_PTR_TOKEN, guid_lo, guid_hi, 0xc6);
     if obj.is_null() {
         return 1;
     }
@@ -43138,12 +43114,9 @@ pub extern "thiscall" fn cg_player_c__on_frame_update__607ed0(this: *mut u8, par
     const ACTIVE_PLAYER_VA: usize = BASE + 0x6_8550;
     // SAFETY: as above.
     let active_player: extern "C" fn() -> u64 = unsafe { core::mem::transmute(ACTIVE_PLAYER_VA) };
-    // 0x468460 ClntObjMgr::ObjectPtr — fastcall(mask, token; lo, hi, tail),
+    // 0x468460 ClntObjMgr::ObjectPtr, fastcall(mask, token; lo, hi, tail),
     // RET 0xC.
-    const OBJECT_PTR_VA: usize = BASE + 0x6_8460;
-    // SAFETY: as above.
-    let object_ptr: extern "fastcall" fn(u32, u32, u32, u32, u32) -> *mut u8 =
-        unsafe { core::mem::transmute(OBJECT_PTR_VA) };
+    let object_ptr = super::objmgr::object_ptr;
     // 0x60ecb0 HasTarget — thiscall(obj) -> AL.
     const HAS_TARGET_VA: usize = BASE + 0x20_ecb0;
     // SAFETY: as above.
@@ -43754,7 +43727,6 @@ pub extern "fastcall" fn cg_unit_c__update_facing_interpolation__600cd0(
     // outlined active-player arm).
     const GET_CTM_GUID_VA: usize = BASE + 0x21_26f0;
     const ACTIVE_PLAYER_VA: usize = BASE + 0x06_8550;
-    const OBJ_PTR_VA: usize = BASE + 0x06_8460;
     /// `.data` token `ObjectPtr` receives in EDX (stock `MOV EDX,0x860c0c`).
     const OBJ_PTR_TOKEN: u32 = (BASE + 0x46_0c0c) as u32;
 
@@ -43866,11 +43838,10 @@ pub extern "fastcall" fn cg_unit_c__update_facing_interpolation__600cd0(
                 }
             }
         }
-        // SAFETY: `__fastcall(mask, token, stack = [lo, hi, tag]) ->
-        // object*`, `RET 0xC` (ObjectPtr precedent; mask 8, tag 0x142b).
-        let object_ptr: extern "fastcall" fn(u32, u32, u32, u32, u32) -> *mut u8 =
-            unsafe { core::mem::transmute(OBJ_PTR_VA) };
-        let obj = object_ptr(8, OBJ_PTR_TOKEN, guid as u32, (guid >> 32) as u32, 0x142b);
+        // ObjectPtr `__fastcall(mask, token, stack = [lo, hi, tag]) -> object*`
+        // with mask 8, tag 0x142b.
+        let obj =
+            super::objmgr::object_ptr(8, OBJ_PTR_TOKEN, guid as u32, (guid >> 32) as u32, 0x142b);
         if obj.is_null() {
             break 'sel keep;
         }

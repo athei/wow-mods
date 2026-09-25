@@ -170,7 +170,7 @@ impl Batch<'_> {
 
     fn bind_programs(&mut self) {
         if self.0.word::<0x32f0>() == 0 {
-            bind(0x40, 0);
+            super::gx_slot::set_slot(0x40, 0);
         } else {
             if self.palette_changed() {
                 self.pack_palette();
@@ -182,12 +182,12 @@ impl Batch<'_> {
                 let index = self.descriptor().word::<0x38>();
                 // SAFETY: the enabled vertex program indexes the owner's table.
                 let program: Record<'_, 4> = unsafe { Record::new((table + index * 4) as usize) };
-                bind(0x40, program.word::<0>());
+                super::gx_slot::set_slot(0x40, program.word::<0>());
             }
             self.upload::<0x3240, 0x3244>(0, 0x50);
         }
         if self.0.word::<0x32f8>() == 0 {
-            bind(0x3f, 0);
+            super::gx_slot::set_slot(0x3f, 0);
         } else {
             if self.type_changed()
                 || self.descriptor().word::<0x3c>() != self.previous_descriptor().word::<0x3c>()
@@ -196,7 +196,7 @@ impl Batch<'_> {
                 let index = self.descriptor().word::<0x3c>();
                 // SAFETY: the enabled pixel program indexes the owner's table.
                 let program: Record<'_, 4> = unsafe { Record::new((table + index * 4) as usize) };
-                bind(0x3f, program.word::<0>());
+                super::gx_slot::set_slot(0x3f, program.word::<0>());
             }
             self.upload::<0x32e8, 0x32ec>(1, 0x3248);
         }
@@ -315,11 +315,4 @@ impl Batch<'_> {
         self.bind_buffers();
         self.draw();
     }
-}
-
-fn bind(slot: u32, value: u32) {
-    // SAFETY: fixed cached-state setter, ECX slot, EDX value, plain ret.
-    let bind: extern "fastcall" fn(u32, u32) =
-        unsafe { core::mem::transmute(crate::win::EXPECTED_IMAGE_BASE + 0x18_9e80) };
-    bind(slot, value);
 }

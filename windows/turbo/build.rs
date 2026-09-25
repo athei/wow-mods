@@ -824,6 +824,7 @@ fn render(m: &Manifest) -> String {
             "{ind}        {detour} as *mut ::core::ffi::c_void,"
         );
         let _ = writeln!(install_body, "{ind}        {name:?},");
+        let _ = writeln!(install_body, "{ind}        &{screaming}_INSTALLED,");
         let _ = writeln!(install_body, "{ind}        |trampoline| {{");
         let _ = writeln!(
             install_body,
@@ -909,6 +910,37 @@ fn render(m: &Manifest) -> String {
     }
     out.push_str("}\n\n");
 
+    // Install state for adapters that call another hooked function. An install
+    // guard can leave a hook stock, and then its client address, not its
+    // adapter, is the behaviour a caller must reach.
+    out.push_str("static HOOKS_APPLIED: ::core::sync::atomic::AtomicBool =\n");
+    out.push_str("    ::core::sync::atomic::AtomicBool::new(false);\n");
+    for (_, snake) in &all_syms {
+        let screaming = snake.to_uppercase();
+        let _ = writeln!(
+            out,
+            "static {screaming}_INSTALLED: ::core::sync::atomic::AtomicBool =\n    \
+             ::core::sync::atomic::AtomicBool::new(false);"
+        );
+    }
+    out.push_str("/// Whether each hooked function's patch went live.\n");
+    out.push_str("///\n");
+    out.push_str("/// `installed::<snake>()` is true once `install_all` queued that hook and\n");
+    out.push_str("/// applied the batch. A hook refused by its signature or install guard\n");
+    out.push_str("/// stays false, so a caller keeps dispatching to the client address.\n");
+    out.push_str("pub mod installed {\n");
+    for (_, snake) in &all_syms {
+        let screaming = snake.to_uppercase();
+        let _ = writeln!(out, "    pub fn {snake}() -> bool {{");
+        let _ = writeln!(
+            out,
+            "        super::HOOKS_APPLIED.load(::core::sync::atomic::Ordering::Acquire)\n            \
+             && super::{screaming}_INSTALLED.load(::core::sync::atomic::Ordering::Relaxed)"
+        );
+        let _ = writeln!(out, "    }}");
+    }
+    out.push_str("}\n\n");
+
     // The installer — patches every hooked prologue and publishes the trampolines.
     let param = if install_body.is_empty() {
         "_image_base"
@@ -931,6 +963,9 @@ fn render(m: &Manifest) -> String {
         );
         out.push_str("    // ABI-matching thunk; the batch goes live here.\n");
         out.push_str("    if unsafe { ::wow_hook::apply_queued(\"install_all\") } {\n");
+        out.push_str(
+            "        HOOKS_APPLIED.store(true, ::core::sync::atomic::Ordering::Release);\n",
+        );
         out.push_str("        // The patches are live now, so what the prologues hold is what\n");
         out.push_str("        // this process wrote — the baseline the overwrite check reads.\n");
         out.push_str("        ::wow_hook::snapshot_patches();\n");
@@ -1321,13 +1356,15 @@ const INSTALL_THUNK: &str = r#"
 /// `detour` is the generated thunk where the entry needs one and the adapter
 /// itself where it does not; either way it carries the entry's own `abi`. The
 /// enable is only queued; `install_all`'s single `apply_queued` makes the batch
-/// live.
+/// live. `installed` is the entry's flag behind `installed::<snake>()`, set
+/// only once the enable is queued.
 fn install_thunk(
     image_base: usize,
     rva: usize,
     sigs: &[&str],
     detour: *mut ::core::ffi::c_void,
     label: &str,
+    installed: &::core::sync::atomic::AtomicBool,
     store: impl FnOnce(*mut ::core::ffi::c_void),
 ) -> bool {
     if rva == 0 {
@@ -1478,6 +1515,7 @@ fn install_thunk(
     // SAFETY: `va` is the hook just created above.
     let queued = unsafe { ::wow_hook::queue_enable_hook(va, label) };
     if queued {
+        installed.store(true, ::core::sync::atomic::Ordering::Relaxed);
         // Registered now, snapshotted after the batch is applied: a prologue
         // another module rewrites later would leave this hook silently dead.
         ::wow_hook::watch_patch(va, label);
@@ -1674,6 +1712,7 @@ fn emit_x87st0(
         "        {snake}_thunk as *mut ::core::ffi::c_void,"
     );
     let _ = writeln!(install_body, "        {name:?},");
+    let _ = writeln!(install_body, "        &{screaming}_INSTALLED,");
     let _ = writeln!(install_body, "        |trampoline| {{");
     let _ = writeln!(
         install_body,
@@ -1797,6 +1836,7 @@ fn emit_x87pow(
         "        {snake}_thunk as *mut ::core::ffi::c_void,"
     );
     let _ = writeln!(install_body, "        {name:?},");
+    let _ = writeln!(install_body, "        &{screaming}_INSTALLED,");
     let _ = writeln!(install_body, "        |trampoline| {{");
     let _ = writeln!(
         install_body,
@@ -1927,6 +1967,7 @@ fn emit_tap(
         "{ind}        {snake}_thunk as *mut ::core::ffi::c_void,"
     );
     let _ = writeln!(install_body, "{ind}        {name:?},");
+    let _ = writeln!(install_body, "{ind}        &{screaming}_INSTALLED,");
     let _ = writeln!(install_body, "{ind}        |trampoline| {{");
     let _ = writeln!(
         install_body,

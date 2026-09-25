@@ -2,6 +2,25 @@
 
 const DEVICE: usize = crate::win::EXPECTED_IMAGE_BASE + 0x0080_ed38;
 const RECORD_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x0019_4010;
+/// Global slot setter entry, `GxSetSlot`.
+const SET_SLOT_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x0018_9e80;
+
+/// Set one slot as a call to the client's `GxSetSlot` would.
+///
+/// `__fastcall(ecx = slot, edx = value)`, plain `ret`. While that hook is live
+/// [`set`] runs directly. A hook refused at install leaves the client entry as
+/// the behaviour to reach, and diagnostic builds keep calling the entry so its
+/// breadcrumbs still see these writes.
+pub fn set_slot(index: u32, value: u32) {
+    if !cfg!(any(wow_turbo_diff, wow_crumb)) && super::symbols::installed::gx_set_slot__589e80() {
+        set(index, value);
+        return;
+    }
+    // SAFETY: a fixed `.text` entry in the verified host image, taking both
+    // arguments in registers with no stack cleanup.
+    let entry: extern "fastcall" fn(u32, u32) = unsafe { core::mem::transmute(SET_SLOT_VA) };
+    entry(index, value);
+}
 
 /// Set one slot using the device selected at entry.
 ///

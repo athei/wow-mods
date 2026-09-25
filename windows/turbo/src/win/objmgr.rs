@@ -21,6 +21,8 @@ const OBJECT_MANAGER: usize = crate::win::EXPECTED_IMAGE_BASE + 0x0074_1414;
 const GAME_TICK: usize = crate::win::EXPECTED_IMAGE_BASE + 0x008f_0bc8;
 /// GUID hash lookup, stack-passed 64-bit GUID, object pointer or zero.
 const OBJECT_BY_GUID_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x0006_4870;
+/// Typed object lookup entry, `ClntObjMgr::ObjectPtr`.
+const OBJECT_PTR_VA: usize = crate::win::EXPECTED_IMAGE_BASE + 0x0006_8460;
 
 /// Resolve an active GUID while the caller excludes manager mutation.
 ///
@@ -65,6 +67,26 @@ pub fn lookup_typed(low: u32, high: u32, mask: u32) -> u32 {
             unsafe { (address as *const u32).read() }
         },
     )
+}
+
+/// Resolve a typed object as a call to the client's `ObjectPtr` would.
+///
+/// `__fastcall(ecx = mask, edx = source file, stack = [guidLo, guidHi, source
+/// line])`, `RET 0xC`; the file and line are inert. While that hook is live
+/// the adapter's lookup runs directly. A hook refused at install leaves the
+/// client entry as the behaviour to reach, and diagnostic builds keep calling
+/// the entry so its comparisons and breadcrumbs still see these lookups.
+pub fn object_ptr(mask: u32, source_file: u32, low: u32, high: u32, source_line: u32) -> *mut u8 {
+    if !cfg!(any(wow_turbo_diff, wow_crumb))
+        && super::symbols::installed::clnt_obj_mgr__object_ptr__468460()
+    {
+        return lookup_typed(low, high, mask) as *mut u8;
+    }
+    // SAFETY: a fixed `.text` entry in the verified host image, declared with
+    // the callee's register and stack arguments and its twelve-byte cleanup.
+    let entry: extern "fastcall" fn(u32, u32, u32, u32, u32) -> *mut u8 =
+        unsafe { core::mem::transmute(OBJECT_PTR_VA) };
+    entry(mask, source_file, low, high, source_line)
 }
 
 /// Unit-token resolver — `fastcall(ecx = token text)`, GUID in `edx:eax`.

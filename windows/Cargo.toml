@@ -116,7 +116,7 @@ undocumented_unsafe_blocks = "warn"
 # masks as literals grouped the way the source grouped them. Rewriting any of
 # it to suit a lint makes the reimplementation harder to check against the
 # behaviour it has to match.
-items_after_statements = "allow"        # 844
+items_after_statements = "allow"        # 835
 cast_ptr_alignment = "allow"            # 936 — reads are already `read_unaligned`
 unreadable_literal = "allow"            # 439, addresses and bit masks, verbatim
 similar_names = "allow"                 # 186
